@@ -483,8 +483,7 @@ public interface TeachingLessonModel {
             String text,
             List<UUID> citationIds,
             List<String> teachingUnitIds,
-            List<RuleFactDraft> ruleFacts,
-            VisualFocusDraft visualFocus) {
+            List<RuleFactDraft> ruleFacts) {
         public StepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
             if (teachingUnitIds != null && teachingUnitIds.stream()
@@ -500,26 +499,16 @@ public interface TeachingLessonModel {
                 TeachingMove kind,
                 String text,
                 List<UUID> citationIds,
-                VisualFocusDraft visualFocus) {
-            this(heading, kind, text, citationIds, List.of(), List.of(), visualFocus);
-        }
-
-        public StepDraft(
-                String heading,
-                TeachingMove kind,
-                String text,
-                List<UUID> citationIds,
-                List<String> teachingUnitIds,
-                VisualFocusDraft visualFocus) {
-            this(heading, kind, text, citationIds, teachingUnitIds, List.of(), visualFocus);
+                List<String> teachingUnitIds) {
+            this(heading, kind, text, citationIds, teachingUnitIds, List.of());
         }
 
         public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
-            this(heading, kind, text, citationIds, List.of(), List.of(), null);
+            this(heading, kind, text, citationIds, List.of(), List.of());
         }
 
         public StepDraft(String text, List<UUID> citationIds) {
-            this("照着做", TeachingMove.DO, text, citationIds, List.of(), List.of(), null);
+            this("照着做", TeachingMove.DO, text, citationIds, List.of(), List.of());
         }
     }
 
@@ -531,30 +520,6 @@ public interface TeachingLessonModel {
             }
             text = text.strip();
             citationIds = List.copyOf(citationIds);
-        }
-    }
-
-    record VisualFocusDraft(
-            int pageNumber,
-            String label,
-            String visibleDescription,
-            int x,
-            int y,
-            int width,
-            int height) {
-        public VisualFocusDraft {
-            label = label == null ? "" : label;
-            visibleDescription = visibleDescription == null ? "" : visibleDescription;
-        }
-
-        public VisualFocusDraft(
-                int pageNumber,
-                String label,
-                int x,
-                int y,
-                int width,
-                int height) {
-            this(pageNumber, label, "", x, y, width, height);
         }
     }
 

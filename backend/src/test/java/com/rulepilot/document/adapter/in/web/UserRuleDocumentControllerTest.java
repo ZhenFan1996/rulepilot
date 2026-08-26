@@ -175,16 +175,65 @@ class UserRuleDocumentControllerTest {
                 0,
                 now,
                 now);
+        var storageFailure = new UploadedRulebookTeachingHandoffService.HandoffView(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                "rules.pdf",
+                com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State.FAILED,
+                UUID.randomUUID(),
+                "TEACHING_PREPARATION_STORAGE_FAILED",
+                0,
+                now,
+                now);
 
         var retryTeaching = UserRuleDocumentController.UploadedRulebookTeachingHandoffResponse.from(
                 teachingFailure, mock(CatalogEditionLookup.class));
         var retryDocument = UserRuleDocumentController.UploadedRulebookTeachingHandoffResponse.from(
                 documentFailure, mock(CatalogEditionLookup.class));
+        var repairStorage = UserRuleDocumentController.UploadedRulebookTeachingHandoffResponse.from(
+                storageFailure, mock(CatalogEditionLookup.class));
 
         assertThat(retryTeaching.nextAction())
                 .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.RETRY_TEACHING);
         assertThat(retryDocument.nextAction())
                 .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.RETRY_DOCUMENT);
+        assertThat(repairStorage.nextAction())
+                .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.NONE);
+    }
+
+    @Test
+    void doesNotOfferAnOfficialTeachingRetryForEvidenceStorageFailure() {
+        Instant now = Instant.parse("2026-08-10T00:00:00Z");
+        var job = new OfficialRulebookImportJob(
+                UUID.randomUUID(),
+                "alice",
+                null,
+                "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                "https://publisher.example/rules.pdf",
+                OfficialRulebookImportJob.Stage.COMPLETED,
+                1_024,
+                1_024L,
+                UUID.randomUUID(),
+                false,
+                null,
+                now,
+                new OfficialRulebookImportJob.TeachingHandoff(
+                        OfficialRulebookImportJob.TeachingHandoffState.FAILED,
+                        null,
+                        UUID.randomUUID(),
+                        "TEACHING_PREPARATION_STORAGE_FAILED",
+                        0,
+                        now),
+                now,
+                now,
+                now);
+
+        var response = UserRuleDocumentController.OfficialRulebookImportJobResponse.from(job, null, false);
+
+        assertThat(response.teachingNextAction())
+                .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.NONE);
     }
 
     @Test

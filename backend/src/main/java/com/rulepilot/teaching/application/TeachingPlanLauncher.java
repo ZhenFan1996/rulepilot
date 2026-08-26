@@ -149,15 +149,18 @@ public class TeachingPlanLauncher {
     }
 
     private String failureCode(Throwable failure) {
-        return causedByInvalidPlan(failure)
+        if (causedBy(failure, TeachingPreparationStorageException.class)) {
+            return "TEACHING_PREPARATION_STORAGE_FAILED";
+        }
+        return causedBy(failure, IllegalArgumentException.class)
                 ? "TEACHING_PREPARATION_INVALID_PLAN"
                 : "TEACHING_PREPARATION_FAILED";
     }
 
-    private boolean causedByInvalidPlan(Throwable failure) {
+    private boolean causedBy(Throwable failure, Class<? extends Throwable> type) {
         Throwable current = failure;
         while (current != null) {
-            if (current instanceof IllegalArgumentException) return true;
+            if (type.isInstance(current)) return true;
             if (current.getCause() == current) return false;
             current = current.getCause();
         }

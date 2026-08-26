@@ -57,7 +57,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           echo "DEPLOY_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "DEPLOY_RELEASE_ID=$(git rev-parse HEAD)-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+          echo "DEPLOY_RELEASE_ID=$(git rev-parse HEAD)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
       - name: Build immutable deployment artifacts
         run: |
@@ -197,7 +197,7 @@ jobs:
           deepseek_enabled=false
           deepseek_key_present=false
           model_credential_key_present=false
-          managed_runtime_keys=' TEACHING_PROVIDER TEACHING_MODEL_PROVIDER VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_TEMPERATURE BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
+          managed_runtime_keys=' TEACHING_PROVIDER TEACHING_MODEL_PROVIDER VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_TEMPERATURE BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY PRODUCTION_TRACING_EXPORT_OTLP_ENABLED PRODUCTION_TRACING_OTLP_ENDPOINT PRODUCTION_TRACING_SAMPLING_PROBABILITY '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
@@ -271,7 +271,10 @@ jobs:
             'RULEBOOK_DISCOVERY_MODEL=qwen3.7-max' \
             'RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL=PT10M' \
             'RULEBOOK_DISCOVERY_HOURLY_LIMIT=30' \
-            'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' >> "$temporary_env"
+            'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' \
+            'PRODUCTION_TRACING_EXPORT_OTLP_ENABLED=true' \
+            'PRODUCTION_TRACING_OTLP_ENDPOINT=http://tempo:4318/v1/traces' \
+            'PRODUCTION_TRACING_SAMPLING_PROBABILITY=0.05' >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"
           unset token
@@ -323,7 +326,74 @@ jobs:
             "$RUNNER_TEMP/${backend_image_archive}.sha256" \
             "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
 
+      - name: Prepare exact-release canary trace context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          read -r canary_trace_id canary_parent_span_id < <(
+            node --input-type=module -e \
+              'import { randomBytes } from "node:crypto"; console.log(`${randomBytes(16).toString("hex")} ${randomBytes(8).toString("hex")}`)'
+          )
+          if [[ ! "$canary_trace_id" =~ ^[0-9a-f]{32}$
+            || "$canary_trace_id" == 00000000000000000000000000000000
+            || ! "$canary_parent_span_id" =~ ^[0-9a-f]{16}$
+            || "$canary_parent_span_id" == 0000000000000000 ]]; then
+            echo "Failed to generate a sampled W3C deployment canary trace context" >&2
+            exit 1
+          fi
+          printf 'DEPLOY_CANARY_TRACE_ID=%s\n' "$canary_trace_id" >> "$GITHUB_ENV"
+          printf 'DEPLOY_TRACE_START_EPOCH_SECONDS=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+          printf 'RULEPILOT_CANARY_TRACEPARENT=00-%s-%s-01\n' \
+            "$canary_trace_id" "$canary_parent_span_id" >> "$GITHUB_ENV"
+
+      - name: Preserve the exact rollback checkpoint
+        id: rollback_checkpoint
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          previous_release_id=$(ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_SSH_PORT" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" <<'REMOTE'
+          set -Eeuo pipefail
+          application_root=$(readlink -f "$1")
+          release_id=$2
+          if [[ ! "$release_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]]; then
+            echo "Rollback checkpoint release coordinate is invalid" >&2
+            exit 1
+          fi
+          archive="/tmp/rulepilot-${release_id}.tar.gz"
+          guard_dir="${application_root}/deployment-guards/${release_id}"
+          guard_script="${guard_dir}/production-release-guard.sh"
+          temporary_guard=$(mktemp "/tmp/rulepilot-release-guard.${release_id}.XXXXXX")
+          cleanup_guard() {
+            rm -f "$temporary_guard"
+          }
+          trap cleanup_guard EXIT
+          test -f "$archive"
+          tar -xOf "$archive" ./scripts/production-release-guard.sh > "$temporary_guard"
+          bash -n "$temporary_guard"
+          install -d -m 0700 "$guard_dir"
+          install -m 0755 "$temporary_guard" "$guard_script"
+          previous_release_id=$("$guard_script" checkpoint "$application_root" "$release_id")
+          "$guard_script" start "$application_root" "$release_id" "$previous_release_id"
+          printf '%s\n' "$previous_release_id"
+          REMOTE
+          )
+          if [[ ! "$previous_release_id" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
+            echo "Rollback checkpoint did not return an immutable release id" >&2
+            exit 1
+          fi
+          printf 'DEPLOY_PREVIOUS_RELEASE_ID=%s\n' "$previous_release_id" >> "$GITHUB_ENV"
+
       - name: Activate release and verify production health
+        id: activate_release
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -336,10 +406,16 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -p "$DEPLOY_SSH_PORT" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" <<'REMOTE'
+            'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" "$DEPLOY_PREVIOUS_RELEASE_ID" <<'REMOTE'
           set -Eeuo pipefail
           application_root=$1
           release_id=$2
+          previous_release_id=$3
+          if [[ ! "$release_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$
+            || ! "$previous_release_id" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
+            echo "Activation release coordinates are invalid" >&2
+            exit 1
+          fi
           archive="/tmp/rulepilot-${release_id}.tar.gz"
           backend_image="rulepilot-backend:${release_id}"
           backend_image_filename="rulepilot-backend-${release_id}.tar.gz"
@@ -348,6 +424,10 @@ jobs:
           releases_root="${application_root}/releases"
           release_dir="${application_root}/releases/${release_id}"
           current_release=$(readlink -f "${application_root}/current" 2>/dev/null || true)
+          guard_script="${application_root}/deployment-guards/${release_id}/production-release-guard.sh"
+          test -x "$guard_script"
+          exec 9>"${application_root}/deployment.lock"
+          flock -x 9
 
           safe_container_state() {
             docker inspect --format \
@@ -357,6 +437,7 @@ jobs:
 
           diagnose_failure() {
             status=$?
+            trap - ERR
             echo "Production activation failed; collecting safe diagnostics." >&2
             cd "${release_dir}" 2>/dev/null || cd "${application_root}/current"
             echo "Production filesystem usage:"
@@ -387,12 +468,13 @@ jobs:
               safe_container_state "$api_container"
             fi
             if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
-              echo "Restoring API and worker from the current release after failed activation."
-              (cd "$current_release" && docker compose --env-file .env \
-                -f infra/compose.yml \
-                -f infra/compose.deployment.yml \
-                -f infra/compose.production.yml up -d --no-build api worker) || \
+              echo "Restoring the complete current release after failed activation."
+              if "$guard_script" rollback-held \
+                "$application_root" "$release_id" "$previous_release_id"; then
+                echo "Restored the immutable frontend and backend checkpoint."
+              else
                 echo "Automatic current-release service restoration failed." >&2
+              fi
             fi
             exit "$status"
           }
@@ -426,7 +508,7 @@ jobs:
           if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
             echo "Ensuring the current release remains available while the replacement image builds."
             cd "$current_release"
-            docker compose --env-file .env \
+            RULEPILOT_RELEASE_ID="${current_release##*/}" docker compose --env-file .env \
               -f infra/compose.yml \
               -f infra/compose.deployment.yml \
               -f infra/compose.production.yml up -d --no-build api worker
@@ -443,12 +525,22 @@ jobs:
 
           cd "${release_dir}"
           sh scripts/run-production.sh config
+          "$guard_script" arm "$application_root" "$release_id" "$previous_release_id"
           RULEPILOT_BACKEND_IMAGE="$backend_image" \
             RULEPILOT_PREBUILT_BACKEND_IMAGE=true \
             make production-up
 
+          frontend_container=$(docker compose --env-file .env \
+            -f infra/compose.yml \
+            -f infra/compose.deployment.yml \
+            -f infra/compose.production.yml ps -q frontend)
+          test -n "$frontend_container"
+          frontend_image_id=$(docker inspect --format '{{.Image}}' "$frontend_container")
+          docker image inspect "$frontend_image_id" >/dev/null
+          docker tag "$frontend_image_id" "rulepilot-frontend:${release_id}"
           docker tag "$backend_image" rulepilot-backend:local
           ln -sfn "${release_dir}" "${application_root}/current"
+          "$guard_script" heartbeat "$application_root" "$release_id" "$previous_release_id"
           rm -f "$archive" "$backend_image_archive" "$backend_image_checksum"
           printf 'Activated production release %s\n' "${release_id}"
           docker image ls \
@@ -456,9 +548,21 @@ jobs:
             --format '{{.Repository}}:{{.Tag}}' | while IFS= read -r candidate; do
             [[ "$candidate" == "$backend_image" ]] && continue
             [[ "$candidate" == "rulepilot-backend:local" ]] && continue
-            if [[ "$candidate" =~ ^rulepilot-backend:[0-9a-f]{40}-[0-9]+$ ]]; then
+            [[ "$candidate" == "rulepilot-backend:${previous_release_id}" ]] && continue
+            if [[ "$candidate" =~ ^rulepilot-backend:[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
               docker image rm "$candidate" || \
                 echo "Deferred removal of inactive backend image ${candidate}." >&2
+            fi
+          done
+          docker image ls \
+            --filter 'reference=rulepilot-frontend:*' \
+            --format '{{.Repository}}:{{.Tag}}' | while IFS= read -r candidate; do
+            [[ "$candidate" == "rulepilot-frontend:${release_id}" ]] && continue
+            [[ "$candidate" == "rulepilot-frontend:local" ]] && continue
+            [[ "$candidate" == "rulepilot-frontend:${previous_release_id}" ]] && continue
+            if [[ "$candidate" =~ ^rulepilot-frontend:[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
+              docker image rm "$candidate" || \
+                echo "Deferred removal of inactive frontend image ${candidate}." >&2
             fi
           done
           echo "Reclaiming stale Docker build cache and dangling images after activation."
@@ -468,10 +572,268 @@ jobs:
             echo "Deferred dangling-image cleanup after successful activation." >&2
           REMOTE
 
-      - name: Verify public release availability
+      - name: Verify public release availability and commit it
+        id: public_availability
+        shell: bash
         env:
           RULEPILOT_PUBLIC_URL: https://rulepilot.cn
-        run: node scripts/verify-production-availability.mjs
+        run: |
+          set -Eeuo pipefail
+          invoke_guard() {
+            local action=$1
+            ssh \
+              -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              -o StrictHostKeyChecking=yes \
+              -p "$DEPLOY_SSH_PORT" \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" "$DEPLOY_PREVIOUS_RELEASE_ID" "$action" <<'REMOTE'
+          set -Eeuo pipefail
+          application_root=$(readlink -f "$1")
+          release_id=$2
+          previous_release_id=$3
+          action=$4
+          guard_script="${application_root}/deployment-guards/${release_id}/production-release-guard.sh"
+          test -x "$guard_script"
+          "$guard_script" "$action" "$application_root" "$release_id" "$previous_release_id"
+          REMOTE
+          }
+          invoke_guard heartbeat
+          keep_guard_alive() {
+            while sleep 30; do
+              invoke_guard heartbeat || return 1
+            done
+          }
+          keep_guard_alive &
+          guard_heartbeat_pid=$!
+          stop_guard_heartbeat() {
+            kill "$guard_heartbeat_pid" 2>/dev/null || true
+            wait "$guard_heartbeat_pid" 2>/dev/null || true
+          }
+          trap stop_guard_heartbeat EXIT INT TERM
+          node scripts/verify-production-availability.mjs
+          invoke_guard commit
+
+      - name: Roll back any activated release without successful public availability
+        if: >-
+          always() &&
+          steps.rollback_checkpoint.outcome == 'success' &&
+          steps.activate_release.outcome != 'skipped' &&
+          steps.public_availability.outcome != 'success'
+        shell: bash
+        env:
+          RULEPILOT_PUBLIC_URL: https://rulepilot.cn
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_SSH_PORT" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" "$DEPLOY_PREVIOUS_RELEASE_ID" <<'REMOTE'
+          set -Eeuo pipefail
+          application_root=$(readlink -f "$1")
+          failed_release_id=$2
+          previous_release_id=$3
+          if [[ ! "$failed_release_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$
+            || ! "$previous_release_id" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
+            echo "Rollback release coordinates are invalid" >&2
+            exit 1
+          fi
+          guard_script="${application_root}/deployment-guards/${failed_release_id}/production-release-guard.sh"
+          test -x "$guard_script"
+          "$guard_script" rollback "$application_root" "$failed_release_id" "$previous_release_id"
+          REMOTE
+          read -r recovery_trace_id recovery_parent_span_id < <(
+            node --input-type=module -e \
+              'import { randomBytes } from "node:crypto"; console.log(`${randomBytes(16).toString("hex")} ${randomBytes(8).toString("hex")}`)'
+          )
+          RULEPILOT_CANARY_TRACEPARENT="00-${recovery_trace_id}-${recovery_parent_span_id}-01" \
+            node scripts/verify-production-availability.mjs
+
+      - name: Collect exact-release trace diagnostics
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          PUBLIC_AVAILABILITY_OUTCOME: ${{ steps.public_availability.outcome }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/deploy-production"
+          trace_evidence="$artifact_dir/release-traces.json"
+          trace_candidate="$artifact_dir/release-traces.candidate.json"
+          mkdir -p "$artifact_dir"
+          chmod 700 "$artifact_dir"
+          if [[ ! "${DEPLOY_RELEASE_ID:-}" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$
+            || ! "${DEPLOY_CANARY_TRACE_ID:-}" =~ ^[0-9a-f]{32}$
+            || "${DEPLOY_CANARY_TRACE_ID:-}" == 00000000000000000000000000000000
+            || ! "${DEPLOY_TRACE_START_EPOCH_SECONDS:-}" =~ ^[1-9][0-9]*$ ]]; then
+            jq -n '{
+              schemaVersion: 1,
+              releaseId: null,
+              traceId: null,
+              window: null,
+              queryOutcome: "NOT_RUN",
+              queryFailureCause: "CANARY_TRACE_NOT_STARTED",
+              releaseTraceObserved: false,
+              observedReleaseTraceCount: 0,
+              resultLimitReached: false,
+              attemptsUsed: 0,
+              businessWorkflowTerminal: {
+                workflow: "recommendation",
+                observed: false,
+                state: "NOT_OBSERVED",
+                latestDurationMs: null,
+                observedTraceCount: 0,
+                observedStateCounts: []
+              }
+            }' > "$trace_evidence"
+            chmod 600 "$trace_evidence"
+            exit 0
+          fi
+          trace_end_epoch_seconds=$(date +%s)
+          jq -n \
+            --arg releaseId "$DEPLOY_RELEASE_ID" \
+            --arg traceId "$DEPLOY_CANARY_TRACE_ID" \
+            --argjson startEpochSeconds "$DEPLOY_TRACE_START_EPOCH_SECONDS" \
+            --argjson endEpochSeconds "$trace_end_epoch_seconds" '{
+              schemaVersion: 1,
+              releaseId: $releaseId,
+              traceId: $traceId,
+              window: {
+                startEpochSeconds: $startEpochSeconds,
+                endEpochSeconds: $endEpochSeconds
+              },
+              queryOutcome: "NOT_AVAILABLE",
+              queryFailureCause: "UNKNOWN",
+              releaseTraceObserved: false,
+              observedReleaseTraceCount: 0,
+              resultLimitReached: false,
+              attemptsUsed: 0,
+              businessWorkflowTerminal: {
+                workflow: "recommendation",
+                observed: false,
+                state: "NOT_OBSERVED",
+                latestDurationMs: null,
+                observedTraceCount: 0,
+                observedStateCounts: []
+              }
+            }' > "$trace_evidence"
+          chmod 600 "$trace_evidence"
+          tempo_tunnel_pid=
+          cleanup_tunnel() {
+            if [[ -n "$tempo_tunnel_pid" ]]; then
+              kill "$tempo_tunnel_pid" 2>/dev/null || true
+              wait "$tempo_tunnel_pid" 2>/dev/null || true
+            fi
+            rm -f "$trace_candidate"
+          }
+          trap cleanup_tunnel EXIT
+
+          # A previous release may predate persistent production tracing and stop
+          # observability services during rollback. Public availability has already
+          # been restored above; now use only this failed release's reviewed Compose
+          # definition to make its persisted Tempo spans queryable.
+          if [[ "$PUBLIC_AVAILABILITY_OUTCOME" != success ]]; then
+            if ! ssh \
+              -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
+              -o StrictHostKeyChecking=yes \
+              -p "$DEPLOY_SSH_PORT" \
+              "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" <<'REMOTE'
+          set -Eeuo pipefail
+          application_root=$(readlink -f "$1")
+          release_id=$2
+          if [[ ! "$release_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]]; then
+            echo "Trace recovery release coordinate is invalid" >&2
+            exit 1
+          fi
+          releases_root=$(readlink -f "$application_root/releases")
+          failed_release=$(readlink -f "$releases_root/$release_id")
+          if [[ "${failed_release%/*}" != "$releases_root"
+            || ! -d "$failed_release" || ! -f "$failed_release/.env" ]]; then
+            echo "Trace recovery release is outside the immutable releases root" >&2
+            exit 1
+          fi
+          cd "$failed_release"
+          RULEPILOT_RELEASE_ID="$release_id" docker compose --env-file .env \
+            -f infra/compose.yml \
+            -f infra/compose.deployment.yml \
+            -f infra/compose.production.yml \
+            --profile observability up -d --no-deps tempo
+          REMOTE
+            then
+              echo "Production Tempo could not be restarted after rollback; retaining sanitized NOT_AVAILABLE evidence." >&2
+            fi
+          fi
+
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_SSH_PORT" \
+            -N -L 13200:127.0.0.1:3200 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" &
+          tempo_tunnel_pid=$!
+          tempo_ready=false
+          for attempt in {1..20}; do
+            if curl -fsS http://127.0.0.1:13200/ready >/dev/null 2>&1; then
+              tempo_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$tempo_ready" != true ]]; then
+            echo "Production Tempo tunnel is not ready; continuing bounded queries to retain NOT_AVAILABLE evidence." >&2
+          fi
+
+          trace_attempts=10
+          if [[ "$PUBLIC_AVAILABILITY_OUTCOME" == failure ]]; then
+            trace_attempts=3
+          fi
+
+          node scripts/summarize-production-release-traces.mjs \
+            --tempo-url http://127.0.0.1:13200 \
+            --release-id "$DEPLOY_RELEASE_ID" \
+            --trace-id "$DEPLOY_CANARY_TRACE_ID" \
+            --start-epoch-seconds "$DEPLOY_TRACE_START_EPOCH_SECONDS" \
+            --end-epoch-seconds "$trace_end_epoch_seconds" \
+            --attempts "$trace_attempts" \
+            --retry-delay-ms 3000 \
+            --output "$trace_candidate" || \
+            echo "Exact-release trace summarization failed; retaining sanitized NOT_AVAILABLE evidence." >&2
+          if jq -e \
+            --arg releaseId "$DEPLOY_RELEASE_ID" \
+            --arg traceId "$DEPLOY_CANARY_TRACE_ID" \
+            '.schemaVersion == 1 and .releaseId == $releaseId and .traceId == $traceId' \
+            "$trace_candidate" >/dev/null 2>&1; then
+            mv "$trace_candidate" "$trace_evidence"
+          fi
+
+      - name: Upload sanitized deployment trace diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-production-traces-${{ github.run_id }}
+          path: .artifacts/deploy-production/release-traces.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Collect production service status after a failed verification
         if: failure()

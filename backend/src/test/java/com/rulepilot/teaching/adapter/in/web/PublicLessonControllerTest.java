@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
 import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -84,7 +85,8 @@ class PublicLessonControllerTest {
         mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image", planId, 4))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.IMAGE_JPEG))
-                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("max-age=600")))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("private")))
                 .andExpect(content().bytes(normalized));
 
         verify(crops).crop(stored, 0, 0, 1_000, 1_000, 0);
@@ -104,10 +106,76 @@ class PublicLessonControllerTest {
         mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image/preview", planId, 4))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.IMAGE_JPEG))
-                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("max-age=600")))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("private")))
                 .andExpect(content().bytes(preview));
 
         verify(crops).preview(stored);
+    }
+
+    @Test
+    void serves_a_cited_crop_with_a_short_private_cache() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        var lesson = lesson(planId, documentVersionId);
+        var stored = new DocumentPageImages.PageImage(4, "image/png", new byte[] {1}, 800, 1_200);
+        byte[] crop = new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9};
+        when(lessons.requireCitedPage(planId, 4)).thenReturn(lesson);
+        when(pageImages.read(documentVersionId, Set.of(4))).thenReturn(List.of(stored));
+        when(crops.crop(stored, 100, 200, 300, 400)).thenReturn(crop);
+
+        mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image/crop", planId, 4)
+                        .param("x", "100")
+                        .param("y", "200")
+                        .param("width", "300")
+                        .param("height", "400"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("max-age=600")))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("private")))
+                .andExpect(content().bytes(crop));
+    }
+
+    @Test
+    void classifies_saturated_crop_decode_capacity_as_temporarily_unavailable() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        var lesson = lesson(planId, documentVersionId);
+        var stored = new DocumentPageImages.PageImage(4, "image/png", new byte[] {1}, 800, 1_200);
+        when(lessons.requireCitedPage(planId, 4)).thenReturn(lesson);
+        when(pageImages.read(documentVersionId, Set.of(4))).thenReturn(List.of(stored));
+        when(crops.crop(stored, 100, 200, 300, 400))
+                .thenThrow(new RejectedExecutionException("decode work is saturated"));
+
+        mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image/crop", planId, 4)
+                        .param("x", "100")
+                        .param("y", "200")
+                        .param("width", "300")
+                        .param("height", "400"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "1"))
+                .andExpect(header().string("X-RulePilot-Visual-Failure", "DECODE_CAPACITY_EXCEEDED"))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
+    }
+
+    @Test
+    void classifies_a_stored_image_decode_failure_as_bad_gateway() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        var lesson = lesson(planId, documentVersionId);
+        var stored = new DocumentPageImages.PageImage(4, "image/png", new byte[] {1}, 800, 1_200);
+        when(lessons.requireCitedPage(planId, 4)).thenReturn(lesson);
+        when(pageImages.read(documentVersionId, Set.of(4))).thenReturn(List.of(stored));
+        when(crops.crop(stored, 100, 200, 300, 400))
+                .thenThrow(new IllegalStateException("image decoder unavailable"));
+
+        mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image/crop", planId, 4)
+                        .param("x", "100")
+                        .param("y", "200")
+                        .param("width", "300")
+                        .param("height", "400"))
+                .andExpect(status().isBadGateway())
+                .andExpect(header().string("X-RulePilot-Visual-Failure", "PAGE_IMAGE_UNAVAILABLE"))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
     }
 
     @Test

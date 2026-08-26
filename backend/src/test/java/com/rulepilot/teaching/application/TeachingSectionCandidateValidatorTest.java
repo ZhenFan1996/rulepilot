@@ -11,7 +11,6 @@ import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
-import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
@@ -27,7 +26,7 @@ class TeachingSectionCandidateValidatorTest {
             new TeachingSectionCandidateValidator(new PolicyEvidenceVerifier());
 
     @Test
-    void producesACitedSectionWithTheAttachedVisualSourcePage() {
+    void preservesVisualIntentButLeavesPixelGeometryToThePostPublicationLocator() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -49,8 +48,7 @@ class TeachingSectionCandidateValidatorTest {
                         "放置主棋盘",
                         TeachingMove.VISUAL,
                         "在图中找到主棋盘，再把它放在桌面中央。",
-                        List.of(chunkId),
-                        new VisualFocusDraft(4, "主棋盘", 120, 120, 500, 500))));
+                        List.of(chunkId))));
 
         var section = validator.validate(
                 plan, planned, List.of(evidence), request(chunkId), draft, EvidenceStatus.CITED_DRAFT);
@@ -60,7 +58,8 @@ class TeachingSectionCandidateValidatorTest {
         assertThat(section.visualSourceChunkIds()).containsExactly(chunkId);
         assertThat(section.steps()).singleElement().satisfies(step -> {
             assertThat(step.sourcePages()).containsExactly(4);
-            assertThat(step.visualFocus().pageNumber()).isEqualTo(4);
+            assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
+            assertThat(step.visualFocus()).isNull();
         });
     }
 
@@ -314,8 +313,7 @@ class TeachingSectionCandidateValidatorTest {
                                 TeachingMove.FLOW,
                                 groundedText,
                                 List.of(chunkId),
-                                List.of("turn-flow"),
-                                null),
+                                List.of("turn-flow")),
                         new StepDraft(
                                 "补充提醒",
                                 TeachingMove.WATCH,
@@ -337,8 +335,7 @@ class TeachingSectionCandidateValidatorTest {
                                 TeachingMove.FLOW,
                                 "这一句不应覆盖已经验证的原文。",
                                 List.of(chunkId),
-                                List.of("turn-flow"),
-                                null),
+                                List.of("turn-flow")),
                         new StepDraft(
                                 "补充提醒",
                                 TeachingMove.WATCH,
@@ -387,15 +384,13 @@ class TeachingSectionCandidateValidatorTest {
                                 TeachingMove.DO,
                                 groundedText,
                                 List.of(chunkId),
-                                List.of("shared-area"),
-                                null),
+                                List.of("shared-area")),
                         new StepDraft(
                                 "检查后续条件",
                                 TeachingMove.CHECK,
                                 "这一条件引用了当前检索范围之外的材料。",
                                 List.of(unknownChunkId),
-                                List.of("ending-check"),
-                                null)));
+                                List.of("ending-check"))));
         SectionRequest request = unitRequest(
                 chunkId,
                 List.of(
@@ -413,15 +408,13 @@ class TeachingSectionCandidateValidatorTest {
                                 TeachingMove.DO,
                                 "这句改写不应覆盖原本合规的准备说明。",
                                 List.of(chunkId),
-                                List.of("shared-area"),
-                                null),
+                                List.of("shared-area")),
                         new StepDraft(
                                 "检查后续条件",
                                 TeachingMove.CHECK,
                                 "每轮结束时检查规则书所列的结束条件；未满足就开始下一轮。",
                                 List.of(chunkId),
-                                List.of("ending-check"),
-                                null)));
+                                List.of("ending-check"))));
 
         SectionDraft merged = validator.mergeRepairPreservingValidatedFields(
                 plan,
@@ -463,22 +456,19 @@ class TeachingSectionCandidateValidatorTest {
                                 TeachingMove.DO,
                                 "轮到你时选择一项可用行动。",
                                 List.of(chunkId),
-                                List.of("turn-flow"),
-                                null),
+                                List.of("turn-flow")),
                         new StepDraft(
                                 "可选算例",
                                 TeachingMove.EXAMPLE,
                                 "这个算例来自未检索到的材料。",
                                 List.of(unknownChunkId),
-                                List.of("turn-flow"),
-                                null),
+                                List.of("turn-flow")),
                         new StepDraft(
                                 "交给下一位",
                                 TeachingMove.FLOW,
                                 "完整结算后把回合交给下一位玩家。",
                                 List.of(chunkId),
-                                List.of("turn-flow"),
-                                null)));
+                                List.of("turn-flow"))));
         SectionRequest request = unitRequest(
                 chunkId,
                 List.of(new TeachingUnitInput(
@@ -494,15 +484,13 @@ class TeachingSectionCandidateValidatorTest {
                                 TeachingMove.DO,
                                 "模型不应覆盖已经验证的第一步。",
                                 List.of(chunkId),
-                                List.of("turn-flow"),
-                                null),
+                                List.of("turn-flow")),
                         new StepDraft(
                                 "交给下一位",
                                 TeachingMove.FLOW,
                                 "模型不应覆盖已经验证的最后一步。",
                                 List.of(chunkId),
-                                List.of("turn-flow"),
-                                null)));
+                                List.of("turn-flow"))));
 
         SectionDraft merged = validator.mergeRepairPreservingValidatedFields(
                 plan,

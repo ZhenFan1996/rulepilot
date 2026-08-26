@@ -37,6 +37,10 @@ final class RecommendationEvidenceReview {
             "maxWeight",
             "type",
             "interaction");
+    private static final Set<String> CLARIFICATION_PROFILE_FIELDS = Set.of(
+            "playerCount",
+            "durationMinutes",
+            "complexity");
     private final ObjectMapper json;
     private final RecommendationReActLoop runtime;
 
@@ -49,10 +53,44 @@ final class RecommendationEvidenceReview {
             JsonNode arguments,
             RecommendationProfile current,
             ConversationRequest request) {
+        return planPreferenceUpdates(arguments, current, request, Set.of(
+                "playerCount",
+                "durationMinutes",
+                "complexity",
+                "type",
+                "interaction"), false);
+    }
+
+    PreferenceUpdatePlan planClarificationPreferenceUpdates(
+            JsonNode arguments,
+            RecommendationProfile current,
+            ConversationRequest request) {
+        return planPreferenceUpdates(
+                arguments,
+                current,
+                request,
+                CLARIFICATION_PROFILE_FIELDS,
+                true);
+    }
+
+    private PreferenceUpdatePlan planPreferenceUpdates(
+            JsonNode arguments,
+            RecommendationProfile current,
+            ConversationRequest request,
+            Set<String> allowedFields,
+            boolean clarification) {
         if (!arguments.has("preferenceUpdates")) return PreferenceUpdatePlan.unchanged(current);
-        JsonNode updates = arguments.path("preferenceUpdates");
-        if (!updates.isArray()) throw new InvalidAction("PREFERENCE_UPDATE_LIST_REQUIRED");
-        return planPreferenceUpdateList(updates, current, request);
+        NormalizedPreferenceUpdates normalized = normalizedPreferenceUpdates(arguments.path("preferenceUpdates"));
+        if (!clarification && !normalized.ignoredFailureCodes().isEmpty()) {
+            throw new InvalidAction(normalized.ignoredFailureCodes().getFirst());
+        }
+        return planPreferenceUpdateList(
+                normalized.updates(),
+                current,
+                request,
+                allowedFields,
+                normalized.ignoredFailureCodes(),
+                clarification);
     }
 
     void commitPreferenceUpdates(PreferenceUpdatePlan plan, RecommendationAgentState state) {
@@ -66,43 +104,143 @@ final class RecommendationEvidenceReview {
         } else if (plan.directUpdatesPresent()) {
             state.actions.add("IGNORED_REDUNDANT_PREFERENCE_UPDATE");
         }
+        plan.ignoredFailureCodes().stream()
+                .distinct()
+                .forEach(code -> state.actions.add("IGNORED_INVALID_PREFERENCE_UPDATE:" + code));
     }
 
     private PreferenceUpdatePlan planPreferenceUpdateList(
-            JsonNode updates,
+            ArrayNode updates,
             RecommendationProfile current,
-            ConversationRequest request) {
-        if (updates.isEmpty()) return PreferenceUpdatePlan.unchanged(current);
-        if (updates.size() > MAX_PROFILE_UPDATES) {
-            throw new InvalidAction("TOO_MANY_PREFERENCE_UPDATES");
+            ConversationRequest request,
+            Set<String> allowedFields,
+            List<String> normalizationFailures,
+            boolean clarification) {
+        List<String> ignoredFailures = new ArrayList<>(normalizationFailures);
+        if (updates.isEmpty()) {
+            return new PreferenceUpdatePlan(current, Map.of(), false, false, ignoredFailures);
         }
-        ArrayNode directUpdates = json.createArrayNode();
+        RecommendationProfile candidate = current;
         Map<String, ContextualPreference> contextualUpdates = new LinkedHashMap<>();
-        Set<String> seen = new LinkedHashSet<>();
+        boolean directUpdatesPresent = false;
+        List<PreparedPreferenceUpdate> prepared = new ArrayList<>();
+        Map<String, Integer> occurrences = new LinkedHashMap<>();
         for (JsonNode update : updates) {
-            String field = text(update.path("field"), 1, 40);
-            String canonicalField = canonicalPreferenceField(field);
-            if (!seen.add(canonicalField)) {
-                throw new InvalidAction("PREFERENCE_FIELD_INVALID");
-            }
-            if (redundantCategoricalClear(update, canonicalField, current, request)) continue;
-            PreferenceEvidenceClassification classification = preferenceClassification(update, request);
-            if (classification.contextual()) {
-                ContextualPreference contextual = contextualPreference(
-                        update, request, classification.reason());
-                contextualUpdates.put(contextual.field(), contextual);
-            } else {
-                directUpdates.add(preferencePayload(update));
+            try {
+                String field = text(update.path("field"), 1, 40);
+                String canonicalField = canonicalPreferenceField(field);
+                if (!PROFILE_FIELDS.contains(field)) {
+                    throw new InvalidAction("PREFERENCE_FIELD_INVALID");
+                }
+                prepared.add(new PreparedPreferenceUpdate(update, canonicalField));
+                occurrences.merge(canonicalField, 1, Integer::sum);
+            } catch (InvalidAction failure) {
+                if (!clarification) throw failure;
+                ignoredFailures.add(failure.code);
             }
         }
-        RecommendationProfile candidate = directUpdates.isEmpty()
-                ? current
-                : updatedProfileFromList(directUpdates, current, request);
+        Set<String> rejectedDuplicates = new LinkedHashSet<>();
+        for (PreparedPreferenceUpdate preparedUpdate : prepared) {
+            String canonicalField = preparedUpdate.canonicalField();
+            if (occurrences.getOrDefault(canonicalField, 0) > 1) {
+                if (rejectedDuplicates.add(canonicalField)) {
+                    boolean directHardDuplicate = prepared.stream()
+                            .filter(entry -> canonicalField.equals(entry.canonicalField()))
+                            .anyMatch(entry -> directHardUpdate(
+                                    entry.update(), entry.canonicalField()));
+                    if (directHardDuplicate && (!clarification || allowedFields.contains(canonicalField))) {
+                        throw new InvalidAction("PREFERENCE_FIELD_INVALID");
+                    }
+                    ignoredFailures.add("PREFERENCE_FIELD_INVALID");
+                }
+                continue;
+            }
+            if (!allowedFields.contains(canonicalField)) {
+                ignoredFailures.add("PREFERENCE_FIELD_NOT_ALLOWED_FOR_ACTION");
+                continue;
+            }
+            JsonNode update = preparedUpdate.update();
+            try {
+                if (redundantCategoricalClear(update, canonicalField, candidate, request)) continue;
+                PreferenceEvidenceClassification classification = preferenceClassification(update, request);
+                if (classification.contextual()) {
+                    ContextualPreference contextual = contextualPreference(
+                            update, request, classification.reason());
+                    contextualUpdates.put(contextual.field(), contextual);
+                } else {
+                    ArrayNode singleUpdate = json.createArrayNode().add(preferencePayload(update));
+                    RecommendationProfile updated =
+                            updatedProfileFromList(singleUpdate, candidate, request);
+                    directUpdatesPresent = true;
+                    candidate = updated;
+                }
+            } catch (InvalidAction failure) {
+                if (directHardUpdate(update, canonicalField)) throw failure;
+                ignoredFailures.add(failure.code);
+            }
+        }
         return new PreferenceUpdatePlan(
                 candidate,
                 contextualUpdates,
                 !candidate.equals(current),
-                !directUpdates.isEmpty());
+                directUpdatesPresent,
+                ignoredFailures);
+    }
+
+    private boolean directHardUpdate(JsonNode update, String canonicalField) {
+        if (!Set.of("playerCount", "durationMinutes", "complexity", "type", "interaction")
+                .contains(canonicalField)) return false;
+        JsonNode classification = update.path("evidenceClassification");
+        return !classification.isTextual()
+                || !"INFERRED_GROUP_MEMBER_COUNT".equals(classification.asText());
+    }
+
+    private NormalizedPreferenceUpdates normalizedPreferenceUpdates(JsonNode supplied) {
+        ArrayNode normalized = json.createArrayNode();
+        List<String> ignoredFailures = new ArrayList<>();
+        if (supplied.isArray()) {
+            if (supplied.size() > MAX_PROFILE_UPDATES) {
+                ignoredFailures.add("TOO_MANY_PREFERENCE_UPDATES");
+            }
+            supplied.elements().forEachRemaining(update -> {
+                if (normalized.size() < MAX_PROFILE_UPDATES) normalized.add(update);
+            });
+            return new NormalizedPreferenceUpdates(normalized, ignoredFailures);
+        }
+        if (!supplied.isObject()) {
+            ignoredFailures.add("PREFERENCE_UPDATE_OBJECT_REQUIRED");
+            return new NormalizedPreferenceUpdates(normalized, ignoredFailures);
+        }
+
+        Set<String> patchFields = new LinkedHashSet<>();
+        supplied.fieldNames().forEachRemaining(patchFields::add);
+        Set<String> allowedPatchFields = new LinkedHashSet<>(PROFILE_FIELDS);
+        allowedPatchFields.add("evidence");
+        allowedPatchFields.add("evidenceClassification");
+        if (patchFields.stream().anyMatch(field -> !allowedPatchFields.contains(field))) {
+            ignoredFailures.add("UNEXPECTED_PREFERENCE_FIELD");
+        }
+        for (String field : List.of(
+                "playerCount",
+                "durationMinutes",
+                "complexity",
+                "type",
+                "interaction",
+                "players",
+                "maxMinutes",
+                "maxWeight")) {
+            if (!supplied.has(field) || normalized.size() == MAX_PROFILE_UPDATES) continue;
+            ObjectNode update = json.createObjectNode();
+            update.put("field", field);
+            update.set("value", supplied.path(field));
+            update.set("evidence", supplied.path("evidence"));
+            if (supplied.has("evidenceClassification")) {
+                update.set("evidenceClassification", supplied.path("evidenceClassification"));
+            }
+            normalized.add(update);
+        }
+        if (normalized.isEmpty()) ignoredFailures.add("EMPTY_PREFERENCE_UPDATE");
+        return new NormalizedPreferenceUpdates(normalized, ignoredFailures);
     }
 
     private boolean redundantCategoricalClear(
@@ -169,7 +307,7 @@ final class RecommendationEvidenceReview {
             requirePreferenceEvidence(update.path("evidence").asText(), request);
             return new PreferenceEvidenceClassification(false, classification);
         }
-        if (!"CONTEXTUAL_COMPLETE_GROUP".equals(classification)) {
+        if (!"INFERRED_GROUP_MEMBER_COUNT".equals(classification)) {
             throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
         }
         JsonNode value = update.path("value");
@@ -505,6 +643,13 @@ final class RecommendationEvidenceReview {
         requirePreferenceEvidence(evidenceId, request);
     }
 
+    void requireCurrentTurnUserEvidence(String evidenceId, ConversationRequest request) {
+        List<String> evidenceIds = preferenceEvidence(request).keySet().stream().toList();
+        if (evidenceIds.isEmpty() || !evidenceIds.getLast().equals(evidenceId)) {
+            throw new InvalidAction("REQUESTED_COUNT_EVIDENCE_NOT_CURRENT");
+        }
+    }
+
     Map<String, String> preferenceEvidence(ConversationRequest request) {
         Map<String, String> evidence = new LinkedHashMap<>();
         for (DialogueMessage message : request.transcript()) {
@@ -641,8 +786,11 @@ final class RecommendationEvidenceReview {
         if (node == null || !node.isObject()) throw new InvalidAction("ARGUMENT_OBJECT_REQUIRED");
         Set<String> allowed = new LinkedHashSet<>(required);
         allowed.addAll(optional);
-        java.util.Iterator<String> fields = node.fieldNames();
-        while (fields.hasNext()) if (!allowed.contains(fields.next())) throw new InvalidAction("UNEXPECTED_ARGUMENT");
+        List<String> unexpected = new ArrayList<>();
+        node.fieldNames().forEachRemaining(field -> {
+            if (!allowed.contains(field)) unexpected.add(field);
+        });
+        if (!unexpected.isEmpty()) throw InvalidAction.unexpectedArguments(unexpected, allowed);
         if (required.stream().anyMatch(field -> !node.has(field))) {
             throw new InvalidAction("REQUIRED_ARGUMENT_MISSING");
         }
@@ -677,16 +825,26 @@ final class RecommendationEvidenceReview {
             RecommendationProfile profile,
             Map<String, ContextualPreference> contextualUpdates,
             boolean profileUpdated,
-            boolean directUpdatesPresent) {
+            boolean directUpdatesPresent,
+            List<String> ignoredFailureCodes) {
         PreferenceUpdatePlan {
             profile = profile == null ? RecommendationProfile.empty() : profile;
             contextualUpdates = contextualUpdates == null
                     ? Map.of()
                     : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(contextualUpdates));
+            ignoredFailureCodes = ignoredFailureCodes == null
+                    ? List.of()
+                    : List.copyOf(ignoredFailureCodes);
         }
 
         static PreferenceUpdatePlan unchanged(RecommendationProfile profile) {
-            return new PreferenceUpdatePlan(profile, Map.of(), false, false);
+            return new PreferenceUpdatePlan(profile, Map.of(), false, false, List.of());
         }
     }
+
+    private record NormalizedPreferenceUpdates(
+            ArrayNode updates,
+            List<String> ignoredFailureCodes) {}
+
+    private record PreparedPreferenceUpdate(JsonNode update, String canonicalField) {}
 }

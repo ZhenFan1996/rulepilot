@@ -2,6 +2,7 @@ package com.rulepilot.document.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.document.DocumentPageImages.PageImage;
 import java.awt.Color;
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.IntStream;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
@@ -160,6 +162,34 @@ class RulePageImageCropperTest {
         BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result));
         assertThat(cropped.getWidth()).isEqualTo(80);
         assertThat(cropped.getHeight()).isEqualTo(120);
+    }
+
+    @Test
+    void rejectsAStoredPageWhoseActualPixelMetadataExceedsTheSingleRequestBoundary() {
+        PageImage page = new PageImage(1, "image/jpeg", new byte[] {1}, 7_000, 7_000);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> cropper.crop(page, 500, 500, 20, 20, 10))
+                .withMessageContaining("source pixel limit");
+    }
+
+    @Test
+    void rejectsAProjectedCropWhoseActualPixelsExceedTheSingleRequestBoundary() {
+        PageImage page = new PageImage(1, "image/jpeg", new byte[] {1}, 5_000, 5_000);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> cropper.crop(page, 0, 0, 1_000, 1_000, 0))
+                .withMessageContaining("projected pixel limit");
+    }
+
+    @Test
+    void rejectsDecodeWorkWhenTheConcurrentPixelBudgetHasNoRoomForTheRequest() {
+        RulePageImageCropper constrained = new RulePageImageCropper(5_000_000L);
+        PageImage page = new PageImage(1, "image/jpeg", new byte[] {1}, 2_000, 3_000);
+
+        assertThatThrownBy(() -> constrained.crop(page, 500, 500, 20, 20, 10))
+                .isInstanceOf(RejectedExecutionException.class)
+                .hasMessageContaining("capacity");
     }
 
     @Test

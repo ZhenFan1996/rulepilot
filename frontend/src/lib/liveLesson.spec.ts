@@ -22,6 +22,7 @@ describe('live lesson snapshots', () => {
     expect(teachingRunIsActive('LESSON_COMPOSITION')).toBe(true)
     expect(teachingRunIsActive('COMPLETED')).toBe(false)
     expect(teachingRunIsActive('INSUFFICIENT_EVIDENCE')).toBe(false)
+    expect(teachingRunIsActive('CANCELLED')).toBe(false)
     expect(teachingRunIsActive(null)).toBe(false)
   })
 

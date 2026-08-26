@@ -65,12 +65,11 @@ final class TeachingSectionCandidateValidator {
             throw new IllegalArgumentException(
                     "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
         }
-        Set<Integer> attachedPages = modelRequest.pageImages().stream()
-                .map(TeachingLessonModel.PageImageInput::pageNumber)
-                .collect(Collectors.toUnmodifiableSet());
         List<LessonStep> steps = IntStream.range(0, acceptedDraft.steps().size())
                 .mapToObj(index -> LessonDraftValidator.validatedStep(
-                        index + 1, acceptedDraft.steps().get(index), allowedEvidence, attachedPages))
+                        // Preserve typed VISUAL intent; the visual Agent resolves an opaque candidate ID to
+                        // application-owned coordinates after composition.
+                        index + 1, acceptedDraft.steps().get(index), allowedEvidence))
                 .toList();
         List<Integer> visualSourcePages = visualCitationIds.stream()
                 .map(allowedEvidence::get)

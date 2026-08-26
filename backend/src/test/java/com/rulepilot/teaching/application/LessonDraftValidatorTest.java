@@ -9,13 +9,10 @@ import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
-import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -61,7 +58,7 @@ class LessonDraftValidatorTest {
     }
 
     @Test
-    void keepsAVisualStepBoundToItsAttachedAndCitedPage() {
+    void keepsCitedVisualIntentWithoutAcceptingGeometryFromTheCompositionModel() {
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = evidence(chunkId, 3, "Place the board in the center.");
         SectionRequest request = visualRequest(chunkId);
@@ -74,19 +71,19 @@ class LessonDraftValidatorTest {
                         "找到主棋盘",
                         TeachingMove.VISUAL,
                         "在图中找到主棋盘。",
-                        List.of(chunkId),
-                        new VisualFocusDraft(3, "主棋盘", 150, 180, 450, 400))));
+                        List.of(chunkId))));
         Map<UUID, RuleEvidence> allowedEvidence = Map.of(chunkId, evidence);
 
         LessonDraftValidator.validateDraft(draft, request);
-        var step = LessonDraftValidator.validatedStep(1, draft.steps().getFirst(), allowedEvidence, Set.of(3));
+        var step = LessonDraftValidator.validatedStep(1, draft.steps().getFirst(), allowedEvidence);
 
         assertThat(LessonDraftValidator.validatedVisualCitationIds(draft, allowedEvidence)).containsExactly(chunkId);
-        assertThat(step.visualFocus()).isEqualTo(new VisualFocus(3, "主棋盘", 150, 180, 450, 400));
+        assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
+        assertThat(step.visualFocus()).isNull();
     }
 
     @Test
-    void skipsOnlyAnUnboundOptionalVisualFocusAndKeepsTheCitedStepExact() {
+    void keepsTheCitedVisualStepExactWhileLeavingGeometryToTheVisualAgent() {
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = evidence(chunkId, 3, "Place the board in the center.");
         String text = "先按规则原文确认版图，再放到桌面中央。";
@@ -94,10 +91,9 @@ class LessonDraftValidatorTest {
                 "确认版图",
                 TeachingMove.VISUAL,
                 text,
-                List.of(chunkId),
-                new VisualFocusDraft(9, "未附加页上的区域", 0, 0, 1_000, 1_000));
+                List.of(chunkId));
 
-        var step = LessonDraftValidator.validatedStep(1, draft, Map.of(chunkId, evidence), Set.of(3));
+        var step = LessonDraftValidator.validatedStep(1, draft, Map.of(chunkId, evidence));
 
         assertThat(step.text()).isEqualTo(text);
         assertThat(step.heading()).isEqualTo(draft.heading());
@@ -117,8 +113,7 @@ class LessonDraftValidatorTest {
                         "找到主棋盘",
                         TeachingMove.VISUAL,
                         "在图中找到主棋盘。",
-                        List.of(chunkId),
-                        new VisualFocusDraft(3, "主棋盘", 150, 180, 450, 400))));
+                        List.of(chunkId))));
 
         assertThat(LessonDraftValidator.reviewClaims(draft, List.of(chunkId)))
                 .extracting(com.rulepilot.assistant.GeneratedContentCritic.Claim::text)

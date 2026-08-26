@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
+import com.rulepilot.teaching.VisualRegionProposer.Proposal;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -29,7 +30,19 @@ public final class VisualRegionCandidateSelector {
             RulebookUnderstanding understanding,
             Set<Integer> citedPages,
             List<String> sectionTerms) {
-        if (understanding == null || citedPages == null || sectionTerms == null) {
+        return select(understanding, citedPages, sectionTerms, Map.of());
+    }
+
+    /**
+     * Adds pixel-derived geometry without letting prose steer it. Proposal order is preserved and interleaved with
+     * PDF layout and coarse coverage, so one imperfect geometry source cannot consume the first attachment batch.
+     */
+    public List<Candidate> select(
+            RulebookUnderstanding understanding,
+            Set<Integer> citedPages,
+            List<String> sectionTerms,
+            Map<Integer, List<Proposal>> visualProposals) {
+        if (understanding == null || citedPages == null || sectionTerms == null || visualProposals == null) {
             throw new IllegalArgumentException("visual region selection input is required");
         }
         if (citedPages.stream().anyMatch(page -> page == null || page < 1)) {
@@ -39,7 +52,9 @@ public final class VisualRegionCandidateSelector {
 
         List<Integer> pages = citedPages.stream().sorted().toList();
         Map<Integer, List<Candidate>> byPage = new LinkedHashMap<>();
-        pages.forEach(page -> byPage.put(page, candidatesForPage(understanding, page)));
+        pages.forEach(page -> byPage.put(
+                page,
+                candidatesForPage(understanding, page, visualProposals.getOrDefault(page, List.of()))));
 
         List<Candidate> selected = new ArrayList<>();
         for (int index = 0; ; index++) {
@@ -56,7 +71,15 @@ public final class VisualRegionCandidateSelector {
         return List.copyOf(selected);
     }
 
-    private List<Candidate> candidatesForPage(RulebookUnderstanding understanding, int pageNumber) {
+    private List<Candidate> candidatesForPage(
+            RulebookUnderstanding understanding, int pageNumber, List<Proposal> visualProposals) {
+        List<Candidate> detectedRegions = visualProposals.stream()
+                .map(Proposal::rectangle)
+                .filter(rectangle -> !WHOLE_PAGE.equals(rectangle))
+                .filter(rectangle -> rectangle.width() >= MIN_REGION_SIZE
+                        && rectangle.height() >= MIN_REGION_SIZE)
+                .map(rectangle -> candidate(pageNumber, rectangle, VisualSourceKind.PAGE_REGION))
+                .toList();
         List<Candidate> tiles = pageTiles(pageNumber);
         List<Candidate> nativeBlocks = understanding.pageBlocks().stream()
                 .filter(block -> block.pageNumber() == pageNumber)
@@ -70,11 +93,14 @@ public final class VisualRegionCandidateSelector {
                 .toList();
 
         Map<Rectangle, Candidate> candidates = new LinkedHashMap<>();
-        // PDF text layout does not describe adjacent diagrams or component art. Four fixed coverage crops keep those
-        // areas inspectable. Interleaving them with native blocks prevents either source from consuming the bounded
-        // multi-page pool, and does not interpret block text or lesson wording.
-        int count = Math.max(tiles.size(), nativeBlocks.size());
+        // Native layout, pixel geometry and four coarse coverage crops are independent candidate sources. Round-robin
+        // ordering keeps all three visible in an early bounded attachment batch; none can starve the others.
+        int count = Math.max(detectedRegions.size(), Math.max(tiles.size(), nativeBlocks.size()));
         for (int index = 0; index < count; index++) {
+            if (index < detectedRegions.size()) {
+                Candidate proposal = detectedRegions.get(index);
+                candidates.putIfAbsent(proposal.rectangle(), proposal);
+            }
             if (index < tiles.size()) {
                 Candidate tile = tiles.get(index);
                 candidates.putIfAbsent(tile.rectangle(), tile);

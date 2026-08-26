@@ -26,7 +26,6 @@ import {
   parseTeachingRunProgress,
   parseTeachingPlans,
   parseUploadedHandoffs,
-  terminalAssistantRunStates,
   validateDocumentRelationships,
   type DocumentProgress,
   type DocumentSummary,
@@ -36,6 +35,7 @@ import {
 import { mergeDocumentProgress } from '@/lib/documentProgress'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import { playerJourneyRunIsTerminal } from '@/lib/playerJourney'
 import {
   playerWorkStatus,
   type PlayerCapability,
@@ -104,7 +104,6 @@ const dismissedTeachingRunIds = ref<Set<string>>(new Set())
 const dismissedImportIds = ref<Set<string>>(new Set())
 const dismissedUploadedHandoffIds = ref<Set<string>>(new Set())
 const titles = new Map<string, string>()
-const terminalTeachingStates = terminalAssistantRunStates
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 let account = ''
@@ -277,7 +276,7 @@ function officialImportFinished(job: RulebookImportJob) {
     : undefined
   if (document?.latestVersion.status === 'FAILED') return true
   if (job.teachingPreparationRunId || job.teachingHandoffState === 'LAUNCHED') {
-    return Boolean(runState && terminalTeachingStates.has(runState))
+    return playerJourneyRunIsTerminal(runState)
   }
   return job.stage === 'COMPLETED'
     && !['WAITING_FOR_DOCUMENT', 'LAUNCHING'].includes(job.teachingHandoffState ?? 'NOT_REQUESTED')
@@ -291,7 +290,7 @@ function uploadedTeachingHandoffFailed(handoff: UploadedTeachingHandoff) {
   return handoff.state === 'FAILED'
     || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
     || document?.latestVersion.status === 'FAILED'
-    || Boolean(runState && terminalTeachingStates.has(runState) && runState !== 'COMPLETED')
+    || Boolean(runState && playerJourneyRunIsTerminal(runState) && runState !== 'COMPLETED')
 }
 
 function uploadedTeachingHandoffFinished(handoff: UploadedTeachingHandoff) {
@@ -299,7 +298,7 @@ function uploadedTeachingHandoffFinished(handoff: UploadedTeachingHandoff) {
     ? preparationStates.value[handoff.preparationRunId]
     : undefined
   return uploadedTeachingHandoffFailed(handoff)
-    || Boolean(runState && terminalTeachingStates.has(runState))
+    || playerJourneyRunIsTerminal(runState)
 }
 
 function preparationStage(state: string) {
@@ -308,6 +307,7 @@ function preparationStage(state: string) {
     DOCUMENT_READINESS: copy.value.preparationReading,
     LESSON_PLANNING: copy.value.preparationPlanning,
     FAILED: copy.value.preparationFailed,
+    CANCELLED: copy.value.preparationFailed,
   }[state] ?? copy.value.teaching
 }
 
@@ -470,8 +470,8 @@ const workItems = computed<WorkItem[]>(() => {
     const runId = job.teachingPreparationRunId
     const runState = runId ? preparationStates.value[runId] : undefined
     if (!runId || !runState || runState === 'COMPLETED') return []
-    if (dismissedImportIds.value.has(job.id) && terminalTeachingStates.has(runState)) return []
-    const failed = terminalTeachingStates.has(runState)
+    if (dismissedImportIds.value.has(job.id) && playerJourneyRunIsTerminal(runState)) return []
+    const failed = playerJourneyRunIsTerminal(runState)
     return [{
       id: `teaching-preparation:${runId}`,
       kind: 'lesson',
@@ -671,7 +671,7 @@ async function loadTeachingSnapshot(
         // The authoritative run state remains usable when optional activity detail is unavailable.
       }
       states[item.runId] = run.state
-      if (terminalTeachingStates.has(run.state)) {
+      if (playerJourneyRunIsTerminal(run.state)) {
         confirmedTerminalStates.set(item.planId, run.state as BackgroundTeachingItem['terminalState'])
         return null
       }
@@ -738,7 +738,7 @@ async function loadDocumentSnapshot(
     const previousState = preparationSubjects.value[runId] === versionId
       ? preparationStates.value[runId]
       : undefined
-    if (previousState && terminalTeachingStates.has(previousState)) {
+    if (previousState && playerJourneyRunIsTerminal(previousState)) {
       nextPreparationStates[runId] = previousState
       nextPreparationSubjects[runId] = versionId
       if (preparationRunDetails.value[runId]) {
@@ -913,7 +913,7 @@ async function bridgeCompletedPreparations(
       const run = parseLatestTeachingRun(await response.json(), planId, targetAccount)
       teaching.states[run.id] = run.state
       transitionById.delete(transition.id)
-      if (terminalTeachingStates.has(run.state)) {
+      if (playerJourneyRunIsTerminal(run.state)) {
         if (dismissedTeachingRunIds.value.has(run.id)) return
         completedByPlan.set(planId, {
           runId: run.id,
@@ -1119,7 +1119,7 @@ function officialImportNeedsPersistentDismissal(job: RulebookImportJob) {
   const runState = job.teachingPreparationRunId
     ? preparationStates.value[job.teachingPreparationRunId]
     : undefined
-  return Boolean(runState && terminalTeachingStates.has(runState) && runState !== 'COMPLETED')
+  return Boolean(runState && playerJourneyRunIsTerminal(runState) && runState !== 'COMPLETED')
 }
 
 function handleVisibility() {

@@ -82,6 +82,9 @@ management:
   opentelemetry:
     resource-attributes:
       service.namespace: rulepilot
+      service.version: ${RULEPILOT_RELEASE_ID:local}
+      deployment.environment.name: ${RULEPILOT_DEPLOYMENT_ENVIRONMENT:development}
+      rulepilot.runtime.role: ${RULEPILOT_RUNTIME_ROLE:combined}
     tracing:
       export:
         otlp:
@@ -176,6 +179,13 @@ rulepilot:
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}
+    region-proposal:
+      # A local pixel tool proposes immutable crop geometry. The visual model may select only opaque candidate IDs;
+      # it never authors coordinates. Per-page work is short and failure falls back to existing PDF layout candidates.
+      enabled: ${VISUAL_REGION_PROPOSAL_ENABLED:true}
+      python-command: ${VISUAL_REGION_PROPOSAL_PYTHON_COMMAND:python3}
+      timeout: ${VISUAL_REGION_PROPOSAL_TIMEOUT:PT2S}
+      max-regions-per-page: ${VISUAL_REGION_PROPOSAL_MAX_REGIONS_PER_PAGE:32}
     # Every cited, sufficiently evidenced section may receive optional crop work. Candidate images travel in bounded
     # per-call batches; the visual Agent decides when another finite batch is no longer useful.
     # Complete post-publication positioning and visual audits use their own bounded pool.

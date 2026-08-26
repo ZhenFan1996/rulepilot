@@ -541,6 +541,16 @@ class VisualRulebookCatalogerTest {
                         operations.add(operation);
                         return invocation.get();
                     }
+
+                    @Override
+                    public void record(
+                            UUID runId,
+                            com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                            String operation,
+                            com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome outcome,
+                            String summary) {
+                        operations.add(operation);
+                    }
                 },
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(2),
@@ -555,8 +565,12 @@ class VisualRulebookCatalogerTest {
                 assistantRunId);
 
         assertThat(operations).containsExactly(
+                "reuseVisualPageFacts",
                 "inspectTeachingVisualPage|2|3",
-                "inspectTeachingVisualPage|3|3");
+                "persistTeachingVisualPage|2|3",
+                "inspectTeachingVisualPage|3|3",
+                "persistTeachingVisualPage|3|3");
+        assertThat(facts.mergeCalls()).isEqualTo(3);
     }
 
     @Test
@@ -709,6 +723,16 @@ class VisualRulebookCatalogerTest {
                         operations.add(operation);
                         return invocation.get();
                     }
+
+                    @Override
+                    public void record(
+                            UUID runId,
+                            com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                            String operation,
+                            com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome outcome,
+                            String summary) {
+                        operations.add(operation);
+                    }
                 },
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(2),
@@ -721,10 +745,46 @@ class VisualRulebookCatalogerTest {
                         "Example game",
                         "owner",
                         assistantRunId))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("page fact store unavailable");
+                .isInstanceOf(TeachingPreparationStorageException.class)
+                .hasRootCauseMessage("page fact store unavailable");
         assertThat(modelCalls).hasValue(1);
         assertThat(operations).containsExactly("inspectTeachingVisualPage|1|1");
+    }
+
+    @Test
+    void classifiesPageFactReadFailureBeforeStartingAnyPaidModelWork() {
+        UUID documentVersionId = UUID.randomUUID();
+        AtomicInteger modelCalls = new AtomicInteger();
+        VisualRulebookPageFacts unavailableFacts = new VisualRulebookPageFacts() {
+            @Override
+            public void replace(UUID versionId, List<PageFact> pages) {}
+
+            @Override
+            public void merge(UUID versionId, List<PageFact> pages) {}
+
+            @Override
+            public List<PageFact> find(UUID versionId, Set<Integer> pageNumbers) {
+                throw new IllegalStateException("page fact read unavailable");
+            }
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                request -> {
+                    modelCalls.incrementAndGet();
+                    return new CatalogDraft(List.of());
+                },
+                unavailableFacts);
+
+        assertThatThrownBy(() -> cataloger.catalogVisualPages(
+                        documentVersionId,
+                        List.of(page(1)),
+                        "Example game",
+                        "owner",
+                        UUID.randomUUID()))
+                .isInstanceOf(TeachingPreparationStorageException.class)
+                .hasRootCauseMessage("page fact read unavailable");
+        assertThat(modelCalls).hasValue(0);
     }
 
     @Test
@@ -3115,6 +3175,7 @@ class VisualRulebookCatalogerTest {
     private static final class InMemoryFacts implements VisualRulebookPageFacts {
 
         private final Map<UUID, List<PageFact>> factsByVersion = new HashMap<>();
+        private final AtomicInteger mergeCalls = new AtomicInteger();
         private final CountDownLatch distinctReaderLatch;
         private final Set<Thread> distinctReaders = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -3133,6 +3194,7 @@ class VisualRulebookCatalogerTest {
 
         @Override
         public synchronized void merge(UUID documentVersionId, List<PageFact> pages) {
+            mergeCalls.incrementAndGet();
             Map<Integer, PageFact> byPage = new HashMap<>();
             factsByVersion.getOrDefault(documentVersionId, List.of())
                     .forEach(fact -> byPage.put(fact.pageNumber(), fact));
@@ -3140,6 +3202,10 @@ class VisualRulebookCatalogerTest {
             factsByVersion.put(
                     documentVersionId,
                     byPage.values().stream().sorted(java.util.Comparator.comparingInt(PageFact::pageNumber)).toList());
+        }
+
+        private int mergeCalls() {
+            return mergeCalls.get();
         }
 
         @Override

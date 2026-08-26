@@ -1,12 +1,12 @@
+import { playerJourneyRunIsTerminal } from './playerJourney'
+
 interface LessonSnapshot {
   id: string
   sections: unknown[]
 }
 
-const terminalTeachingStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
-
 export function teachingRunIsActive(state: string | null | undefined) {
-  return Boolean(state && !terminalTeachingStates.has(state))
+  return Boolean(state && !playerJourneyRunIsTerminal(state))
 }
 
 export function teachingLessonNeedsFinalSnapshot(

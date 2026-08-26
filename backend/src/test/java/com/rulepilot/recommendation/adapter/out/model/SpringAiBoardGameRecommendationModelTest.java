@@ -15,6 +15,9 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.StructuredOutput;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
+import com.google.genai.types.FunctionDeclaration;
+import com.google.genai.types.Schema;
+import com.google.genai.types.Type;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -128,12 +131,16 @@ class SpringAiBoardGameRecommendationModelTest {
                 .build();
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(output))));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        String countSchema = "{\"type\":\"object\",\"additionalProperties\":false,"
+                + "\"properties\":{\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},"
+                + "\"requestedCountBasis\":{\"type\":\"string\",\"enum\":[\"PRODUCT_DEFAULT\",\"U1\"]}},"
+                + "\"required\":[\"requestedCount\",\"requestedCountBasis\"]}";
 
         adapter.next(new Request(
                 List.of(Message.system("Choose one typed action."), Message.user("你好")),
                 List.of(
                         new ToolSpec("reply_to_user", "Reply naturally", "{\"type\":\"object\"}"),
-                        new ToolSpec("search_bgg", "Search the catalog", "{\"type\":\"object\"}")),
+                        new ToolSpec("search_bgg", "Search the catalog", countSchema)),
                 512,
                 ToolChoice.REQUIRED));
 
@@ -147,7 +154,25 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(options.getToolCallbacks())
                 .extracting(callback -> callback.getToolDefinition().name())
                 .containsExactly("reply_to_user", "search_bgg");
-        assertGeminiCanCreateRequest(prompt.getValue());
+        GoogleGenAiChatModel.GeminiRequest geminiRequest = geminiRequest(prompt.getValue());
+        FunctionDeclaration search = geminiRequest.config().tools().orElseThrow().stream()
+                .flatMap(tool -> tool.functionDeclarations().orElseThrow().stream())
+                .filter(declaration -> declaration.name().orElseThrow().equals("search_bgg"))
+                .findFirst()
+                .orElseThrow();
+        Schema parameters = search.parameters().orElseThrow();
+        assertThat(parameters.type().orElseThrow().knownEnum()).isEqualTo(Type.Known.OBJECT);
+        assertThat(parameters.required().orElseThrow())
+                .containsExactly("requestedCount", "requestedCountBasis");
+        assertThat(parameters.properties().orElseThrow()).satisfies(properties -> {
+            Schema count = properties.get("requestedCount");
+            assertThat(count.type().orElseThrow().knownEnum()).isEqualTo(Type.Known.INTEGER);
+            assertThat(count.minimum()).contains(1.0);
+            assertThat(count.maximum()).contains(8.0);
+            Schema basis = properties.get("requestedCountBasis");
+            assertThat(basis.type().orElseThrow().knownEnum()).isEqualTo(Type.Known.STRING);
+            assertThat(basis.enum_().orElseThrow()).containsExactly("PRODUCT_DEFAULT", "U1");
+        });
     }
 
     @Test
@@ -467,13 +492,16 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     private void assertGeminiCanCreateRequest(Prompt prompt) throws Exception {
+        assertThat(geminiRequest(prompt)).isNotNull();
+    }
+
+    private GoogleGenAiChatModel.GeminiRequest geminiRequest(Prompt prompt) throws Exception {
         ChatModelFactory factory = new ChatModelFactory(
                 io.micrometer.observation.ObservationRegistry.NOOP, java.time.Duration.ofSeconds(5));
         GoogleGenAiChatModel model = (GoogleGenAiChatModel) factory.create(
                 "gemini", "test-api-key", null, "gemini-test-model");
         try {
-            Object geminiRequest = ReflectionTestUtils.invokeMethod(model, "createGeminiRequest", prompt);
-            assertThat(geminiRequest).isNotNull();
+            return ReflectionTestUtils.invokeMethod(model, "createGeminiRequest", prompt);
         } finally {
             model.destroy();
         }

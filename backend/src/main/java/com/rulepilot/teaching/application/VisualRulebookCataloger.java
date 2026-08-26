@@ -244,7 +244,7 @@ class VisualRulebookCataloger {
         if (totalPageCount < highestRequestedPage) {
             throw new IllegalArgumentException("rulebook page total cannot be lower than a requested page number");
         }
-        List<PageFact> cached = visualFacts.find(documentVersionId, pageNumbers);
+        List<PageFact> cached = findVisualFacts(documentVersionId, pageNumbers);
         Set<Integer> missing = VisualRulebookCatalogPolicy.missingPages(pageNumbers, cached);
         if (!missing.isEmpty() && available(owner)) {
             catalogTeachingPageFacts(
@@ -255,7 +255,7 @@ class VisualRulebookCataloger {
                     owner,
                     assistantRunId);
         }
-        return visualFacts.find(documentVersionId, pageNumbers).stream()
+        return findVisualFacts(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .sorted(java.util.Comparator.comparingInt(PageFact::pageNumber))
                 .toList();
@@ -343,7 +343,7 @@ class VisualRulebookCataloger {
                 .map(DocumentProcessing.PageView::pageNumber)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         if (requestedPages.isEmpty()) return List.of();
-        List<PageFact> cached = visualFacts.find(documentVersionId, requestedPages);
+        List<PageFact> cached = findVisualFacts(documentVersionId, requestedPages);
         // A schema change means the interpretation contract changed. Reusing an old dense-page transcript as the
         // input to the new interpreter can preserve exactly the model error that prompted the migration, so stale
         // facts deliberately fall through to a fresh read of the immutable source page below.
@@ -358,9 +358,9 @@ class VisualRulebookCataloger {
         if (!pagesToInspect.isEmpty()) {
             List<PageFact> inspected =
                     catalogPageFacts(documentVersionId, pagesToInspect, rulebookTitle, owner, assistantRunId, true);
-            if (!inspected.isEmpty()) visualFacts.merge(documentVersionId, inspected);
+            if (!inspected.isEmpty()) mergeVisualFacts(documentVersionId, inspected);
         }
-        return visualFacts.find(documentVersionId, requestedPages).stream()
+        return findVisualFacts(documentVersionId, requestedPages).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
     }
@@ -374,7 +374,7 @@ class VisualRulebookCataloger {
         Set<Integer> requestedPages = documentPages.stream()
                 .map(DocumentProcessing.PageView::pageNumber)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        List<PageFact> cached = visualFacts.find(documentVersionId, requestedPages);
+        List<PageFact> cached = findVisualFacts(documentVersionId, requestedPages);
         Set<Integer> missingPages = VisualRulebookCatalogPolicy.missingPages(requestedPages, cached);
         if (!cached.isEmpty() && assistantRunId != null) {
             invocations.record(
@@ -401,7 +401,6 @@ class VisualRulebookCataloger {
         List<PageFact> facts = cached.isEmpty()
                 ? VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh)
                 : VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
-        if (!fresh.isEmpty()) visualFacts.merge(documentVersionId, facts);
         List<PageFact> teachingFacts = facts.stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
@@ -418,7 +417,7 @@ class VisualRulebookCataloger {
         Set<Integer> selected = VisualOutlineEvidencePolicy.unownedSparseVisualCoveragePageNumbers(
                 outline, documentPages, visualCoverageProbePages);
         if (selected.isEmpty()) return List.of();
-        List<PageFact> cached = visualFacts.find(documentVersionId, selected);
+        List<PageFact> cached = findVisualFacts(documentVersionId, selected);
         Set<Integer> cachedPages = cached.stream()
                 .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
                 .map(PageFact::pageNumber)
@@ -446,7 +445,7 @@ class VisualRulebookCataloger {
             return cached;
         }
         if (!fresh.isEmpty()) {
-            visualFacts.merge(documentVersionId, fresh);
+            mergeVisualFacts(documentVersionId, fresh);
             log.info(
                     "Sparse-page visual coverage probe stored document {} pages {}",
                     documentVersionId,
@@ -519,7 +518,7 @@ class VisualRulebookCataloger {
                     requestedFlights);
         }
         requestedFlights.values().forEach(this::awaitTeachingPageFactFlight);
-        return visualFacts.find(documentVersionId, pageNumbers).stream()
+        return findVisualFacts(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
     }
@@ -547,7 +546,7 @@ class VisualRulebookCataloger {
     private boolean hasReusableTeachingPageFact(TeachingPageFactKey key) {
         Set<Integer> page = Set.of(key.pageNumber());
         return VisualRulebookCatalogPolicy.missingPages(
-                        page, visualFacts.find(key.documentVersionId(), page))
+                        page, findVisualFacts(key.documentVersionId(), page))
                 .isEmpty();
     }
 
@@ -568,7 +567,7 @@ class VisualRulebookCataloger {
                         LinkedHashMap::new));
         try {
             Set<Integer> stillMissing = VisualRulebookCatalogPolicy.missingPages(
-                    ownedPages, visualFacts.find(documentVersionId, ownedPages));
+                    ownedPages, findVisualFacts(documentVersionId, ownedPages));
             if (!stillMissing.isEmpty()) {
                 catalogOwnedTeachingPageFacts(
                         documentVersionId,
@@ -627,6 +626,7 @@ class VisualRulebookCataloger {
                 owner,
                 rulebookTitle,
                 assistantRunId,
+                totalPageCount,
                 index -> "inspectTeachingVisualPage|" + orderedPages.get(index) + "|" + totalPageCount,
                 Map.of(),
                 contractViolations,
@@ -652,6 +652,7 @@ class VisualRulebookCataloger {
                     owner,
                     rulebookTitle,
                     assistantRunId,
+                    totalPageCount,
                     index -> "inspectTeachingVisualRepair|" + repairPages.get(index) + "|" + totalPageCount + "|"
                             + contractViolations.get(repairPages.get(index)),
                     contractViolations,
@@ -672,6 +673,7 @@ class VisualRulebookCataloger {
                     owner,
                     rulebookTitle,
                     assistantRunId,
+                    totalPageCount,
                     index -> "inspectTeachingVisualRetry|" + retryPages.get(index) + "|" + totalPageCount,
                     Map.of(),
                     new LinkedHashMap<>(),
@@ -679,7 +681,7 @@ class VisualRulebookCataloger {
                     Map.of(),
                     "transient_replay");
         }
-        return visualFacts.find(documentVersionId, pageNumbers).stream()
+        return findVisualFacts(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
     }
@@ -690,6 +692,7 @@ class VisualRulebookCataloger {
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
+            int totalPageCount,
             IntFunction<String> operationForIndex,
             Map<Integer, TeachingCatalogRepairCode> requestedRepairs,
             Map<Integer, TeachingCatalogRepairCode> contractViolations,
@@ -786,6 +789,14 @@ class VisualRulebookCataloger {
                         persistCompletedFacts(documentVersionId, completed);
                         return null;
                     });
+                    if (assistantRunId != null) {
+                        completed.forEach(summary -> invocations.record(
+                                assistantRunId,
+                                ActivityType.VALIDATION,
+                                "persistTeachingVisualPage|" + summary.pageNumber() + "|" + totalPageCount,
+                                ActivityOutcome.SUCCEEDED,
+                                "Stored typed rule groups for visual page " + summary.pageNumber()));
+                    }
                     Set<Integer> completedPages = completed.stream()
                             .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
                             .collect(Collectors.toSet());
@@ -1047,7 +1058,7 @@ class VisualRulebookCataloger {
                 .filter(summary -> pageNumbers.contains(summary.pageNumber()))
                 .toList();
         persistCompletedFacts(documentVersionId, consolidated);
-        return visualFacts.find(documentVersionId, pageNumbers).stream()
+        return findVisualFacts(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
     }
@@ -1059,21 +1070,47 @@ class VisualRulebookCataloger {
     private void persistCompletedFacts(
             UUID documentVersionId, List<VisualRulebookPageCatalogModel.PageSummary> observations) {
         if (observations == null || observations.isEmpty()) return;
-        Set<Integer> observedPages = observations.stream()
-                .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        Map<Integer, VisualRulebookPageCatalogModel.PageSummary> accumulated = new LinkedHashMap<>();
-        visualFacts.find(documentVersionId, observedPages).stream()
-                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
-                .map(VisualRulebookCataloger::pageSummary)
-                .forEach(summary -> accumulated.put(summary.pageNumber(), summary));
-        observations.forEach(summary -> accumulated.merge(
-                summary.pageNumber(), summary, VisualRulebookCatalogPolicy::mergePersistedPageObservation));
-        visualFacts.merge(
-                documentVersionId,
-                accumulated.values().stream()
-                        .map(VisualRulebookCataloger::pageFact)
-                        .toList());
+        try {
+            Set<Integer> observedPages = observations.stream()
+                    .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            Map<Integer, VisualRulebookPageCatalogModel.PageSummary> accumulated = new LinkedHashMap<>();
+            findVisualFacts(documentVersionId, observedPages).stream()
+                    .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                    .map(VisualRulebookCataloger::pageSummary)
+                    .forEach(summary -> accumulated.put(summary.pageNumber(), summary));
+            observations.forEach(summary -> accumulated.merge(
+                    summary.pageNumber(), summary, VisualRulebookCatalogPolicy::mergePersistedPageObservation));
+            mergeVisualFacts(
+                    documentVersionId,
+                    accumulated.values().stream()
+                            .map(VisualRulebookCataloger::pageFact)
+                            .toList());
+        } catch (TeachingPreparationStorageException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new TeachingPreparationStorageException(failure);
+        }
+    }
+
+    private void mergeVisualFacts(UUID documentVersionId, List<PageFact> facts) {
+        try {
+            visualFacts.merge(documentVersionId, facts);
+        } catch (TeachingPreparationStorageException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new TeachingPreparationStorageException(failure);
+        }
+    }
+
+    private List<PageFact> findVisualFacts(UUID documentVersionId, Set<Integer> pageNumbers) {
+        try {
+            return visualFacts.find(documentVersionId, pageNumbers);
+        } catch (TeachingPreparationStorageException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new TeachingPreparationStorageException(failure);
+        }
     }
 
     private static PageFact pageFact(VisualRulebookPageCatalogModel.PageSummary summary) {

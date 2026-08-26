@@ -34,6 +34,8 @@ describe('background teaching status', () => {
     expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, terminalState: 'RUNNING' }]))).toEqual([])
     expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, terminalState: 'FAILED' }])))
       .toEqual([{ ...first, terminalState: 'FAILED' }])
+    expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, terminalState: 'CANCELLED' }])))
+      .toEqual([{ ...first, terminalState: 'CANCELLED' }])
     expect(parseBackgroundTeachingItems(JSON.stringify(Array.from({ length: 25 }, (_, index) => ({
       ...first,
       runId: `run-${index}`,

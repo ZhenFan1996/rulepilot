@@ -220,6 +220,52 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
+  it('does not present or poll an authoritative CANCELLED teaching run as active generation', async () => {
+    let teachingRunReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', 'Cancelled guide'),
+          sections: [{ position: 1, title: '已保留章节', visualEvidenceRecommended: false }],
+        })
+      }
+      if (path.includes('mode=TEACHING')) {
+        teachingRunReads += 1
+        const snapshot = runFixture('plan-1', 'CANCELLED')
+        return Response.json({
+          ...snapshot,
+          run: { ...snapshot.run, lastErrorCode: 'AGENT_CANCELLED' },
+        })
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-cancelled', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [section(1, '已保留章节')],
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    expect(teachingRunReads).toBe(1)
+    expect(wrapper.text()).toContain('已保留章节')
+    expect(wrapper.text()).not.toContain('整本仍在后台生成')
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    await flushPromises()
+
+    expect(teachingRunReads).toBe(1)
+    expect(wrapper.text()).not.toContain('整本仍在后台生成')
+    wrapper.unmount()
+  })
+
   it('lets the player use a complete cited draft while factual review remains active', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)

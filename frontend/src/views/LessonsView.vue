@@ -10,6 +10,7 @@ import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import { playerJourneyRunIsTerminal } from '@/lib/playerJourney'
 import { guideWorkStatus, playerWorkStatus } from '@/lib/playerWorkStatus'
 import {
   buildPendingGuideJourneys,
@@ -126,7 +127,6 @@ const showingAllVersions = ref(false)
 const planFilter = ref<PlanFilter>('READABLE')
 const now = ref(Date.now())
 const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
-const terminalStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 const knownRunIds = new Map<string, string>()
 const requestVersions = new Map<string, number>()
 const progressControllers = new Map<string, AbortController>()
@@ -173,7 +173,6 @@ const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   retryPreparation: 'Retry guide preparation', retryingPreparation: 'Restarting…',
   retryFailed: 'A new guide-preparation task could not be started. Please try again shortly.',
 })
-const terminalPreparationStates = new Set(['COMPLETED', 'FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'])
 function preparationForPlan(plan: TeachingPlan) {
   return preparationRuns.value
     .filter(run => run.subjectId === plan.documentVersionId)
@@ -189,7 +188,7 @@ function preparationStillOwnsPlanStartup(plan: TeachingPlan) {
 function preparationCanStillStartTeaching(plan: TeachingPlan) {
   const preparation = preparationForPlan(plan)
   return Boolean(preparation
-    && !terminalPreparationStates.has(preparation.state)
+    && !playerJourneyRunIsTerminal(preparation.state)
     && !progress.value[plan.id]?.run
     && !progress.value[plan.id]?.lesson)
 }
@@ -211,12 +210,12 @@ const pendingJourneys = computed(() => buildPendingGuideJourneys(
 
 function stateOf(planId: string) {
   const item = progress.value[planId]
-  if (item?.run && !terminalStates.has(item.run.run.state)) return 'GENERATING'
+  if (item?.run && !playerJourneyRunIsTerminal(item.run.run.state)) return 'GENERATING'
   if (item?.lesson?.status === 'COMPLETE') return 'COMPLETE'
   if (item?.lesson?.status === 'DRAFT_READY') return 'DRAFT_READY'
   if (item?.lesson?.status === 'INCOMPLETE') return 'INCOMPLETE'
   if (item?.run?.run.state === 'FAILED') return 'FAILED'
-  if (item?.run && terminalStates.has(item.run.run.state)) return 'NEEDS_ATTENTION'
+  if (item?.run && playerJourneyRunIsTerminal(item.run.run.state)) return 'NEEDS_ATTENTION'
   return 'PLANNED'
 }
 
@@ -283,11 +282,11 @@ function displayPlanTitle(plan: TeachingPlan) {
 function continuationPriority(plan: TeachingPlan) {
   const item = progress.value[plan.id]
   if (item?.lesson?.status === 'COMPLETE') return 600
-  if (item?.lesson?.status === 'DRAFT_READY' && item.run && !terminalStates.has(item.run.run.state)) return 550
+  if (item?.lesson?.status === 'DRAFT_READY' && item.run && !playerJourneyRunIsTerminal(item.run.run.state)) return 550
   if (item?.lesson?.status === 'DRAFT_READY') return 500
   if (item?.lesson?.status === 'INCOMPLETE') return 400
-  if (item?.run && !terminalStates.has(item.run.run.state)) return 300
-  if (item?.run && terminalStates.has(item.run.run.state)) return 100
+  if (item?.run && !playerJourneyRunIsTerminal(item.run.run.state)) return 300
+  if (item?.run && playerJourneyRunIsTerminal(item.run.run.state)) return 100
   return 200
 }
 
@@ -522,7 +521,7 @@ async function loadProgress(plan: TeachingPlan, listRequest = latestListRequest,
         lesson,
       },
     }
-    if (expectedRunId && run?.run.id === expectedRunId && terminalStates.has(run.run.state)) {
+    if (expectedRunId && run?.run.id === expectedRunId && playerJourneyRunIsTerminal(run.run.state)) {
       const settlingRead = terminalSettlingReads.get(plan.id) ?? 0
       if (run.run.state !== 'COMPLETED' || lesson || settlingRead >= 3) {
         knownRunIds.delete(plan.id)

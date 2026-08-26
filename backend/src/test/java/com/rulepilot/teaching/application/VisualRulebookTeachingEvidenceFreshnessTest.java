@@ -149,6 +149,16 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
     }
 
     @Test
+    void requiresExternalRepairWhenDurablePageFactsCouldNotBeStored() {
+        UUID preparationRunId = preparationRunId();
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.FAILED, "TEACHING_PREPARATION_STORAGE_FAILED")));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.EXTERNAL_REPAIR_REQUIRED);
+    }
+
+    @Test
     void preservesExplicitCancellationInsteadOfMakingItRetryable() {
         UUID preparationRunId = preparationRunId();
         when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(

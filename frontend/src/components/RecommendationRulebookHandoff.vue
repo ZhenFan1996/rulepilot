@@ -36,6 +36,7 @@ import {
   acceptImportJob,
   acceptJourneyRun,
   derivePlayerJourney,
+  playerJourneyRunIsTerminal,
   playerJourneyPollDelay,
   type OfficialImportFailureKind,
   type OfficialImportRecovery,
@@ -49,8 +50,10 @@ import {
 import {
   recentTeachingActivitySteps,
   recentTeachingPreparationActivitySteps,
+  summarizeTeachingVisualPageRuleGroups,
   teachingActivityText,
-  type TeachingActivity,
+  type TeachingActivityOutcome,
+  type TeachingVisualPageRuleGroupState,
 } from '@/lib/teachingProgress'
 import {
   fetchVisualStatusWithDeadline,
@@ -210,10 +213,21 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   generationLocalFailureTitle: '局部降级：可用内容保留',
   generationLocalFailure: '单页逐字识别失败会改读该页原图；局部配图失败只省略配图。格式、字段、重复内容或页码绑定错误只修正当前结果一次；已确认页面不会丢失。',
   generationPreservedStopTitle: '保留已完成内容后停止',
-  generationPreservedStop: '所有规划主题都找不到足够的可引用规则、章节规划契约无法成立、整条任务的总预算或全局时限耗尽，或任务被取消时，当前任务停止；已确认页面和已发布章节保留。',
+  generationPreservedStop: '至少一个必讲主题在有限检索与定向重试后仍找不到足够的可引用规则、整条任务的总预算或全局时限耗尽，或任务被取消时，当前任务停止；已确认页面和已发布章节保留。',
   generationRepairTitle: '需要你或运维修复后继续',
-  generationRepair: '权限/登录、非法参数或来源、服务持续不可用、未知异常或保存失败需先修复；界面只在有安全恢复动作时显示重试、换来源或上传。单个请求超时本身不归入这一类：它只影响当前请求，只有明确的临时异常会重试一次，不代表整条任务的全局时限已耗尽。',
-  generationShowHistory: (count: number) => `展开另外 ${count} 条历史`, generationHideHistory: '收起历史', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
+  generationRepair: '权限/登录、非法参数或来源、章节规划结构不符合契约、服务持续不可用、未知异常或保存失败需先修复；界面只在有安全恢复动作时显示重试、换来源或上传。单个请求超时本身不归入这一类：它只影响当前请求，只有明确的临时异常会重试一次，不代表整条任务的全局时限已耗尽。',
+  visualRuleGroupSummaryTitle: '每页规则组最新状态',
+  visualRuleGroupSummaryHint: '只按每页已发出的最新真实活动汇总；还没有活动的页面不会计入，下方保留每次玩家可见尝试。',
+  visualRuleGroupStatus: {
+    'directly-completed': '直接完成',
+    'completed-after-recovery': '经修正 / 临时重试后完成',
+    processing: '正在处理',
+    'no-rule-groups': '当前未形成规则组',
+  } satisfies Record<TeachingVisualPageRuleGroupState, string>,
+  visualRuleGroupCount: (count: number) => `${count} 页`,
+  visualRuleGroupPages: (pages: readonly number[]) => `第 ${pages.join('、')} 页`,
+  generationAttemptMarkerHint: '“!”表示这一条真实尝试未完成或未通过校验，“?”表示活动状态无法识别；两者都不代表整份讲解失败，请以上方每页最新状态和整条任务状态为准。',
+  planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
     '图片页直接生成带页码绑定的结构化规则事实，文字层直接读取原文；只有结构化契约未通过时才退回 OCR 并修正一次',
     '按页面整理规则组，并记录规则书要求的外部资料',
@@ -303,10 +317,23 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   generationLocalFailureTitle: 'Local degradation: usable content remains',
   generationLocalFailure: 'A failed page transcription falls back to that page image; a focused-visual failure omits only that visual. Formatting, field, duplicate-content, or page-binding errors receive one correction for the current result. Confirmed pages remain available.',
   generationPreservedStopTitle: 'Stop after preserving completed work',
-  generationPreservedStop: 'The current task stops if every planned topic lacks enough citable rules, the chapter-plan contract cannot be satisfied, the whole task exhausts its total budget or global deadline, or the task is cancelled. Confirmed pages and published chapters remain available.',
+  generationPreservedStop: 'The current task stops if at least one required topic still lacks enough citable rules after bounded retrieval and its targeted retry, the whole task exhausts its total budget or global deadline, or the task is cancelled. Confirmed pages and published chapters remain available.',
   generationRepairTitle: 'You or operations must repair this before continuing',
-  generationRepair: 'Authorization or sign-in issues, invalid parameters or sources, persistent service unavailability, unknown failures, and storage failures need repair first. The UI shows retry, source change, or upload only when that recovery is safe. A single request timeout is not this category by itself: it affects only that request, only an explicit temporary error retries once, and it does not mean the whole task exhausted its global deadline.',
-  generationShowHistory: (count: number) => `Show ${count} earlier activities`, generationHideHistory: 'Hide earlier activities', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
+  generationRepair: 'Authorization or sign-in issues, invalid parameters or sources, a chapter-plan structure that violates its contract, persistent service unavailability, unknown failures, and storage failures need repair first. The UI shows retry, source change, or upload only when that recovery is safe. A single request timeout is not this category by itself: it affects only that request, only an explicit temporary error retries once, and it does not mean the whole task exhausted its global deadline.',
+  visualRuleGroupSummaryTitle: 'Latest rule-group state by page',
+  visualRuleGroupSummaryHint: 'This uses only the latest real activity emitted for each page. Pages without an activity are not counted, and every player-visible attempt remains below.',
+  visualRuleGroupStatus: {
+    'directly-completed': 'Completed directly',
+    'completed-after-recovery': 'Completed after correction / temporary retry',
+    processing: 'Processing',
+    'no-rule-groups': 'No rule groups formed yet',
+  } satisfies Record<TeachingVisualPageRuleGroupState, string>,
+  visualRuleGroupCount: (count: number) => `${count} ${count === 1 ? 'page' : 'pages'}`,
+  visualRuleGroupPages: (pages: readonly number[]) => pages.length === 1
+    ? `Page ${pages[0]}`
+    : `Pages ${pages.join(', ')}`,
+  generationAttemptMarkerHint: '“!” marks one real attempt that did not complete or pass validation, while “?” marks an unrecognized activity status. Neither means the entire guide failed; use the latest per-page state above and the overall run state.',
+  planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
     'Generate typed, page-bound rule facts directly from image pages and read text layers as source text; fall back to OCR and one correction only when the typed contract fails validation',
     'Organise each page into rule groups and record any external material the rulebook requires',
@@ -559,8 +586,8 @@ const journeyDetail = computed(() => {
     }
     return teachingActivityText(
       progressPlan,
-      activities as unknown as TeachingActivity[],
-      activities.at(-1) as unknown as TeachingActivity,
+      activities,
+      activities.at(-1),
       locale.value,
     )
   }
@@ -594,7 +621,7 @@ const safeCloseDetail = computed(() => projection.value.failureClassification ||
   : copy.value.safe)
 const journeyTeachingSteps = computed(() => {
   const preparationSteps = recentTeachingPreparationActivitySteps(
-    (preparationRun.value?.activities ?? []) as unknown as TeachingActivity[],
+    preparationRun.value?.activities ?? [],
     locale.value,
   ).map(step => ({ ...step, key: `preparation-${step.sequence}` }))
   if (!plan.value || !teachingRun.value?.activities?.length) return preparationSteps
@@ -606,11 +633,30 @@ const journeyTeachingSteps = computed(() => {
   }
   const chapterSteps = recentTeachingActivitySteps(
     progressPlan,
-    teachingRun.value.activities as unknown as TeachingActivity[],
+    teachingRun.value.activities,
     locale.value,
   ).map(step => ({ ...step, key: `chapter-${step.sequence}` }))
   return [...preparationSteps, ...chapterSteps]
 })
+const visualPageRuleGroupStates = [
+  'directly-completed',
+  'completed-after-recovery',
+  'processing',
+  'no-rule-groups',
+] as const satisfies readonly TeachingVisualPageRuleGroupState[]
+const visualPageRuleGroupSummary = computed(() => summarizeTeachingVisualPageRuleGroups(
+  preparationRun.value?.activities ?? [],
+  preparationRun.value?.run.state,
+))
+const visualPageRuleGroupBuckets = computed(() => visualPageRuleGroupStates.map(state => ({
+  state,
+  pages: visualPageRuleGroupSummary.value
+    .filter(page => page.state === state)
+    .map(page => page.pageNumber),
+})))
+const hasUnsuccessfulTeachingAttempt = computed(() => journeyTeachingSteps.value.some(
+  step => step.outcome === 'FAILED' || step.outcome === 'REJECTED' || step.outcome === 'UNKNOWN',
+))
 const teachingJourneyPhases = new Set([
   'TEACHING_PREPARATION_QUEUED', 'TEACHING_PREPARING', 'LESSON_GENERATION_QUEUED',
   'LESSON_GENERATING', 'LESSON_READABLE', 'LESSON_COMPLETE',
@@ -619,23 +665,14 @@ const showTeachingGenerationSteps = computed(() => teachingJourneyPhases.has(pro
   || projection.value.phase === 'FAILED' && Boolean(
     projection.value.canReadRulebook || preparationRun.value || plan.value || teachingRun.value,
   ))
-const teachingHistoryExpanded = ref(false)
-const teachingHistoryPreviewLimit = 5
-const hiddenJourneyTeachingStepCount = computed(() => Math.max(
-  0,
-  journeyTeachingSteps.value.length - teachingHistoryPreviewLimit,
-))
 const visibleJourneyTeachingSteps = computed(() => {
   if (journeyTeachingSteps.value.length) {
-    const newestFirst = [...journeyTeachingSteps.value].reverse()
-    return teachingHistoryExpanded.value
-      ? newestFirst
-      : newestFirst.slice(0, teachingHistoryPreviewLimit)
+    return [...journeyTeachingSteps.value].reverse()
   }
   const phase = projection.value.phase
   const preparationState = preparationRun.value?.run.state
   let text = copy.value.generationFallback.queued
-  let outcome: TeachingActivity['outcome'] = 'RUNNING'
+  let outcome: TeachingActivityOutcome = 'RUNNING'
   if (phase === 'TEACHING_PREPARING') {
     text = preparationState === 'DOCUMENT_READINESS'
       ? copy.value.generationFallback.readiness
@@ -1643,7 +1680,6 @@ function resetJourneyState() {
   stopFailure.value = false
   generationStoppedByPlayer.value = false
   deleteConfirmOpen.value = false
-  teachingHistoryExpanded.value = false
   ensuredLessonPlans.clear()
 }
 
@@ -1713,7 +1749,7 @@ function importHandoffSettled(job: OfficialImportJob) {
 }
 
 function runTerminal(runState: string) {
-  return ['COMPLETED', 'FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(runState)
+  return playerJourneyRunIsTerminal(runState)
 }
 
 function formatBytes(value: number) {
@@ -1992,7 +2028,44 @@ onBeforeUnmount(() => {
               <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationRepair }}</p>
             </div>
           </div>
+          <section
+            v-if="visualPageRuleGroupSummary.length"
+            data-testid="recommendation-visual-rule-group-summary"
+            class="mt-3 rounded-lg border border-indigo/15 bg-paper/80 px-3 py-2.5"
+            :aria-label="copy.visualRuleGroupSummaryTitle"
+          >
+            <p class="text-xs font-semibold text-indigo">{{ copy.visualRuleGroupSummaryTitle }}</p>
+            <p class="mt-1 text-xs leading-5 text-ink/55">{{ copy.visualRuleGroupSummaryHint }}</p>
+            <dl class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <div
+                v-for="bucket in visualPageRuleGroupBuckets"
+                :key="bucket.state"
+                :data-rule-group-state="bucket.state"
+                class="rounded-md border px-2.5 py-2"
+                :class="bucket.state === 'directly-completed'
+                  ? 'border-emerald-200 bg-emerald-50/70'
+                  : bucket.state === 'completed-after-recovery'
+                    ? 'border-indigo/20 bg-indigo/5'
+                    : bucket.state === 'processing'
+                      ? 'border-copper/20 bg-copper/5'
+                      : 'border-amber-200 bg-amber-50/70'"
+              >
+                <dt class="text-[11px] font-semibold leading-4 text-ink/65">{{ copy.visualRuleGroupStatus[bucket.state] }}</dt>
+                <dd class="mt-1 text-xs leading-5 text-ink/55">
+                  <span class="font-semibold text-ink/75">{{ copy.visualRuleGroupCount(bucket.pages.length) }}</span>
+                  <span v-if="bucket.pages.length"> · {{ copy.visualRuleGroupPages(bucket.pages) }}</span>
+                </dd>
+              </div>
+            </dl>
+          </section>
           <p class="mt-3 text-[11px] font-bold uppercase tracking-[0.08em] text-ink/45">{{ copy.generationLatest }}</p>
+          <p
+            v-if="hasUnsuccessfulTeachingAttempt"
+            data-testid="recommendation-teaching-attempt-marker-hint"
+            class="mt-1 text-xs leading-5 text-ink/55"
+          >
+            {{ copy.generationAttemptMarkerHint }}
+          </p>
           <p data-testid="recommendation-teaching-live-status" class="sr-only" aria-live="polite" aria-atomic="true">{{ visibleJourneyTeachingSteps[0]?.text }}</p>
           <ol data-testid="recommendation-teaching-activity-list" class="mt-2 grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
             <li
@@ -2004,20 +2077,10 @@ onBeforeUnmount(() => {
                 class="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
                 :class="step.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : step.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'"
                 aria-hidden="true"
-              >{{ step.outcome === 'SUCCEEDED' ? '✓' : step.outcome === 'RUNNING' ? '●' : '!' }}</span>
+              >{{ step.outcome === 'SUCCEEDED' ? '✓' : step.outcome === 'RUNNING' ? '●' : step.outcome === 'UNKNOWN' ? '?' : '!' }}</span>
               <span>{{ step.text }}</span>
             </li>
           </ol>
-          <button
-            v-if="hiddenJourneyTeachingStepCount > 0"
-            type="button"
-            data-testid="recommendation-teaching-history-toggle"
-            class="mt-3 min-h-11 text-xs font-semibold text-indigo underline underline-offset-2"
-            :aria-expanded="teachingHistoryExpanded"
-            @click="teachingHistoryExpanded = !teachingHistoryExpanded"
-          >
-            {{ teachingHistoryExpanded ? copy.generationHideHistory : copy.generationShowHistory(hiddenJourneyTeachingStepCount) }}
-          </button>
         </section>
         <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ safeCloseDetail }}</p>
         <div

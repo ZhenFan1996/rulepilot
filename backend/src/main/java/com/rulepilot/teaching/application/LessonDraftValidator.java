@@ -6,11 +6,9 @@ import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.RuleFactDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
-import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFact;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -24,8 +22,8 @@ import java.util.stream.IntStream;
  *
  * <p>This class owns required structure, citation scope, and source-page membership. It does not infer rule meaning
  * from wording and it never rejects player prose because of its length, punctuation, vocabulary, symbols, or
- * quantities. Optional visual metadata is retained only when it is bound to an attached, cited page; an invalid
- * visual focus is skipped without changing the cited teaching step.</p>
+ * quantities. The composition model may declare typed VISUAL intent, but page inspection and geometry belong only
+ * to the post-composition visual Agent.</p>
  */
 final class LessonDraftValidator {
 
@@ -60,14 +58,6 @@ final class LessonDraftValidator {
     }
 
     static LessonStep validatedStep(int position, StepDraft draft, Map<UUID, RuleEvidence> allowedEvidence) {
-        return validatedStep(position, draft, allowedEvidence, Set.of());
-    }
-
-    static LessonStep validatedStep(
-            int position,
-            StepDraft draft,
-            Map<UUID, RuleEvidence> allowedEvidence,
-            Set<Integer> attachedPages) {
         if (draft == null || draft.text() == null || draft.text().isBlank() || draft.citationIds().isEmpty()) {
             throw new IllegalArgumentException("teaching step is invalid");
         }
@@ -90,7 +80,7 @@ final class LessonDraftValidator {
                 pages,
                 List.copyOf(citationIds),
                 validatedRuleFacts(draft.ruleFacts(), allowedEvidence),
-                validatedVisualFocus(draft, attachedPages, allowedEvidence));
+                null);
     }
 
     private static List<RuleFact> validatedRuleFacts(
@@ -118,37 +108,6 @@ final class LessonDraftValidator {
                     return new RuleFact(index + 1, draft.role(), draft.text(), sourcePages, List.copyOf(ids));
                 })
                 .toList();
-    }
-
-    private static VisualFocus validatedVisualFocus(
-            StepDraft draft,
-            Set<Integer> attachedPages,
-            Map<UUID, RuleEvidence> allowedEvidence) {
-        VisualFocusDraft focus = draft.visualFocus();
-        if (draft.kind() != TeachingMove.VISUAL || focus == null || !attachedPages.contains(focus.pageNumber())) {
-            return null;
-        }
-        boolean citesFocusedPage = draft.citationIds().stream()
-                .map(allowedEvidence::get)
-                .filter(java.util.Objects::nonNull)
-                .anyMatch(source -> focus.pageNumber() >= source.pageFrom() && focus.pageNumber() <= source.pageTo());
-        if (!citesFocusedPage) return null;
-        try {
-            return validatedFocus(focus);
-        } catch (IllegalArgumentException invalidOptionalVisualFocus) {
-            return null;
-        }
-    }
-
-    static VisualFocus validatedFocus(VisualFocusDraft focus) {
-        return new VisualFocus(
-                focus.pageNumber(),
-                focus.label(),
-                focus.visibleDescription(),
-                focus.x(),
-                focus.y(),
-                focus.width(),
-                focus.height());
     }
 
     static void validateDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {

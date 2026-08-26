@@ -376,6 +376,11 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                         job.id(), handoff.preparationRunId(), "TEACHING_PREPARATION_INVALID_PLAN", Instant.now(clock))) {
                     exhausted++;
                 }
+            } else if (assessment == ReuseAssessment.EXTERNAL_REPAIR_REQUIRED) {
+                if (jobs.failTeachingTerminal(
+                        job.id(), handoff.preparationRunId(), "TEACHING_PREPARATION_STORAGE_FAILED", Instant.now(clock))) {
+                    exhausted++;
+                }
             } else if (assessment == ReuseAssessment.REFRESH_REQUIRED
                     || assessment == ReuseAssessment.RETRYABLE_FAILURE) {
                 if (jobs.retryTeachingAutomatically(
@@ -405,11 +410,16 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     job.documentVersionId(),
                     job.teachingHandoff().preparationRunId(),
                     job.ownerUsername());
+            if (assessment == ReuseAssessment.EXTERNAL_REPAIR_REQUIRED) return job;
             if (assessment != ReuseAssessment.REUSABLE && assessment != ReuseAssessment.IN_PROGRESS) {
                 jobs.retryTeaching(
                         job.id(), job.teachingHandoff().preparationRunId(), Instant.now(clock));
                 return requireOwned(job.id(), job.ownerUsername());
             }
+        }
+        if (job.teachingHandoff().state() == TeachingHandoffState.FAILED
+                && "TEACHING_PREPARATION_STORAGE_FAILED".equals(job.teachingHandoff().errorCode())) {
+            return job;
         }
         if (job.teachingHandoff().state() != TeachingHandoffState.NOT_REQUESTED
                 && job.teachingHandoff().state() != TeachingHandoffState.FAILED) {

@@ -156,6 +156,14 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
                         Instant.now(clock))) {
                     exhausted++;
                 }
+            } else if (assessment == ReuseAssessment.EXTERNAL_REPAIR_REQUIRED) {
+                if (handoffs.failTerminal(
+                        handoff.id(),
+                        handoff.preparationRunId(),
+                        "TEACHING_PREPARATION_STORAGE_FAILED",
+                        Instant.now(clock))) {
+                    exhausted++;
+                }
             } else if (assessment == ReuseAssessment.REFRESH_REQUIRED
                     || assessment == ReuseAssessment.RETRYABLE_FAILURE) {
                 if (handoffs.retryAutomatically(

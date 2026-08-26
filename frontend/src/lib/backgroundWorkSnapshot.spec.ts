@@ -27,6 +27,10 @@ describe('background work snapshot boundary', () => {
 
   it('accepts the authoritative active-run identity and rejects cross-account or duplicate subjects', () => {
     expect(parseActiveTeachingRuns([run], 'player')).toEqual([run])
+    expect(() => parseActiveTeachingRuns([{ ...run, state: 'CANCELLED' }], 'player')).toThrow()
+    expect(parseExpectedAssistantRun({ run: { ...run, state: 'CANCELLED' } }, {
+      id: 'run-1', mode: 'TEACHING', subjectId: 'plan-1', ownerUsername: 'player',
+    }).state).toBe('CANCELLED')
     expect(() => parseActiveTeachingRuns([{ ...run, ownerUsername: 'other' }], 'player')).toThrow()
     expect(() => parseActiveTeachingRuns([run, { ...run, id: 'run-2' }], 'player')).toThrow()
     expect(() => parseExpectedAssistantRun({ run: { ...run, subjectId: 'wrong-plan' } }, {

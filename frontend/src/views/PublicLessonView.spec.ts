@@ -246,7 +246,11 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('照这个例子走：开局示例')
     expect(wrapper.get('a[aria-label="打开来源：设置，第 2 页"]').attributes('href'))
       .toBe('/api/public/lessons/plan-1/pages/2/image')
-    expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src')).toContain('/pages/2/image/crop')
+    const answerVisual = wrapper.get('img[alt*="玩家板设置"]')
+    expect(answerVisual.attributes('src')).toContain('/pages/2/image/crop')
+    expect(answerVisual.attributes('loading')).toBe('lazy')
+    expect(answerVisual.attributes('decoding')).toBe('async')
+    expect(answerVisual.attributes('fetchpriority')).toBe('low')
     expect(wrapper.get('#public-answer-0').element.compareDocumentPosition(wrapper.get('form').element) & Node.DOCUMENT_POSITION_FOLLOWING)
       .not.toBe(0)
 

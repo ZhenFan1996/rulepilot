@@ -16,7 +16,6 @@ import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.RuleFactDraft;
-import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
@@ -38,10 +37,8 @@ import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.ByteArrayResource;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
-import org.springframework.util.MimeTypeUtils;
 import tools.jackson.core.JacksonException;
 
 @Component
@@ -63,7 +60,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                     + QWEN_TEACHING_SCHEMA;
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
-    private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final double temperature;
 
     public SpringAiTeachingLessonModel(
@@ -87,23 +83,19 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     @Override
     public String providerId() {
-        String teaching = models.providerFor(Role.TEACHING);
-        String visual = models.providerFor(Role.VISUAL);
-        return "fake".equals(visual) || teaching.equals(visual) ? teaching : teaching + "+" + visual;
+        return models.providerFor(Role.TEACHING);
     }
 
     @Override
     public boolean supportsVisualEvidence() {
-        return !models.usesFake(Role.VISUAL) && models.supportsVision(Role.VISUAL);
+        // Section composition writes cited teaching prose and visual intent only. The post-publication visual Agent
+        // owns page pixels, opaque candidate selection, and immutable crop geometry.
+        return false;
     }
 
     @Override
     public boolean supportsVisualEvidence(String modelConfigurationOwner) {
-        if (modelConfigurationOwner == null || modelConfigurationOwner.isBlank()) {
-            return supportsVisualEvidence();
-        }
-        return !models.usesFake(Role.VISUAL, modelConfigurationOwner)
-                && models.supportsVision(Role.VISUAL, modelConfigurationOwner);
+        return false;
     }
 
     @Override
@@ -216,7 +208,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 citation before considering removal. Never pass review by silently deleting an objective-required action
                 that the supplied evidence can support. Correct every diagnosed problem while still satisfying the original
                 objective and output schema. Every revision must include a non-empty title, a non-empty visualCaption, and
-                at least one valid visualCitationId supporting the whole caption, even when no page image is attached. If a
+                at least one valid visualCitationId supporting the whole caption. If a
                 caption field was diagnosed as missing, write a concise text-based rules-aid caption from the original
                 evidence and cite that evidence; never leave the field or its citation list empty.
                 """.formatted(toModelDraft(request, previousDraft), modelFeedback(request, feedback));
@@ -242,14 +234,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         int revisionTokens = estimateTokens(revisionInstruction);
         int otherRequestTokens = estimateTokens(request.title())
                 + estimateTokens(request.coverageTags().toString())
-                + estimateTokens(request.wholeGameContext().toString())
-                + estimateTokens(Boolean.toString(!request.pageImages().isEmpty()))
-                + (request.pageImages().isEmpty()
-                        ? 0
-                        : estimateTokens(request.pageImages().stream()
-                                .map(TeachingLessonModel.PageImageInput::pageNumber)
-                                .toList()
-                                .toString()));
+                + estimateTokens(request.wholeGameContext().toString());
         int totalTokens = fixedContractTokens
                 + objectiveTokens
                 + requiredRuleTokens
@@ -287,8 +272,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 "continuity",
                 "chapterScope",
                 "evidence",
-                "visualEvidenceAvailable",
-                "visualPages",
                 "repair")) {
             result = result.replace("{" + parameter + "}", "");
         }
@@ -348,16 +331,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                 .param("continuity", request.priorSections())
                                 .param("chapterScope", request.chapterScope())
                                 .param("evidence", modelEvidence(request))
-                                .param("visualEvidenceAvailable", !request.pageImages().isEmpty())
-                                .param("visualPages", request.pageImages().stream()
-                                        .map(TeachingLessonModel.PageImageInput::pageNumber)
-                                        .toList())
                                 .param("repair", repairInstruction);
-                        if (role == Role.VISUAL) {
-                            request.pageImages().stream().map(images::prepare).forEach(image -> user.media(
-                                    MimeTypeUtils.parseMimeType(image.mediaType()),
-                                    new ByteArrayResource(image.content())));
-                        }
                     });
             ChatResponse response = requestSpec.call().chatResponse();
             if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
@@ -368,27 +342,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             usage = response.getMetadata() == null ? null : response.getMetadata().getUsage();
         } catch (JacksonException | JsonProcessingException invalidJson) {
             throw new InvalidOutputException("teaching model returned malformed structured output", invalidJson);
-        }
-        if (role == Role.VISUAL) {
-            log.info(
-                    "Visual teaching structure: title={}, kind={}, caption={}, citations={}, steps={}, visualSteps={}, describedFocus={}",
-                    draft != null && draft.title() != null && !draft.title().isBlank(),
-                    draft == null ? null : draft.visualKind(),
-                    draft != null && draft.visualCaption() != null && !draft.visualCaption().isBlank(),
-                    draft == null ? 0 : draft.visualCitationIds().size(),
-                    draft == null ? 0 : draft.steps().size(),
-                    draft == null
-                            ? 0
-                            : draft.steps().stream()
-                                    .filter(java.util.Objects::nonNull)
-                                    .filter(step -> step.kind() == TeachingMove.VISUAL)
-                                    .count(),
-                    draft != null
-                            && draft.steps().stream()
-                                    .filter(java.util.Objects::nonNull)
-                                    .map(ModelStepDraft::visualFocus)
-                                    .filter(java.util.Objects::nonNull)
-                                    .anyMatch(focus -> !focus.visibleDescription().isBlank()));
         }
         try {
             SectionDraft sectionDraft = toSectionDraft(draft, evidenceIds);
@@ -631,8 +584,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                                 fact.role(),
                                                 fact.text(),
                                                 fact.citationIds().stream().map(references::get).toList()))
-                                        .toList(),
-                                step.visualFocus()))
+                                        .toList()))
                         .toList());
     }
 
@@ -674,8 +626,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                                 fact.role(),
                                                 fact.text(),
                                                 resolveReferences(fact.citationIds(), evidenceIds)))
-                                        .toList(),
-                                step.kind() == TeachingMove.VISUAL ? step.visualFocus() : null))
+                                        .toList()))
                         .toList());
     }
 
@@ -733,8 +684,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             String text,
             List<String> citationIds,
             List<String> teachingUnitIds,
-            List<ModelRuleFact> ruleFacts,
-            VisualFocusDraft visualFocus) {
+            List<ModelRuleFact> ruleFacts) {
         ModelStepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
             teachingUnitIds = teachingUnitIds == null ? List.of() : List.copyOf(teachingUnitIds);

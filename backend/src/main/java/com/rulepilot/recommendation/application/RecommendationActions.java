@@ -28,6 +28,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryGoal;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.GameResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Observation;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.PublicContextEvidence;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.ResolvedRelationship;
@@ -131,7 +132,11 @@ final class RecommendationActions {
                 case RESEARCH_TOOL -> research(arguments, state, locale, progress);
                 case COMPARE_TOOL -> compare(arguments, state, request, locale);
                 case NO_MATCH_TOOL -> noMatch(arguments, state, locale);
-                default -> rejected(state, "TOOL_NOT_ALLOWED", "Choose one action from the supplied action list.");
+                default -> rejectedContract(
+                        state,
+                        "TOOL_NOT_ALLOWED",
+                        "Choose one action from the supplied action list.",
+                        Map.of());
             };
         } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
             throw exception;
@@ -139,16 +144,20 @@ final class RecommendationActions {
             InvalidAction invalid = exception instanceof InvalidAction value ? value : null;
             String code = invalid == null ? "INVALID_JSON" : invalid.code;
             if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
-            return rejected(
+            return rejectedContract(
                     state,
                     code,
                     invalid != null && invalid.guidance != null
                             ? invalid.guidance
-                            : invalidActionGuidance(code));
+                            : invalidActionGuidance(code),
+                    invalid == null ? Map.of() : invalid.details);
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation action {} failed ({})", call.name(), exception.getClass().getSimpleName());
             if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
-            return rejected(state, "ACTION_UNAVAILABLE", "The action failed. Choose another useful action or respond transparently.");
+            return rejectedUnavailable(
+                    state,
+                    "ACTION_UNAVAILABLE",
+                    "The action failed. Choose another useful action or respond transparently.");
         }
     }
 
@@ -192,9 +201,12 @@ final class RecommendationActions {
                 arguments.path("status"),
                 "IDENTITY_STATUS_INVALID");
         if (status == IdentityStatus.VERIFIED) {
+            Set<String> required = new LinkedHashSet<>(
+                    Set.of("status", "entityKind", "entityNames", "playerReply"));
+            if (state.hasVerifiedPublicContext()) required.add("publicEvidenceIds");
             requireObject(
                     arguments,
-                    Set.of("status", "entityKind", "entityNames", "playerReply"),
+                    required,
                     Set.of());
             IdentityKind kind = enumValue(
                     IdentityKind.class,
@@ -206,11 +218,24 @@ final class RecommendationActions {
                     || !names.equals(state.discoveredRelationshipNames)) {
                 throw new InvalidAction("IDENTITY_NOT_VERIFIED");
             }
+            if (state.hasVerifiedPublicContext()) selectPublicEvidence(arguments, state);
+        } else if (status == IdentityStatus.SOURCED_CONTEXT) {
+            requireObject(
+                    arguments,
+                    Set.of("status", "publicEvidenceIds", "playerReply"),
+                    Set.of());
+            if (state.hasVerifiedIdentity()
+                    || !state.hasVerifiedPublicContext()
+                    || state.discoveryPurpose != DiscoveryPurpose.IDENTITY_ONLY
+                    || !state.discoveryAttempted) {
+                throw new InvalidAction("PUBLIC_CONTEXT_STATE_INVALID");
+            }
+            selectPublicEvidence(arguments, state);
         } else {
             List<Integer> expectedContextIds = state.verifiedIdentityContextIds();
             Set<String> required = expectedContextIds.isEmpty()
-                    ? Set.of("status", "playerReply")
-                    : Set.of("status", "contextBggIds", "playerReply");
+                    ? Set.of("status")
+                    : Set.of("status", "contextBggIds");
             requireObject(arguments, required, Set.of());
             List<Integer> contextIds = expectedContextIds.isEmpty()
                     ? List.of()
@@ -222,8 +247,15 @@ final class RecommendationActions {
                 throw new InvalidAction("IDENTITY_UNRESOLVED_STATE_INVALID");
             }
         }
-        String playerReply = playerReply(arguments);
-        state.actions.add(status == IdentityStatus.VERIFIED
+        String playerReply = status == IdentityStatus.UNRESOLVED
+                ? unresolvedIdentityReply(state, locale)
+                : playerReply(arguments);
+        if (status == IdentityStatus.UNRESOLVED) {
+            state.actions.add(state.webResearchFailureCode.isBlank()
+                    ? "IDENTITY_UNRESOLVED:INSUFFICIENT_PUBLIC_EVIDENCE"
+                    : "IDENTITY_UNRESOLVED:PUBLIC_RESEARCH_UNAVAILABLE");
+        }
+        state.actions.add(status == IdentityStatus.VERIFIED || status == IdentityStatus.SOURCED_CONTEXT
                 ? "REPLY_TO_USER"
                 : "REPLY_TO_USER:IDENTITY_UNRESOLVED");
         return ActionOutcome.terminal(response(
@@ -235,6 +267,37 @@ final class RecommendationActions {
                 List.of()));
     }
 
+    private String unresolvedIdentityReply(RecommendationAgentState state, String locale) {
+        boolean hasVerifiedGameContext = !state.verifiedIdentityContextIds().isEmpty();
+        if (runtime.chinese(locale)) {
+            if (!state.webResearchFailureCode.isBlank()) {
+                return hasVerifiedGameContext
+                        ? "公开资料查询这次没有完成，所以我现在不能可靠确认这个称呼指的是谁。我能确认你提到的游戏条目，但它不足以证明这个称呼的身份关系；这一步可以稍后重试。"
+                        : "公开资料查询这次没有完成，所以我现在不能可靠确认这个称呼指的是谁。这不是你的问题有问题；这一步可以稍后重试。";
+            }
+            return hasVerifiedGameContext
+                    ? "我查过公开资料，但没有找到足够证据确认这个称呼指的是谁。我能确认你提到的游戏条目，但它不足以证明这个称呼的身份关系；为了不凭记忆乱猜，我先停在这里。"
+                    : "我查过公开资料，但没有找到足够证据确认这个称呼指的是谁。为了不凭记忆乱猜，我先停在这里；你可以补充更精确的名称或一条来源。";
+        }
+        if (!state.webResearchFailureCode.isBlank()) {
+            return hasVerifiedGameContext
+                    ? "The public-source lookup did not complete, so I cannot reliably identify this name right now. I could verify the game record you mentioned, but that does not prove the identity relationship; this step can be retried later."
+                    : "The public-source lookup did not complete, so I cannot reliably identify this name right now. Your question is valid; this step can be retried later.";
+        }
+        return hasVerifiedGameContext
+                ? "I checked public sources but did not find enough evidence to identify this name. I could verify the game record you mentioned, but that does not prove the identity relationship, so I will not guess from memory."
+                : "I checked public sources but did not find enough evidence to identify this name. I will not guess from memory; a more precise name or one source would help narrow it down.";
+    }
+
+    private void selectPublicEvidence(JsonNode arguments, RecommendationAgentState state) {
+        List<String> selected = strings(arguments.path("publicEvidenceIds"), 1, 4, 1, 16);
+        if (selected.stream().anyMatch(id -> !state.publicContextEvidence.containsKey(id))) {
+            throw new InvalidAction("PUBLIC_CONTEXT_EVIDENCE_NOT_VERIFIED");
+        }
+        state.finalResponsePublicEvidenceIds.addAll(selected);
+        state.actions.add("CITE_PUBLIC_CONTEXT");
+    }
+
     private ActionOutcome ask(
             JsonNode arguments,
             RecommendationAgentState state,
@@ -242,7 +305,7 @@ final class RecommendationActions {
             String locale) {
         requireObject(arguments, Set.of("question"), Set.of("options", "preferenceUpdates"));
         PreferenceUpdatePlan preferencePlan =
-                evidenceReview.planPreferenceUpdates(arguments, state.profile, request);
+                evidenceReview.planClarificationPreferenceUpdates(arguments, state.profile, request);
         String question = playerFacingText(arguments.path("question"));
         List<ClarificationOption> options = List.of();
         if (arguments.has("options")) {
@@ -669,7 +732,7 @@ final class RecommendationActions {
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(
                 arguments,
-                Set.of(),
+                Set.of("requestedCount"),
                 Set.of(
                         "purpose",
                         "types",
@@ -686,7 +749,7 @@ final class RecommendationActions {
                         "sort",
                         "limit",
                         "requestedCount",
-                        "requestedCountEvidence",
+                        "requestedCountBasis",
                         "continuationGoal",
                         "continuationEvidence",
                         "learningGoal",
@@ -945,12 +1008,12 @@ final class RecommendationActions {
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(
                 arguments,
-                Set.of("evidence", "subject", "afterIdentity"),
+                Set.of("evidence", "subject", "afterIdentity", "requestedCount"),
                 Set.of(
                         "types",
                         "candidateUse",
                         "requestedCount",
-                        "requestedCountEvidence",
+                        "requestedCountBasis",
                         "playerLead"));
         AfterIdentity afterIdentity = enumValue(
                 AfterIdentity.class,
@@ -972,6 +1035,9 @@ final class RecommendationActions {
         String subject = text(arguments.path("subject"), 1, 80).strip();
         List<BggGameType> types = optionalGameTypeHints(arguments, state);
         progress.accept(ProgressStage.DISCOVERING_CANDIDATES, null);
+        state.publicContextEvidence.clear();
+        state.publicContextSources = List.of();
+        state.finalResponsePublicEvidenceIds.clear();
         state.webResearchCalls++;
         BoardGameRecommendationWebResearch.DiscoveryRequest discoveryRequest =
                 new BoardGameRecommendationWebResearch.DiscoveryRequest(
@@ -1001,6 +1067,7 @@ final class RecommendationActions {
             if (!webResearchAvailable) state.disableWebResearch(result.code());
             return ActionOutcome.observation(observation);
         }
+        List<PublicContextEvidence> publicContext = recordPublicContext(discovery, state);
         List<BoardGameRecommendationWebResearch.CandidateLead> leads = discovery.candidates().stream()
                 .limit(6)
                 .toList();
@@ -1011,6 +1078,19 @@ final class RecommendationActions {
         CandidateDiscovery canonicalDiscovery = discovery;
         CatalogObservation inspection = null;
         ResolvedRelationship proposedRelationship = discovery.relationship();
+        if (purpose == DiscoveryPurpose.IDENTITY_ONLY
+                && !publicContext.isEmpty()
+                && (proposedRelationship == null || proposedRelationship.kind() == RelationshipKind.OTHER)) {
+            state.discoveryAttempted = true;
+            state.discoveryPurpose = purpose;
+            state.actions.add("DISCOVER_CANDIDATES");
+            return ActionOutcome.observation(runtime.observation(Map.of(
+                    "status", "SUCCESS",
+                    "guidance", "The public relationship is source-backed and needs no BGG canonicalization. Finish with SOURCED_CONTEXT, select only supplied public evidence ids, and keep every public factual clause within those statements.",
+                    "publicContextEvidence", publicContext.stream()
+                            .map(this::publicContextObservation)
+                            .toList())));
+        }
         if (proposedRelationship != null
                 && (proposedRelationship.kind() == RelationshipKind.DESIGNER
                         || proposedRelationship.kind() == RelationshipKind.DESIGNER_GROUP)) {
@@ -1060,6 +1140,37 @@ final class RecommendationActions {
                 use,
                 requestedCount,
                 playerLead(arguments));
+    }
+
+    private List<PublicContextEvidence> recordPublicContext(
+            CandidateDiscovery discovery,
+            RecommendationAgentState state) {
+        Set<Integer> sourceIndexes = discovery.sources().stream()
+                .map(Source::index)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        LinkedHashMap<String, PublicContextEvidence> verified = new LinkedHashMap<>();
+        discovery.publicContext().stream()
+                .filter(Objects::nonNull)
+                .limit(4)
+                .filter(evidence -> sourceIndexes.containsAll(evidence.sourceIndexes()))
+                .forEach(evidence -> verified.putIfAbsent(evidence.id(), evidence));
+        if (verified.isEmpty()) return List.of();
+        state.publicContextEvidence.putAll(verified);
+        state.publicContextSources = discovery.sources();
+        state.sourceCount = Math.max(state.sourceCount, discovery.sources().size());
+        state.actions.add("DISCOVERY_PUBLIC_CONTEXT_VERIFIED");
+        return List.copyOf(verified.values());
+    }
+
+    Map<String, Object> publicContextObservation(PublicContextEvidence evidence) {
+        return Map.of(
+                "id", evidence.id(),
+                "subjectKind", evidence.subjectKind().name(),
+                "subject", evidence.subject(),
+                "relation", evidence.relation(),
+                "object", evidence.object(),
+                "statement", evidence.statement(),
+                "sourceIndexes", evidence.sourceIndexes());
     }
 
     private CatalogObservation searchDesignerGames(
@@ -1251,10 +1362,21 @@ final class RecommendationActions {
         return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(observations));
     }
 
-
-    private ActionOutcome rejected(RecommendationAgentState state, String code, String guidance) {
+    private ActionOutcome rejectedContract(
+            RecommendationAgentState state,
+            String code,
+            String guidance,
+            Map<String, ?> details) {
         state.actions.add("REJECTED_ACTION:" + code);
-        return ActionOutcome.rejected(runtime.error(code, guidance));
+        return ActionOutcome.rejectedContract(runtime.error(code, guidance, details), code);
+    }
+
+    private ActionOutcome rejectedUnavailable(
+            RecommendationAgentState state,
+            String code,
+            String guidance) {
+        state.actions.add("REJECTED_ACTION:" + code);
+        return ActionOutcome.rejectedUnavailable(runtime.error(code, guidance), code);
     }
 
     private String invalidActionGuidance(String code) {
@@ -1292,7 +1414,7 @@ final class RecommendationActions {
             case "PREFERENCE_CATEGORICAL_EVIDENCE_NOT_EXPLICIT" ->
                 "A persistent type or interaction filter requires the player to explicitly name that category in an affirmative statement. A companion, setting, mood, inferred audience, or rejected category is not categorical evidence; omit the typed update and keep that context in the natural decision instead.";
             case "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID" ->
-                "Use evidenceClassification DIRECT for an explicitly stated constraint. Only an exact player count strongly implied by a fully described whole group may use CONTEXTUAL_COMPLETE_GROUP; otherwise omit the typed update.";
+                "Use DIRECT for a cited number. Use INFERRED_GROUP_MEMBER_COUNT only to count stated members when no total is given; otherwise omit the update.";
             case "RECOMMENDATION_EVIDENCE_REQUIRED", "RECOMMENDATION_EVIDENCE_NOT_GROUNDED" ->
                 "For every selection, cite one to eight observation IDs that belong to that same candidate in current turnState. Use them only as internalEvidenceIds and keep them out of player-facing prose.";
             case "RECOMMENDATION_REPLY_INVALID" ->
@@ -1554,8 +1676,11 @@ final class RecommendationActions {
         if (node == null || !node.isObject()) throw new InvalidAction("ARGUMENT_OBJECT_REQUIRED");
         Set<String> allowed = new LinkedHashSet<>(required);
         allowed.addAll(optional);
-        java.util.Iterator<String> fields = node.fieldNames();
-        while (fields.hasNext()) if (!allowed.contains(fields.next())) throw new InvalidAction("UNEXPECTED_ARGUMENT");
+        List<String> unexpected = new ArrayList<>();
+        node.fieldNames().forEachRemaining(field -> {
+            if (!allowed.contains(field)) unexpected.add(field);
+        });
+        if (!unexpected.isEmpty()) throw InvalidAction.unexpectedArguments(unexpected, allowed);
         if (required.stream().anyMatch(field -> !node.has(field))) {
             throw new InvalidAction("REQUIRED_ARGUMENT_MISSING");
         }
@@ -1740,19 +1865,22 @@ final class RecommendationActions {
     }
 
     private int publicationCount(JsonNode arguments, ConversationRequest request) {
-        boolean hasCount = arguments.has("requestedCount");
-        boolean hasEvidence = arguments.has("requestedCountEvidence");
-        if (hasCount != hasEvidence) {
-            throw new InvalidAction("REQUESTED_COUNT_EVIDENCE_REQUIRED");
+        if (!arguments.has("requestedCountBasis")) {
+            throw new InvalidAction("REQUESTED_COUNT_BASIS_REQUIRED");
         }
-        if (!hasCount) return properties.resultCount();
-        String evidenceId = text(arguments.path("requestedCountEvidence"), 1, 32);
         int requestedCount = integer(
                 arguments.path("requestedCount"),
                 1,
                 runtime.maximumRecommendationResults(),
                 "REQUESTED_COUNT_OUT_OF_RANGE");
-        evidenceReview.requireUserEvidence(evidenceId, request);
+        String basis = text(arguments.path("requestedCountBasis"), 1, 32);
+        if ("PRODUCT_DEFAULT".equals(basis)) {
+            if (requestedCount != properties.resultCount()) {
+                throw new InvalidAction("REQUESTED_COUNT_DEFAULT_INVALID");
+            }
+            return requestedCount;
+        }
+        evidenceReview.requireCurrentTurnUserEvidence(basis, request);
         return requestedCount;
     }
 
@@ -1804,26 +1932,63 @@ final class RecommendationActions {
             String observation,
             boolean rejected,
             boolean settledRead,
-            PublicationSeed publicationSeed) {
+            PublicationSeed publicationSeed,
+            RejectionKind rejectionKind,
+            String rejectionCode) {
         static ActionOutcome terminal(ConversationResponse response) {
-            return new ActionOutcome(response, "", false, false, null);
+            return new ActionOutcome(response, "", false, false, null, RejectionKind.NONE, null);
         }
 
         static ActionOutcome terminalRead(ConversationResponse response) {
-            return new ActionOutcome(response, "", false, true, null);
+            return new ActionOutcome(response, "", false, true, null, RejectionKind.NONE, null);
         }
 
         static ActionOutcome observation(String observation) {
-            return new ActionOutcome(null, observation, false, true, null);
+            return new ActionOutcome(null, observation, false, true, null, RejectionKind.NONE, null);
         }
 
         static ActionOutcome publication(String observation, PublicationSeed publicationSeed) {
-            return new ActionOutcome(null, observation, false, true, publicationSeed);
+            return new ActionOutcome(
+                    null,
+                    observation,
+                    false,
+                    true,
+                    publicationSeed,
+                    RejectionKind.NONE,
+                    null);
         }
 
-        static ActionOutcome rejected(String observation) {
-            return new ActionOutcome(null, observation, true, false, null);
+        static ActionOutcome rejectedContract(String observation, String code) {
+            return new ActionOutcome(
+                    null,
+                    observation,
+                    true,
+                    false,
+                    null,
+                    RejectionKind.DETERMINISTIC_CONTRACT,
+                    code);
         }
+
+        static ActionOutcome rejectedUnavailable(String observation, String code) {
+            return new ActionOutcome(
+                    null,
+                    observation,
+                    true,
+                    false,
+                    null,
+                    RejectionKind.TRANSIENT_UNAVAILABLE,
+                    code);
+        }
+
+        boolean deterministicContractRejection() {
+            return rejectionKind == RejectionKind.DETERMINISTIC_CONTRACT;
+        }
+    }
+
+    enum RejectionKind {
+        NONE,
+        DETERMINISTIC_CONTRACT,
+        TRANSIENT_UNAVAILABLE
     }
 
     private record TargetCompletion(String playerReply) {}
@@ -1836,6 +2001,7 @@ final class RecommendationActions {
 
     private enum IdentityStatus {
         VERIFIED,
+        SOURCED_CONTEXT,
         UNRESOLVED
     }
 
@@ -1851,15 +2017,36 @@ final class RecommendationActions {
     static final class InvalidAction extends RuntimeException {
         final String code;
         final String guidance;
+        final Map<String, ?> details;
 
         InvalidAction(String code) {
-            this(code, null);
+            this(code, null, Map.of());
         }
 
         InvalidAction(String code, String guidance) {
+            this(code, guidance, Map.of());
+        }
+
+        InvalidAction(String code, String guidance, Map<String, ?> details) {
             super(code);
             this.code = code;
             this.guidance = guidance;
+            this.details = details == null ? Map.of() : Map.copyOf(details);
+        }
+
+        static InvalidAction unexpectedArguments(
+                java.util.Collection<String> unexpected,
+                java.util.Collection<String> allowed) {
+            List<String> unexpectedFields = unexpected.stream().distinct().sorted().toList();
+            List<String> allowedFields = allowed.stream().distinct().sorted().toList();
+            return new InvalidAction(
+                    "UNEXPECTED_ARGUMENT",
+                    "Remove the unsupported fields listed in unexpectedArguments from this object. "
+                            + "Use only fields listed in allowedArguments at this object boundary; do not relocate "
+                            + "a value unless the current action schema names its destination.",
+                    Map.of(
+                            "unexpectedArguments", unexpectedFields,
+                            "allowedArguments", allowedFields));
         }
     }
 }

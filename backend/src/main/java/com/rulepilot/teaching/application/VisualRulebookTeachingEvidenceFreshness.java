@@ -61,6 +61,9 @@ final class VisualRulebookTeachingEvidenceFreshness implements RulebookTeachingE
             if ("AGENT_CANCELLED".equals(preparation.orElseThrow().lastErrorCode())) {
                 return ReuseAssessment.CANCELLED;
             }
+            if ("TEACHING_PREPARATION_STORAGE_FAILED".equals(preparation.orElseThrow().lastErrorCode())) {
+                return ReuseAssessment.EXTERNAL_REPAIR_REQUIRED;
+            }
             return "TEACHING_PREPARATION_INVALID_PLAN".equals(preparation.orElseThrow().lastErrorCode())
                     ? ReuseAssessment.TERMINAL_FAILURE
                     : ReuseAssessment.RETRYABLE_FAILURE;

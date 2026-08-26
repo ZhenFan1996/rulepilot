@@ -143,7 +143,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(continuation.candidateCount()).isEqualTo(2);
                 assertThat(continuation.learningGoal()).contains("设置", "首轮");
             });
-            assertThat(response.harness().modelCalls()).isEqualTo(1);
+            assertThat(response.harness().modelCalls()).isEqualTo(2);
             assertThat(response.harness().fallbackUsed()).isFalse();
             assertThat(totalMs).isLessThan(25_000L);
             ToolCall producingCall = capture.lastCandidateProducingToolCall();
@@ -235,8 +235,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(firstChunkMs.get()).isNotNull().isLessThan(totalMs).isLessThan(20_000L);
             assertThat(totalMs).isLessThan(20_000L);
             assertThat(response.harness().modelCalls())
-                    .as("a directly publishable candidate action must be the only model call")
-                    .isEqualTo(1);
+                    .as("one candidate decision plus one grounded publication turn")
+                    .isEqualTo(2);
             assertThat(response.harness().fallbackUsed()).isFalse();
             assertThat(response.harness().actions())
                     .contains("RECOMMEND_GAMES")
@@ -254,7 +254,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             "元数据",
                             "竞争")
                     .hasSizeGreaterThanOrEqualTo(12);
-            assertSingleCallRecommendationPublication(capture, response);
+            assertGroundedRecommendationPublication(capture, response);
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             trace.recordFailure(failure);
@@ -439,11 +439,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
             assertThat(choices.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             assertThat(choices.games()).hasSize(2);
-            assertSingleCallRecommendationPublication(capture, choices);
+            assertGroundedRecommendationPublication(capture, choices);
             assertEmptyTypedProfile(choices.profile());
             assertThat(choices.harness().modelCalls())
-                    .as("the publishable turn in this multi-turn journey must not open a writer call")
-                    .isEqualTo(1);
+                    .as("the publishable turn uses one candidate decision and one grounded writer")
+                    .isEqualTo(2);
             assertThat(choices.harness().catalogCalls()).isEqualTo(1);
             assertThat(choices.harness().webResearchCalls()).isZero();
             assertThat(choices.harness().actions())
@@ -793,7 +793,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     }
 
     @Test
-    void preservesDirectBoundsAcrossTheProductionTwoTurnJourney() throws Exception {
+    void answersCurrentPublicEventContextFromOneSourcedDiscoveryWithoutABggCarrier() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
@@ -809,7 +809,67 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
-                new BoardGameRecommendationTools(new CanaryCatalog(), noResearch()),
+                new BoardGameRecommendationTools(new CanaryCatalog(), realPublicResearch(prefix)),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String request = "只查公开来源：SPIEL Essen 是什么活动，目前由哪个组织主办？不要推荐游戏卡片。";
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), request),
+                    "zh-CN");
+            visibleTurns.add(visible("source-backed-public-event-context", response, elapsed(started)));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(response.games()).isEmpty();
+            assertThat(response.assistantMessage()).isNotBlank();
+            assertThat(response.researchSources()).isNotEmpty().allSatisfy(source ->
+                    assertThat(source.url()).startsWith("https://"));
+            assertThat(response.harness().modelCalls()).isEqualTo(2);
+            assertThat(response.harness().catalogCalls()).isZero();
+            assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+            assertThat(response.harness().actions())
+                    .contains(
+                            "DISCOVERY_PUBLIC_CONTEXT_VERIFIED",
+                            "DISCOVER_CANDIDATES",
+                            "CITE_PUBLIC_CONTEXT",
+                            "REPLY_TO_USER")
+                    .noneMatch(action -> action.startsWith("REJECTED_")
+                            || action.startsWith("FALLBACK_")
+                            || action.equals("RUN_DEADLINE_EXCEEDED"));
+            assertThat(capture.structuredCallCount()).isZero();
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void preservesDirectBoundsAcrossTheProductionTwoTurnJourney() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        CanaryCatalog catalog = new CanaryCatalog();
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(catalog, noResearch()),
                 new BoardGameRecommendationSelector(properties),
                 properties,
                 json);
@@ -822,6 +882,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     new ConversationRequest(RecommendationProfile.empty(), openingPrompt),
                     "zh-CN");
             visibleTurns.add(visible("production-opening", opening, elapsed(openingStarted)));
+            assertThat(opening.outcome()).isEqualTo(Outcome.NEEDS_CLARIFICATION);
+            assertThat(opening.profile().players()).isEqualTo(5);
+            assertThat(opening.harness().modelCalls()).isEqualTo(1);
+            assertThat(opening.harness().actions())
+                    .contains("ASK_USER")
+                    .noneMatch(action -> action.startsWith("REJECTED_ACTION:"));
+            assertThat(capture.structuredCallCount()).isZero();
             assertThat(opening.harness().fallbackUsed()).isFalse();
 
             String recommendationPrompt = "我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款吧。";
@@ -849,10 +916,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             known,
                             shown),
                     "zh-CN");
+            long recommendationLatencyMs = elapsed(recommendationStarted);
             visibleTurns.add(visible(
                     "production-explicit-three",
                     recommendation,
-                    elapsed(recommendationStarted)));
+                    recommendationLatencyMs));
 
             assertThat(recommendation.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             assertThat(recommendation.profile().playerCount().minimum()).isEqualTo(5);
@@ -876,9 +944,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             });
             assertThat(recommendation.harness().actions()).contains("RECOMMEND_GAMES");
             assertThat(recommendation.harness().fallbackUsed()).isFalse();
-            assertThat(recommendation.harness().modelCalls())
-                    .as("the publishable follow-up must finish in its candidate-producing decision call")
-                    .isEqualTo(1);
+            assertBoundedUsefulCatalogJourney(
+                    capture,
+                    recommendation,
+                    recommendationLatencyMs,
+                    catalog);
             assertRecommendationNarrativesPreserved(capture, recommendation);
 
             writeArtifact(capture, visibleTurns, null);
@@ -930,10 +1000,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(details.maximumPlayTimeMinutes()).isLessThanOrEqualTo(60);
                 assertThat(details.averageWeight()).isLessThanOrEqualTo(new BigDecimal("3.0"));
             });
-            assertSingleCallRecommendationPublication(capture, response);
+            assertGroundedRecommendationPublication(capture, response);
             assertThat(response.harness().actions()).contains("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES");
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().modelCalls()).isEqualTo(1);
+            assertThat(response.harness().modelCalls()).isEqualTo(2);
 
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
@@ -1058,7 +1128,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(details.averageWeight()).isLessThanOrEqualTo(new BigDecimal("3.0"));
             });
             assertRecommendationNarrativesPreserved(capture, first);
-            assertThat(first.harness().modelCalls()).isEqualTo(1);
+            assertThat(first.harness().modelCalls()).isEqualTo(2);
 
             String followup = "周末临时缩短了，最短仍是 30 分钟，只把上限从 60 改到 45 分钟。保留其他条件，重新给我两款，别只列标签，直接讲怎么选。";
             List<DialogueMessage> transcript = List.of(
@@ -1098,7 +1168,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(details.averageWeight()).isLessThanOrEqualTo(new BigDecimal("3.0"));
             });
             assertRecommendationNarrativesPreserved(capture, second);
-            assertThat(second.harness().modelCalls()).isEqualTo(1);
+            assertThat(second.harness().modelCalls()).isEqualTo(2);
 
             String comparisonFollowup = "把刚才这两款按时长、复杂度和机制放在一起比较，直接告诉我怎么选；资料不知道的地方就局部标出来。";
             List<DialogueMessage> comparisonTranscript = new ArrayList<>(transcript);
@@ -1159,7 +1229,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .isGreaterThanOrEqualTo(60);
             assertThat(open.games()).hasSize(2);
             assertRecommendationNarrativesPreserved(capture, open);
-            assertThat(open.harness().modelCalls()).isEqualTo(1);
+            assertThat(open.harness().modelCalls()).isEqualTo(2);
             assertThat(open.harness().fallbackUsed()).isFalse();
 
             writeArtifact(capture, visibleTurns, null);
@@ -1811,21 +1881,109 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         assertThat(response.shortfall().availableCount()).isEqualTo(publishedCount);
     }
 
+    private void assertBoundedUsefulCatalogJourney(
+            Capture capture,
+            BoardGameRecommendationAgent.ConversationResponse response,
+            long latencyMs,
+            CanaryCatalog catalog) throws Exception {
+        List<CatalogRead> reads = catalog.catalogReads();
+        assertThat(reads)
+                .as("one direct catalog read plus at most one distinct supplement")
+                .hasSizeBetween(1, 2);
+        assertThat(response.harness().catalogCalls()).isEqualTo(reads.size());
+        assertThat(response.harness().webResearchCalls()).isZero();
+        List<String> contractRepairs = response.harness().actions().stream()
+                .filter(action -> action.startsWith("REJECTED_ACTION:"))
+                .toList();
+        assertThat(contractRepairs)
+                .as("at most one model-facing schema correction may occur without becoming a player failure")
+                .hasSizeLessThanOrEqualTo(1)
+                .allMatch("REJECTED_ACTION:UNEXPECTED_ARGUMENT"::equals);
+        assertThat(response.harness().modelCalls())
+                .as("each executed read and bounded schema repair needs one decision; publication adds one writer")
+                .isEqualTo(reads.size() + contractRepairs.size() + 1);
+        assertThat(capture.structuredCallCount())
+                .as("the verified slate has exactly one grounded natural-writing turn")
+                .isEqualTo(1);
+        assertThat(latencyMs)
+                .as("the complete candidate-read and publication journey stays inside its configured deadline")
+                .isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
+        assertThat(response.games()).isNotEmpty();
+        assertThat(response.harness().actions())
+                .contains("RECOMMEND_GAMES")
+                .noneMatch(action -> action.equals("REUSED_READ_OBSERVATION")
+                        || action.equals("REUSED_ACTION_ERROR")
+                        || action.startsWith("REPEATED_DETERMINISTIC_ACTION:")
+                        || action.equals("REACT_BUDGET_EXHAUSTED")
+                        || action.equals("RUN_DEADLINE_EXCEEDED"));
+
+        List<ToolCall> browseActions = capture.toolCalls(BoardGameRecommendationAgent.BROWSE_TOOL);
+        assertThat(browseActions).hasSizeGreaterThanOrEqualTo(reads.size());
+        for (ToolCall browseAction : browseActions) {
+            JsonNode arguments = json.readTree(browseAction.argumentsJson());
+            assertThat(arguments.path("purpose").asText("SELECTABLE_CARDS"))
+                    .as("omitted purpose uses the action contract's selectable-card default")
+                    .isEqualTo("SELECTABLE_CARDS");
+            assertThat(arguments.path("candidateUse").asText())
+                    .as("a direct result request must make every candidate read terminal when useful")
+                    .isEqualTo("PUBLISH_CARDS");
+        }
+
+        Set<Map<String, Object>> distinctQueryShapes = reads.stream()
+                .map(CatalogRead::filters)
+                .map(this::catalogQueryShape)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        assertThat(distinctQueryShapes)
+                .as("an executed supplemental read must change the effective catalog query")
+                .hasSize(reads.size());
+        if (reads.size() == 2) {
+            assertThat(reads.getLast().returnedCount())
+                    .as("the only allowed supplement must rescue a useful candidate slate")
+                    .isPositive();
+        }
+    }
+
+    private Map<String, Object> catalogQueryShape(
+            BoardGameRecommendationCatalog.CatalogFilters filters) {
+        Map<String, Object> shape = new LinkedHashMap<>();
+        shape.put("types", Set.copyOf(filters.types()));
+        shape.put("categories", Set.copyOf(filters.categories()));
+        shape.put("mechanics", Set.copyOf(filters.mechanics()));
+        shape.put("designers", Set.copyOf(filters.designers()));
+        shape.put("publishers", Set.copyOf(filters.publishers()));
+        shape.put("families", Set.copyOf(filters.families()));
+        shape.put("minimumPublicationYear", filters.minimumPublicationYear());
+        shape.put("maximumPublicationYear", filters.maximumPublicationYear());
+        shape.put(
+                "minimumAverageRating",
+                filters.minimumAverageRating() == null
+                        ? null
+                        : filters.minimumAverageRating().stripTrailingZeros());
+        shape.put("minimumRatingsCount", filters.minimumRatingsCount());
+        shape.put("textQuery", filters.textQuery());
+        shape.put("sort", filters.sort());
+        shape.put("maximum", filters.maximum());
+        shape.put("offset", filters.offset());
+        return shape;
+    }
+
     private void assertTerminalProsePreserved(
             Capture capture,
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         if (response.harness().actions().contains("RECOMMEND_GAMES")) {
-            ToolCall call = capture.lastCandidateProducingToolCall();
-            JsonNode arguments = json.readTree(call.argumentsJson());
-            String playerLead = arguments.path("playerLead").asText();
-            assertThat(playerLead)
-                    .as("the one decision call must supply the natural player-visible lead")
-                    .isNotBlank();
+            JsonNode publication = json.readTree(capture.lastStructuredJson());
+            String playerLead = publication.path("lead").path("text").asText();
+            assertThat(playerLead).as("the grounded writer must supply the natural player-visible lead").isNotBlank();
+            JsonNode leadEvidenceIds = publication.path("lead").path("evidenceIds");
+            assertThat(leadEvidenceIds.isArray()).isTrue();
+            assertThat(leadEvidenceIds.size())
+                    .as("the lead must select only IDs exposed by its evidence-scoped schema")
+                    .isPositive();
             assertThat(response.recommendationLead()).isEqualTo(playerLead);
             assertThat(response.assistantMessage()).isEqualTo(playerLead);
             assertThat(capture.structuredCallCount())
-                    .as("ordinary recommendation publication must not open a synchronous writer stream")
-                    .isZero();
+                    .as("a recommendation must use the bounded evidence-scoped writer")
+                    .isPositive();
             return;
         }
         ToolCall call = capture.lastToolCall();
@@ -1911,13 +2069,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         assertThat(response.games()).isNotEmpty().allSatisfy(this::assertEvidenceBackedReplyParts);
     }
 
-    private void assertSingleCallRecommendationPublication(
+    private void assertGroundedRecommendationPublication(
             Capture capture,
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         assertRecommendationNarrativesPreserved(capture, response);
         assertThat(response.recommendationLead().codePointCount(
                         0, response.recommendationLead().length()))
-                .isBetween(12, RecommendationAgentState.MAX_PLAYER_LEAD_CODE_POINTS);
+                .isBetween(12, 1_200);
         assertThat(response.recommendationLead())
                 .doesNotContain(
                         "recommendation_publication",
@@ -1931,17 +2089,18 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private void assertEvidenceBackedReplyParts(BoardGameRecommendationAgent.RecommendedGame recommended) {
         assertThat(recommended.replyParts())
                 .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
-                .contains(
-                        BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT,
-                        BoardGameRecommendationAgent.ReplyPartRole.TRADEOFF);
+                .contains(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT);
         assertThat(recommended.replyParts()).allSatisfy(part -> {
             int bggId = recommended.game().ranking().bggId();
+            assertThat(part.claim().type())
+                    .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.PREFERENCE_INFERENCE);
             assertThat(part.claim().bggId()).isEqualTo(bggId);
             assertThat(part.claim().text().codePointCount(0, part.claim().text().length()))
                     .isGreaterThanOrEqualTo(8);
             assertThat(part.claim().evidence())
                     .isNotEmpty()
                     .allSatisfy(evidence -> assertThat(evidence.bggId()).isEqualTo(bggId));
+            assertThat(part.claim().text()).doesNotContain("一条已核对", "选择边界：");
         });
     }
 
@@ -1981,6 +2140,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             }
 
             @Override
+            public boolean structuredPublicationConfigured(String ownerUsername) {
+                return true;
+            }
+
+            @Override
             public Turn next(Request request) {
                 long started = System.nanoTime();
                 int callIndex = capture.begin("react", request);
@@ -1999,8 +2163,17 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     Request request,
                     String ownerUsername,
                     java.util.function.Consumer<String> jsonDeltaListener) {
-                capture.recordUnexpectedStructuredCall();
-                throw new AssertionError("ordinary recommendation unexpectedly opened a structured writer call");
+                long started = System.nanoTime();
+                int callIndex = capture.begin("structured_publication", request);
+                try {
+                    BoardGameRecommendationModel.StructuredTurn result =
+                            delegate.streamStructured(request, ownerUsername, jsonDeltaListener);
+                    capture.completeStructured(callIndex, result, elapsed(started));
+                    return result;
+                } catch (RuntimeException | Error failure) {
+                    capture.fail(callIndex, failure, elapsed(started));
+                    throw failure;
+                }
             }
 
         };
@@ -2401,6 +2574,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private synchronized int begin(
                 String operation,
                 BoardGameRecommendationModel.Request request) {
+            if ("structured_publication".equals(operation)) structuredCallCount++;
             Map<String, Object> call = new LinkedHashMap<>();
             call.put("ordinal", calls.size() + 1);
             call.put("operation", operation);
@@ -2431,16 +2605,24 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             toolCalls.addAll(turn.toolCalls());
         }
 
+        private synchronized void completeStructured(
+                int callIndex,
+                BoardGameRecommendationModel.StructuredTurn turn,
+                long latencyMs) {
+            Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
+            call.put("status", "COMPLETED");
+            call.put("latencyMs", latencyMs);
+            call.put("structuredJson", turn.json());
+            call.put("completionStatus", turn.completionStatus().name());
+            calls.set(callIndex, Map.copyOf(call));
+        }
+
         private synchronized void fail(int callIndex, Throwable failure, long latencyMs) {
             Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
             call.put("status", "FAILED");
             call.put("latencyMs", latencyMs);
             call.put("failureType", failure.getClass().getSimpleName());
             calls.set(callIndex, Map.copyOf(call));
-        }
-
-        private synchronized void recordUnexpectedStructuredCall() {
-            structuredCallCount++;
         }
 
         private synchronized String lastArguments(String toolName) {
@@ -2467,8 +2649,22 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             throw new AssertionError("missing captured candidate-producing action");
         }
 
+        private synchronized List<ToolCall> toolCalls(String toolName) {
+            return toolCalls.stream()
+                    .filter(call -> toolName.equals(call.name()))
+                    .toList();
+        }
+
         private synchronized int structuredCallCount() {
             return structuredCallCount;
+        }
+
+        private synchronized String lastStructuredJson() {
+            for (int index = calls.size() - 1; index >= 0; index--) {
+                Object value = calls.get(index).get("structuredJson");
+                if (value instanceof String json) return json;
+            }
+            throw new AssertionError("missing captured structured publication");
         }
 
         private synchronized boolean lastTurnHadToolCalls() {
@@ -2486,6 +2682,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private final Map<Integer, Game> games;
         private final Map<String, Integer> names;
         private final List<Integer> candidateIds;
+        private final List<CatalogRead> catalogReads = new ArrayList<>();
 
         private CanaryCatalog() {
             this(List.of());
@@ -2608,7 +2805,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .skip(filters.offset())
                     .limit(filters.maximum())
                     .toList();
+            catalogReads.add(new CatalogRead(filters, allMatches.size(), candidates.size()));
             return new CandidateSet(allMatches.size(), candidates);
+        }
+
+        private List<CatalogRead> catalogReads() {
+            return List.copyOf(catalogReads);
         }
 
         private int textMatchScore(Game game, String query) {
@@ -2653,4 +2855,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             return games.size();
         }
     }
+
+    private record CatalogRead(
+            BoardGameRecommendationCatalog.CatalogFilters filters,
+            int matchingCount,
+            int returnedCount) {}
 }

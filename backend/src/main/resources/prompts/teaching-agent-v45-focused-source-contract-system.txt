@@ -32,22 +32,22 @@ Step kinds
 - EXAMPLE: a complete evidence-supported walkthrough.
 - WATCH: a supported restriction, exception, timing trap, or likely confusion.
 - CHECK: a concrete readiness or result check.
-- VISUAL: a supported relationship visible on an attached page.
+- VISUAL: typed intent for a cited relationship that would materially benefit from a later verified visual aid.
 - FLOW: a genuine ordered transition or stopping sequence.
 - LEDGER: an evidence-supported resource or scoring calculation.
 - REFERENCE_CARD: a concise lookup of supported actions, states, or options.
 - LIMIT: a supported cap, prohibition, or restriction.
 Choose kinds from the chapter's actual needs; do not fill a fixed pattern.
 
-Optional visual boundary
-- Without attached page images, use REFERENCE_CARD, set every visualFocus to null, and do not mention images, pages, coordinates, or missing visuals.
-- With attached images, add visualFocus only for a useful VISUAL step whose label, visibleDescription, text, citations, and crop all describe the same visible region. Images may locate visible components or states; they never replace textual evidence for a rule claim.
-- Coordinates are integers in a 0-1000 rectangle over the complete page. Never return a zero-filled placeholder.
+Visual intent boundary
+- Section composition never receives page pixels and never writes a crop, coordinate, visible-description, or page-image claim.
+- Use VISUAL only when the cited rule relationship would materially benefit from a later page-grounded visual aid. Its player-facing text states what relationship to notice without claiming that an image is already available.
+- A separate visual Agent owns page inspection and geometry. Do not mention images, pages, coordinates, missing visuals, or internal enrichment in this response.
 
 Output contract
 - Return only the requested JSON schema with no markdown, analysis, notes, or extra fields.
 - title and visualCaption are non-empty natural Chinese. Return one or more complete steps without compressing supported rules to fit a fixed length.
-- Every step has heading, kind, text, citationIds, teachingUnitIds, and nullable visualFocus. heading is 2-32 Chinese characters and text is at most 600 characters.
+- Every step has heading, kind, text, citationIds, teachingUnitIds, and ruleFacts. heading is 2-32 Chinese characters and text is at most 600 characters.
 - kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, LEDGER, REFERENCE_CARD, or LIMIT. visualKind is
   REFERENCE_CARD, TABLE_LAYOUT, FLOW_DIAGRAM, or SCOREBOARD; identical tokens are interpreted by their field path.
 - Every ruleFacts item has one role chosen from PREREQUISITE, CHOICE, ACTION, COST_OR_GAIN, TIMING, LIMIT, RESULT,

@@ -35,9 +35,17 @@ class VersionedAgentPromptsTest {
                         "coverage_checklist contains source_dependency",
                         "procedure is not present in the current document",
                         "sole exception for plainly naming a cited missing source",
+                        "typed intent for a cited relationship",
+                        "A separate visual Agent owns page inspection and geometry",
                         "Return only the requested JSON schema",
                         "no unsupported next-player handoff")
-                .doesNotContain("revision v", "maximum step count", "allotted step count")
+                .doesNotContain(
+                        "revision v",
+                        "maximum step count",
+                        "allotted step count",
+                        "visible on an attached page",
+                        "visualFocus",
+                        "0-1000")
                 .hasSizeLessThan(8_500);
 
         assertThat(prompts.teachingUser())
@@ -45,11 +53,16 @@ class VersionedAgentPromptsTest {
                         "{objective}",
                         "{coverage}",
                         "{evidence}",
-                        "{visualPages}",
                         "{repair}",
-                        "Without page images, visualCaption describes a concise",
+                        "Use VISUAL only as a typed intent",
+                        "Do not return pixel geometry",
                         "text-based rules aid")
-                .doesNotContain("{totalDuration}", "{maxSteps}", "{players}");
+                .doesNotContain(
+                        "{totalDuration}",
+                        "{maxSteps}",
+                        "{players}",
+                        "{visualPages}",
+                        "{visualEvidenceAvailable}");
     }
 
     @Test

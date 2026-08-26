@@ -675,6 +675,45 @@ class OfficialRulebookImportJobServiceTest {
     }
 
     @Test
+    void settlesStorageFailureWithoutRepeatingTheTeachingModelWork() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        var failed = launchedJob(jobs, editionId, documentVersionId, failedRunId, SOURCE);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        when(freshness.assess(documentVersionId, failedRunId, "alice"))
+                .thenReturn(ReuseAssessment.EXTERNAL_REPAIR_REQUIRED);
+        var service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var result = service.reconcileLaunched(4);
+
+        assertThat(result.restarted()).isZero();
+        assertThat(result.exhausted()).isOne();
+        var handoff = jobs.findOwned(failed.id(), "alice").orElseThrow().teachingHandoff();
+        assertThat(handoff.state()).isEqualTo(TeachingHandoffState.FAILED);
+        assertThat(handoff.preparationRunId()).isEqualTo(failedRunId);
+        assertThat(handoff.errorCode()).isEqualTo("TEACHING_PREPARATION_STORAGE_FAILED");
+        assertThat(jobs.automaticallyRecovered).doesNotContain(failed.id());
+
+        var reused = service.enqueue(automaticTeachingCommand(), "alice");
+
+        assertThat(reused.reused()).isTrue();
+        assertThat(reused.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.FAILED);
+        assertThat(reused.job().teachingHandoff().errorCode())
+                .isEqualTo("TEACHING_PREPARATION_STORAGE_FAILED");
+        assertThat(jobs.automaticallyRecovered).doesNotContain(failed.id());
+    }
+
+    @Test
     void preservesPlayerCancellationInsteadOfAutomaticallyRestartingTheGuide() {
         FakeJobs jobs = new FakeJobs();
         UUID editionId = automaticTeachingCommand().editionId();

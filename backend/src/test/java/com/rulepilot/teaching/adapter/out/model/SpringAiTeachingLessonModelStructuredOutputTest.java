@@ -2,7 +2,12 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
+import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import org.junit.jupiter.api.Test;
 
 class SpringAiTeachingLessonModelStructuredOutputTest {
@@ -23,11 +28,22 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
                   {"role":"CHOICE","text":"选择一项当前可用的行动。","citationIds":["E1"]},
                   {"role":"COST_OR_GAIN","text":"支付该行动列出的费用。","citationIds":["E1"]},
                   {"role":"LIMIT","text":"本回合只能选择一项行动。","citationIds":["E1"]}
-                ],
-                "visualFocus":null
+                ]
               }]
             }
             """;
+
+    @Test
+    void advertisesOnlyTheTextCapabilityItActuallyUsesForSectionComposition() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        SpringAiTeachingLessonModel model =
+                new SpringAiTeachingLessonModel(configuration, mock(VersionedAgentPrompts.class));
+
+        assertThat(model.providerId()).isEqualTo("deepseek");
+        assertThat(model.supportsVisualEvidence()).isFalse();
+        assertThat(model.supportsVisualEvidence("player")).isFalse();
+    }
 
     @Test
     void admitsEveryDeclaredDisplayFieldFromOneExactJsonObject() throws Exception {
@@ -58,6 +74,16 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
     }
 
     @Test
+    void preservesVisualIntentWithoutAskingTheTextModelForGeometry() throws Exception {
+        var visual = SpringAiTeachingLessonModel.parseStructuredDraft(
+                VALID.replace("\"kind\":\"DO\"", "\"kind\":\"VISUAL\""));
+
+        assertThat(visual.steps().getFirst().kind())
+                .isEqualTo(com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(SpringAiTeachingLessonModel.qwenTeachingSchema()).doesNotContain("visualFocus");
+    }
+
+    @Test
     void rejectsMissingNestedFieldsInsteadOfDefaultingThemToEmptyLists() {
         String missingRuleFacts = """
                 {
@@ -70,8 +96,7 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
                     "kind":"DO",
                     "text":"选择当前可用的一项行动。",
                     "citationIds":["E1"],
-                    "teachingUnitIds":["turn-action"],
-                    "visualFocus":null
+                    "teachingUnitIds":["turn-action"]
                   }]
                 }
                 """;
@@ -83,8 +108,13 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
     @Test
     void rejectsUnexpectedFieldsAndMarkdownWrappersInsteadOfRepairingThem() {
         String unexpected = VALID.replace("\"title\":\"开始行动\"", "\"title\":\"开始行动\",\"statusLine\":\"完成\"");
+        String obsoleteGeometry = VALID.replace(
+                "\"ruleFacts\":[",
+                "\"visualFocus\":null,\"ruleFacts\":[");
 
         assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(unexpected))
+                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(obsoleteGeometry))
                 .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
         assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft("```json\n" + VALID + "\n```"))
                 .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);

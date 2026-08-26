@@ -196,8 +196,7 @@ class TeachingPlannedUnitCoveragePolicyTest {
                 move,
                 text,
                 citations,
-                teachingUnitIds,
-                null);
+                teachingUnitIds);
     }
 
     private RuleEvidence evidence(String heading, String excerpt, int page) {

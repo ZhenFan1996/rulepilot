@@ -91,6 +91,14 @@ public interface BoardGameRecommendationWebResearch {
         OTHER
     }
 
+    /** Public subject class used for source-backed context that does not need a BGG identity. */
+    enum PublicSubjectKind {
+        PERSON,
+        EVENT,
+        ORGANIZATION,
+        ENTITY
+    }
+
     record DiscoveryRequest(
             String query,
             String subject,
@@ -120,14 +128,56 @@ public interface BoardGameRecommendationWebResearch {
     record CandidateDiscovery(
             List<CandidateLead> candidates,
             List<Source> sources,
-            ResolvedRelationship relationship) {
+            ResolvedRelationship relationship,
+            List<PublicContextEvidence> publicContext) {
         public CandidateDiscovery(List<CandidateLead> candidates, List<Source> sources) {
-            this(candidates, sources, null);
+            this(candidates, sources, null, List.of());
+        }
+
+        public CandidateDiscovery(
+                List<CandidateLead> candidates,
+                List<Source> sources,
+                ResolvedRelationship relationship) {
+            this(candidates, sources, relationship, List.of());
         }
 
         public CandidateDiscovery {
             candidates = candidates == null ? List.of() : List.copyOf(candidates);
             sources = sources == null ? List.of() : List.copyOf(sources);
+            publicContext = publicContext == null ? List.of() : List.copyOf(publicContext);
+        }
+    }
+
+    /**
+     * One externally sourced public-context fact. The application owns the evidence id and final
+     * publication validates that the model selected an id returned by this same discovery read.
+     */
+    record PublicContextEvidence(
+            String id,
+            PublicSubjectKind subjectKind,
+            String subject,
+            String relation,
+            String object,
+            String statement,
+            List<Integer> sourceIndexes) {
+        public PublicContextEvidence {
+            id = bounded(id, 16, "public context evidence id");
+            subject = bounded(subject, 160, "public context subject");
+            relation = bounded(relation, 120, "public context relation");
+            object = bounded(object, 200, "public context object");
+            statement = bounded(statement, 600, "public context statement");
+            sourceIndexes = sourceIndexes == null ? List.of() : List.copyOf(sourceIndexes);
+            if (subjectKind == null || sourceIndexes.isEmpty() || sourceIndexes.size() > 3) {
+                throw new IllegalArgumentException("public context evidence is invalid");
+            }
+        }
+
+        private static String bounded(String value, int maximum, String field) {
+            String normalized = value == null ? "" : value.strip();
+            if (normalized.isBlank() || normalized.length() > maximum) {
+                throw new IllegalArgumentException(field + " is invalid");
+            }
+            return normalized;
         }
     }
 

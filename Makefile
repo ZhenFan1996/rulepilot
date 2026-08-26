@@ -152,6 +152,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@node --test scripts/verify-mcp-guidance.test.mjs
 	@sh scripts/verify-compose.sh config
 	@sh scripts/run-deployment.sh config
+	@sh scripts/run-production.sh config
 	@sh scripts/verify-architecture.sh
 	@node --test scripts/evaluate-product.test.mjs
 	@node --test scripts/preflight-public-rulebook.test.mjs
@@ -164,6 +165,9 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@node --test scripts/verify-paid-canary-entrypoints.test.mjs
 	@node --test scripts/smoke-production-ordinary-user.test.mjs
 	@node --test scripts/manage-public-lesson-candidate.test.mjs
+	@node --test scripts/verify-production-availability.test.mjs
+	@node --test scripts/summarize-production-release-traces.test.mjs
+	@node --test scripts/summarize-production-resource-samples.test.mjs
 	@node --test scripts/verify-ci-workflow.test.mjs
 	@sh scripts/verify-mockito-agent.sh
 	@sh scripts/verify-archunit-imports.sh

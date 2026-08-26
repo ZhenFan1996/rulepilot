@@ -69,6 +69,29 @@ class TeachingLessonAssemblyPolicyTest {
     }
 
     @Test
+    void doesNotReuseLegacyModelOwnedVisualCoordinatesAfterTheOwnershipMigration() {
+        TeachingPlan plan = plan();
+        LessonSection legacyVisual = section(1, "setup", EvidenceStatus.SUPPORTED, true);
+        IllustratedLesson previous = new IllustratedLesson(
+                UUID.randomUUID(),
+                plan.id(),
+                LessonStatus.COMPLETE,
+                List.of(legacyVisual),
+                "adaptive-teaching-v58-whole-game-context",
+                Instant.EPOCH);
+
+        assertThat(legacyVisual.steps().getFirst().visualFocus()).isNotNull();
+        assertThat(GroundedTeachingAgent.GENERATOR_VERSION)
+                .isEqualTo("adaptive-teaching-v59-post-model-visual-ownership");
+        assertThat(policy.reusableSections(
+                        plan,
+                        previous,
+                        Set.of(GroundedTeachingAgent.GENERATOR_VERSION),
+                        false))
+                .isEmpty();
+    }
+
+    @Test
     void keepsOnlyTheLastTwoSupportedSectionsForContinuityAndBuildsTheSafeFallback() {
         List<PriorSectionContext> context = policy.continuityContext(List.of(
                 section(1, "setup", EvidenceStatus.SUPPORTED, false),

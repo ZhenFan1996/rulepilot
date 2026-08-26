@@ -275,17 +275,15 @@ public interface VisualRulebookPageFacts {
         public String presentationEvidenceText() {
             String anchors = visualAnchors.stream()
                     .map(anchor -> anchor.kind() + " | " + anchor.label()
-                            + " | " + anchor.visibleDescription()
-                            + " | rect=" + anchor.x() + "," + anchor.y() + ","
-                            + anchor.width() + "," + anchor.height())
+                            + " | " + anchor.visibleDescription())
                     .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
             return "Visual presentation data only. Do not use it to state a rule effect, condition, quantity, score, "
-                    + "timing, or exception. It may populate only visualFocus, its literal visibleDescription, and "
-                    + "player-facing directions about where to look."
+                    + "timing, or exception. It may inform only a typed VISUAL intent and the literal relationship "
+                    + "a later page-grounded visual aid should help the player notice."
                     + "\nPrinted terms: " + printedTerms
                     + (visualAnchors.isEmpty()
                             ? "\nCataloged visual anchors: none"
-                            : "\nCataloged visual anchors (0-1000 page coordinates):" + anchors);
+                            : "\nCataloged visual anchors:" + anchors);
         }
 
     }

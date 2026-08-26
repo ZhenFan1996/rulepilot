@@ -232,7 +232,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             JsonNode sent = json.readTree(body.get());
             assertThat(sent.path("tool_choice").asText()).isEqualTo("required");
             assertThat(sent.path("reasoning").path("effort").asText()).isEqualTo("none");
-            assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(700);
+            assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(1_200);
             assertThat(sent.path("input").asText())
                     .contains(
                             "Search the web once",
@@ -247,6 +247,57 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                             "THEMATIC")
                     .doesNotContain("\"bggId\"");
             assertThat(body.get()).doesNotContain("科幻主题", "secret-test-key");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void returnsTypedPublicContextForAnEventWithoutInventingABggCarrier() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/responses", exchange -> respond(exchange, """
+                {
+                  "output": [
+                    {"type":"web_search_call","action":{"sources":[
+                      {"title":"Convention organizer","url":"https://events.example/convention"}
+                    ]}},
+                    {"type":"message","content":[{"type":"output_text","text":"{\\"relationship\\":null,\\"candidates\\":[],\\"publicContext\\":[{\\"subjectKind\\":\\"EVENT\\",\\"subject\\":\\"North Harbor Games Week\\",\\"relation\\":\\"organized by\\",\\"object\\":\\"Harbor Tabletop Association\\",\\"statement\\":\\"North Harbor Games Week is organized by the Harbor Tabletop Association.\\",\\"sourceIndexes\\":[1]}]}"}]}
+                  ]
+                }
+                """));
+        server.start();
+        try {
+            StringRedisTemplate redis = mock(StringRedisTemplate.class);
+            @SuppressWarnings("unchecked")
+            ValueOperations<String, String> values = mock(ValueOperations.class);
+            when(redis.opsForValue()).thenReturn(values);
+            when(values.get(anyString())).thenReturn(null);
+            when(values.increment(anyString())).thenReturn(1L);
+            var adapter = new ResponsesApiBoardGameRecommendationWebResearch(
+                    new OkHttpClient(), new ObjectMapper(), redis, true, "secret-test-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "research-model", Duration.ofDays(7), 20, 2,
+                    Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC));
+
+            var result = adapter.discover(new DiscoveryRequest(
+                    "Who organizes North Harbor Games Week?",
+                    "North Harbor Games Week",
+                    List.of(),
+                    "en",
+                    com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryGoal.IDENTITY_ONLY));
+
+            assertThat(result).hasValueSatisfying(discovery -> {
+                assertThat(discovery.relationship()).isNull();
+                assertThat(discovery.candidates()).isEmpty();
+                assertThat(discovery.publicContext()).singleElement().satisfies(evidence -> {
+                    assertThat(evidence.id()).isEqualTo("P1");
+                    assertThat(evidence.subjectKind().name()).isEqualTo("EVENT");
+                    assertThat(evidence.subject()).isEqualTo("North Harbor Games Week");
+                    assertThat(evidence.relation()).isEqualTo("organized by");
+                    assertThat(evidence.object()).isEqualTo("Harbor Tabletop Association");
+                    assertThat(evidence.sourceIndexes()).containsExactly(1);
+                });
+            });
         } finally {
             server.stop(0);
         }
@@ -306,7 +357,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             adapter.rememberVerifiedIdentity(request, result.orElseThrow());
             org.mockito.Mockito.verify(values).set(
                     org.mockito.ArgumentMatchers.argThat(key -> key.startsWith(
-                            "rulepilot:bgg:verified-external-identity:v2:")),
+                            "rulepilot:bgg:verified-external-identity:v3:")),
                     org.mockito.ArgumentMatchers.anyString(),
                     org.mockito.ArgumentMatchers.eq(Duration.ofDays(180)));
             long cachedStarted = System.nanoTime();

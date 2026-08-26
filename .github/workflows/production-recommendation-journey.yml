@@ -115,6 +115,7 @@ jobs:
           chmod 644 "$HOME/.ssh/known_hosts"
 
       - name: Exercise the complete public recommendation journey
+        id: production_journey
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -166,6 +167,9 @@ jobs:
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
             -o StrictHostKeyChecking=yes
             -p "$DEPLOY_SSH_PORT"
           )
@@ -199,6 +203,7 @@ jobs:
           mv "$report_update" "$artifact_dir/journey.json"
           export RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA="$active_release_sha"
           printf 'RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA=%s\n' "$active_release_sha" >> "$GITHUB_ENV"
+          printf 'RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID=%s\n' "$active_release_id" >> "$GITHUB_ENV"
 
           credentials=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
@@ -223,27 +228,360 @@ jobs:
           echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
 
+          trace_start_epoch_seconds=$(date +%s)
+          read -r canary_trace_id canary_parent_span_id < <(
+            node --input-type=module -e \
+              'import { randomBytes } from "node:crypto"; console.log(`${randomBytes(16).toString("hex")} ${randomBytes(8).toString("hex")}`)'
+          )
+          if [[ ! "$canary_trace_id" =~ ^[0-9a-f]{32}$
+            || "$canary_trace_id" == 00000000000000000000000000000000
+            || ! "$canary_parent_span_id" =~ ^[0-9a-f]{16}$
+            || "$canary_parent_span_id" == 0000000000000000 ]]; then
+            echo "Failed to generate a sampled W3C canary trace context" >&2
+            exit 1
+          fi
+          canary_traceparent="00-${canary_trace_id}-${canary_parent_span_id}-01"
+          printf 'RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS=%s\n' \
+            "$trace_start_epoch_seconds" >> "$GITHUB_ENV"
+          printf 'RULEPILOT_RECOMMENDATION_TRACE_ID=%s\n' "$canary_trace_id" >> "$GITHUB_ENV"
+
+          resource_baseline="$artifact_dir/resource-baseline.tsv"
+          resource_samples="$artifact_dir/resource-samples.tsv"
+          resource_final="$artifact_dir/resource-final.tsv"
+          resource_sampler_diagnostics="$artifact_dir/resource-sampler-diagnostics.log"
+          resource_sampler_pid=
+          resource_baseline_captured=false
+
+          collect_resource_state() {
+            local output=$1
+            timeout --signal=TERM --kill-after=5s 60s \
+              ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'bash -s' -- "$DEPLOY_PATH" "$active_release_id" \
+              > "$output" 2>> "$resource_sampler_diagnostics" <<'REMOTE'
+          set -Eeuo pipefail
+          application_root=$(readlink -f "$1")
+          expected_release_id=$2
+          active_release=$(readlink -f "$application_root/current")
+          [[ "${active_release##*/}" == "$expected_release_id" ]]
+          while IFS= read -r container_id; do
+            service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id")
+            case "$service" in
+              api|frontend|gateway|grafana|minio|postgres|prometheus|rabbitmq|redis|tempo|worker)
+                docker inspect --format \
+                  '{{index .Config.Labels "com.docker.compose.service"}}\t{{.Id}}\t{{.RestartCount}}\t{{.State.OOMKilled}}\t{{.State.Running}}' \
+                  "$container_id"
+                ;;
+            esac
+          done < <(docker ps -a --filter label=com.docker.compose.project=rulepilot --format '{{.ID}}' | sort)
+          REMOTE
+          }
+
+          stop_resource_sampler() {
+            if [[ -n "$resource_sampler_pid" ]]; then
+              kill "$resource_sampler_pid" 2>/dev/null || true
+              for _ in {1..10}; do
+                if ! kill -0 "$resource_sampler_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              if kill -0 "$resource_sampler_pid" 2>/dev/null; then
+                kill -KILL "$resource_sampler_pid" 2>/dev/null || true
+              fi
+              wait "$resource_sampler_pid" 2>/dev/null || true
+              resource_sampler_pid=
+            fi
+            if [[ "$resource_baseline_captured" == true ]]; then
+              if ! collect_resource_state "$resource_final"; then
+                echo "Final production resource state was unavailable; retaining typed NOT_AVAILABLE evidence." >&2
+              fi
+            fi
+          }
+          trap 'stop_resource_sampler' EXIT
+
+          if collect_resource_state "$resource_baseline"; then
+            resource_baseline_captured=true
+            ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              'bash -s' -- "$DEPLOY_PATH" "$active_release_id" \
+              > "$resource_samples" 2>> "$resource_sampler_diagnostics" <<'REMOTE' &
+          set -Eeuo pipefail
+          trap 'exit 0' HUP INT TERM
+          application_root=$(readlink -f "$1")
+          expected_release_id=$2
+          active_release=$(readlink -f "$application_root/current")
+          [[ "${active_release##*/}" == "$expected_release_id" ]]
+          while true; do
+            measured_at=$(date +%s)
+            host_total_kib=$(awk '$1 == "MemTotal:" {print $2}' /proc/meminfo)
+            host_available_kib=$(awk '$1 == "MemAvailable:" {print $2}' /proc/meminfo)
+            mapfile -t container_ids < <(
+              docker ps --filter label=com.docker.compose.project=rulepilot --format '{{.ID}}' | sort
+            )
+            if (( ${#container_ids[@]} > 0 )); then
+              docker stats --no-stream \
+                --format '{{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}' "${container_ids[@]}" |
+                while IFS=$'\t' read -r container_id cpu_percent memory_usage; do
+                  service=$(docker inspect \
+                    --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id")
+                  case "$service" in
+                    api|frontend|gateway|grafana|minio|postgres|prometheus|rabbitmq|redis|tempo|worker)
+                      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+                        "$measured_at" "$host_total_kib" "$host_available_kib" \
+                        "$service" "$cpu_percent" "$memory_usage"
+                      ;;
+                  esac
+                done
+            fi
+            sample_elapsed_seconds=$(($(date +%s) - measured_at))
+            if (( sample_elapsed_seconds < 5 )); then
+              sleep $((5 - sample_elapsed_seconds))
+            fi
+          done
+          REMOTE
+            resource_sampler_pid=$!
+          else
+            echo "Baseline production resource state was unavailable; journey will retain diagnostic evidence." >&2
+          fi
+
+          set +e
           RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true \
           RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
           RULEPILOT_RECOMMENDATION_USER="$player_username" \
           RULEPILOT_RECOMMENDATION_PASSWORD="$player_password" \
+          RULEPILOT_RECOMMENDATION_TRACEPARENT="$canary_traceparent" \
           RULEPILOT_RECOMMENDATION_REPORT="$artifact_dir/journey.json" \
             npm --prefix frontend exec -- playwright test \
               --config frontend/playwright.recommendation-production.config.ts
+          journey_status=$?
+          set -e
+          stop_resource_sampler
+          trap - EXIT
           chmod -R go-rwx "$artifact_dir"
+          exit "$journey_status"
 
-      - name: Build public-safe journey summary
+      - name: Summarize exact-release production resources
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
+          umask 077
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          jq '{
+          resource_evidence="$artifact_dir/resource-summary.json"
+          mkdir -p "$artifact_dir"
+          chmod 700 "$artifact_dir"
+          if [[ ! "${RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID:-}" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
+            jq -n '{
+              schemaVersion: 1,
+              releaseId: null,
+              collectionOutcome: "NOT_RUN",
+              failureCause: "ACTIVE_RELEASE_NOT_CONFIRMED",
+              sampleIntervalSeconds: 5,
+              sampleTimestampCount: 0,
+              host: {
+                totalMemoryMiB: null,
+                minimumAvailableMemoryMiB: null,
+                minimumAvailableMemoryPercent: null
+              },
+              services: [],
+              safety: {
+                evaluated: false,
+                passed: null,
+                oomObserved: null,
+                runtimeResetObserved: null
+              }
+            }' > "$resource_evidence"
+            chmod 600 "$resource_evidence"
+            exit 0
+          fi
+          node scripts/summarize-production-resource-samples.mjs \
+            --release-id "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
+            --baseline "$artifact_dir/resource-baseline.tsv" \
+            --samples "$artifact_dir/resource-samples.tsv" \
+            --final "$artifact_dir/resource-final.tsv" \
+            --fail-on-runtime-reset \
+            --output "$resource_evidence"
+
+      - name: Collect exact-release Tempo workflow terminals
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
+          trace_evidence="$artifact_dir/release-traces.json"
+          trace_candidate="$artifact_dir/release-traces.candidate.json"
+          mkdir -p "$artifact_dir"
+          chmod 700 "$artifact_dir"
+
+          if [[ ! "${RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID:-}" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$
+            || ! "${RULEPILOT_RECOMMENDATION_TRACE_ID:-}" =~ ^[0-9a-f]{32}$
+            || "${RULEPILOT_RECOMMENDATION_TRACE_ID:-}" == 00000000000000000000000000000000
+            || ! "${RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS:-}" =~ ^[1-9][0-9]*$ ]]; then
+            jq -n '{
+              schemaVersion: 1,
+              releaseId: null,
+              traceId: null,
+              window: null,
+              queryOutcome: "NOT_RUN",
+              queryFailureCause: "CANARY_TRACE_NOT_STARTED",
+              releaseTraceObserved: false,
+              observedReleaseTraceCount: 0,
+              resultLimitReached: false,
+              attemptsUsed: 0,
+              businessWorkflowTerminal: {
+                workflow: "recommendation",
+                observed: false,
+                state: "NOT_OBSERVED",
+                latestDurationMs: null,
+                observedTraceCount: 0,
+                observedStateCounts: []
+              }
+            }' > "$trace_evidence"
+            chmod 600 "$trace_evidence"
+            exit 0
+          fi
+
+          trace_end_epoch_seconds=$(date +%s)
+          jq -n \
+            --arg releaseId "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
+            --arg traceId "$RULEPILOT_RECOMMENDATION_TRACE_ID" \
+            --argjson startEpochSeconds "$RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS" \
+            --argjson endEpochSeconds "$trace_end_epoch_seconds" '{
+              schemaVersion: 1,
+              releaseId: $releaseId,
+              traceId: $traceId,
+              window: {
+                startEpochSeconds: $startEpochSeconds,
+                endEpochSeconds: $endEpochSeconds
+              },
+              queryOutcome: "NOT_AVAILABLE",
+              queryFailureCause: "UNKNOWN",
+              releaseTraceObserved: false,
+              observedReleaseTraceCount: 0,
+              resultLimitReached: false,
+              attemptsUsed: 0,
+              businessWorkflowTerminal: {
+                workflow: "recommendation",
+                observed: false,
+                state: "NOT_OBSERVED",
+                latestDurationMs: null,
+                observedTraceCount: 0,
+                observedStateCounts: []
+              }
+            }' > "$trace_evidence"
+          chmod 600 "$trace_evidence"
+
+          tempo_tunnel_pid=
+          cleanup_tunnel() {
+            if [[ -n "$tempo_tunnel_pid" ]]; then
+              kill "$tempo_tunnel_pid" 2>/dev/null || true
+              wait "$tempo_tunnel_pid" 2>/dev/null || true
+            fi
+            rm -f "$trace_candidate"
+          }
+          trap cleanup_tunnel EXIT
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_SSH_PORT" \
+            -N -L 13201:127.0.0.1:3200 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" &
+          tempo_tunnel_pid=$!
+          tempo_ready=false
+          for attempt in {1..20}; do
+            if curl -fsS http://127.0.0.1:13201/ready >/dev/null 2>&1; then
+              tempo_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$tempo_ready" != true ]]; then
+            echo "Production Tempo tunnel is not ready; continuing bounded queries to retain NOT_AVAILABLE evidence." >&2
+          fi
+
+          node scripts/summarize-production-release-traces.mjs \
+            --tempo-url http://127.0.0.1:13201 \
+            --release-id "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
+            --trace-id "$RULEPILOT_RECOMMENDATION_TRACE_ID" \
+            --start-epoch-seconds "$RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS" \
+            --end-epoch-seconds "$trace_end_epoch_seconds" \
+            --attempts 10 \
+            --retry-delay-ms 3000 \
+            --wait-for-workflow-terminal \
+            --output "$trace_candidate" || \
+            echo "Exact-release trace summarization failed; retaining sanitized NOT_AVAILABLE evidence." >&2
+          if jq -e \
+            --arg releaseId "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
+            --arg traceId "$RULEPILOT_RECOMMENDATION_TRACE_ID" \
+            '.schemaVersion == 1 and .releaseId == $releaseId and .traceId == $traceId' \
+            "$trace_candidate" >/dev/null 2>&1; then
+            mv "$trace_candidate" "$trace_evidence"
+          fi
+
+      - name: Build public-safe journey summary
+        if: always()
+        shell: bash
+        env:
+          CANARY_ASSERTION_OUTCOME: ${{ steps.production_journey.outcome }}
+        run: |
+          set -Eeuo pipefail
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
+          trace_evidence="$artifact_dir/release-traces.json"
+          if ! jq -e '.schemaVersion == 1 and has("queryOutcome") and has("traceId")' \
+            "$trace_evidence" >/dev/null 2>&1; then
+            jq -n '{
+              schemaVersion: 1,
+              releaseId: null,
+              traceId: null,
+              window: null,
+              queryOutcome: "NOT_AVAILABLE",
+              queryFailureCause: "TRACE_SUMMARY_STEP_FAILED",
+              releaseTraceObserved: false,
+              observedReleaseTraceCount: 0,
+              resultLimitReached: false,
+              attemptsUsed: 0,
+              businessWorkflowTerminal: {
+                workflow: "recommendation",
+                observed: false,
+                state: "NOT_OBSERVED",
+                latestDurationMs: null,
+                observedTraceCount: 0,
+                observedStateCounts: []
+              }
+            }' > "$trace_evidence"
+            chmod 600 "$trace_evidence"
+          fi
+          jq --arg canaryAssertionOutcome "$CANARY_ASSERTION_OUTCOME" \
+            --slurpfile traceEvidence "$trace_evidence" \
+            --slurpfile resourceEvidence "$artifact_dir/resource-summary.json" '{
             generatedAt,
             completed,
             stage,
             testedSha,
             activeReleaseSha,
+            canaryAssertion: {
+              outcome: ($canaryAssertionOutcome | ascii_upcase)
+            },
+            productWorkflowTerminal: $traceEvidence[0].businessWorkflowTerminal,
+            resourceEvidence: $resourceEvidence[0],
+            traceEvidence: ($traceEvidence[0] | {
+              schemaVersion,
+              releaseId,
+              traceId,
+              window,
+              queryOutcome,
+              queryFailureCause,
+              releaseTraceObserved,
+              observedReleaseTraceCount,
+              resultLimitReached,
+              attemptsUsed
+            }),
             journeyMode,
             recommendationOnly,
             requireFreshImport,
