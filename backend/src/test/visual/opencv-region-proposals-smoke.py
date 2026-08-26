@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import resource
+import subprocess
 import sys
 
 sys.dont_write_bytecode = True
@@ -42,6 +43,25 @@ def main() -> None:
     working_address_space = address_space_limit - production.ADDRESS_SPACE_BASELINE_BYTES
     if working_address_space != production.DEFAULT_WORKING_ADDRESS_SPACE_BYTES:
         raise AssertionError("the native proposal process escaped its bounded working address space")
+
+    original_proc_reader = production.proc_virtual_memory_bytes
+    original_ps_runner = production.subprocess.run
+    original_path_is_file = production.os.path.isfile
+    try:
+        def unavailable_proc_reader() -> int:
+            raise RuntimeError("synthetic non-Linux host")
+
+        production.proc_virtual_memory_bytes = unavailable_proc_reader
+        production.os.path.isfile = lambda candidate: candidate == "/bin/ps"
+        production.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout="123456\n"
+        )
+        if production.current_virtual_memory_bytes() != 123_456 * 1_024:
+            raise AssertionError("portable process address-space accounting changed units")
+    finally:
+        production.proc_virtual_memory_bytes = original_proc_reader
+        production.subprocess.run = original_ps_runner
+        production.os.path.isfile = original_path_is_file
 
     width, height = 1_200, 800
     blank = np.full((height, width, 3), 255, dtype=np.uint8)

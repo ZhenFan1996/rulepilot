@@ -8,6 +8,7 @@ import json
 import math
 import os
 import resource
+import subprocess
 import sys
 
 
@@ -46,7 +47,7 @@ def apply_cpu_limit() -> None:
     lower_process_limit(resource.RLIMIT_CPU, cpu_limit)
 
 
-def linux_virtual_memory_bytes() -> int:
+def proc_virtual_memory_bytes() -> int:
     try:
         with open("/proc/self/statm", encoding="ascii") as process_memory:
             statm = process_memory.read().split()
@@ -59,6 +60,39 @@ def linux_virtual_memory_bytes() -> int:
     return pages * page_size
 
 
+def ps_virtual_memory_bytes() -> int:
+    ps_command = next(
+        (candidate for candidate in ("/bin/ps", "/usr/bin/ps") if os.path.isfile(candidate)),
+        None,
+    )
+    if ps_command is None:
+        raise RuntimeError("POSIX process address-space accounting is unavailable")
+    try:
+        completed = subprocess.run(
+            [ps_command, "-o", "vsz=", "-p", str(os.getpid())],
+            check=True,
+            capture_output=True,
+            encoding="ascii",
+            timeout=1,
+        )
+        raw_kibibytes = completed.stdout.strip()
+        if not raw_kibibytes.isascii() or not raw_kibibytes.isdecimal():
+            raise ValueError("ps returned a non-numeric virtual-memory size")
+        virtual_memory_bytes = int(raw_kibibytes) * 1_024
+    except (OSError, subprocess.SubprocessError, ValueError) as failure:
+        raise RuntimeError("POSIX process address-space accounting is unavailable") from failure
+    if virtual_memory_bytes < 1:
+        raise RuntimeError("POSIX process address-space accounting is invalid")
+    return virtual_memory_bytes
+
+
+def current_virtual_memory_bytes() -> int:
+    try:
+        return proc_virtual_memory_bytes()
+    except RuntimeError:
+        return ps_virtual_memory_bytes()
+
+
 def apply_working_address_space_limit() -> tuple[int, int]:
     working_allowance = bounded_environment_integer(
         "RULEPILOT_OPENCV_WORKING_ADDRESS_SPACE_BYTES",
@@ -66,7 +100,7 @@ def apply_working_address_space_limit() -> tuple[int, int]:
         256 * 1024 * 1024,
         MAX_WORKING_ADDRESS_SPACE_BYTES,
     )
-    baseline = linux_virtual_memory_bytes()
+    baseline = current_virtual_memory_bytes()
     requested = baseline + working_allowance
     applied = lower_process_limit(resource.RLIMIT_AS, requested)
     if applied != requested:
