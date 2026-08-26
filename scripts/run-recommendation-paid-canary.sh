@@ -31,7 +31,7 @@ if [ "${#RULEPILOT_RECOMMENDATION_CANARY_LABEL}" -gt 80 ]; then
 fi
 
 case "$scenario" in
-	critical-path|ready-continuation|comparison-only|deep-comparison|classic-awards|classic-awards-conversation|creator-alias|creator-alias-identity|wild-chat|imaginative|production-two-turn|availability-shortfall|direct-target|all) ;;
+	critical-path|ready-continuation|comparison-only|deep-comparison|classic-awards|classic-awards-conversation|creator-alias|creator-alias-identity|public-context|wild-chat|imaginative|production-two-turn|availability-shortfall|direct-target|all) ;;
 	*)
 		echo "FAIL unsupported recommendation canary scenario: $scenario"
 		exit 2
@@ -74,6 +74,8 @@ elif [ "$scenario" = "creator-alias" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#resolvesAPlayerCreatorAliasThroughTheGeneralAgentAndLocalBggWhenPossible' test
 elif [ "$scenario" = "creator-alias-identity" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#recognizesThePlayerCreatorAliasWithoutPublishingAGuessedIdentity' test
+elif [ "$scenario" = "public-context" ]; then
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#answersCurrentPublicEventContextFromOneSourcedDiscoveryWithoutABggCarrier' test
 elif [ "$scenario" = "wild-chat" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#routesWildConversationIntoCardsOnlyWhenThePlayerActuallyAsksForChoices' test
 elif [ "$scenario" = "imaginative" ]; then

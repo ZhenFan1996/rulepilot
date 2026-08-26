@@ -123,7 +123,7 @@ class TeachingSectionModelRequestFactoryTest {
     }
 
     @Test
-    void attachesStoredVisualFactsAndTheRelevantSourcePageToTheModelRequest() {
+    void keepsStoredVisualFactsButDoesNotPretendTextCompositionReceivedAPageImage() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         TeachingPlan plan = plan(versionId);
@@ -144,9 +144,9 @@ class TeachingSectionModelRequestFactoryTest {
                 List.of(),
                 List.of(evidence),
                 true,
-                true);
+                false);
 
-        assertThat(request.pageImages()).extracting(image -> image.pageNumber()).containsExactly(4);
+        assertThat(request.pageImages()).isEmpty();
         assertThat(request.modelConfigurationOwner()).isEqualTo("player");
         assertThat(request.evidence()).singleElement().satisfies(source -> {
             assertThat(source.excerpt())
@@ -156,7 +156,7 @@ class TeachingSectionModelRequestFactoryTest {
                         .contains("Visual presentation data only")
                         .contains("Cataloged visual anchors")
                         .contains("中央设置区")
-                        .contains("rect=120,180,620,480");
+                        .doesNotContain("rect=", "coordinates", "visualFocus");
         });
         assertThat(request.chapterScope()).contains("【当前章节】第1章《开局准备》");
     }

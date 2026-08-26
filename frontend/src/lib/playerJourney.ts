@@ -79,9 +79,16 @@ export interface PlayerJourneyRun {
     sequence: number
     operation: string
     summary: string
-    outcome: string
+    outcome: PlayerJourneyActivityOutcome
   }>
 }
+
+export type PlayerJourneyActivityOutcome =
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'REJECTED'
+  | 'UNKNOWN'
 
 export interface PlayerJourneyPlan {
   id: string
@@ -173,7 +180,10 @@ export function playerJourneyPollDelay(
   return 1_250
 }
 
-const FAILED_RUN_STATES = new Set(['FAILED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED'])
+const FAILED_RUN_STATES = new Set(['FAILED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'CANCELLED'])
+const KNOWN_ACTIVITY_OUTCOMES = new Set<PlayerJourneyActivityOutcome>([
+  'RUNNING', 'SUCCEEDED', 'FAILED', 'REJECTED',
+])
 
 const LOCAL_DEGRADATION_CODES = new Set([
   'DEGRADED',
@@ -212,6 +222,7 @@ const EXTERNAL_REPAIR_CODES = new Set([
   'INVALID_PDF_SOURCE',
   'SOURCE_BROWSER_REQUIRED',
   'TEACHING_PREPARATION_INVALID_PLAN',
+  'TEACHING_PREPARATION_STORAGE_FAILED',
   'TEACHING_HANDOFF_INVALID',
   'TEACHING_RECOVERY_EXHAUSTED',
   'TEACHING_COMPLETION_FAILED',
@@ -578,8 +589,17 @@ function normalizeJourneyRun(run: PlayerJourneyRun): PlayerJourneyRun {
 
 function normalizeJourneyActivities(activities: NonNullable<PlayerJourneyRun['activities']>) {
   return Array.from(new Map(
-    activities.map(activity => [activity.sequence, activity]),
+    activities.map(activity => [activity.sequence, {
+      ...activity,
+      outcome: normalizeJourneyActivityOutcome(activity.outcome),
+    }]),
   ).values()).sort((left, right) => left.sequence - right.sequence)
+}
+
+function normalizeJourneyActivityOutcome(outcome: unknown): PlayerJourneyActivityOutcome {
+  return KNOWN_ACTIVITY_OUTCOMES.has(outcome as PlayerJourneyActivityOutcome)
+    ? outcome as PlayerJourneyActivityOutcome
+    : 'UNKNOWN'
 }
 
 function isTerminalImport(job: PlayerJourneyImportJob) {
@@ -587,6 +607,11 @@ function isTerminalImport(job: PlayerJourneyImportJob) {
     || job.stage === 'COMPLETED' && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState)
 }
 
-function isTerminalRun(state: string) {
+export function playerJourneyRunIsTerminal(state: string | null | undefined) {
+  if (!state) return false
   return state === 'COMPLETED' || FAILED_RUN_STATES.has(state)
+}
+
+function isTerminalRun(state: string) {
+  return playerJourneyRunIsTerminal(state)
 }

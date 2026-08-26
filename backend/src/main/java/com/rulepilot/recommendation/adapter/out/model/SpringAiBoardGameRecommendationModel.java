@@ -71,6 +71,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     }
 
     @Override
+    public boolean structuredPublicationConfigured(String ownerUsername) {
+        return configured(ownerUsername);
+    }
+
+    @Override
     public Turn next(Request request) {
         return next(request, null);
     }

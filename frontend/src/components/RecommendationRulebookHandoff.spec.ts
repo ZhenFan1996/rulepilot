@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readPendingRulebookLessons } from '@/lib/pendingRulebookLesson'
 import { BACKGROUND_WORK_CHANGED_EVENT } from '@/lib/backgroundWorkRefresh'
 import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
+import { setLocale } from '@/lib/locale'
 
 import RecommendationRulebookHandoff from './RecommendationRulebookHandoff.vue'
 
@@ -98,7 +99,7 @@ describe('RecommendationRulebookHandoff', () => {
   beforeEach(() => {
     localStorage.clear()
     sessionStorage.clear()
-    localStorage.setItem('rulepilot:locale', 'zh-CN')
+    setLocale('zh-CN')
   })
 
   afterEach(() => {
@@ -1690,7 +1691,15 @@ describe('RecommendationRulebookHandoff', () => {
       }, { status: 202 })
       if (path === '/api/v1/assistant-runs/preparation-failed') {
         const snapshot = runSnapshot('preparation-failed', 'FAILED', 'version-1')
-        const failed = { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_FAILED' } }
+        const failed = {
+          ...snapshot,
+          run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_FAILED' },
+          activities: [
+            { sequence: 1, operation: 'inspectTeachingVisualPage|1|8', summary: 'page one grouped', outcome: 'SUCCEEDED' },
+            { sequence: 2, operation: 'persistTeachingVisualPage|1|8', summary: 'page one stored', outcome: 'SUCCEEDED' },
+            { sequence: 3, operation: 'transcribeTeachingVisualRepairPage|2|8', summary: 'OCR stopped', outcome: 'FAILED' },
+          ],
+        }
         return Response.json(failed)
       }
       if (path === '/api/v1/documents/official-imports/import-1/teaching-retry' && options?.method === 'POST') {
@@ -1725,11 +1734,35 @@ describe('RecommendationRulebookHandoff', () => {
       .toContain('保留已完成内容后停止')
     expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
       .toContain('需要你或运维修复后继续')
-    expect(failureBoundary.text()).toContain('足够的可引用规则')
+    expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
+      .toContain('章节规划结构不符合契约')
+    expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').text())
+      .toContain('至少一个必讲主题在有限检索与定向重试后仍找不到足够的可引用规则')
     expect(wrapper.get('[data-testid="recommendation-current-failure-classification"]').text())
       .toContain('本次属于：保留已完成内容后停止')
     expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').attributes('data-current-failure'))
       .toBe('true')
+
+    const pageSummary = wrapper.get('[data-testid="recommendation-visual-rule-group-summary"]')
+    expect(pageSummary.get('[data-rule-group-state="directly-completed"]').text())
+      .toContain('直接完成1 页 · 第 1 页')
+    expect(pageSummary.get('[data-rule-group-state="processing"]').text())
+      .toContain('正在处理0 页')
+    expect(pageSummary.get('[data-rule-group-state="no-rule-groups"]').text())
+      .toContain('当前未形成规则组1 页 · 第 2 页')
+
+    setLocale('en')
+    await wrapper.vm.$nextTick()
+    expect(pageSummary.get('[data-rule-group-state="processing"]').text())
+      .toContain('Processing0 pages')
+    expect(pageSummary.get('[data-rule-group-state="no-rule-groups"]').text())
+      .toContain('No rule groups formed yet1 page · Page 2')
+    expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').text())
+      .toContain('at least one required topic still lacks enough citable rules after bounded retrieval and its targeted retry')
+    expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
+      .toContain('a chapter-plan structure that violates its contract')
+    setLocale('zh-CN')
+    await wrapper.vm.$nextTick()
 
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
     await flushPromises()
@@ -1876,6 +1909,51 @@ describe('RecommendationRulebookHandoff', () => {
       && request.options?.method === 'POST')).toBe(true))
     await vi.waitFor(() => expect(sessionStorage.getItem('rulepilot:recommendation-journey:266192'))
       .toContain('"generationStoppedByPlayer":false'))
+  })
+
+  it('settles an authoritative CANCELLED run without scheduling another journey poll', async () => {
+    vi.useFakeTimers()
+    seedCompletedJourney()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let teachingRunReads = 0
+    try {
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          teachingRunReads += 1
+          const snapshot = runSnapshot('teaching-run-1', 'CANCELLED')
+          return Response.json({ ...snapshot, run: { ...snapshot.run, lastErrorCode: 'AGENT_CANCELLED' } })
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json({ ...lessonFixture('lesson-1'), status: 'DRAFT_READY' })
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      ;({ wrapper } = await mountHandoff())
+      await flushPromises()
+      await vi.waitFor(() => expect(teachingRunReads).toBe(1))
+
+      expect(wrapper.text()).toContain('从已完成内容重新开始')
+      expect(wrapper.text()).not.toContain('正在组织讲解')
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await flushPromises()
+
+      expect(teachingRunReads).toBe(1)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
   })
 
   it('moves focus into the destructive confirmation and restores it when the player keeps the guide', async () => {
@@ -2026,7 +2104,7 @@ describe('RecommendationRulebookHandoff', () => {
     }
   })
 
-  it('keeps local page-attempt history compact without turning an active run into a task retry', async () => {
+  it('summarizes the latest page state without hiding local attempt history or declaring the guide failed', async () => {
     vi.useFakeTimers()
     let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
     try {
@@ -2042,12 +2120,19 @@ describe('RecommendationRulebookHandoff', () => {
         },
         preparationRunId: 'preparation-run-1',
       }))
-      const activities = Array.from({ length: 8 }, (_, index) => ({
-        sequence: index + 1,
-        operation: `inspectTeachingVisualPage|${index + 1}|20`,
-        summary: `internal page ${index + 1} attempt`,
-        outcome: index % 2 === 0 ? 'FAILED' : 'REJECTED',
-      }))
+      const activities = [
+        { sequence: 1, operation: 'inspectTeachingVisualPage|1|20', summary: 'internal direct attempt', outcome: 'SUCCEEDED' },
+        { sequence: 2, operation: 'persistTeachingVisualPage|1|20', summary: 'internal direct store', outcome: 'SUCCEEDED' },
+        { sequence: 3, operation: 'inspectTeachingVisualPage|2|20', summary: 'internal rejected attempt', outcome: 'REJECTED' },
+        { sequence: 4, operation: 'inspectTeachingVisualRepair|2|20|SCHEMA_MISMATCH', summary: 'internal correction', outcome: 'SUCCEEDED' },
+        { sequence: 5, operation: 'persistTeachingVisualPage|2|20', summary: 'internal corrected store', outcome: 'SUCCEEDED' },
+        { sequence: 6, operation: 'inspectTeachingVisualPage|3|20', summary: 'internal failed attempt', outcome: 'FAILED' },
+        { sequence: 7, operation: 'inspectTeachingVisualRetry|3|20', summary: 'internal temporary retry', outcome: 'SUCCEEDED' },
+        { sequence: 8, operation: 'persistTeachingVisualPage|3|20', summary: 'internal retried store', outcome: 'SUCCEEDED' },
+        { sequence: 9, operation: 'inspectTeachingVisualPage|4|20', summary: 'internal running attempt', outcome: 'RUNNING' },
+        { sequence: 10, operation: 'inspectTeachingVisualPage|5|20', summary: 'internal rejected attempt', outcome: 'REJECTED' },
+        { sequence: 11, operation: 'inspectTeachingVisualRepair|6|20|PAGE_BINDING_MISMATCH', summary: 'internal rejected correction', outcome: 'REJECTED' },
+      ]
       vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
         const path = String(input)
         if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
@@ -2083,24 +2168,54 @@ describe('RecommendationRulebookHandoff', () => {
       expect(generationSteps.attributes('aria-live')).toBeUndefined()
       const liveStatus = wrapper.get('[data-testid="recommendation-teaching-live-status"]')
       expect(liveStatus.attributes()).toMatchObject({ 'aria-live': 'polite', 'aria-atomic': 'true' })
-      expect(liveStatus.text()).toContain('第 8 / 20 页')
+      expect(liveStatus.text()).toContain('第 6 / 20 页')
       expect(liveStatus.text()).not.toContain('局部降级')
 
+      const pageSummary = wrapper.get('[data-testid="recommendation-visual-rule-group-summary"]')
+      expect(pageSummary.text()).toContain('每页规则组最新状态')
+      expect(pageSummary.text()).toContain('只按每页已发出的最新真实活动汇总')
+      expect(pageSummary.text()).toContain('还没有活动的页面不会计入')
+      expect(pageSummary.get('[data-rule-group-state="directly-completed"]').text())
+        .toContain('直接完成1 页 · 第 1 页')
+      expect(pageSummary.get('[data-rule-group-state="completed-after-recovery"]').text())
+        .toContain('经修正 / 临时重试后完成2 页 · 第 2、3 页')
+      expect(pageSummary.get('[data-rule-group-state="processing"]').text())
+        .toContain('正在处理1 页 · 第 4 页')
+      expect(pageSummary.get('[data-rule-group-state="no-rule-groups"]').text())
+        .toContain('当前未形成规则组2 页 · 第 5、6 页')
+      expect(generationSteps.text().indexOf('每页规则组最新状态'))
+        .toBeLessThan(generationSteps.text().indexOf('最新实际进度'))
+
+      const attemptHint = wrapper.get('[data-testid="recommendation-teaching-attempt-marker-hint"]')
+      expect(attemptHint.text()).toContain('“!”表示这一条真实尝试')
+      expect(attemptHint.text()).toContain('不代表整份讲解失败')
+
       const activityList = wrapper.get('[data-testid="recommendation-teaching-activity-list"]')
-      expect(activityList.findAll('li')).toHaveLength(5)
-      expect(activityList.text()).toContain('第 8 / 20 页的规则整理本次校验未通过')
-      expect(activityList.text()).toContain('第 4 / 20 页的规则整理本次校验未通过')
-      expect(activityList.text()).not.toContain('第 3 / 20 页')
+      expect(activityList.findAll('li')).toHaveLength(11)
+      expect(activityList.text()).toContain('第 6 / 20 页的规则整理经过一次修正后仍未通过校验')
+      expect(activityList.text()).toContain('正在整理图像规则页第 4 / 20 页的规则组')
+      expect(activityList.text()).toContain('第 3 / 20 页的规则整理在临时服务异常后已生成结果，正在保存')
+      expect(activityList.text()).toContain('图像规则页第 3 / 20 页的规则组已经保存')
+      expect(activityList.text()).toContain('图像规则页第 1 / 20 页的规则整理已生成结果，正在保存')
+      expect(activityList.text()).toContain('图像规则页第 1 / 20 页的规则组已经保存')
+      expect(activityList.text()).toContain('图像规则页第 2 / 20 页的规则整理本次校验未通过')
+      expect(activityList.text()).toContain('图像规则页第 2 / 20 页的规则整理修正结果已生成，正在保存')
+      expect(wrapper.find('[data-testid="recommendation-teaching-history-toggle"]').exists()).toBe(false)
 
-      const toggle = wrapper.get('[data-testid="recommendation-teaching-history-toggle"]')
-      expect(toggle.text()).toBe('展开另外 3 条历史')
-      expect(toggle.attributes('aria-expanded')).toBe('false')
-      await toggle.trigger('click')
-
-      expect(activityList.findAll('li')).toHaveLength(8)
-      expect(activityList.text()).toContain('第 1 / 20 页的规则整理本次未完成')
-      expect(toggle.text()).toBe('收起历史')
-      expect(toggle.attributes('aria-expanded')).toBe('true')
+      setLocale('en')
+      await wrapper.vm.$nextTick()
+      expect(pageSummary.text()).toContain('Latest rule-group state by page')
+      expect(pageSummary.text()).toContain('Pages without an activity are not counted')
+      expect(pageSummary.get('[data-rule-group-state="directly-completed"]').text())
+        .toContain('Completed directly1 page · Page 1')
+      expect(pageSummary.get('[data-rule-group-state="completed-after-recovery"]').text())
+        .toContain('Completed after correction / temporary retry2 pages · Pages 2, 3')
+      expect(pageSummary.get('[data-rule-group-state="processing"]').text())
+        .toContain('Processing1 page · Page 4')
+      expect(pageSummary.get('[data-rule-group-state="no-rule-groups"]').text())
+        .toContain('No rule groups formed yet2 pages · Pages 5, 6')
+      expect(attemptHint.text()).toContain('“!” marks one real attempt')
+      expect(attemptHint.text()).toContain('Neither means the entire guide failed')
     } finally {
       wrapper?.unmount()
       vi.useRealTimers()

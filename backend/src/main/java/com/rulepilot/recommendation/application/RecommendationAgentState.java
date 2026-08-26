@@ -4,6 +4,8 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Continuation;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.PublicContextEvidence;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -38,6 +40,7 @@ final class RecommendationAgentState {
     final Set<Integer> comparisonSubjectIds = new LinkedHashSet<>();
     final Set<Integer> finalResponseGameIds = new LinkedHashSet<>();
     final Set<String> finalResponseEvidenceIds = new LinkedHashSet<>();
+    final Set<String> finalResponsePublicEvidenceIds = new LinkedHashSet<>();
     final Map<String, Object> finalResponseDecisionFacts = new LinkedHashMap<>();
     final Map<Integer, Continuation> teachingContinuations = new LinkedHashMap<>();
     final Set<Integer> teachingContinuationQueriedIds = new LinkedHashSet<>();
@@ -57,6 +60,8 @@ final class RecommendationAgentState {
     DiscoveryPurpose discoveryPurpose;
     RelationshipKind discoveredRelationshipKind;
     List<String> discoveredRelationshipNames = List.of();
+    final Map<String, PublicContextEvidence> publicContextEvidence = new LinkedHashMap<>();
+    List<Source> publicContextSources = List.of();
     boolean researchAttempted;
     boolean clarificationBlockedByExecutionFailure;
     String webResearchFailureCode = "";
@@ -220,6 +225,10 @@ final class RecommendationAgentState {
 
     boolean hasVerifiedIdentity() {
         return discoveredRelationshipKind != null && !discoveredRelationshipNames.isEmpty();
+    }
+
+    boolean hasVerifiedPublicContext() {
+        return !publicContextEvidence.isEmpty();
     }
 
     List<Integer> verifiedIdentityContextIds() {

@@ -709,7 +709,7 @@ function terminalGenerationMessage(state: string, availableSectionCount: number)
   if (state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
     return t('lesson.generation.finished.incomplete')
   }
-  if (state === 'FAILED') return t('lesson.generation.finished.failed')
+  if (state === 'FAILED' || state === 'CANCELLED') return t('lesson.generation.finished.failed')
   return ''
 }
 

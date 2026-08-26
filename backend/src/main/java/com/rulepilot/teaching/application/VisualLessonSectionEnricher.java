@@ -31,24 +31,8 @@ final class VisualLessonSectionEnricher {
         return stepLocator.supportsVisualEvidence(modelConfigurationOwner);
     }
 
-    Result enrich(
-            RulebookUnderstanding understanding,
-            UUID documentVersionId,
-            LessonSection section,
-            String modelConfigurationOwner,
-            VisualLessonEnricher.VisualProgressListener progress,
-            List<VisualFocus> acceptedVisuals,
-            java.util.Set<Integer> explicitVisualStepPositions) {
-        return enrich(
-                understanding,
-                documentVersionId,
-                section,
-                modelConfigurationOwner,
-                null,
-                null,
-                progress,
-                acceptedVisuals,
-                explicitVisualStepPositions);
+    VisualLessonStepLocator.ProposalToolCircuit beginProposalWorkflow() {
+        return stepLocator.beginProposalWorkflow();
     }
 
     Result enrich(
@@ -58,6 +42,7 @@ final class VisualLessonSectionEnricher {
             String modelConfigurationOwner,
             UUID runId,
             Instant compatibilityDeadline,
+            VisualLessonStepLocator.ProposalToolCircuit proposalToolCircuit,
             VisualLessonEnricher.VisualProgressListener progress,
             List<VisualFocus> acceptedVisuals,
             java.util.Set<Integer> explicitVisualStepPositions) {
@@ -74,7 +59,8 @@ final class VisualLessonSectionEnricher {
                 targets,
                 modelConfigurationOwner,
                 runId,
-                compatibilityDeadline);
+                compatibilityDeadline,
+                proposalToolCircuit);
         for (LessonStep step : targets) {
             boolean acceptedForStep = location.regions().stream().anyMatch(region ->
                     region.supportedStepPositions().isEmpty()

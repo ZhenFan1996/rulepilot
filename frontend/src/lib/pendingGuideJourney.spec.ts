@@ -66,20 +66,49 @@ describe('buildPendingGuideJourneys', () => {
     })])
   })
 
-  it('reports a persisted preparation failure instead of leaving the guide active forever', () => {
+  it.each(['FAILED', 'CANCELLED'])('reports a persisted %s preparation instead of leaving the guide active forever', (state) => {
     const journeys = buildPendingGuideJourneys([], [{
       id: 'import-1', title: '花砖物语', stage: 'COMPLETED', downloadedBytes: 100,
       totalBytes: 100, documentVersionId: 'version-1', errorCode: null,
       teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-1',
       updatedAt: '2026-08-10T10:00:00Z',
     }], [{
-      id: 'prep-1', subjectId: 'version-1', state: 'FAILED',
+      id: 'prep-1', subjectId: 'version-1', state,
       lastErrorCode: 'TEACHING_PREPARATION_FAILED', updatedAt: '2026-08-10T10:01:00Z',
     }], [], [])
 
     expect(journeys).toEqual([expect.objectContaining({
       title: '花砖物语', phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
     })])
+  })
+
+  it('keeps storage failures terminal across official, uploaded, and direct preparation projections', () => {
+    const storageRun = {
+      id: 'prep-storage', subjectId: 'version-1', state: 'FAILED',
+      lastErrorCode: 'TEACHING_PREPARATION_STORAGE_FAILED', updatedAt: '2026-08-10T10:01:00Z',
+    }
+    const official = buildPendingGuideJourneys([], [{
+      id: 'import-1', title: '花砖物语', stage: 'COMPLETED', downloadedBytes: 100,
+      totalBytes: 100, documentVersionId: 'version-1', errorCode: null,
+      teachingHandoffState: 'FAILED', teachingPreparationRunId: 'prep-storage',
+      teachingErrorCode: 'TEACHING_PREPARATION_STORAGE_FAILED',
+      updatedAt: '2026-08-10T10:00:00Z',
+    }], [storageRun], [], [])
+    const uploaded = buildPendingGuideJourneys([], [], [], [], [], [{
+      id: 'handoff-1', documentVersionId: 'version-2', editionId: null,
+      rulebookTitle: 'rules.pdf', state: 'FAILED', preparationRunId: null,
+      errorCode: 'TEACHING_PREPARATION_STORAGE_FAILED', updatedAt: '2026-08-10T10:00:00Z',
+    }])
+    const direct = buildPendingGuideJourneys([], [], [{
+      ...storageRun, id: 'prep-direct', subjectId: 'version-3',
+    }], [{
+      document: { gameEditionId: null, title: 'direct.pdf' },
+      latestVersion: { id: 'version-3', status: 'READY' },
+    }], [])
+
+    expect(official).toEqual([expect.objectContaining({ retryAction: null, state: 'failed' })])
+    expect(uploaded).toEqual([expect.objectContaining({ retryAction: null, state: 'failed' })])
+    expect(direct).toEqual([expect.objectContaining({ retryAction: null, state: 'failed' })])
   })
 
   it('keeps a newer retry run authoritative over an older failed handoff run', () => {

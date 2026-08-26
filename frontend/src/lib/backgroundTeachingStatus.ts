@@ -1,8 +1,10 @@
+import { playerJourneyRunIsTerminal } from './playerJourney'
+
 export interface BackgroundTeachingItem {
   runId: string
   planId: string
   gameTitle: string
-  terminalState?: 'COMPLETED' | 'INSUFFICIENT_EVIDENCE' | 'DEGRADED' | 'FAILED'
+  terminalState?: 'COMPLETED' | 'INSUFFICIENT_EVIDENCE' | 'DEGRADED' | 'FAILED' | 'CANCELLED'
 }
 
 export interface BackgroundTeachingTransition {
@@ -59,7 +61,7 @@ export function parseBackgroundTeachingItems(value: string | null) {
         && bounded(candidate.planId, 64)
         && bounded(candidate.gameTitle, 160)
         && (candidate.terminalState === undefined
-          || ['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'].includes(candidate.terminalState))
+          || playerJourneyRunIsTerminal(candidate.terminalState))
     })
   } catch {
     return []

@@ -51,8 +51,7 @@ class TeachingQuantitativeReviewPolicyTest {
                 "先检查角色是否满足例外。",
                 List.of(evidenceId),
                 List.of("exception-unit"),
-                List.of(exception),
-                null));
+                List.of(exception)));
 
         assertThat(TeachingQuantitativeReviewPolicy.requiresCompleteReviewEvidence(planned(), draft)).isTrue();
     }

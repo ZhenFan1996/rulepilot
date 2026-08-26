@@ -1,4 +1,5 @@
 import type { TeachingProgressPlan, TeachingRunProgress } from './teachingProgress'
+import { playerJourneyRunIsTerminal } from './playerJourney'
 
 export interface TeachingPlanSummary {
   id: string
@@ -62,12 +63,11 @@ export interface DocumentProgress {
   complete: boolean
 }
 
-export const terminalAssistantRunStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
-
 const assistantRunStates = new Set([
   'RECEIVED', 'DOCUMENT_READINESS', 'LESSON_PLANNING', 'QUESTION_UNDERSTANDING', 'NEED_CLARIFICATION',
   'RETRIEVAL_PLANNING', 'RETRIEVING', 'VERIFYING_EVIDENCE', 'INSUFFICIENT_EVIDENCE',
   'LESSON_COMPOSITION', 'ANSWER_COMPOSITION', 'MEDIA_PACKAGING', 'CRITIQUING', 'COMPLETED', 'FAILED', 'DEGRADED',
+  'CANCELLED',
 ])
 const assistantRunModes = new Set(['TEACHING_PREPARATION', 'TEACHING', 'VISUAL_ENRICHMENT', 'QUESTION_ANSWER'])
 const importStages = new Set(['QUEUED', 'CONNECTING', 'DOWNLOADING', 'COMPRESSING', 'VERIFYING_FILE', 'SAVING', 'COMPLETED', 'FAILED'])
@@ -84,7 +84,7 @@ export function parseActiveTeachingRuns(value: unknown, ownerUsername: string) {
     const run = parseAssistantRun(entry)
     if (run.mode !== 'TEACHING'
       || run.ownerUsername !== ownerUsername
-      || terminalAssistantRunStates.has(run.state)) {
+      || playerJourneyRunIsTerminal(run.state)) {
       throw new Error('background teaching identity is invalid')
     }
     if (seenIds.has(run.id) || seenSubjects.has(run.subjectId)) {

@@ -27,23 +27,42 @@ const successfulFetch = async (url) => {
 
 test('verifies the deterministic public release surface without invoking an Agent', async () => {
   const calls = []
+  const traceparent = '00-89abcdef0123456789abcdef01234567-0123456789abcdef-01'
   const result = await verifyProductionAvailability({
     publicUrl: 'https://rulepilot.example/',
-    fetchImpl: async (url) => {
-      calls.push(url)
+    traceparent,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
       return successfulFetch(url)
     },
     attempts: 1,
   })
 
   assert.deepEqual(result, { attempt: 1, bggId: 42, gameName: 'Harbor' })
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.map(({ url }) => url), [
     'https://rulepilot.example/',
     'https://rulepilot.example/api/auth/csrf',
     'https://rulepilot.example/api/v1/bgg/recommendations',
     'https://rulepilot.example/api/v1/bgg/games/42?locale=zh-CN',
   ])
-  assert.ok(calls.every((url) => !url.includes('recommendation-agent')))
+  assert.ok(calls.every(({ url }) => !url.includes('recommendation-agent')))
+  assert.ok(calls.every(({ init }) => init.headers.traceparent === traceparent))
+})
+
+test('rejects unsampled, zero, or malformed canary trace context', async () => {
+  for (const traceparent of [
+    '00-89abcdef0123456789abcdef01234567-0123456789abcdef-00',
+    '00-00000000000000000000000000000000-0123456789abcdef-01',
+    '00-89abcdef0123456789abcdef01234567-0000000000000000-01',
+    'private-input',
+  ]) {
+    await assert.rejects(verifyProductionAvailability({
+      publicUrl: 'https://rulepilot.example',
+      traceparent,
+      fetchImpl: successfulFetch,
+      attempts: 1,
+    }), /traceparent must be a sampled non-zero W3C version 00 value/)
+  }
 })
 
 test('rejects a detail response for a different BGG identity', async () => {

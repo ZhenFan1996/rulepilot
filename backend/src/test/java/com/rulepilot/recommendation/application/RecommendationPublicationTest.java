@@ -29,7 +29,10 @@ import com.rulepilot.recommendation.application.RecommendationAgentState.Candida
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class RecommendationPublicationTest {
@@ -37,21 +40,46 @@ class RecommendationPublicationTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
-    void publishesTheTypedLeadAndTwoEvidenceBackedPartsForEverySeededCard() {
+    void publishesModelWrittenLeadAndEvidenceBackedPartsForEverySeededCard() throws Exception {
         Fixture fixture = fixture(
                 List.of(101, 102),
                 new RecommendationProfile(3, 60, null, BggGameType.ALL, InteractionPreference.ANY),
                 "三个人，六十分钟以内");
-        String lead = "我按你给出的三人桌和一小时边界整理了两款，先看各自的明确依据与选择边界。";
+        String lead = "我按你给出的三人桌和一小时边界整理了两款，先看各自真正不同的抓手。";
+        PublicationSeed seed = new PublicationSeed(
+                List.of(102, 101),
+                List.of(),
+                CandidateUse.PUBLISH_CARDS,
+                2,
+                "旧的决策阶段引导不应覆盖检索后的自然写作。");
+        RecommendationPublication.Permit permit = fixture.publication.permit(
+                fixture.state,
+                seed,
+                Set.of("U1"));
+        String evidence102 = evidenceId(permit, 102, "mechanics");
+        String evidence101 = evidenceId(permit, 101, "publisherDescription");
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", lead(lead, "U1"),
+                        "cards", List.of(
+                                card(
+                                        102,
+                                        "如果你们想把合作落到每一步的共同判断上，这款的行动结构更贴近今晚的方向。",
+                                        evidence102,
+                                        "它并不替你们消除分歧，反而要求大家愿意把有限信息说清楚。",
+                                        evidence102),
+                                card(
+                                        101,
+                                        "它把修复林间路径变成清晰的共同目标，新手比较容易抓住大家为何要配合。",
+                                        evidence101,
+                                        null,
+                                        null)))),
+                permit);
 
         var response = fixture.publication.publish(
                 fixture.state,
-                new PublicationSeed(
-                        List.of(102, 101),
-                        List.of(),
-                        CandidateUse.PUBLISH_CARDS,
-                        2,
-                        lead),
+                seed,
+                narrative,
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
@@ -64,19 +92,31 @@ class RecommendationPublicationTest {
             assertThat(game.matches()).isEmpty();
             assertThat(game.tradeoffs()).isEmpty();
             assertThat(game.reasons()).isEmpty();
-            assertThat(game.replyParts())
-                    .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
-                    .containsExactly(ReplyPartRole.WHY_FIT, ReplyPartRole.TRADEOFF);
+            assertThat(game.replyParts()).isNotEmpty();
+            assertThat(game.replyParts().getFirst().role()).isEqualTo(ReplyPartRole.WHY_FIT);
             assertThat(game.replyParts()).allSatisfy(part -> {
                 assertThat(part.claim().bggId()).isEqualTo(game.game().ranking().bggId());
+                assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.PREFERENCE_INFERENCE);
                 assertThat(part.claim().evidence()).isNotEmpty().allSatisfy(evidence ->
                         assertThat(evidence.bggId()).isEqualTo(game.game().ranking().bggId()));
                 assertThat(part.claim().text()).isNotBlank();
             });
         });
+        assertThat(response.games().getFirst().replyParts())
+                .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
+                .containsExactly(ReplyPartRole.WHY_FIT, ReplyPartRole.TRADEOFF);
+        assertThat(response.games().get(1).replyParts())
+                .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
+                .containsExactly(ReplyPartRole.WHY_FIT);
+        assertThat(response.games())
+                .flatExtracting(game -> game.replyParts().stream()
+                        .map(part -> part.claim().text())
+                        .toList())
+                .noneMatch(text -> text.contains("一条已核对") || text.contains("选择边界："));
         assertThat(fixture.state.finalResponseGameIds).containsExactlyInAnyOrder(101, 102);
         assertThat(fixture.state.finalResponseEvidenceIds).isNotEmpty();
-        assertThat(fixture.state.actions).containsExactly("RECOMMEND_GAMES");
+        assertThat(fixture.state.actions)
+                .containsExactly("WRITE_GROUNDED_RECOMMENDATION", "RECOMMEND_GAMES");
     }
 
     @Test
@@ -115,9 +155,10 @@ class RecommendationPublicationTest {
     }
 
     @Test
-    void missingOrOverlongPlayerLeadUsesALocalNaturalLeadWithoutDiscardingCards() {
+    void missingOrLegacySeedLeadExplainsNarrativeFailureWithoutDiscardingCards() {
         Fixture fixture = fixture(List.of(101));
         String overlong = "很".repeat(RecommendationAgentState.MAX_PLAYER_LEAD_CODE_POINTS + 1);
+        String unvalidatedLegacyLead = "未经证据绑定的旧决策引导绝不能直接发布。";
 
         var missing = fixture.publication.publish(
                 fixture.state,
@@ -128,23 +169,38 @@ class RecommendationPublicationTest {
                 secondFixture.state,
                 new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1, overlong),
                 "en");
+        Fixture thirdFixture = fixture(List.of(101));
+        var legacy = thirdFixture.publication.publish(
+                thirdFixture.state,
+                new PublicationSeed(
+                        List.of(101),
+                        List.of(),
+                        CandidateUse.PUBLISH_CARDS,
+                        1,
+                        unvalidatedLegacyLead),
+                "zh-CN");
 
         assertThat(missing.assistantMessage())
-                .contains("已经核对", "选择边界")
+                .contains("硬条件核对", "自然讲解没有生成完成")
                 .doesNotContain("失败", "fallback");
         assertThat(invalid.assistantMessage())
-                .contains("verified slate", "boundary")
+                .contains("passed source and hard-constraint checks", "notes did not finish")
                 .doesNotContain(overlong, "fallback");
+        assertThat(legacy.assistantMessage())
+                .contains("自然讲解没有生成完成")
+                .doesNotContain(unvalidatedLegacyLead);
         assertThat(missing.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).hasSize(2));
+                assertThat(game.replyParts()).isEmpty());
         assertThat(invalid.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).hasSize(2));
+                assertThat(game.replyParts()).isEmpty());
+        assertThat(missing.harness().actions()).contains("RECOMMENDATION_NARRATIVE_UNAVAILABLE");
+        assertThat(invalid.harness().actions()).contains("RECOMMENDATION_NARRATIVE_UNAVAILABLE");
         assertThat(missing.harness().fallbackUsed()).isFalse();
         assertThat(invalid.harness().fallbackUsed()).isFalse();
     }
 
     @Test
-    void usesAnExplicitSatisfiedConstraintForWhyFitAndASoftConflictForTradeoff() {
+    void modelNarrativeSelectsHardFitAndSoftConflictEvidenceWithoutTemplateCopy() throws Exception {
         RecommendationProfile profile = new RecommendationProfile(
                 ConstraintRange.hardExact(3),
                 ConstraintRange.hardAtMost(60),
@@ -158,27 +214,47 @@ class RecommendationPublicationTest {
                 InteractionPreference.ANY);
         Fixture fixture = fixture(List.of(101), profile, "三个人，一小时内，最好别太重");
 
-        var response = fixture.publication.publish(
+        PublicationSeed seed = new PublicationSeed(
+                List.of(101),
+                List.of(),
+                CandidateUse.PUBLISH_CARDS,
+                1,
+                "旧引导");
+        RecommendationPublication.Permit permit = fixture.publication.permit(
                 fixture.state,
-                new PublicationSeed(
-                        List.of(101),
-                        List.of(),
-                        CandidateUse.PUBLISH_CARDS,
-                        1,
-                        "先看这张卡的硬条件和取舍。"),
-                "zh-CN");
+                seed,
+                Set.of("U1"));
+        String playerEvidence = evidenceId(permit, 101, "playerCount");
+        String complexityEvidence = evidenceId(permit, 101, "complexity");
+        String lead = "三人和一小时都是硬边界；真正需要你们判断的是今晚愿不愿意接住稍高的规则密度。";
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", lead(lead, "U1"),
+                        "cards", List.of(card(
+                                101,
+                                "三人桌落在它的支持范围内，人数不会先把这款排除。",
+                                playerEvidence,
+                                "不过你说最好别太重，而它的复杂度正是这次选择里要认真权衡的一项。",
+                                complexityEvidence)))),
+                permit);
+
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
 
         assertThat(response.games()).singleElement().satisfies(game -> {
             assertThat(game.replyParts()).first().satisfies(part -> {
                 assertThat(part.role()).isEqualTo(ReplyPartRole.WHY_FIT);
-                assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.CONSTRAINT_FIT);
-                assertThat(part.claim().relation()).isEqualTo(CandidateClaim.Relation.SATISFIED);
+                assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.PREFERENCE_INFERENCE);
+                assertThat(part.claim().relation()).isEqualTo(CandidateClaim.Relation.OBSERVED);
+                assertThat(part.claim().text()).isEqualTo("三人桌落在它的支持范围内，人数不会先把这款排除。");
+                assertThat(part.claim().evidence())
+                        .extracting(CandidateObservation::attribute)
+                        .containsExactly("playerCount");
             });
             assertThat(game.replyParts()).element(1).satisfies(part -> {
                 assertThat(part.role()).isEqualTo(ReplyPartRole.TRADEOFF);
-                assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.CONSTRAINT_FIT);
-                assertThat(part.claim().strength()).isEqualTo(ConstraintRange.Strength.SOFT);
-                assertThat(part.claim().relation()).isEqualTo(CandidateClaim.Relation.CONFLICT);
+                assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.PREFERENCE_INFERENCE);
+                assertThat(part.claim().relation()).isEqualTo(CandidateClaim.Relation.OBSERVED);
+                assertThat(part.claim().text()).doesNotStartWith("选择边界：");
                 assertThat(part.claim().evidence())
                         .extracting(CandidateObservation::attribute)
                         .containsExactly("complexity");
@@ -187,7 +263,7 @@ class RecommendationPublicationTest {
     }
 
     @Test
-    void keepsResearchedExperienceAttributedInBothTheReasonAndItsBoundary() {
+    void keepsModelWrittenExperienceNotesBoundToAttributedResearch() throws Exception {
         Fixture fixture = fixture(List.of(), RecommendationProfile.empty(), "请直接给我一款候选");
         fixture.state.addVerified(attributedOnlyGame(101));
         fixture.state.research = new Research(
@@ -197,25 +273,92 @@ class RecommendationPublicationTest {
                 List.of(new Source(1, "体验报告", "https://example.test/report", "example.test")));
         when(fixture.runtime.recommendableIds(fixture.state)).thenReturn(List.of(101));
 
-        var response = fixture.publication.publish(
-                fixture.state,
-                new PublicationSeed(
-                        List.of(101),
-                        List.of(),
-                        CandidateUse.PUBLISH_CARDS,
-                        1,
-                        "先看有来源的体验边界。"),
-                "zh-CN");
+        PublicationSeed seed = new PublicationSeed(
+                List.of(101),
+                List.of(),
+                CandidateUse.PUBLISH_CARDS,
+                1,
+                "旧引导");
+        RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
+        String reportEvidence = permit.allowedEvidenceByGame().get(101).values().stream()
+                .filter(value -> value.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT)
+                .findFirst()
+                .orElseThrow()
+                .id();
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", lead(
+                                "这款方向明确，但首局节奏是你们今晚要预留耐心的地方。",
+                                reportEvidence),
+                        "cards", List.of(card(
+                                101,
+                                "有玩家体验报告把首局的推进描述得偏慢，适合愿意边玩边磨合的一桌。",
+                                reportEvidence,
+                                "这只是有来源的体验反馈，不代表你们这桌一定会遇到相同节奏。",
+                                reportEvidence)))),
+                permit);
+
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
 
         assertThat(response.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).allSatisfy(part -> {
-                    assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.ATTRIBUTED_EXPERIENCE);
-                    assertThat(part.claim().text()).containsAnyOf("有来源", "归因报告", "来源资料");
+                assertThat(game.replyParts()).hasSize(2).allSatisfy(part -> {
+                    assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.PREFERENCE_INFERENCE);
+                    assertThat(part.claim().text()).doesNotContain("一条有来源的考虑依据是", "选择边界：");
                     assertThat(part.claim().evidence()).singleElement().satisfies(evidence -> {
                         assertThat(evidence.kind()).isEqualTo(CandidateObservation.Kind.ATTRIBUTED_REPORT);
                         assertThat(evidence.sourceIndexes()).containsExactly(1);
                     });
                 }));
+    }
+
+    @Test
+    void dropsOnlyTheCardNarrativeWhoseEvidenceBelongsToAnotherCandidate() throws Exception {
+        Fixture fixture = fixture(List.of(101, 102));
+        PublicationSeed seed =
+                new PublicationSeed(List.of(101, 102), List.of(), CandidateUse.PUBLISH_CARDS, 2, "");
+        RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
+        String evidence101 = evidenceId(permit, 101, "mechanics");
+        String evidence102 = evidenceId(permit, 102, "mechanics");
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", lead(
+                                "两款都过了硬边界，但我只保留证据真正属于各自卡片的讲法。",
+                                evidence101),
+                        "cards", List.of(
+                                card(101, "这段有本卡证据。", evidence101, null, null),
+                                card(102, "这段错误地借了另一张卡的证据。", evidence101, null, null)))),
+                permit);
+
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
+
+        assertThat(narrative.rejectedCardNarratives()).isEqualTo(1);
+        assertThat(response.games().getFirst().replyParts()).singleElement().satisfies(part ->
+                assertThat(part.claim().evidence())
+                        .extracting(CandidateObservation::id)
+                        .containsExactly(evidence101));
+        assertThat(response.games().get(1).replyParts()).isEmpty();
+        assertThat(response.harness().actions()).contains("RECOMMENDATION_NARRATIVE_PARTIAL");
+        assertThat(fixture.state.finalResponseEvidenceIds).containsExactly(evidence101);
+        assertThat(fixture.state.finalResponseEvidenceIds).doesNotContain(evidence102);
+    }
+
+    @Test
+    void rejectsLeadEvidenceOutsideTheCurrentRequestAndSelectedCandidatePermit() throws Exception {
+        Fixture fixture = fixture(List.of(101));
+        PublicationSeed seed =
+                new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1, "");
+        RecommendationPublication.Permit permit = fixture.publication.permit(
+                fixture.state,
+                seed,
+                Set.of("U1"));
+        String evidence101 = evidenceId(permit, 101, "mechanics");
+        String narrative = json.writeValueAsString(Map.of(
+                "lead", lead("这一句冒用了不属于当前请求的用户证据。", "U99"),
+                "cards", List.of(card(101, "这段有本卡证据。", evidence101, null, null))));
+
+        assertFailure(
+                () -> fixture.publication.validateNarrative(narrative, permit),
+                RecommendationPublication.Code.NARRATIVE_EVIDENCE_NOT_OWNED);
     }
 
     @Test
@@ -241,6 +384,44 @@ class RecommendationPublicationTest {
                 RecommendationPublication.Code.FINAL_ID_FAILS_HARD_GATES);
         assertThat(ineligible.state.finalResponseGameIds).isEmpty();
         assertThat(ineligible.state.finalResponseEvidenceIds).isEmpty();
+    }
+
+    private String evidenceId(
+            RecommendationPublication.Permit permit,
+            int bggId,
+            String attribute) {
+        return permit.allowedEvidenceByGame().get(bggId).values().stream()
+                .filter(value -> attribute.equals(value.attribute()))
+                .findFirst()
+                .orElseThrow()
+                .id();
+    }
+
+    private Map<String, Object> card(
+            int bggId,
+            String whyText,
+            String whyEvidenceId,
+            String tradeoffText,
+            String tradeoffEvidenceId) {
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("bggId", bggId);
+        card.put("why", Map.of(
+                "text", whyText,
+                "evidenceIds", List.of(whyEvidenceId)));
+        card.put(
+                "tradeoff",
+                tradeoffText == null
+                        ? null
+                        : Map.of(
+                                "text", tradeoffText,
+                                "evidenceIds", List.of(tradeoffEvidenceId)));
+        return card;
+    }
+
+    private Map<String, Object> lead(String text, String... evidenceIds) {
+        return Map.of(
+                "text", text,
+                "evidenceIds", List.of(evidenceIds));
     }
 
     private Fixture fixture(List<Integer> verifiedIds) {
@@ -270,7 +451,7 @@ class RecommendationPublicationTest {
         RecommendationActions observations = new RecommendationActions(
                 null, selector, properties(), json, review, runtime);
         RecommendationPublication publication = new RecommendationPublication(
-                selector, review, observations, runtime);
+                selector, review, observations, runtime, json);
         return new Fixture(state, runtime, publication);
     }
 

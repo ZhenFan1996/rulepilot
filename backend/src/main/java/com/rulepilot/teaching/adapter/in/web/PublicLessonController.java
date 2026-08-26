@@ -15,6 +15,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Supplier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
@@ -33,6 +35,10 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/public/lessons")
 @Profile("!test")
 public class PublicLessonController {
+
+    private static final CacheControl PUBLIC_PAGE_IMAGE_CACHE =
+            CacheControl.maxAge(Duration.ofMinutes(10)).cachePrivate();
+    private static final String VISUAL_FAILURE_HEADER = "X-RulePilot-Visual-Failure";
 
     private final PublicLessonReader lessons;
     private final PublicLessonCatalog catalog;
@@ -137,11 +143,10 @@ public class PublicLessonController {
 
     @GetMapping("/{planId}/pages/{pageNumber}/image")
     ResponseEntity<byte[]> pageImage(@PathVariable UUID planId, @PathVariable int pageNumber) {
-        var image = image(planId, pageNumber);
-        return ResponseEntity.ok()
-                .contentType(MediaType.IMAGE_JPEG)
-                .cacheControl(CacheControl.noStore())
-                .body(crops.crop(image, 0, 0, 1_000, 1_000, 0));
+        return publicPageImage(() -> {
+            var image = image(planId, pageNumber);
+            return crops.crop(image, 0, 0, 1_000, 1_000, 0);
+        });
     }
 
     @GetMapping("/{planId}/pages/{pageNumber}/image/crop")
@@ -152,19 +157,36 @@ public class PublicLessonController {
             @RequestParam int y,
             @RequestParam int width,
             @RequestParam int height) {
-        var image = image(planId, pageNumber);
-        return ResponseEntity.ok()
-                .contentType(MediaType.IMAGE_JPEG)
-                .cacheControl(CacheControl.noStore())
-                .body(crops.crop(image, x, y, width, height));
+        return publicPageImage(() -> crops.crop(image(planId, pageNumber), x, y, width, height));
     }
 
     @GetMapping("/{planId}/pages/{pageNumber}/image/preview")
     ResponseEntity<byte[]> pageImagePreview(@PathVariable UUID planId, @PathVariable int pageNumber) {
-        return ResponseEntity.ok()
-                .contentType(MediaType.IMAGE_JPEG)
-                .cacheControl(CacheControl.noStore())
-                .body(crops.preview(image(planId, pageNumber)));
+        return publicPageImage(() -> crops.preview(image(planId, pageNumber)));
+    }
+
+    private ResponseEntity<byte[]> publicPageImage(Supplier<byte[]> content) {
+        try {
+            return ResponseEntity.ok()
+                    .contentType(MediaType.IMAGE_JPEG)
+                    .cacheControl(PUBLIC_PAGE_IMAGE_CACHE)
+                    .body(content.get());
+        } catch (ResponseStatusException classified) {
+            throw classified;
+        } catch (RejectedExecutionException saturated) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .cacheControl(CacheControl.noStore())
+                    .header("Retry-After", "1")
+                    .header(VISUAL_FAILURE_HEADER, "DECODE_CAPACITY_EXCEEDED")
+                    .body(new byte[0]);
+        } catch (IllegalArgumentException invalidRequest) {
+            throw invalidRequest;
+        } catch (RuntimeException unavailable) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                    .cacheControl(CacheControl.noStore())
+                    .header(VISUAL_FAILURE_HEADER, "PAGE_IMAGE_UNAVAILABLE")
+                    .body(new byte[0]);
+        }
     }
 
     private DocumentPageImages.PageImage image(UUID planId, int pageNumber) {

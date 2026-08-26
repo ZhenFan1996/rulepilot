@@ -29,6 +29,8 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryGoal;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.PublicContextEvidence;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.PublicSubjectKind;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.ResolvedRelationship;
@@ -114,8 +116,8 @@ class RecommendationNaturalFrontDoorTest {
                     List.of(new ToolCall(
                             "browse-with-teaching-continuation",
                             BoardGameRecommendationAgent.BROWSE_TOOL,
-                            "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":3,\"requestedCount\":3,"
-                                    + "\"requestedCountEvidence\":\"U1\",\"continuationGoal\":\"GUIDE_AND_RULE_QA\","
+                            "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":3,\"requestedCount\":3,\"requestedCountBasis\":\"U1\","
+                                    + "\"continuationGoal\":\"GUIDE_AND_RULE_QA\","
                                     + "\"continuationEvidence\":\"U1\",\"learningGoal\":\"先讲设置，再回答首轮规则。\","
                                     + "\"playerLead\":\"先给你三款符合方向的选择；有现成讲解的候选会排在前面。\"}")),
                     CompletionStatus.COMPLETE);
@@ -222,8 +224,8 @@ class RecommendationNaturalFrontDoorTest {
                 List.of(new ToolCall(
                         "browse-with-slow-teaching-continuation",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,"
-                                + "\"requestedCountEvidence\":\"U1\",\"continuationGoal\":\"GUIDE_AND_RULE_QA\","
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\","
+                                + "\"continuationGoal\":\"GUIDE_AND_RULE_QA\","
                                 + "\"continuationEvidence\":\"U1\","
                                 + "\"playerLead\":\"先给你两款；现成讲解状态暂时无法确认。\"}")),
                 CompletionStatus.COMPLETE));
@@ -699,13 +701,21 @@ class RecommendationNaturalFrontDoorTest {
                         "RELEVANCE",
                         "offset",
                         "preferenceUpdates",
-                        "\"required\":[\"requestedCount\",\"requestedCountEvidence\"]");
+                        "requestedCount",
+                        "requestedCountBasis",
+                        "evidence",
+                        "\"required\":[\"requestedCount\",\"requestedCountBasis\"]");
         assertThat(first.tools().stream()
                         .filter(tool -> BoardGameRecommendationAgent.BROWSE_TOOL.equals(tool.name()))
                         .findFirst()
                         .orElseThrow()
                 .description())
-                .contains("local BGG catalog for selectable cards");
+                .contains(
+                        "local BGG catalog for selectable cards",
+                        "requestedCount and requestedCountBasis are required",
+                        "defaultRecommendationCount",
+                        "PRODUCT_DEFAULT",
+                        "current-turn U id");
         String system = first.messages().getFirst().content();
         assertThat(system)
                 .contains(
@@ -837,7 +847,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                             "native-browse",
                             BoardGameRecommendationAgent.BROWSE_TOOL,
-                            "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountEvidence\":\"U1\",\"playerLead\":\"我核对了这张候选卡，下面给出明确依据和选择边界。\"}")),
+                            "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"playerLead\":\"我核对了这张候选卡，下面给出明确依据和选择边界。\"}")),
                     CompletionStatus.COMPLETE);
         });
         var properties = new BoardGameRecommendationProperties(
@@ -861,7 +871,9 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(901);
-        assertThat(response.recommendationLead()).isEqualTo("我核对了这张候选卡，下面给出明确依据和选择边界。");
+        assertNarrativeUnavailable(
+                response,
+                "我核对了这张候选卡，下面给出明确依据和选择边界。");
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().fallbackUsed()).isFalse();
@@ -1015,14 +1027,14 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "browse-first-page",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountEvidence\":\"U1\",\"offset\":0,\"playerLead\":\"先看这两款已核对的候选；每张卡都列出依据和选择边界。\"}")),
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"offset\":0,\"playerLead\":\"先看这两款已核对的候选；每张卡都列出依据和选择边界。\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
                                 "browse-second-page",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountEvidence\":\"U1\",\"offset\":2,\"playerLead\":\"这次换一批已核对的候选，不重复前两款。\"}")),
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"offset\":2,\"playerLead\":\"这次换一批已核对的候选，不重复前两款。\"}")),
                         CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -1060,13 +1072,19 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(observedOffsets).containsExactly(0, 2);
         assertThat(firstIds).containsExactly(901, 902);
         assertThat(secondIds).containsExactly(903, 904).doesNotContainAnyElementsOf(firstIds);
-        assertThat(first.recommendationLead()).isEqualTo("先看这两款已核对的候选；每张卡都列出依据和选择边界。");
-        assertThat(second.recommendationLead()).isEqualTo("这次换一批已核对的候选，不重复前两款。");
+        assertNarrativeUnavailable(
+                first,
+                "先看这两款已核对的候选；每张卡都列出依据和选择边界。");
+        assertNarrativeUnavailable(
+                second,
+                "这次换一批已核对的候选，不重复前两款。");
         assertThat(first.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(second.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(first.harness().modelCalls()).isEqualTo(1);
         assertThat(second.harness().modelCalls()).isEqualTo(1);
-        assertThat(second.harness().actions()).containsExactly("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES");
+        assertThat(second.harness().actions())
+                .containsSubsequence("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
+                .contains("RECOMMENDATION_NARRATIVE_UNAVAILABLE");
         verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
@@ -1153,21 +1171,21 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-local-wrong-identity",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"designers\":[\"Wrong Architect\"],\"purpose\":\"IDENTITY_ONLY\"}")),
+                                "{\"designers\":[\"Wrong Architect\"],\"purpose\":\"IDENTITY_ONLY\",\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
                                 "call-discover",
                                 BoardGameRecommendationAgent.DISCOVER_TOOL,
-                                "{\"evidence\":\"U1\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"CONTINUE_REACT\"}")),
+                                "{\"evidence\":\"U1\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"CONTINUE_REACT\",\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
                                 "call-filter",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"designers\":[\"Studio Architect\"],\"limit\":2,\"requestedCount\":2,\"requestedCountEvidence\":\"U1\",\"playerLead\":\"这两款都来自已经核对的设计师关系，下面分别列出依据和选择边界。\"}")),
+                                "{\"designers\":[\"Studio Architect\"],\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"playerLead\":\"这两款都来自已经核对的设计师关系，下面分别列出依据和选择边界。\"}")),
                         CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -1192,7 +1210,9 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(701, 702);
-        assertThat(response.recommendationLead()).isEqualTo("这两款都来自已经核对的设计师关系，下面分别列出依据和选择边界。");
+        assertNarrativeUnavailable(
+                response,
+                "这两款都来自已经核对的设计师关系，下面分别列出依据和选择边界。");
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
         assertThat(response.harness().actions())
@@ -1277,7 +1297,7 @@ class RecommendationNaturalFrontDoorTest {
                 List.of(new ToolCall(
                         "call-discover-franchise",
                         BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U1\",\"subject\":\"Orion Saga IP\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\",\"requestedCount\":2,\"requestedCountEvidence\":\"U1\",\"playerLead\":\"公开来源指向这两款系列桌游；每张卡都保留可核对的依据和选择边界。\"}")),
+                        "{\"evidence\":\"U1\",\"subject\":\"Orion Saga IP\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\",\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"playerLead\":\"公开来源指向这两款系列桌游；每张卡都保留可核对的依据和选择边界。\"}")),
                 CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -1304,12 +1324,11 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(711, 712);
-        assertThat(response.recommendationLead()).isEqualTo("公开来源指向这两款系列桌游；每张卡都保留可核对的依据和选择边界。");
+        assertNarrativeUnavailable(
+                response,
+                "公开来源指向这两款系列桌游；每张卡都保留可核对的依据和选择边界。");
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
-        assertThat(response.researchSources()).singleElement().satisfies(source -> {
-            assertThat(source.url()).isEqualTo("https://tabletop.example.test/orion-saga");
-            assertThat(source.domain()).isEqualTo("tabletop.example.test");
-        });
+        assertThat(response.researchSources()).isEmpty();
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
         assertThat(response.harness().actions())
                 .contains(
@@ -1320,6 +1339,301 @@ class RecommendationNaturalFrontDoorTest {
                         "RECOMMEND_GAMES");
         assertThat(response.harness().modelCalls()).isOne();
         verify(model, never()).streamStructured(any(), eq("player"), any());
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void answersASourceBackedEventRelationshipWithoutForcingBggCanonicalization() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("public context must stay within the single discovery read");
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                return Optional.of(new CandidateDiscovery(
+                        List.of(),
+                        List.of(new Source(
+                                1,
+                                "Convention organizer",
+                                "https://events.example.test/north-harbor",
+                                "events.example.test")),
+                        null,
+                        List.of(new PublicContextEvidence(
+                                "P1",
+                                PublicSubjectKind.EVENT,
+                                "North Harbor Games Week",
+                                "organized by",
+                                "Harbor Tabletop Association",
+                                "North Harbor Games Week is organized by the Harbor Tabletop Association.",
+                                List.of(1)))));
+            }
+        };
+        AtomicReference<Request> completionRequest = new AtomicReference<>();
+        String reply = "North Harbor Games Week 的主办方是 Harbor Tabletop Association。";
+        when(model.configured("player")).thenReturn(true);
+        when(model.next(any(), eq("player")))
+                .thenReturn(new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "discover-event",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"North Harbor Games Week\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
+                        CompletionStatus.COMPLETE))
+                .thenAnswer(invocation -> {
+                    completionRequest.set(invocation.getArgument(0));
+                    return new Turn(
+                            "",
+                            List.of(new ToolCall(
+                                    "finish-event",
+                                    BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                    "{\"status\":\"SOURCED_CONTEXT\",\"publicEvidenceIds\":[\"P1\"],\"playerReply\":\""
+                                            + reply
+                                            + "\"}")),
+                            CompletionStatus.COMPLETE);
+                });
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "今年的 North Harbor Games Week 是谁主办的？只回答这个公开关系。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo(reply);
+        assertThat(response.games()).isEmpty();
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(response.harness().actions()).containsSubsequence(
+                "DISCOVERY_PUBLIC_CONTEXT_VERIFIED",
+                "DISCOVER_CANDIDATES",
+                "CITE_PUBLIC_CONTEXT",
+                "REPLY_TO_USER");
+        assertThat(response.researchSources()).singleElement().satisfies(source ->
+                assertThat(source.url()).isEqualTo("https://events.example.test/north-harbor"));
+        assertThat(completionRequest.get()).satisfies(request -> {
+            assertThat(request.messages()).anySatisfy(message ->
+                    assertThat(message.content()).contains("P1", "Harbor Tabletop Association"));
+            assertThat(request.tools().stream()
+                            .filter(tool -> BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL.equals(tool.name()))
+                            .findFirst()
+                            .orElseThrow()
+                            .inputSchema())
+                    .contains("SOURCED_CONTEXT", "P1", "publicEvidenceIds");
+        });
+        verify(catalog, never()).searchGames(any());
+        verify(catalog, never()).searchByNames(any());
+        verify(catalog, never()).findGamesByIds(any());
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void answersASourceBackedPersonRelationshipWithoutPretendingThePersonIsABggDesigner() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("public context must stay within the single discovery read");
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                return Optional.of(new CandidateDiscovery(
+                        List.of(),
+                        List.of(new Source(
+                                1,
+                                "Foundation leadership",
+                                "https://community.example.test/leadership",
+                                "community.example.test")),
+                        null,
+                        List.of(new PublicContextEvidence(
+                                "P1",
+                                PublicSubjectKind.PERSON,
+                                "Mira Chen",
+                                "chairs",
+                                "River City Tabletop Foundation",
+                                "Mira Chen chairs the River City Tabletop Foundation.",
+                                List.of(1)))));
+            }
+        };
+        String reply = "Mira Chen 目前担任 River City Tabletop Foundation 的主席；这里说的是公开组织关系，不是 BGG 设计师身份。";
+        when(model.configured("player")).thenReturn(true);
+        when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "discover-person",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"Mira Chen\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "finish-person",
+                                BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                "{\"status\":\"SOURCED_CONTEXT\",\"publicEvidenceIds\":[\"P1\"],\"playerReply\":\""
+                                        + reply
+                                        + "\"}")),
+                        CompletionStatus.COMPLETE));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "Mira Chen 和 River City Tabletop Foundation 是什么关系？"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo(reply);
+        assertThat(response.researchSources()).singleElement().satisfies(source ->
+                assertThat(source.domain()).isEqualTo("community.example.test"));
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(response.harness().actions())
+                .contains("DISCOVERY_PUBLIC_CONTEXT_VERIFIED", "CITE_PUBLIC_CONTEXT")
+                .doesNotContain(
+                        "DISCOVERY_RELATIONSHIP_VERIFIED",
+                        "SEARCH_BGG_BY_NAME",
+                        "LOOKUP_BGG_CANDIDATES",
+                        "RECOMMEND_GAMES");
+        verify(catalog, never()).searchGames(any());
+        verify(catalog, never()).searchByNames(any());
+        verify(catalog, never()).findGamesByIds(any());
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void rejectsPublicContextEvidenceThatWasNotReturnedByTheCurrentDiscovery() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("public context must stay within the single discovery read");
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                return Optional.of(new CandidateDiscovery(
+                        List.of(),
+                        List.of(new Source(
+                                1,
+                                "Public organization record",
+                                "https://records.example.test/copper-city",
+                                "records.example.test")),
+                        null,
+                        List.of(new PublicContextEvidence(
+                                "P1",
+                                PublicSubjectKind.ORGANIZATION,
+                                "Copper City Tabletop Council",
+                                "operates",
+                                "Copper City Games Forum",
+                                "The Copper City Tabletop Council operates the Copper City Games Forum.",
+                                List.of(1)))));
+            }
+        };
+        String reply = "公开资料显示，Copper City Games Forum 由 Copper City Tabletop Council 运营。";
+        when(model.configured("player")).thenReturn(true);
+        when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "discover-organization",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"Copper City Games Forum\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "finish-with-foreign-evidence",
+                                BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                "{\"status\":\"SOURCED_CONTEXT\",\"publicEvidenceIds\":[\"P9\"],\"playerReply\":\""
+                                        + reply
+                                        + "\"}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "finish-with-owned-evidence",
+                                BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                "{\"status\":\"SOURCED_CONTEXT\",\"publicEvidenceIds\":[\"P1\"],\"playerReply\":\""
+                                        + reply
+                                        + "\"}")),
+                        CompletionStatus.COMPLETE));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "Copper City Games Forum 是由哪个组织运营的？"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo(reply);
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(response.harness().actions())
+                .contains(
+                        "REJECTED_ACTION:PUBLIC_CONTEXT_EVIDENCE_NOT_VERIFIED",
+                        "CITE_PUBLIC_CONTEXT",
+                        "REPLY_TO_USER");
+        assertThat(response.researchSources()).singleElement().satisfies(source ->
+                assertThat(source.url()).isEqualTo("https://records.example.test/copper-city"));
+        verify(catalog, never()).searchGames(any());
+        verify(catalog, never()).searchByNames(any());
+        verify(catalog, never()).findGamesByIds(any());
 
         loop.stopBoundedCalls();
     }
@@ -1346,7 +1660,8 @@ class RecommendationNaturalFrontDoorTest {
                 return Optional.empty();
             }
         };
-        String unresolvedReply = "这个称呼目前没有足够的公开证据，我不想把它猜成某个系列或设计师。";
+        String unresolvedReply = "我查过公开资料，但没有找到足够证据确认这个称呼指的是谁。"
+                + "为了不凭记忆乱猜，我先停在这里；你可以补充更精确的名称或一条来源。";
         when(model.configured("player")).thenReturn(true);
         when(model.next(any(), eq("player"))).thenReturn(
                 new Turn(
@@ -1354,14 +1669,14 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-discover-identity",
                                 BoardGameRecommendationAgent.DISCOVER_TOOL,
-                                "{\"evidence\":\"U1\",\"subject\":\"Silver Comet alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                                "{\"evidence\":\"U1\",\"subject\":\"Silver Comet alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
                                 "call-finish-unresolved-identity",
                                 BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
-                                "{\"status\":\"UNRESOLVED\",\"playerReply\":\"" + unresolvedReply + "\"}")),
+                                "{\"status\":\"UNRESOLVED\"}")),
                         CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -1388,10 +1703,82 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.assistantMessage()).isEqualTo(unresolvedReply);
         assertThat(response.games()).isEmpty();
         assertThat(response.harness().actions())
-                .contains("DISCOVER_CANDIDATES", "REPLY_TO_USER:IDENTITY_UNRESOLVED")
+                .contains(
+                        "DISCOVER_CANDIDATES",
+                        "IDENTITY_UNRESOLVED:INSUFFICIENT_PUBLIC_EVIDENCE",
+                        "REPLY_TO_USER:IDENTITY_UNRESOLVED")
                 .doesNotContain("RECOMMEND_GAMES", "RESEARCH_GAME_FIT");
         verify(model, never()).streamStructured(any(), eq("player"), any());
 
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void publishesAnApplicationOwnedFailureExplanationWhenPublicResearchIsUnavailable() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("an identity-only turn must not start fit research");
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                throw new BoardGameRecommendationWebResearch.WebResearchUnavailableException(
+                        "PROVIDER_HTTP_ERROR");
+            }
+        };
+        when(model.configured("player")).thenReturn(true);
+        when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-discover-unavailable",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"current event organizer\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-finish-unavailable",
+                                BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                "{\"status\":\"UNRESOLVED\"}")),
+                        CompletionStatus.COMPLETE));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "不要推荐卡片，只确认这个活动现在由谁主办。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage())
+                .isEqualTo("公开资料查询这次没有完成，所以我现在不能可靠确认这个称呼指的是谁。"
+                        + "这不是你的问题有问题；这一步可以稍后重试。")
+                .doesNotContain("PROVIDER_HTTP_ERROR");
+        assertThat(response.games()).isEmpty();
+        assertThat(response.harness().actions())
+                .contains(
+                        "WEB_RESEARCH_DEGRADED:PROVIDER_HTTP_ERROR",
+                        "IDENTITY_UNRESOLVED:PUBLIC_RESEARCH_UNAVAILABLE",
+                        "REPLY_TO_USER:IDENTITY_UNRESOLVED")
+                .doesNotContain("RECOMMEND_GAMES");
         loop.stopBoundedCalls();
     }
 
@@ -1440,7 +1827,7 @@ class RecommendationNaturalFrontDoorTest {
                             "call-browse",
                             BoardGameRecommendationAgent.BROWSE_TOOL,
                             """
-                            {"purpose":"SELECTABLE_CARDS","limit":8,"requestedCount":1,"requestedCountEvidence":"U1","playerLead":"按四人和最多七十五分钟的硬边界核对后，先看这一款。","preferenceUpdates":[
+                            {"purpose":"SELECTABLE_CARDS","limit":8,"requestedCount":1,"requestedCountBasis":"U1","playerLead":"按四人和最多七十五分钟的硬边界核对后，先看这一款。","preferenceUpdates":[
                               {"field":"playerCount","value":4,"evidence":"U1","evidenceClassification":"DIRECT"},
                               {"field":"durationMinutes","value":{"minimum":null,"maximum":75},"evidence":"U1","evidenceClassification":"DIRECT"}
                             ]}
@@ -1468,7 +1855,9 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.profile().playerCount().minimum()).isEqualTo(4);
         assertThat(response.profile().playerCount().maximum()).isEqualTo(4);
         assertThat(response.profile().durationMinutes().maximum()).isEqualTo(75);
-        assertThat(response.recommendationLead()).isEqualTo("按四人和最多七十五分钟的硬边界核对后，先看这一款。");
+        assertNarrativeUnavailable(
+                response,
+                "按四人和最多七十五分钟的硬边界核对后，先看这一款。");
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().fallbackUsed()).isFalse();
@@ -1488,13 +1877,15 @@ class RecommendationNaturalFrontDoorTest {
                 .contains(
                         "preferenceUpdates",
                         "requestedCount",
-                        "requestedCountEvidence",
-                        "playerLead",
+                        "evidence",
                         "\"playerCount\"")
                 .as("the model-facing preference schema exposes one canonical player-count field")
-                .doesNotContain("\"players\"");
+                .doesNotContain("\"players\"", "playerLead");
         assertThat(observedActionRequest.messages().getFirst().content())
-                .contains("Preserve an explicit cardinal from the current turn");
+                .contains(
+                        "Every candidate read must set requestedCount plus requestedCountBasis",
+                        "defaultRecommendationCount",
+                        "never reuse an older turn's count");
         verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
@@ -1563,7 +1954,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-discover",
                                 BoardGameRecommendationAgent.DISCOVER_TOOL,
-                                "{\"evidence\":\"U2\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                                "{\"evidence\":\"U2\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
                         CompletionStatus.COMPLETE))
                 .thenAnswer(invocation -> {
                     followupRequest.set(invocation.getArgument(0));
@@ -1675,15 +2066,15 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        String unresolvedReply = "这个叫法我还不能可靠地缩小到某一位，所以不想随便猜。"
-                + "《银河漫游》的 BGG 署名是 Avery Stone、Blake North 和 Casey Rivers；目前更稳妥的说法，是线索只指向这组设计团队。";
+        String unresolvedReply = "我查过公开资料，但没有找到足够证据确认这个称呼指的是谁。"
+                + "我能确认你提到的游戏条目，但它不足以证明这个称呼的身份关系；为了不凭记忆乱猜，我先停在这里。";
         when(model.next(any(), eq("player"))).thenReturn(
                 new Turn(
                         "",
                         List.of(new ToolCall(
                                 "call-discover",
                                 BoardGameRecommendationAgent.DISCOVER_TOOL,
-                                "{\"evidence\":\"U1\",\"subject\":\"the creator alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                                "{\"evidence\":\"U1\",\"subject\":\"the creator alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
@@ -1697,9 +2088,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-finish-unresolved",
                                 BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
-                                "{\"status\":\"UNRESOLVED\",\"contextBggIds\":[703],\"playerReply\":\""
-                                        + unresolvedReply
-                                        + "\"}")),
+                                "{\"status\":\"UNRESOLVED\",\"contextBggIds\":[703]}")),
                         CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -1726,6 +2115,7 @@ class RecommendationNaturalFrontDoorTest {
                 .containsSubsequence(
                         "DISCOVER_CANDIDATES",
                         "RESOLVE_BGG_REFERENCE",
+                        "IDENTITY_UNRESOLVED:INSUFFICIENT_PUBLIC_EVIDENCE",
                         "REPLY_TO_USER:IDENTITY_UNRESOLVED")
                 .doesNotContain("RESEARCH_GAME_FIT");
         verify(model, never()).streamStructured(any(), eq("player"), any());
@@ -1792,7 +2182,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-discover-group",
                                 BoardGameRecommendationAgent.DISCOVER_TOOL,
-                                "{\"evidence\":\"U1\",\"subject\":\"the team alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                                "{\"evidence\":\"U1\",\"subject\":\"the team alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\",\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
@@ -1827,15 +2217,31 @@ class RecommendationNaturalFrontDoorTest {
     }
 
     private void assertEvidenceBackedReplyParts(BoardGameRecommendationAgent.RecommendedGame game) {
-        assertThat(game.replyParts())
-                .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
-                .containsExactly(ReplyPartRole.WHY_FIT, ReplyPartRole.TRADEOFF);
+        assertThat(game.replyParts()).hasSizeLessThanOrEqualTo(2);
+        if (!game.replyParts().isEmpty()) {
+            assertThat(game.replyParts().getFirst().role()).isEqualTo(ReplyPartRole.WHY_FIT);
+        }
         assertThat(game.replyParts()).allSatisfy(part -> {
+            assertThat(part.claim().type())
+                    .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.PREFERENCE_INFERENCE);
             assertThat(part.claim().bggId()).isEqualTo(game.game().ranking().bggId());
             assertThat(part.claim().evidence()).isNotEmpty().allSatisfy(evidence ->
                     assertThat(evidence.bggId()).isEqualTo(game.game().ranking().bggId()));
-            assertThat(part.claim().text()).isNotBlank();
+            assertThat(part.claim().text())
+                    .isNotBlank()
+                    .doesNotContain("一条已核对", "选择边界：");
         });
+    }
+
+    private void assertNarrativeUnavailable(
+            BoardGameRecommendationAgent.ConversationResponse response,
+            String unvalidatedDecisionLead) {
+        assertThat(response.recommendationLead())
+                .contains("自然讲解没有生成完成")
+                .doesNotContain(unvalidatedDecisionLead);
+        assertThat(response.harness().actions()).contains(
+                "RECOMMENDATION_NARRATIVE_SKIPPED:CAPABILITY_UNAVAILABLE",
+                "RECOMMENDATION_NARRATIVE_UNAVAILABLE");
     }
 
     private RecommendationAgentState optionalDeadlineState() {

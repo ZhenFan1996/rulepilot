@@ -830,8 +830,7 @@ class TeachingRichLessonPaidCanaryTest {
         return raw.heading().equals(published.heading())
                 && raw.kind() == published.kind()
                 && raw.text().equals(published.text())
-                && raw.citationIds().equals(published.sourceChunkIds())
-                && visibleFocus(raw.visualFocus()).equals(visibleFocus(published.visualFocus()));
+                && raw.citationIds().equals(published.sourceChunkIds());
     }
 
     private final Map<String, SectionRequest> requestIndex = new ConcurrentHashMap<>();
@@ -915,18 +914,6 @@ class TeachingRichLessonPaidCanaryTest {
                     return Map.copyOf(visible);
                 })
                         .toList());
-    }
-
-    private Map<String, Object> visibleFocus(TeachingLessonModel.VisualFocusDraft focus) {
-        if (focus == null) return Map.of();
-        return visibleFocus(
-                focus.pageNumber(),
-                focus.label(),
-                focus.visibleDescription(),
-                focus.x(),
-                focus.y(),
-                focus.width(),
-                focus.height());
     }
 
     private Map<String, Object> visibleFocus(IllustratedLesson.VisualFocus focus) {
@@ -1146,7 +1133,6 @@ class TeachingRichLessonPaidCanaryTest {
                     visibleStep.put("text", step.text());
                     visibleStep.put("citationIds", step.citationIds());
                     visibleStep.put("teachingUnitIds", step.teachingUnitIds());
-                    visibleStep.put("visualFocus", visibleFocus(step.visualFocus()));
                     return Map.copyOf(visibleStep);
                 }).toList());
                 return Map.copyOf(item);

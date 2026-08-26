@@ -133,9 +133,8 @@ final class TeachingSectionDraftComposer {
             throw visualCompositionFailure;
         }
         draft = normalizeDraft(draft, modelRequest, evidence);
-        boolean hasPageImages = !modelRequest.pageImages().isEmpty();
         int maxRepairAttempts = allowValidationRevision
-                ? draftRecoveryPolicy.maxRepairAttempts(hasPageImages)
+                ? draftRecoveryPolicy.maxRepairAttempts()
                 : 0;
         for (int repair = 0; ; repair++) {
             try {
@@ -162,8 +161,7 @@ final class TeachingSectionDraftComposer {
                 String diagnostic = rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
                         : candidateValidator.repairDiagnostic(rejectedDraft, draft, evidence);
-                List<String> feedback = draftRecoveryPolicy.repairFeedback(
-                        diagnostic, hasPageImages, false);
+                List<String> feedback = draftRecoveryPolicy.repairFeedback(diagnostic);
                 log.info(
                         "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),
@@ -252,7 +250,7 @@ final class TeachingSectionDraftComposer {
                         validationAttempt + repair,
                         ActivityOutcome.REJECTED,
                         "TEXT_FALLBACK_REJECTED");
-                if (repair == draftRecoveryPolicy.maxRepairAttempts(false)) {
+                if (repair == draftRecoveryPolicy.maxRepairAttempts()) {
                     throw rejectedFallback;
                 }
                 String diagnostic = rejectedFallback.getMessage() == null

@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionProposer;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
@@ -42,6 +43,7 @@ public class VisualLessonEnricher {
             RulebookUnderstandingCatalog understanding,
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
+            VisualRegionProposer proposals,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
             AgentExecutionControl execution,
@@ -51,6 +53,7 @@ public class VisualLessonEnricher {
                 understanding,
                 pageImages,
                 candidates,
+                proposals,
                 locator,
                 prioritizer,
                 execution,
@@ -62,6 +65,28 @@ public class VisualLessonEnricher {
             RulebookUnderstandingCatalog understanding,
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
+            VisualRegionLocator locator,
+            VisualSectionPrioritizer prioritizer,
+            AgentExecutionControl execution,
+            Duration compatibilityWorkflowTimeout,
+            Clock clock) {
+        this(
+                understanding,
+                pageImages,
+                candidates,
+                VisualRegionProposer.unavailable(),
+                locator,
+                prioritizer,
+                execution,
+                compatibilityWorkflowTimeout,
+                clock);
+    }
+
+    VisualLessonEnricher(
+            RulebookUnderstandingCatalog understanding,
+            DocumentPageImages pageImages,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionProposer proposals,
             VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
             AgentExecutionControl execution,
@@ -79,6 +104,7 @@ public class VisualLessonEnricher {
                 new VisualLessonStepLocator(
                         pageImages,
                         candidates,
+                        proposals,
                         locator,
                         cropPolicy,
                         execution,
@@ -96,6 +122,7 @@ public class VisualLessonEnricher {
                 understanding,
                 pageImages,
                 candidates,
+                VisualRegionProposer.unavailable(),
                 locator,
                 prioritizer,
                 null,
@@ -175,6 +202,7 @@ public class VisualLessonEnricher {
         List<SectionResult> sectionResults = new ArrayList<>();
         List<LessonSection> currentSections = new ArrayList<>(lesson.sections());
         Instant compatibilityDeadline = clock.instant().plus(compatibilityWorkflowTimeout);
+        VisualLessonStepLocator.ProposalToolCircuit proposalToolCircuit = sectionEnricher.beginProposalWorkflow();
         for (int sectionIndex = 0; sectionIndex < lesson.sections().size(); sectionIndex++) {
             LessonSection section = lesson.sections().get(sectionIndex);
             if (!selectedPositions.contains(section.position())) continue;
@@ -185,6 +213,7 @@ public class VisualLessonEnricher {
                     modelConfigurationOwner,
                     runId,
                     compatibilityDeadline,
+                    proposalToolCircuit,
                     progress,
                     acceptedVisuals,
                     explicitVisualStepPositions.getOrDefault(section.position(), Set.of()));

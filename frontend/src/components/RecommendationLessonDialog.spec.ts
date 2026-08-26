@@ -636,6 +636,53 @@ describe('RecommendationLessonDialog', () => {
     wrapper.unmount()
   })
 
+  it('settles a cancelled visual run as unfinished without continuing visual polling', async () => {
+    let visualRunReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...plan,
+          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
+        })
+      }
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [section(1, '文字讲解已保留')],
+        })
+      }
+      if (path.includes('mode=TEACHING')) {
+        return Response.json(run('COMPLETED', '2026-08-10T00:02:00Z'))
+      }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) {
+        visualRunReads += 1
+        return Response.json({
+          ...runFor('plan-1', 'CANCELLED'),
+          run: { ...runFor('plan-1', 'CANCELLED').run, id: 'visual-run-1' },
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: { open: true, planId: 'plan-1' },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    await flushPromises()
+
+    expect(visualRunReads).toBe(1)
+    const status = wrapper.get('[data-testid="recommendation-lesson-visual-status"]')
+    expect(status.text()).toContain('局部配图没有完成')
+    expect(status.text()).not.toContain('正在从规则书中挑选')
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    await flushPromises()
+    expect(visualRunReads).toBe(1)
+    wrapper.unmount()
+  })
+
   it('drops a visual discovery response when a newer teaching run becomes current and resets the new run budget', async () => {
     let teachingRunReads = 0
     let visualRunReads = 0

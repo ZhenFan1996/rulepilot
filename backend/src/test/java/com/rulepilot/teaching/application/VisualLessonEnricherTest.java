@@ -6,6 +6,7 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionProposer;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Clock;
 import java.time.Duration;
@@ -134,6 +135,121 @@ class VisualLessonEnricherTest {
                 .containsExactly(
                         VisualLessonEnricher.Outcome.ADDED,
                         VisualLessonEnricher.Outcome.MODEL_TIMEOUT);
+    }
+
+    @Test
+    void consecutiveProposalRuntimeFailuresAcrossSectionsOpenOnlyTheCurrentEnrichmentCircuit() {
+        List<UUID> evidence = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        java.util.concurrent.atomic.AtomicInteger proposalCalls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger visualCalls = new java.util.concurrent.atomic.AtomicInteger();
+        VisualRegionProposer proposer = (page, timeout) -> {
+            proposalCalls.incrementAndGet();
+            return VisualRegionProposer.ProposalResult.timeout();
+        };
+        VisualRegionLocator visual = request -> {
+            visualCalls.incrementAndGet();
+            var candidate = request.candidates().getFirst();
+            var claim = request.claims().getFirst();
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    candidate.pageNumber(),
+                    "可核对图示",
+                    "候选区域中可见组件与相邻流程箭头",
+                    candidate.rectangle().x(),
+                    candidate.rectangle().y(),
+                    candidate.rectangle().width(),
+                    candidate.rectangle().height(),
+                    List.of(claim.evidenceId()),
+                    List.of(claim.stepPosition())));
+        };
+        var enricher = new VisualLessonEnricher(
+                ignored -> understanding(),
+                (ignored, pages) -> pages.stream().map(page -> new DocumentPageImages.PageImage(
+                        page, "image/png", new byte[] {1}, 1_000, 1_000)).toList(),
+                new VisualRegionCandidateSelector(),
+                proposer,
+                visual,
+                new VisualSectionPrioritizer(),
+                null,
+                Duration.ofMinutes(1),
+                Clock.systemUTC());
+
+        var firstRun = enricher.enrichWithProgress(
+                UUID.randomUUID(),
+                multiSectionVisualLesson(evidence),
+                "owner",
+                UUID.randomUUID(),
+                new VisualLessonEnricher.VisualProgressListener() {});
+        var secondRun = enricher.enrichWithProgress(
+                UUID.randomUUID(),
+                multiSectionVisualLesson(evidence),
+                "owner",
+                UUID.randomUUID(),
+                new VisualLessonEnricher.VisualProgressListener() {});
+
+        assertThat(proposalCalls)
+                .as("each enrichment stops the local proposer after two runtime failures, then the next run resets it")
+                .hasValue(4);
+        assertThat(visualCalls).hasValue(6);
+        assertThat(firstRun.outcomes()).extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .containsExactly(
+                        VisualLessonEnricher.Outcome.ADDED,
+                        VisualLessonEnricher.Outcome.ADDED,
+                        VisualLessonEnricher.Outcome.ADDED);
+        assertThat(secondRun.outcomes()).extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .containsExactly(
+                        VisualLessonEnricher.Outcome.ADDED,
+                        VisualLessonEnricher.Outcome.ADDED,
+                        VisualLessonEnricher.Outcome.ADDED);
+    }
+
+    @Test
+    void pageLocalProposalFailureResetsRuntimeFailureStreakAcrossSections() {
+        List<UUID> evidence = List.of(
+                UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        java.util.concurrent.atomic.AtomicInteger proposalCalls = new java.util.concurrent.atomic.AtomicInteger();
+        VisualRegionProposer proposer = (page, timeout) -> switch (proposalCalls.incrementAndGet()) {
+            case 1, 3 -> VisualRegionProposer.ProposalResult.timeout();
+            case 2 -> VisualRegionProposer.ProposalResult.failed();
+            default -> VisualRegionProposer.ProposalResult.none();
+        };
+        VisualRegionLocator visual = request -> {
+            var candidate = request.candidates().getFirst();
+            var claim = request.claims().getFirst();
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    candidate.pageNumber(),
+                    "可核对图示",
+                    "候选区域中可见组件与相邻流程箭头",
+                    candidate.rectangle().x(),
+                    candidate.rectangle().y(),
+                    candidate.rectangle().width(),
+                    candidate.rectangle().height(),
+                    List.of(claim.evidenceId()),
+                    List.of(claim.stepPosition())));
+        };
+        var enricher = new VisualLessonEnricher(
+                ignored -> understanding(),
+                (ignored, pages) -> pages.stream().map(page -> new DocumentPageImages.PageImage(
+                        page, "image/png", new byte[] {1}, 1_000, 1_000)).toList(),
+                new VisualRegionCandidateSelector(),
+                proposer,
+                visual,
+                new VisualSectionPrioritizer(),
+                null,
+                Duration.ofMinutes(1),
+                Clock.systemUTC());
+
+        var result = enricher.enrichWithProgress(
+                UUID.randomUUID(),
+                multiSectionVisualLesson(evidence),
+                "owner",
+                UUID.randomUUID(),
+                new VisualLessonEnricher.VisualProgressListener() {});
+
+        assertThat(proposalCalls)
+                .as("a page-local input or geometry failure proves the process is runnable and breaks the streak")
+                .hasValue(4);
+        assertThat(result.outcomes()).extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .containsOnly(VisualLessonEnricher.Outcome.ADDED);
     }
 
     @Test
@@ -1174,6 +1290,40 @@ class VisualLessonEnricherTest {
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(first, second), "test", Instant.now());
+    }
+
+    private IllustratedLesson multiSectionVisualLesson(List<UUID> evidence) {
+        List<IllustratedLesson.LessonSection> sections = new java.util.ArrayList<>();
+        for (int index = 0; index < evidence.size(); index++) {
+            int position = index + 1;
+            int page = position + 1;
+            var step = new IllustratedLesson.LessonStep(
+                    1,
+                    "执行步骤 " + position,
+                    IllustratedLesson.TeachingMove.DO,
+                    "按照规则图完成第 " + position + " 个步骤。",
+                    List.of(page),
+                    List.of(evidence.get(index)));
+            sections.add(new IllustratedLesson.LessonSection(
+                    position,
+                    "step_" + position,
+                    List.of("core_loop"),
+                    "流程 " + position,
+                    true,
+                    IllustratedLesson.EvidenceStatus.SUPPORTED,
+                    IllustratedLesson.VisualKind.FLOW_DIAGRAM,
+                    "完成流程步骤",
+                    List.of(),
+                    List.of(),
+                    List.of(step)));
+        }
+        return new IllustratedLesson(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                IllustratedLesson.LessonStatus.DRAFT_READY,
+                sections,
+                "test",
+                Instant.now());
     }
 
     private IllustratedLesson tieBreakLesson(UUID evidence) {

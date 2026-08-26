@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   fetchVisualStatusWithDeadline,
+  visualEnrichmentResult,
+  visualRunIsTerminal,
   VisualRequestTimeoutError,
 } from './visualEnrichment'
 
@@ -75,5 +77,21 @@ describe('fetchVisualStatusWithDeadline', () => {
 
     expect(response.headers.get('X-Visual-Revision')).toBe('7')
     await expect(response.json()).resolves.toEqual({ state: 'COMPLETED' })
+  })
+})
+
+describe('visual enrichment terminal state', () => {
+  it('keeps active work active but treats cancellation as an unfinished terminal result', () => {
+    expect(visualRunIsTerminal('RETRIEVING')).toBe(false)
+    expect(visualEnrichmentResult({ run: { state: 'RETRIEVING' } }, true))
+      .toEqual({ outcome: 'ACTIVE', addedSectionCount: 0 })
+
+    expect(visualRunIsTerminal('CANCELLED')).toBe(true)
+    expect(visualEnrichmentResult({ run: { state: 'CANCELLED' } }, false))
+      .toEqual({ outcome: 'FAILED', addedSectionCount: 0 })
+    expect(visualEnrichmentResult({
+      run: { state: 'CANCELLED' },
+      activities: [{ operation: 'visualSection|2', outcome: 'SUCCEEDED' }],
+    }, false)).toEqual({ outcome: 'PARTIAL', addedSectionCount: 1 })
   })
 })

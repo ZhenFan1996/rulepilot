@@ -1,7 +1,5 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.teaching.TeachingLessonModel;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -13,19 +11,13 @@ import java.util.List;
 final class TeachingDraftRecoveryPolicy {
 
     private static final int MAX_SCHEMA_REPAIR_ATTEMPTS = 1;
-    private static final String VISUAL_REPAIR_GUIDANCE = "The attached page images are usable visual evidence. "
-            + "Keep the grounded text, but repair one VISUAL step: cite an attached-page E-reference and return a "
-            + "compact 0-1000 focus rectangle that contains the visible area named in that step. Do not fall back "
-            + "to text-only.";
 
-    int maxRepairAttempts(boolean hasPageImages) {
+    int maxRepairAttempts() {
         return MAX_SCHEMA_REPAIR_ATTEMPTS;
     }
 
-    List<String> repairFeedback(String diagnostic, boolean hasPageImages, boolean visualLocalizationFailure) {
-        List<String> feedback = new ArrayList<>(List.of(diagnostic));
-        if (hasPageImages && visualLocalizationFailure) feedback.add(VISUAL_REPAIR_GUIDANCE);
-        return List.copyOf(feedback);
+    List<String> repairFeedback(String diagnostic) {
+        return List.of(diagnostic);
     }
 
 }

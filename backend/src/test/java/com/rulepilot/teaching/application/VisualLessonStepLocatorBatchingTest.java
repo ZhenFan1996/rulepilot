@@ -7,9 +7,12 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.BatchAction;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
+import com.rulepilot.teaching.VisualRegionProposer;
+import com.rulepilot.teaching.VisualRegionProposer.Proposal;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Clock;
 import java.time.Duration;
@@ -22,6 +25,153 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class VisualLessonStepLocatorBatchingTest {
+
+    @Test
+    void offersPixelToolGeometryAsAnOpaqueCandidateBeforeTheVisionModelSelectsIt() {
+        UUID evidence = UUID.randomUUID();
+        Rectangle tightDiagram = new Rectangle(210, 280, 260, 180);
+        java.util.concurrent.atomic.AtomicInteger proposalCalls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger pageReads = new java.util.concurrent.atomic.AtomicInteger();
+        DocumentPageImages images = (ignored, pages) -> {
+            pageReads.incrementAndGet();
+            return pages.stream().map(this::page).toList();
+        };
+        VisualRegionProposer proposer = (page, timeout) -> {
+            proposalCalls.incrementAndGet();
+            return VisualRegionProposer.ProposalResult.found(List.of(new Proposal(tightDiagram)));
+        };
+        VisualRegionLocator visual = new VisualRegionLocator() {
+            @Override
+            public java.util.Optional<LocatedRegion> locate(VisualLocationRequest request) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+                assertThat(request.candidates().getFirst().rectangle()).isEqualTo(tightDiagram);
+                return acceptedFirst(request, evidence, BatchAction.STOP);
+            }
+        };
+        var locator = new VisualLessonStepLocator(
+                images,
+                new VisualRegionCandidateSelector(),
+                proposer,
+                visual,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(1));
+
+        var result = locator.locate(
+                understanding(),
+                UUID.randomUUID(),
+                section(evidence, List.of(2)),
+                List.of(step(evidence, List.of(2))),
+                "owner");
+
+        assertThat(proposalCalls).hasValue(1);
+        assertThat(pageReads).hasValue(2);
+        assertThat(result.regions()).singleElement().satisfies(region -> {
+            assertThat(region.x()).isEqualTo(tightDiagram.x());
+            assertThat(region.y()).isEqualTo(tightDiagram.y());
+            assertThat(region.width()).isEqualTo(tightDiagram.width());
+            assertThat(region.height()).isEqualTo(tightDiagram.height());
+        });
+    }
+
+    @Test
+    void consecutivePixelToolTimeoutsOpenTheBreakerOnlyForTheCurrentWorkflow() {
+        UUID evidence = UUID.randomUUID();
+        List<Integer> proposedPages = new ArrayList<>();
+        DocumentPageImages images = (ignored, pages) -> pages.stream().map(this::page).toList();
+        VisualRegionProposer proposer = (page, timeout) -> {
+            proposedPages.add(page.pageNumber());
+            return VisualRegionProposer.ProposalResult.timeout();
+        };
+        VisualRegionLocator visual = new VisualRegionLocator() {
+            @Override
+            public java.util.Optional<LocatedRegion> locate(VisualLocationRequest request) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+                return acceptedFirst(request, evidence, BatchAction.STOP);
+            }
+        };
+        var locator = new VisualLessonStepLocator(
+                images,
+                new VisualRegionCandidateSelector(),
+                proposer,
+                visual,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(1));
+
+        var first = locator.locate(
+                understanding(),
+                UUID.randomUUID(),
+                section(evidence, List.of(1, 2, 3, 4, 5, 6, 7)),
+                List.of(step(evidence, List.of(1, 2, 3, 4, 5, 6, 7))),
+                "owner");
+        var laterWorkflow = locator.locate(
+                understanding(),
+                UUID.randomUUID(),
+                section(evidence, List.of(8)),
+                List.of(step(evidence, List.of(8))),
+                "owner");
+
+        assertThat(proposedPages).containsExactly(1, 2, 8);
+        assertThat(first.regions()).singleElement();
+        assertThat(laterWorkflow.regions()).singleElement();
+        assertThat(first.rejection()).isNull();
+        assertThat(laterWorkflow.rejection()).isNull();
+    }
+
+    @Test
+    void oneRuntimeFailureAndPageLocalOutcomesDoNotOpenTheBreaker() {
+        UUID evidence = UUID.randomUUID();
+        List<Integer> proposedPages = new ArrayList<>();
+        DocumentPageImages images = (ignored, pages) -> pages.stream().map(this::page).toList();
+        VisualRegionProposer proposer = (page, timeout) -> {
+            proposedPages.add(page.pageNumber());
+            if (page.pageNumber() == 1) return VisualRegionProposer.ProposalResult.unavailable();
+            if (page.pageNumber() == 2) return VisualRegionProposer.ProposalResult.failed();
+            return VisualRegionProposer.ProposalResult.none();
+        };
+        VisualRegionLocator visual = new VisualRegionLocator() {
+            @Override
+            public java.util.Optional<LocatedRegion> locate(VisualLocationRequest request) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+                return acceptedFirst(request, evidence, BatchAction.STOP);
+            }
+        };
+        var locator = new VisualLessonStepLocator(
+                images,
+                new VisualRegionCandidateSelector(),
+                proposer,
+                visual,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(1));
+
+        var result = locator.locate(
+                understanding(),
+                UUID.randomUUID(),
+                section(evidence, List.of(1, 2, 3, 4, 5)),
+                List.of(step(evidence, List.of(1, 2, 3, 4, 5))),
+                "owner");
+
+        assertThat(proposedPages).containsExactly(1, 2, 3, 4, 5);
+        assertThat(result.regions()).singleElement();
+        assertThat(result.rejection()).isNull();
+    }
 
     @Test
     void allContinueRereadsOnlyCurrentPageWindowAndKeepsEveryAgentAcceptedVisual() {
@@ -76,12 +226,12 @@ class VisualLessonStepLocatorBatchingTest {
                 List.of(step(evidence, citedPages)),
                 "owner");
 
-        assertThat(pageReads).hasSize(5);
+        assertThat(pageReads).hasSize(3);
         assertThat(pageReads).allSatisfy(read ->
                 assertThat(read).hasSizeLessThanOrEqualTo(DocumentPageImages.MAX_PAGES_PER_READ));
         assertThat(pageReads.stream().filter(read -> read.contains(1))).hasSizeGreaterThan(1);
         assertThat(requestPages).hasSize(3).allSatisfy(pages -> assertThat(pages).hasSizeLessThanOrEqualTo(7));
-        assertThat(candidateBatchSizes).containsExactly(12, 12, 4);
+        assertThat(candidateBatchSizes).containsExactly(12, 8, 8);
         assertThat(batchNumbers).containsExactly(1, 2, 3);
         assertThat(hasMoreValues).containsExactly(true, true, false);
         assertThat(result.regions()).hasSize(28);
@@ -183,6 +333,7 @@ class VisualLessonStepLocatorBatchingTest {
         UUID evidence = UUID.randomUUID();
         List<Integer> citedPages = java.util.stream.IntStream.rangeClosed(1, 20).boxed().toList();
         List<Set<Integer>> pageReads = new ArrayList<>();
+        List<Integer> proposedPages = new ArrayList<>();
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
         DocumentPageImages images = (ignored, pages) -> {
             pageReads.add(Set.copyOf(pages));
@@ -212,8 +363,21 @@ class VisualLessonStepLocatorBatchingTest {
                         candidate.sourceKind())), BatchAction.STOP);
             }
         };
+        VisualRegionProposer proposer = (page, timeout) -> {
+            proposedPages.add(page.pageNumber());
+            return VisualRegionProposer.ProposalResult.none();
+        };
+        var locator = new VisualLessonStepLocator(
+                images,
+                new VisualRegionCandidateSelector(),
+                proposer,
+                visual,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(1));
 
-        var result = stepLocator(images, visual).locate(
+        var result = locator.locate(
                 understanding(),
                 UUID.randomUUID(),
                 section(evidence, citedPages),
@@ -224,11 +388,11 @@ class VisualLessonStepLocatorBatchingTest {
         assertThat(result.regions()).hasSize(1);
         assertThat(pageReads).containsExactly(
                 Set.of(1, 2, 3, 4, 5),
-                Set.of(6, 7, 8, 9, 10),
-                Set.of(11, 12));
+                Set.of(1, 2, 3, 4, 5));
+        assertThat(proposedPages).containsExactly(1, 2, 3, 4, 5);
         assertThat(pageReads).allSatisfy(read ->
                 assertThat(read).hasSizeLessThanOrEqualTo(DocumentPageImages.MAX_PAGES_PER_READ));
-        assertThat(pageReads).allSatisfy(read -> assertThat(read).allMatch(page -> page <= 12));
+        assertThat(pageReads).allSatisfy(read -> assertThat(read).allMatch(page -> page <= 5));
     }
 
     @Test

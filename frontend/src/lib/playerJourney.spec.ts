@@ -142,6 +142,24 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('requires storage repair without offering another teaching run', () => {
+    const preparation = run('FAILED')
+    preparation.run.lastErrorCode = 'TEACHING_PREPARATION_STORAGE_FAILED'
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'FAILED',
+        teachingErrorCode: 'TEACHING_PREPARATION_STORAGE_FAILED', teachingNextAction: 'RETRY_TEACHING',
+      }),
+      preparationRun: preparation,
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: null,
+      errorCode: 'TEACHING_PREPARATION_STORAGE_FAILED',
+      failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+    })
+  })
+
   it('classifies a user cancellation as a preserved stop with an explicit new run', () => {
     const cancelled = run('FAILED')
     cancelled.run.lastErrorCode = 'AGENT_CANCELLED'
@@ -358,11 +376,11 @@ describe('journey snapshot acceptance', () => {
   })
 
   it('keeps the newest run revision and merges activity history', () => {
-    const previous = {
+    const previous: PlayerJourneyRun = {
       ...run('LESSON_COMPOSITION', 3),
       activities: [{ sequence: 1, operation: 'search', summary: 'Found rules', outcome: 'SUCCEEDED' }],
     }
-    const incoming = {
+    const incoming: PlayerJourneyRun = {
       ...run('CRITIQUING', 4),
       activities: [{ sequence: 2, operation: 'review', summary: 'Reviewing', outcome: 'RUNNING' }],
     }
@@ -374,7 +392,7 @@ describe('journey snapshot acceptance', () => {
   })
 
   it('normalizes first and replacement run activities with the last incoming sequence winning', () => {
-    const first = {
+    const first: PlayerJourneyRun = {
       ...run('LESSON_COMPOSITION'),
       activities: [
         { sequence: 3, operation: 'compose', summary: 'Composing', outcome: 'RUNNING' },
@@ -387,7 +405,7 @@ describe('journey snapshot acceptance', () => {
       { sequence: 3, summary: 'Composing', outcome: 'RUNNING' },
     ])
 
-    const replacement = {
+    const replacement: PlayerJourneyRun = {
       ...run('LESSON_PLANNING'),
       run: { ...run('LESSON_PLANNING').run, id: 'run-2' },
       activities: [
@@ -400,5 +418,24 @@ describe('journey snapshot acceptance', () => {
       { sequence: 2, summary: 'Read', outcome: 'SUCCEEDED' },
       { sequence: 5, summary: 'Planning', outcome: 'RUNNING' },
     ])
+  })
+
+  it('normalizes an unrecognized API activity outcome to explicit UNKNOWN', () => {
+    const incoming = {
+      ...run('LESSON_PLANNING'),
+      activities: [{
+        sequence: 1,
+        operation: 'transcribeTeachingVisualPage|4|10',
+        summary: 'Provider added a new outcome',
+        outcome: 'PAUSED_BY_PROVIDER',
+      }],
+    } as unknown as PlayerJourneyRun
+
+    expect(acceptJourneyRun(null, incoming).activities).toEqual([{
+      sequence: 1,
+      operation: 'transcribeTeachingVisualPage|4|10',
+      summary: 'Provider added a new outcome',
+      outcome: 'UNKNOWN',
+    }])
   })
 })

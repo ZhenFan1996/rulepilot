@@ -14,7 +14,6 @@ import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
-import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
@@ -395,8 +394,7 @@ class TeachingSectionDraftComposerTest {
                         "放置主棋盘",
                         TeachingMove.VISUAL,
                         "在图中找到主棋盘，再把它放在桌面中央。",
-                        List.of(chunkId),
-                        new VisualFocusDraft(4, "主棋盘", 120, 120, 500, 500))));
+                        List.of(chunkId))));
     }
 
     private SectionDraft textDraft(UUID chunkId) {

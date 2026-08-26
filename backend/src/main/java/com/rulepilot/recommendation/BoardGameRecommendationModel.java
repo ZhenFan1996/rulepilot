@@ -13,6 +13,14 @@ public interface BoardGameRecommendationModel {
         return configured();
     }
 
+    /**
+     * Whether this provider can run the final evidence-scoped structured prose turn. A missing capability degrades
+     * only card annotations; it never invalidates a slate that already passed the deterministic publication boundary.
+     */
+    default boolean structuredPublicationConfigured(String ownerUsername) {
+        return false;
+    }
+
     Turn next(Request request);
 
     default Turn next(Request request, String ownerUsername) {

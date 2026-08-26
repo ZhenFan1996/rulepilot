@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import test from 'node:test'
+
+const execFileAsync = promisify(execFile)
 
 const ciWorkflow = await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
 const deploymentWorkflow = await readFile(
@@ -13,7 +19,21 @@ const productionAvailabilityScript = await readFile(
 )
 const productionCompose = await readFile(new URL('../infra/compose.production.yml', import.meta.url), 'utf8')
 const deploymentCompose = await readFile(new URL('../infra/compose.deployment.yml', import.meta.url), 'utf8')
+const makefile = await readFile(new URL('../Makefile', import.meta.url), 'utf8')
+const applicationConfig = await readFile(new URL('../backend/src/main/resources/application.yml', import.meta.url), 'utf8')
 const productionScript = await readFile(new URL('./run-production.sh', import.meta.url), 'utf8')
+const productionReleaseGuard = await readFile(
+  new URL('./production-release-guard.sh', import.meta.url),
+  'utf8',
+)
+const productionTraceSummaryScript = await readFile(
+  new URL('./summarize-production-release-traces.mjs', import.meta.url),
+  'utf8',
+)
+const productionResourceSummaryScript = await readFile(
+  new URL('./summarize-production-resource-samples.mjs', import.meta.url),
+  'utf8',
+)
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
 const productionRecommendationWorkflow = await readFile(
   new URL('../.github/workflows/production-recommendation-journey.yml', import.meta.url),
@@ -249,9 +269,260 @@ test('production activation allows the measured cold boot to finish before rollb
 test('production tracing opt-in requires an explicit reachable collector endpoint', () => {
   assert.match(productionScript, /PRODUCTION_TRACING_EXPORT_OTLP_ENABLED:-false/)
   assert.match(productionScript,
+    /read_managed_production_setting\(\)[\s\S]*?PRODUCTION_TRACING_EXPORT_OTLP_ENABLED\|PRODUCTION_TRACING_OTLP_ENDPOINT\|PRODUCTION_TRACING_SAMPLING_PROBABILITY\|TEMPO_PORT/)
+  assert.match(productionScript,
+    /managed_value=\$\(read_managed_production_setting PRODUCTION_TRACING_EXPORT_OTLP_ENABLED\)/)
+  assert.doesNotMatch(productionScript, /^\s*(?:source|\.)\s+[^\n]*\.env/m)
+  assert.match(productionScript,
     /PRODUCTION_TRACING_OTLP_ENDPOINT is required when production OTLP tracing is enabled\./)
+  assert.match(productionScript,
+    /compose stop prometheus grafana[\s\S]*?compose up -d --no-deps tempo[\s\S]*?wait_for_tempo/)
+  assert.doesNotMatch(productionScript, /compose up[^\n]*--profile observability/)
+  assert.match(productionScript, /down\)[\s\S]*?compose --profile observability down/)
+  assert.match(productionScript, /Production Tempo must use the fixed loopback port 3200\./)
+  assert.match(makefile, /verify:[\s\S]*?sh scripts\/run-production\.sh config/)
+  assert.match(makefile,
+    /verify:[\s\S]*?node --test scripts\/verify-production-availability\.test\.mjs/)
   const endpointOverride = /OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: \$\{PRODUCTION_TRACING_OTLP_ENDPOINT:-http:\/\/tempo:4318\/v1\/traces\}/g
   assert.equal([...productionCompose.matchAll(endpointOverride)].length, 2)
+  assert.match(deploymentWorkflow, /'PRODUCTION_TRACING_EXPORT_OTLP_ENABLED=true'/)
+  assert.match(deploymentWorkflow, /'PRODUCTION_TRACING_OTLP_ENDPOINT=http:\/\/tempo:4318\/v1\/traces'/)
+  assert.match(deploymentWorkflow, /'PRODUCTION_TRACING_SAMPLING_PROBABILITY=0\.05'/)
+  assert.doesNotMatch(deploymentWorkflow, /'PRODUCTION_TRACING_SAMPLING_PROBABILITY=1\.0'/)
+  assert.match(productionCompose, /tempo:[\s\S]*?GOMEMLIMIT: \$\{PRODUCTION_TEMPO_GOMEMLIMIT:-192MiB\}/)
+  assert.match(productionCompose, /tempo:[\s\S]*?mem_limit: 320m/)
+  assert.match(productionCompose,
+    /tempo:[\s\S]*?ports: !override\s*\n\s+- "127\.0\.0\.1:3200:3200"/)
+  assert.equal([...productionCompose.matchAll(
+    /MANAGEMENT_TRACING_SAMPLING_PROBABILITY: \$\{PRODUCTION_TRACING_SAMPLING_PROBABILITY:-0\.05\}/g,
+  )].length, 2)
+  assert.equal([...productionCompose.matchAll(/MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_MAX_QUEUE_SIZE: "512"/g)].length, 2)
+  assert.equal([...productionCompose.matchAll(/MANAGEMENT_OPENTELEMETRY_TRACING_LIMITS_MAX_EVENTS: "0"/g)].length, 2)
+  assert.match(applicationConfig, /service\.version: \$\{RULEPILOT_RELEASE_ID:local\}/)
+  assert.match(applicationConfig,
+    /deployment\.environment\.name: \$\{RULEPILOT_DEPLOYMENT_ENVIRONMENT:development\}/)
+})
+
+test('deployment and production journey query sanitized Tempo evidence for the exact release', () => {
+  assert.match(deploymentWorkflow,
+    /DEPLOY_TRACE_START_EPOCH_SECONDS=%s\\n' "\$\(date \+%s\)"/)
+  assert.match(productionAvailabilityScript, /\/api\/auth\/csrf/)
+  assert.match(productionAvailabilityScript, /\/api\/v1\/bgg\/recommendations/)
+  assert.match(productionAvailabilityScript, /\/api\/v1\/bgg\/games\/\$\{firstGame\.bggId\}/)
+  assert.ok(deploymentWorkflow.indexOf('name: Verify public release availability')
+    < deploymentWorkflow.indexOf('name: Collect exact-release trace diagnostics'))
+  assert.match(deploymentWorkflow,
+    /name: Collect exact-release trace diagnostics\n\s+if: always\(\)\n\s+continue-on-error: true/)
+  assert.match(deploymentWorkflow,
+    /summarize-production-release-traces\.mjs[\s\S]*?--release-id "\$DEPLOY_RELEASE_ID"[\s\S]*?--trace-id "\$DEPLOY_CANARY_TRACE_ID"/)
+  assert.doesNotMatch(deploymentWorkflow, /--require-release-trace|--require-workflow-terminal/)
+  assert.match(deploymentWorkflow, /name: Upload sanitized deployment trace diagnostics/)
+  assert.match(deploymentWorkflow,
+    /name: Upload sanitized deployment trace diagnostics[\s\S]*?if-no-files-found: warn/)
+  assert.match(deploymentWorkflow, /RULEPILOT_CANARY_TRACEPARENT=00-%s-%s-01/)
+  assert.match(productionAvailabilityScript, /headers: \{ traceparent \}/)
+  assert.match(productionAvailabilityScript,
+    /RULEPILOT_CANARY_TRACEPARENT is required for exact-release verification/)
+
+  assert.match(productionRecommendationWorkflow, /id: production_journey/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID=%s/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS=%s/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_TRACE_ID=%s/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_TRACEPARENT="\$canary_traceparent"/)
+  assert.match(productionRecommendationConfig,
+    /extraHTTPHeaders:[\s\S]*?traceparent: canaryTraceparent/)
+  assert.match(productionRecommendationConfig,
+    /\^00-\(\[0-9a-f\]\{32\}\)-\(\[0-9a-f\]\{16\}\)-01\$/)
+  assert.match(productionRecommendationWorkflow,
+    /name: Collect exact-release Tempo workflow terminals\n\s+if: always\(\)\n\s+continue-on-error: true/)
+  assert.match(productionRecommendationWorkflow,
+    /--release-id "\$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID"[\s\S]*?--trace-id "\$RULEPILOT_RECOMMENDATION_TRACE_ID"/)
+  assert.match(productionRecommendationWorkflow, /--wait-for-workflow-terminal/)
+  assert.doesNotMatch(productionRecommendationWorkflow,
+    /--require-release-trace|--require-workflow-terminal/)
+  assert.match(productionRecommendationWorkflow,
+    /CANARY_ASSERTION_OUTCOME: \$\{\{ steps\.production_journey\.outcome \}\}/)
+  assert.match(productionRecommendationWorkflow, /canaryAssertion:/)
+  assert.match(productionRecommendationWorkflow,
+    /productWorkflowTerminal: \$traceEvidence\[0\]\.businessWorkflowTerminal/)
+  assert.match(productionRecommendationWorkflow, /traceEvidence: \(\$traceEvidence\[0\] \| \{/)
+  for (const workflow of [deploymentWorkflow, productionRecommendationWorkflow]) {
+    assert.match(workflow, /tempo_ready=false[\s\S]*?tempo_ready=true[\s\S]*?NOT_AVAILABLE evidence/)
+  }
+
+  assert.match(productionTraceSummaryScript,
+    /resource\.service\.version = \"\$\{releaseId\}\"/)
+  assert.match(productionTraceSummaryScript, /trace:id = \"\$\{traceId\}\"/)
+  assert.match(productionTraceSummaryScript, /Promise\.allSettled/)
+  assert.match(productionTraceSummaryScript, /span:name = \"recommendation-react\"/)
+  assert.match(productionTraceSummaryScript, /businessWorkflowTerminal:/)
+  assert.match(productionTraceSummaryScript, /queryOutcome: 'NOT_AVAILABLE'/)
+  assert.match(productionTraceSummaryScript, /queryFailureCause/)
+  assert.match(productionRecommendationWorkflow, /queryFailureCause/)
+  assert.match(productionRecommendationWorkflow, /traceId,/)
+  assert.match(productionRecommendationWorkflow, /TRACE_SUMMARY_STEP_FAILED/)
+  assert.doesNotMatch(productionTraceSummaryScript,
+    /console\.log\([^\n]*(?:traceID|spanID|response|body)/)
+})
+
+test('post-activation failure, cancellation, or skipped public gate restores one validated release before diagnostics', () => {
+  const traceContext = deploymentWorkflow.indexOf('name: Prepare exact-release canary trace context')
+  const checkpoint = deploymentWorkflow.indexOf('name: Preserve the exact rollback checkpoint')
+  const activation = deploymentWorkflow.indexOf('name: Activate release and verify production health')
+  const availability = deploymentWorkflow.indexOf('name: Verify public release availability')
+  const traceDiagnostics = deploymentWorkflow.indexOf('name: Collect exact-release trace diagnostics')
+  const rollback = deploymentWorkflow.indexOf(
+    'name: Roll back any activated release without successful public availability',
+  )
+  assert.ok(traceContext >= 0)
+  assert.ok(traceContext < checkpoint)
+  assert.ok(checkpoint >= 0)
+  assert.ok(checkpoint < activation)
+  assert.ok(activation < availability)
+  assert.ok(availability < rollback)
+  assert.ok(rollback < traceDiagnostics)
+
+  assert.match(deploymentWorkflow, /tar -xOf "\$archive" \.\/scripts\/production-release-guard\.sh/)
+  assert.match(deploymentWorkflow, /"\$guard_script" checkpoint[\s\S]*?"\$guard_script" start/)
+  assert.match(productionReleaseGuard,
+    /docker tag "\$api_image" "rulepilot-backend:\$\{previous_release_id\}"/)
+  assert.match(productionReleaseGuard,
+    /docker tag "\$frontend_image" "rulepilot-frontend:\$\{previous_release_id\}"/)
+  assert.match(productionReleaseGuard,
+    /"\$api_image" == "\$worker_image"/)
+  assert.match(deploymentWorkflow, /DEPLOY_PREVIOUS_RELEASE_ID=%s/)
+  assert.match(deploymentWorkflow, /id: public_availability/)
+  assert.match(deploymentWorkflow, /id: rollback_checkpoint/)
+  assert.match(deploymentWorkflow, /id: activate_release/)
+  assert.match(deploymentWorkflow,
+    /always\(\) &&[\s\S]*?steps\.rollback_checkpoint\.outcome == 'success' &&[\s\S]*?steps\.activate_release\.outcome != 'skipped' &&[\s\S]*?steps\.public_availability\.outcome != 'success'/)
+  assert.match(deploymentWorkflow, /exec 9>"\$\{application_root\}\/deployment\.lock"[\s\S]*?flock -x 9/)
+  assert.match(deploymentWorkflow, /"\$guard_script" arm[\s\S]*?make production-up/)
+  assert.match(deploymentWorkflow,
+    /node scripts\/verify-production-availability\.mjs[\s\S]*?invoke_guard commit/)
+  assert.match(deploymentWorkflow, /keep_guard_alive[\s\S]*?invoke_guard heartbeat/)
+  assert.match(productionReleaseGuard,
+    /exec 9>"\$application_root\/deployment\.lock"[\s\S]*?flock -x 9/)
+  assert.match(productionReleaseGuard,
+    /docker tag "\$backend_image" rulepilot-backend:local[\s\S]*?docker tag "\$frontend_image" rulepilot-frontend:local[\s\S]*?up -d --no-build --no-deps api worker frontend gateway/)
+  assert.doesNotMatch(productionReleaseGuard, /make production-up/)
+  assert.match(productionReleaseGuard,
+    /require_running_image "\$previous_release" api[\s\S]*?require_running_image "\$previous_release" worker[\s\S]*?require_running_image "\$previous_release" frontend/)
+  assert.match(productionReleaseGuard,
+    /wait_for_worker "\$previous_release" "\$backend_image_id" 60[\s\S]*?atomic_write "\$state_dir\/rolled-back"/)
+  assert.match(productionReleaseGuard,
+    /active_release" != "\$failed_release" && "\$active_release" != "\$previous_release"/)
+  assert.match(productionReleaseGuard,
+    /atomic_write "\$state_dir\/committed" "\$release_id"/)
+  assert.match(productionReleaseGuard,
+    /now - lease_epoch >= LEASE_STALE_SECONDS[\s\S]*?rollback_if_stale "\$application_root"/)
+  assert.match(productionReleaseGuard,
+    /rollback_if_stale\(\)[\s\S]*?flock -x 9[\s\S]*?now - lease_epoch < LEASE_STALE_SECONDS/)
+  assert.match(deploymentWorkflow,
+    /recovery_trace_id[\s\S]*?RULEPILOT_CANARY_TRACEPARENT="00-\$\{recovery_trace_id\}-\$\{recovery_parent_span_id\}-01"/)
+  assert.match(deploymentWorkflow,
+    /queryOutcome: "NOT_RUN"[\s\S]*?queryFailureCause: "CANARY_TRACE_NOT_STARTED"/)
+  assert.match(deploymentWorkflow,
+    /trace_candidate[\s\S]*?retaining sanitized NOT_AVAILABLE evidence/)
+  assert.match(deploymentWorkflow,
+    /PUBLIC_AVAILABILITY_OUTCOME: \$\{\{ steps\.public_availability\.outcome \}\}[\s\S]*?failure[\s\S]*?trace_attempts=3/)
+
+  const traceUpload = deploymentWorkflow.indexOf(
+    'name: Upload sanitized deployment trace diagnostics',
+  )
+  const traceStep = deploymentWorkflow.slice(traceDiagnostics, traceUpload)
+  const tempoRecovery = traceStep.indexOf(
+    '--profile observability up -d --no-deps tempo',
+  )
+  const tempoTunnel = traceStep.indexOf('-N -L 13200:127.0.0.1:3200')
+  assert.ok(tempoRecovery >= 0)
+  assert.ok(tempoRecovery < tempoTunnel)
+  assert.match(traceStep,
+    /PUBLIC_AVAILABILITY_OUTCOME" != success[\s\S]*?failed_release=.*?\$releases_root\/\$release_id[\s\S]*?--profile observability up -d --no-deps tempo/)
+  assert.doesNotMatch(traceStep, /RULEPILOT_PREBUILT_BACKEND_IMAGE=true[\s\S]*?make production-up/)
+})
+
+test('watchdog rechecks a stale lease after acquiring the activation lock', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('production lock semantics are exercised on the Linux CI runner')
+    return
+  }
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-release-guard.'))
+  const release = `${'a'.repeat(40)}-101-2`
+  const previous = `${'b'.repeat(40)}-100`
+  const state = join(root, 'deployment-guards', release)
+  const lease = join(state, 'lease')
+  try {
+    await mkdir(state, { recursive: true })
+    await writeFile(join(state, 'previous-release'), `${previous}\n`, { mode: 0o600 })
+    await writeFile(join(state, 'armed'), `${release}\n`, { mode: 0o600 })
+    await writeFile(lease, '')
+    const stale = new Date(Date.now() - 10 * 60 * 1000)
+    await utimes(lease, stale, stale)
+    await execFileAsync('bash', [
+      '-c',
+      'set -Eeuo pipefail; exec 8>"$2/deployment.lock"; flock -x 8; "$1" rollback-if-stale "$2" "$3" "$4" & guard_pid=$!; sleep 0.2; touch "$2/deployment-guards/$3/lease"; flock -u 8; wait "$guard_pid"',
+      'release-guard-test',
+      new URL('./production-release-guard.sh', import.meta.url).pathname,
+      root,
+      release,
+      previous,
+    ])
+    await assert.rejects(access(join(state, 'rolled-back')))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('production recommendation journey records exact-release single-user resource safety evidence', () => {
+  const activeReleaseCheck = productionRecommendationWorkflow.indexOf(
+    'Production active release SHA does not equal tested_sha',
+  )
+  const baselineCollection = productionRecommendationWorkflow.indexOf(
+    'if collect_resource_state "$resource_baseline"',
+  )
+  const journeyStart = productionRecommendationWorkflow.indexOf(
+    'RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true',
+  )
+
+  assert.ok(activeReleaseCheck >= 0)
+  assert.ok(activeReleaseCheck < baselineCollection)
+  assert.ok(baselineCollection < journeyStart)
+  assert.match(productionRecommendationWorkflow,
+    /docker ps -a --filter label=com\.docker\.compose\.project=rulepilot/)
+  assert.match(productionRecommendationWorkflow,
+    /\.RestartCount[\s\S]*?\.State\.OOMKilled[\s\S]*?\.State\.Running/)
+  assert.match(productionRecommendationWorkflow, /MemAvailable:/)
+  assert.match(productionRecommendationWorkflow, /docker stats --no-stream/)
+  assert.match(productionRecommendationWorkflow,
+    /sample_elapsed_seconds=.*?[\s\S]*?sleep \$\(\(5 - sample_elapsed_seconds\)\)/)
+  assert.match(productionRecommendationWorkflow, /resource_sampler_pid=\$!/)
+  assert.match(productionRecommendationWorkflow,
+    /collect_resource_state\(\)[\s\S]*?timeout --signal=TERM --kill-after=5s 60s/)
+  assert.match(productionRecommendationWorkflow,
+    /stop_resource_sampler\(\)[\s\S]*?kill "\$resource_sampler_pid"[\s\S]*?kill -KILL "\$resource_sampler_pid"[\s\S]*?wait "\$resource_sampler_pid"/)
+  assert.match(productionRecommendationWorkflow,
+    /name: Summarize exact-release production resources\n\s+if: always\(\)/)
+  assert.match(productionRecommendationWorkflow,
+    /summarize-production-resource-samples\.mjs[\s\S]*?--release-id "\$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID"[\s\S]*?--fail-on-runtime-reset/)
+  assert.match(productionRecommendationWorkflow, /resourceEvidence: \$resourceEvidence\[0\]/)
+
+  assert.match(productionResourceSummaryScript,
+    /const REQUIRED_SERVICES = \['api', 'tempo', 'worker'\]/)
+  assert.match(productionResourceSummaryScript,
+    /summary\.safety\.evaluated && !summary\.safety\.passed/)
+  assert.match(productionResourceSummaryScript,
+    /oomKilledAtBaseline[\s\S]*?oomKilledAtEnd/)
+  assert.match(productionResourceSummaryScript,
+    /restartDelta[\s\S]*?instanceChanged/)
+  assert.doesNotMatch(productionResourceSummaryScript,
+    /(?:peakCpuPercent|peakMemoryMiB|minimumAvailableMemory(?:MiB|Percent))\s*[<>]=?\s*[0-9]/)
+  assert.match(makefile,
+    /verify:[\s\S]*?node --test scripts\/summarize-production-resource-samples\.test\.mjs/)
 })
 
 test('public production recommendation artifacts contain only sanitized journey evidence', () => {
@@ -263,16 +534,19 @@ test('public production recommendation artifacts contain only sanitized journey 
   assert.match(productionRecommendationWorkflow, /name: Upload sanitized journey measurements/)
   assert.match(productionRecommendationWorkflow,
     /path: \.artifacts\/production-recommendation-journey\/public-summary\.json/)
-  assert.match(publicSummaryStep, /jq '\{/)
+  assert.match(publicSummaryStep, /jq[\s\S]*?'\{/)
   assert.match(publicSummaryStep, /journeyMode/)
   assert.match(publicSummaryStep, /testedSha/)
   assert.match(publicSummaryStep, /activeReleaseSha/)
+  assert.match(publicSummaryStep, /resourceEvidence/)
   assert.match(publicSummaryStep, /requireFreshImport/)
   assert.match(publicSummaryStep, /importReused/)
   assert.match(publicSummaryStep, /recommendationPublishedGames/)
   assert.doesNotMatch(publicSummaryStep,
     /recommendationConversationId|modelAssignments|sourceUrl|lessonDockText|teachingPlanId|answerSessionId|TurnId|ErrorCode/)
   assert.doesNotMatch(productionRecommendationWorkflow, /api-diagnostics\.log|docker compose[^\n]*logs|Upload private/)
+  assert.doesNotMatch(productionRecommendationWorkflow,
+    /path:.*(?:resource-(?:baseline|samples|final)\.tsv|resource-sampler-diagnostics\.log)/)
   assert.doesNotMatch(productionRecommendationSpec, /recommendationPublishedReply/)
   assert.match(productionRecommendationSpec,
     /recommendationPublishedGames = terminalGames\.map\(entry => \(\{[\s\S]*?bggId: entry\.game\.bggId,[\s\S]*?name: entry\.game\.name,[\s\S]*?originalName: entry\.game\.originalName,[\s\S]*?\}\)\)/)
@@ -392,6 +666,17 @@ test('production deployment keeps the recommendation transport and run budget on
     /BGG_RECOMMENDATION_AGENT_TIMEOUT: \$\{BGG_RECOMMENDATION_AGENT_TIMEOUT:-PT45S\}/)
 })
 
+test('deployment forwards the local visual geometry tool kill switch and bounded process settings', () => {
+  assert.match(deploymentCompose,
+    /VISUAL_REGION_PROPOSAL_ENABLED: \$\{VISUAL_REGION_PROPOSAL_ENABLED:-true\}/)
+  assert.match(deploymentCompose,
+    /VISUAL_REGION_PROPOSAL_PYTHON_COMMAND: \$\{VISUAL_REGION_PROPOSAL_PYTHON_COMMAND:-python3\}/)
+  assert.match(deploymentCompose,
+    /VISUAL_REGION_PROPOSAL_TIMEOUT: \$\{VISUAL_REGION_PROPOSAL_TIMEOUT:-PT2S\}/)
+  assert.match(deploymentCompose,
+    /VISUAL_REGION_PROPOSAL_MAX_REGIONS_PER_PAGE: \$\{VISUAL_REGION_PROPOSAL_MAX_REGIONS_PER_PAGE:-32\}/)
+})
+
 test('production deployment enables the staged persistent Chinese catalog cache only with DeepSeek configured', () => {
   assert.match(deploymentWorkflow, /deepseek_enabled.*deepseek_key_present/s)
   assert.match(deploymentWorkflow, /'BGG_TRANSLATION_ENABLED=true'/)
@@ -448,8 +733,9 @@ test('production deployment reclaims only inactive releases and restores current
   assert.match(deploymentWorkflow, /\[\[ "\$candidate_path" == "\$release_dir" \]\] && continue/)
   assert.match(deploymentWorkflow, /"\$candidate_path" != "\$\{releases_root\}\/"\*/)
   assert.match(deploymentWorkflow, /rm -rf -- "\$candidate_path"/)
-  assert.match(deploymentWorkflow, /Restoring API and worker from the current release after failed activation/)
-  assert.match(deploymentWorkflow, /\.yml up -d --no-build api worker/)
+  assert.match(deploymentWorkflow, /Restoring the complete current release after failed activation/)
+  assert.match(deploymentWorkflow,
+    /"\$guard_script" rollback-held[\s\S]*?Restored the immutable frontend and backend checkpoint/)
   assert.match(deploymentWorkflow, /Ensuring the current release remains available while the replacement image builds/)
   assert.match(deploymentWorkflow, /ln -sfn "\$\{application_root\}\/\.env" "\$\{release_dir\}\/\.env"/)
   assert.doesNotMatch(deploymentWorkflow, /\.yml stop worker api/)
@@ -481,6 +767,8 @@ test('production deployment keeps long SSH activation sessions alive', () => {
 
 test('production deploys an immutable backend image built off-host', () => {
   assert.match(deploymentWorkflow, /name: Prepare immutable release identity/)
+  assert.match(deploymentWorkflow,
+    /DEPLOY_RELEASE_ID=\$\(git rev-parse HEAD\)-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}/)
   assert.match(deploymentWorkflow, /name: Build immutable backend runtime image/)
   assert.match(deploymentWorkflow, /docker build \\/)
   assert.match(deploymentWorkflow, /--tag "\$backend_image"/)
@@ -492,6 +780,11 @@ test('production deploys an immutable backend image built off-host', () => {
   assert.match(deploymentWorkflow, /RULEPILOT_BACKEND_IMAGE="\$backend_image" \\/)
   assert.match(deploymentWorkflow, /RULEPILOT_PREBUILT_BACKEND_IMAGE=true \\/)
   assert.match(deploymentWorkflow, /docker tag "\$backend_image" rulepilot-backend:local/)
+  assert.match(productionScript,
+    /wait_for_worker[\s\S]*?worker_health[\s\S]*?healthy[\s\S]*?expected_worker_image/)
+  assert.match(deploymentCompose, /worker:[\s\S]*?healthcheck:[\s\S]*?rulepilot-worker-ready/)
+  assert.match(productionReleaseGuard,
+    /require_running_image "\$active_release" worker "\$backend_image_id"[\s\S]*?worker_health[\s\S]*?healthy/)
   assert.equal(
     productionCompose.match(/image: \$\{RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local\}/g)?.length,
     2,

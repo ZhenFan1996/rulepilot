@@ -466,7 +466,9 @@ public class UserRuleDocumentController {
             case LAUNCHED -> TeachingRecoveryAction.OPEN_PROGRESS;
             case FAILED -> "DOCUMENT_PROCESSING_FAILED".equals(errorCode)
                     ? TeachingRecoveryAction.RETRY_DOCUMENT
-                    : TeachingRecoveryAction.RETRY_TEACHING;
+                    : "TEACHING_PREPARATION_STORAGE_FAILED".equals(errorCode)
+                            ? TeachingRecoveryAction.NONE
+                            : TeachingRecoveryAction.RETRY_TEACHING;
             case NOT_REQUESTED -> TeachingRecoveryAction.NONE;
         };
     }
@@ -479,7 +481,9 @@ public class UserRuleDocumentController {
             case LAUNCHED -> TeachingRecoveryAction.OPEN_PROGRESS;
             case FAILED -> "DOCUMENT_PROCESSING_FAILED".equals(errorCode)
                     ? TeachingRecoveryAction.RETRY_DOCUMENT
-                    : TeachingRecoveryAction.RETRY_TEACHING;
+                    : "TEACHING_PREPARATION_STORAGE_FAILED".equals(errorCode)
+                            ? TeachingRecoveryAction.NONE
+                            : TeachingRecoveryAction.RETRY_TEACHING;
         };
     }
 }

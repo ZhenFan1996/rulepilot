@@ -1,3 +1,6 @@
+import type { AppLocale } from './locale'
+import { playerJourneyRunIsTerminal } from './playerJourney'
+
 export interface TeachingProgressSection {
   position: number
   title: string
@@ -13,20 +16,50 @@ export interface TeachingActivity {
   type: 'TOOL' | 'MODEL' | 'CRITIC' | 'VALIDATION'
   operation: string
   summary: string
-  outcome: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+  outcome: TeachingActivityOutcome
   latencyMs: number
   occurredAt: string
 }
 
-export type TeachingActivitySummary = Pick<
-  TeachingActivity,
-  'sequence' | 'operation' | 'summary' | 'outcome'
->
+export type TeachingActivityOutcome =
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'REJECTED'
+export type TeachingActivityDisplayOutcome = TeachingActivityOutcome | 'UNKNOWN'
 
-export interface PlayerFacingTeachingActivity {
+export type TeachingActivitySummary<
+  TOutcome extends TeachingActivityDisplayOutcome = TeachingActivityOutcome,
+> = Pick<
+  TeachingActivity,
+  'sequence' | 'operation' | 'summary'
+> & { outcome: TOutcome }
+
+export interface PlayerFacingTeachingActivity<
+  TOutcome extends TeachingActivityDisplayOutcome = TeachingActivityOutcome,
+> {
   sequence: number
-  outcome: TeachingActivity['outcome']
+  outcome: TOutcome
   text: string
+}
+
+export type TeachingVisualPageRuleGroupState =
+  | 'directly-completed'
+  | 'completed-after-recovery'
+  | 'processing'
+  | 'no-rule-groups'
+
+export type TeachingVisualPageRuleGroupAttempt = 'direct' | 'repair' | 'temporary-retry'
+export type TeachingVisualPageRuleGroupStage = 'transcription' | 'grouping' | 'persistence'
+
+export interface TeachingVisualPageRuleGroupSummary {
+  pageNumber: number
+  totalPages: number
+  latestSequence: number
+  latestStage: TeachingVisualPageRuleGroupStage
+  latestAttempt: TeachingVisualPageRuleGroupAttempt
+  latestOutcome: TeachingActivityDisplayOutcome
+  state: TeachingVisualPageRuleGroupState
 }
 
 export interface TeachingRunProgress {
@@ -78,11 +111,16 @@ function normalizeTeachingActivities(activities: readonly TeachingActivity[]) {
 
 export function teachingActivityText(
   plan: TeachingProgressPlan,
-  activities: readonly TeachingActivitySummary[],
-  activity: TeachingActivitySummary | undefined,
+  activities: readonly TeachingActivitySummary<TeachingActivityDisplayOutcome>[],
+  activity: TeachingActivitySummary<TeachingActivityDisplayOutcome> | undefined,
   locale: AppLocale = 'zh-CN',
 ) {
   if (!activity) return locale === 'en' ? 'Preparing rulebook support and chapter order' : '正在准备规则依据和章节顺序'
+  if (activity.outcome === 'UNKNOWN') {
+    return locale === 'en'
+      ? 'The latest guide activity has an unrecognized status; use the overall task state'
+      : '最新讲解活动的状态无法识别，请以整条任务状态为准'
+  }
   const chapter = chapterForActivity(plan, activities, activity)
   const target = chapter
     ? locale === 'en'
@@ -157,11 +195,11 @@ export function teachingActivityText(
  * Returns only real, player-relevant chapter activities. It never invents a timed sequence when the
  * backend has not emitted one, and it never exposes model/tool operation names or audit summaries.
  */
-export function recentTeachingActivitySteps(
+export function recentTeachingActivitySteps<TOutcome extends TeachingActivityDisplayOutcome>(
   plan: TeachingProgressPlan,
-  activities: readonly TeachingActivitySummary[],
+  activities: readonly TeachingActivitySummary<TOutcome>[],
   locale: AppLocale = 'zh-CN',
-): PlayerFacingTeachingActivity[] {
+): PlayerFacingTeachingActivity<TOutcome>[] {
   return activities
     .filter(activity => isPlayerFacingTeachingOperation(activity.operation))
     .map(activity => ({
@@ -172,10 +210,10 @@ export function recentTeachingActivitySteps(
 }
 
 /** Player-safe preparation events emitted before a chapter plan or teaching run exists. */
-export function recentTeachingPreparationActivitySteps(
-  activities: readonly TeachingActivitySummary[],
+export function recentTeachingPreparationActivitySteps<TOutcome extends TeachingActivityDisplayOutcome>(
+  activities: readonly TeachingActivitySummary<TOutcome>[],
   locale: AppLocale = 'zh-CN',
-): PlayerFacingTeachingActivity[] {
+): PlayerFacingTeachingActivity<TOutcome>[] {
   return activities
     .filter(activity => isPlayerFacingTeachingPreparationOperation(activity.operation))
     .map(activity => ({
@@ -183,6 +221,41 @@ export function recentTeachingPreparationActivitySteps(
       outcome: activity.outcome,
       text: teachingPreparationActivityText(activity, locale),
     }))
+}
+
+/**
+ * Summarises the latest real page activity that leads to typed rule groups. Earlier attempts remain
+ * available in the activity history; they do not override a later repair or temporary retry.
+ */
+export function summarizeTeachingVisualPageRuleGroups(
+  activities: readonly TeachingActivitySummary<TeachingActivityDisplayOutcome>[],
+  preparationRunState?: string | null,
+): TeachingVisualPageRuleGroupSummary[] {
+  const latestByPage = new Map<number, TeachingVisualPageRuleGroupSummary>()
+  for (const activity of activities) {
+    const progress = visualPreparationPageProgress(activity.operation)
+    if (!progress) continue
+    const current = latestByPage.get(progress.page)
+    if (current && current.latestSequence > activity.sequence) continue
+    const attempt = progress.kind === 'persistence'
+      ? current?.latestAttempt ?? 'direct'
+      : progress.attempt
+    latestByPage.set(progress.page, {
+      pageNumber: progress.page,
+      totalPages: progress.total,
+      latestSequence: activity.sequence,
+      latestStage: progress.kind,
+      latestAttempt: attempt,
+      latestOutcome: activity.outcome,
+      state: visualPageRuleGroupState(
+        activity.outcome,
+        progress.kind,
+        attempt,
+        !playerJourneyRunIsTerminal(preparationRunState),
+      ),
+    })
+  }
+  return [...latestByPage.values()].sort((left, right) => left.pageNumber - right.pageNumber)
 }
 
 export function processedTeachingChapterCount(run: TeachingRunProgress | null) {
@@ -288,8 +361,8 @@ function chapterFor(plan: TeachingProgressPlan, operation: string) {
 
 function chapterForActivity(
   plan: TeachingProgressPlan,
-  activities: readonly TeachingActivitySummary[],
-  activity: TeachingActivitySummary,
+  activities: readonly TeachingActivitySummary<TeachingActivityDisplayOutcome>[],
+  activity: TeachingActivitySummary<TeachingActivityDisplayOutcome>,
 ) {
   const direct = chapterFor(plan, activity.operation)
   if (direct) return direct
@@ -322,12 +395,8 @@ function isPlayerFacingTeachingOperation(operation: string) {
 }
 
 function isPlayerFacingTeachingPreparationOperation(operation: string) {
-  return operation.startsWith('transcribeTeachingVisualPage')
-    || operation.startsWith('transcribeTeachingVisualRetry')
+  return visualPreparationPageProgress(operation) !== null
     || operation.startsWith('inspectTeachingVisualBatch')
-    || operation.startsWith('inspectTeachingVisualPage')
-    || operation.startsWith('inspectTeachingVisualRetry')
-    || operation.startsWith('inspectTeachingVisualRepair')
     || operation.startsWith('selectProgressiveTeachingStart')
     || operation.startsWith('organizeTeachingOutline')
     || operation.startsWith('refineTeachingOutlineCoverage')
@@ -336,10 +405,9 @@ function isPlayerFacingTeachingPreparationOperation(operation: string) {
 }
 
 function teachingPreparationActivityText(
-  activity: TeachingActivitySummary,
+  activity: TeachingActivitySummary<TeachingActivityDisplayOutcome>,
   locale: AppLocale,
 ) {
-  const unsuccessful = activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
   const visualPageProgress = visualPreparationPageProgress(activity.operation)
   if (activity.operation.startsWith('transcribeTeachingVisual')) {
     return visualPageActivityText(activity.outcome, visualPageProgress, 'transcription', locale)
@@ -347,6 +415,15 @@ function teachingPreparationActivityText(
   if (activity.operation.startsWith('inspectTeachingVisual')) {
     return visualPageActivityText(activity.outcome, visualPageProgress, 'grouping', locale)
   }
+  if (activity.operation.startsWith('persistTeachingVisualPage')) {
+    return visualPagePersistenceActivityText(activity.outcome, visualPageProgress, locale)
+  }
+  if (activity.outcome === 'UNKNOWN') {
+    return locale === 'en'
+      ? 'The latest preparation activity has an unrecognized status; use the overall task state'
+      : '最新讲解准备活动的状态无法识别，请以整条任务状态为准'
+  }
+  const unsuccessful = activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
   if (locale === 'en') {
     if (activity.operation.startsWith('selectProgressiveTeachingStart')) {
       return unsuccessful ? 'The first-page selection did not complete; continuing with the complete rulebook plan' : 'Choosing the first rule pages that can be taught clearly'
@@ -386,23 +463,36 @@ function teachingPreparationActivityText(
 }
 
 function visualPageActivityText(
-  outcome: TeachingActivity['outcome'],
+  outcome: TeachingActivityDisplayOutcome,
   progress: ReturnType<typeof visualPreparationPageProgress>,
   kind: 'transcription' | 'grouping',
   locale: AppLocale,
 ) {
-  if (progress?.repairCode) {
+  if (outcome === 'UNKNOWN') {
+    const target = progress
+      ? locale === 'en'
+        ? `visual rulebook page ${progress.page} of ${progress.total}`
+        : `图像规则页第 ${progress.page} / ${progress.total} 页`
+      : locale === 'en' ? 'the visual rulebook page' : '图像规则页'
+    return locale === 'en'
+      ? `The latest activity status for ${target} is unrecognized; use the overall task state`
+      : `${target}的最新活动状态无法识别，请以整条任务状态为准`
+  }
+  if (progress?.kind === 'transcription' && progress.attempt === 'repair') {
+    return visualRepairTranscriptionActivityText(outcome, progress, locale)
+  }
+  if (progress?.attempt === 'repair' && progress.repairCode) {
     const reason = visualContractRepairReason(progress.repairCode, locale)
     if (locale === 'en') {
       const target = `visual rulebook page ${progress.page} of ${progress.total}`
       if (outcome === 'RUNNING') return `${reason}; correcting the rule grouping for ${target}`
-      if (outcome === 'SUCCEEDED') return `Rule grouping correction completed for ${target}`
+      if (outcome === 'SUCCEEDED') return `Rule grouping correction generated for ${target}; saving it now`
       if (outcome === 'FAILED') return `Rule grouping for ${target} still did not complete after one correction`
       return `Rule grouping for ${target} still did not pass validation after one correction`
     }
     const target = `图像规则页第 ${progress.page} / ${progress.total} 页的规则整理`
     if (outcome === 'RUNNING') return `${reason}，正在修正${target}`
-    if (outcome === 'SUCCEEDED') return `${target}修正完成`
+    if (outcome === 'SUCCEEDED') return `${target}修正结果已生成，正在保存`
     if (outcome === 'FAILED') return `${target}经过一次修正后仍未完成`
     return `${target}经过一次修正后仍未通过校验`
   }
@@ -410,13 +500,17 @@ function visualPageActivityText(
     const label = kind === 'transcription' ? 'Text recognition' : 'Rule grouping'
     const target = progress ? ` for visual rulebook page ${progress.page} of ${progress.total}` : ''
     const subject = progress ? `${label}${target}` : `Visual rulebook page ${kind}`
-    if (progress?.retry) {
+    if (progress?.attempt === 'temporary-retry') {
       if (outcome === 'RUNNING') return `A temporary service error occurred; retrying ${label.toLocaleLowerCase()}${target}`
-      if (outcome === 'SUCCEEDED') return `${label} retry completed after a temporary service error${target}`
+      if (outcome === 'SUCCEEDED') return kind === 'transcription'
+        ? `${label} retry completed after a temporary service error${target}`
+        : `${label} retry generated a result after a temporary service error${target}; saving it now`
       if (outcome === 'FAILED') return `${label} retry${target} still did not complete after a temporary service error`
       return `${label} retry${target} did not pass validation after a temporary service error`
     }
-    if (outcome === 'SUCCEEDED') return `${subject} completed`
+    if (outcome === 'SUCCEEDED') return kind === 'transcription'
+      ? `${subject} completed`
+      : `${subject} generated a result; saving it now`
     if (outcome === 'FAILED') return `${subject} did not complete this time`
     if (outcome === 'REJECTED') return `${subject} did not pass validation this time`
     return progress
@@ -430,13 +524,17 @@ function visualPageActivityText(
   const subject = progress
     ? `图像规则页第 ${progress.page} / ${progress.total} 页的${kind === 'transcription' ? '逐字识别' : '规则整理'}`
     : `图像规则页的${kind === 'transcription' ? '逐字识别' : '规则整理'}`
-  if (progress?.retry) {
+  if (progress?.attempt === 'temporary-retry') {
     if (outcome === 'RUNNING') return `临时服务异常，正在重试${subject}`
-    if (outcome === 'SUCCEEDED') return `${subject}在临时服务异常后重试完成`
+    if (outcome === 'SUCCEEDED') return kind === 'transcription'
+      ? `${subject}在临时服务异常后重试完成`
+      : `${subject}在临时服务异常后已生成结果，正在保存`
     if (outcome === 'FAILED') return `${subject}在临时服务异常后重试仍未完成`
     return `${subject}在临时服务异常后重试仍未通过校验`
   }
-  if (outcome === 'SUCCEEDED') return `${subject}完成`
+  if (outcome === 'SUCCEEDED') return kind === 'transcription'
+    ? `${subject}完成`
+    : `${subject}已生成结果，正在保存`
   if (outcome === 'FAILED') return `${subject}本次未完成`
   if (outcome === 'REJECTED') return `${subject}本次校验未通过`
   return progress
@@ -449,14 +547,97 @@ function visualPageActivityText(
 }
 
 function visualPreparationPageProgress(operation: string) {
-  const [kind, pageText, totalText, repairCode] = operation.split('|')
-  const retry = kind === 'inspectTeachingVisualRetry' || kind === 'transcribeTeachingVisualRetry'
-  const repair = kind === 'inspectTeachingVisualRepair'
-  if (!retry && !repair && kind !== 'inspectTeachingVisualPage' && kind !== 'transcribeTeachingVisualPage') return null
+  const parts = operation.split('|')
+  const [kind, pageText, totalText, repairCode] = parts
+  const grouping = kind === 'inspectTeachingVisualPage'
+    || kind === 'inspectTeachingVisualRetry'
+    || kind === 'inspectTeachingVisualRepair'
+  const transcription = kind === 'transcribeTeachingVisualPage'
+    || kind === 'transcribeTeachingVisualRetry'
+    || kind === 'transcribeTeachingVisualRepairPage'
+  const persistence = kind === 'persistTeachingVisualPage'
+  if (!grouping && !transcription && !persistence) return null
+  const groupingRepair = kind === 'inspectTeachingVisualRepair'
+  if (parts.length !== (groupingRepair ? 4 : 3)) return null
   const page = Number(pageText)
   const total = Number(totalText)
   if (!Number.isInteger(page) || page < 1 || !Number.isInteger(total) || total < page) return null
-  return { page, total, retry, repairCode: repair ? repairCode ?? '' : '' }
+  const repair = groupingRepair || kind === 'transcribeTeachingVisualRepairPage'
+  const attempt: TeachingVisualPageRuleGroupAttempt = repair
+    ? 'repair'
+    : kind === 'inspectTeachingVisualRetry' || kind === 'transcribeTeachingVisualRetry'
+      ? 'temporary-retry'
+      : 'direct'
+  if (groupingRepair && !repairCode) return null
+  return {
+    kind: grouping ? 'grouping' as const : transcription ? 'transcription' as const : 'persistence' as const,
+    page,
+    total,
+    attempt,
+    repairCode: groupingRepair ? repairCode ?? null : null,
+  }
+}
+
+function visualPageRuleGroupState(
+  outcome: TeachingActivityDisplayOutcome,
+  stage: TeachingVisualPageRuleGroupStage,
+  attempt: TeachingVisualPageRuleGroupAttempt,
+  runCanProgress: boolean,
+): TeachingVisualPageRuleGroupState {
+  if (outcome === 'UNKNOWN') return 'no-rule-groups'
+  if (stage === 'transcription') return runCanProgress ? 'processing' : 'no-rule-groups'
+  if (outcome === 'RUNNING') return runCanProgress ? 'processing' : 'no-rule-groups'
+  if (outcome === 'SUCCEEDED') {
+    if (stage === 'grouping') {
+      return runCanProgress ? 'processing' : 'no-rule-groups'
+    }
+    return attempt === 'direct' ? 'directly-completed' : 'completed-after-recovery'
+  }
+  return 'no-rule-groups'
+}
+
+function visualPagePersistenceActivityText(
+  outcome: TeachingActivityDisplayOutcome,
+  progress: ReturnType<typeof visualPreparationPageProgress>,
+  locale: AppLocale,
+) {
+  const target = progress
+    ? locale === 'en'
+      ? `visual rulebook page ${progress.page} of ${progress.total}`
+      : `图像规则页第 ${progress.page} / ${progress.total} 页`
+    : locale === 'en' ? 'the visual rulebook page' : '图像规则页'
+  if (outcome === 'UNKNOWN') {
+    return locale === 'en'
+      ? `The saved-rule-group status for ${target} is unrecognized; use the overall task state`
+      : `${target}的规则组保存状态无法识别，请以整条任务状态为准`
+  }
+  if (locale === 'en') {
+    if (outcome === 'SUCCEEDED') return `Saved the typed rule groups for ${target}`
+    if (outcome === 'RUNNING') return `Saving the typed rule groups for ${target}`
+    return `The typed rule groups for ${target} were not saved`
+  }
+  if (outcome === 'SUCCEEDED') return `${target}的规则组已经保存`
+  if (outcome === 'RUNNING') return `正在保存${target}的规则组`
+  return `${target}的规则组没有保存成功`
+}
+
+function visualRepairTranscriptionActivityText(
+  outcome: TeachingActivityDisplayOutcome,
+  progress: NonNullable<ReturnType<typeof visualPreparationPageProgress>>,
+  locale: AppLocale,
+) {
+  if (locale === 'en') {
+    const target = `visual rulebook page ${progress.page} of ${progress.total}`
+    if (outcome === 'RUNNING') return `Transcribing ${target} to support its rule-group correction`
+    if (outcome === 'SUCCEEDED') return `Text recognition for the rule-group correction completed for ${target}`
+    if (outcome === 'FAILED') return `Text recognition for ${target} did not complete; keeping the original image for the rule-group correction`
+    return `Text recognition for ${target} did not pass validation; keeping the original image for the rule-group correction`
+  }
+  const target = `图像规则页第 ${progress.page} / ${progress.total} 页`
+  if (outcome === 'RUNNING') return `正在逐字识别${target}，为本页规则组修正提供原文`
+  if (outcome === 'SUCCEEDED') return `${target}用于规则组修正的逐字识别完成`
+  if (outcome === 'FAILED') return `${target}本次逐字识别未完成；会保留原图继续修正规则组`
+  return `${target}的逐字识别结果未通过校验；会保留原图继续修正规则组`
 }
 
 function visualContractRepairReason(code: string, locale: AppLocale) {
@@ -490,4 +671,3 @@ function latestPublicationActivities(activities: TeachingActivity[]) {
   }
   return latest
 }
-import type { AppLocale } from './locale'

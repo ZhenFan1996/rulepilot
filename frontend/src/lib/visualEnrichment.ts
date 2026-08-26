@@ -1,3 +1,5 @@
+import { playerJourneyRunIsTerminal } from './playerJourney'
+
 interface VisualEnrichmentActivityLike {
   operation: string
   outcome: string
@@ -84,15 +86,8 @@ export async function fetchVisualStatusWithDeadline(
   }
 }
 
-const terminalVisualRunStates = new Set([
-  'COMPLETED',
-  'INSUFFICIENT_EVIDENCE',
-  'DEGRADED',
-  'FAILED',
-])
-
 export function visualRunIsTerminal(state: string | null | undefined) {
-  return Boolean(state && terminalVisualRunStates.has(state))
+  return playerJourneyRunIsTerminal(state)
 }
 
 function succeededVisualSectionPositions(activities: readonly VisualEnrichmentActivityLike[]) {
@@ -119,7 +114,7 @@ export function visualEnrichmentResult(
   if (active) return { outcome: 'ACTIVE', addedSectionCount: 0 }
 
   const addedSectionCount = succeededVisualSectionPositions(run.activities ?? []).size
-  const failed = ['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(run.run.state)
+  const failed = playerJourneyRunIsTerminal(run.run.state) && run.run.state !== 'COMPLETED'
   if (failed) {
     return {
       outcome: addedSectionCount > 0 ? 'PARTIAL' : 'FAILED',

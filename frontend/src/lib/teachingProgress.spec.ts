@@ -6,6 +6,7 @@ import {
   recentTeachingActivitySteps,
   recentTeachingPreparationActivitySteps,
   rejectedTeachingChapterCount,
+  summarizeTeachingVisualPageRuleGroups,
   supportedTeachingChapterCount,
   teachingActivityCursor,
   teachingActivityText,
@@ -181,16 +182,18 @@ describe('teaching progress', () => {
     const activities = [
       activity(1, 'transcribeTeachingVisualPage|3|16', 'SUCCEEDED'),
       activity(2, 'inspectTeachingVisualPage|3|16', 'SUCCEEDED'),
-      activity(3, 'organizeTeachingOutline', 'RUNNING'),
-      activity(4, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
-      activity(5, 'internalOutlineTelemetry', 'SUCCEEDED'),
+      activity(3, 'persistTeachingVisualPage|3|16', 'SUCCEEDED'),
+      activity(4, 'organizeTeachingOutline', 'RUNNING'),
+      activity(5, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
+      activity(6, 'internalOutlineTelemetry', 'SUCCEEDED'),
     ]
 
     const steps = recentTeachingPreparationActivitySteps(activities)
 
     expect(steps.map(step => step.text)).toEqual([
       '图像规则页第 3 / 16 页的逐字识别完成',
-      '图像规则页第 3 / 16 页的规则整理完成',
+      '图像规则页第 3 / 16 页的规则整理已生成结果，正在保存',
+      '图像规则页第 3 / 16 页的规则组已经保存',
       '正在通读规则书，先形成整局认识再规划讲解章节',
       '正在检查章节规划有没有漏掉规则内容',
     ])
@@ -218,19 +221,22 @@ describe('teaching progress', () => {
     const activities = [
       activity(1, 'inspectTeachingVisualRetry|7|16', 'RUNNING'),
       activity(2, 'inspectTeachingVisualRetry|8|16', 'SUCCEEDED'),
-      activity(3, 'inspectTeachingVisualRetry|9|16', 'FAILED'),
-      activity(4, 'inspectTeachingVisualRetry|10|16', 'REJECTED'),
+      activity(3, 'persistTeachingVisualPage|8|16', 'SUCCEEDED'),
+      activity(4, 'inspectTeachingVisualRetry|9|16', 'FAILED'),
+      activity(5, 'inspectTeachingVisualRetry|10|16', 'REJECTED'),
     ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
       '临时服务异常，正在重试图像规则页第 7 / 16 页的规则整理',
-      '图像规则页第 8 / 16 页的规则整理在临时服务异常后重试完成',
+      '图像规则页第 8 / 16 页的规则整理在临时服务异常后已生成结果，正在保存',
+      '图像规则页第 8 / 16 页的规则组已经保存',
       '图像规则页第 9 / 16 页的规则整理在临时服务异常后重试仍未完成',
       '图像规则页第 10 / 16 页的规则整理在临时服务异常后重试仍未通过校验',
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
       'A temporary service error occurred; retrying rule grouping for visual rulebook page 7 of 16',
-      'Rule grouping retry completed after a temporary service error for visual rulebook page 8 of 16',
+      'Rule grouping retry generated a result after a temporary service error for visual rulebook page 8 of 16; saving it now',
+      'Saved the typed rule groups for visual rulebook page 8 of 16',
       'Rule grouping retry for visual rulebook page 9 of 16 still did not complete after a temporary service error',
       'Rule grouping retry for visual rulebook page 10 of 16 did not pass validation after a temporary service error',
     ])
@@ -240,21 +246,79 @@ describe('teaching progress', () => {
     const activities = [
       activity(1, 'inspectTeachingVisualRepair|7|16|MALFORMED_JSON', 'RUNNING'),
       activity(2, 'inspectTeachingVisualRepair|8|16|DUPLICATE_RULE_GROUP', 'SUCCEEDED'),
-      activity(3, 'inspectTeachingVisualRepair|9|16|PAGE_BINDING_MISMATCH', 'FAILED'),
-      activity(4, 'inspectTeachingVisualRepair|10|16|SCHEMA_MISMATCH', 'REJECTED'),
+      activity(3, 'persistTeachingVisualPage|8|16', 'SUCCEEDED'),
+      activity(4, 'inspectTeachingVisualRepair|9|16|PAGE_BINDING_MISMATCH', 'FAILED'),
+      activity(5, 'inspectTeachingVisualRepair|10|16|SCHEMA_MISMATCH', 'REJECTED'),
     ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
       '返回格式没有通过校验，正在修正图像规则页第 7 / 16 页的规则整理',
-      '图像规则页第 8 / 16 页的规则整理修正完成',
+      '图像规则页第 8 / 16 页的规则整理修正结果已生成，正在保存',
+      '图像规则页第 8 / 16 页的规则组已经保存',
       '图像规则页第 9 / 16 页的规则整理经过一次修正后仍未完成',
       '图像规则页第 10 / 16 页的规则整理经过一次修正后仍未通过校验',
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
       'The returned format did not pass validation; correcting the rule grouping for visual rulebook page 7 of 16',
-      'Rule grouping correction completed for visual rulebook page 8 of 16',
+      'Rule grouping correction generated for visual rulebook page 8 of 16; saving it now',
+      'Saved the typed rule groups for visual rulebook page 8 of 16',
       'Rule grouping for visual rulebook page 9 of 16 still did not complete after one correction',
       'Rule grouping for visual rulebook page 10 of 16 still did not pass validation after one correction',
+    ])
+  })
+
+  it('keeps repair transcription intermediate only while the preparation run can still advance', () => {
+    const activities = [
+      activity(1, 'inspectTeachingVisualPage|7|16', 'REJECTED'),
+      activity(2, 'transcribeTeachingVisualRepairPage|7|16', 'FAILED'),
+    ]
+
+    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
+      '图像规则页第 7 / 16 页的规则整理本次校验未通过',
+      '图像规则页第 7 / 16 页本次逐字识别未完成；会保留原图继续修正规则组',
+    ])
+    expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
+      'Rule grouping for visual rulebook page 7 of 16 did not pass validation this time',
+      'Text recognition for visual rulebook page 7 of 16 did not complete; keeping the original image for the rule-group correction',
+    ])
+    expect(summarizeTeachingVisualPageRuleGroups(activities)).toEqual([expect.objectContaining({
+      pageNumber: 7,
+      latestStage: 'transcription',
+      latestAttempt: 'repair',
+      latestOutcome: 'FAILED',
+      state: 'processing',
+    })])
+    expect(summarizeTeachingVisualPageRuleGroups(activities, 'FAILED')).toEqual([
+      expect.objectContaining({ pageNumber: 7, state: 'no-rule-groups' }),
+    ])
+    expect(summarizeTeachingVisualPageRuleGroups(activities, 'CANCELLED')).toEqual([
+      expect.objectContaining({ pageNumber: 7, state: 'no-rule-groups' }),
+    ])
+    expect(summarizeTeachingVisualPageRuleGroups(activities, 'COMPLETED')).toEqual([
+      expect.objectContaining({ pageNumber: 7, state: 'no-rule-groups' }),
+    ])
+  })
+
+  it('shows an unrecognized API activity outcome explicitly instead of treating it as progress or validation failure', () => {
+    const activities = [{
+      sequence: 1,
+      operation: 'transcribeTeachingVisualPage|4|10',
+      summary: 'provider added a new outcome',
+      outcome: 'UNKNOWN' as const,
+    }]
+
+    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
+      '图像规则页第 4 / 10 页的最新活动状态无法识别，请以整条任务状态为准',
+    ])
+    expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
+      'The latest activity status for visual rulebook page 4 of 10 is unrecognized; use the overall task state',
+    ])
+    expect(summarizeTeachingVisualPageRuleGroups(activities, 'LESSON_PLANNING')).toEqual([
+      expect.objectContaining({
+        pageNumber: 4,
+        latestOutcome: 'UNKNOWN',
+        state: 'no-rule-groups',
+      }),
     ])
   })
 
@@ -273,15 +337,123 @@ describe('teaching progress', () => {
   it('keeps the complete real preparation history instead of hiding early pages behind a display cap', () => {
     const activities = Array.from({ length: 16 }, (_, index) => index + 1)
       .flatMap(page => [
-        activity(page * 2 - 1, `transcribeTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
-        activity(page * 2, `inspectTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+        activity(page * 3 - 2, `transcribeTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+        activity(page * 3 - 1, `inspectTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+        activity(page * 3, `persistTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
       ])
 
     const steps = recentTeachingPreparationActivitySteps(activities)
 
-    expect(steps).toHaveLength(32)
+    expect(steps).toHaveLength(48)
     expect(steps[0]?.text).toBe('图像规则页第 1 / 16 页的逐字识别完成')
-    expect(steps.at(-1)?.text).toBe('图像规则页第 16 / 16 页的规则整理完成')
+    expect(steps.at(-1)?.text).toBe('图像规则页第 16 / 16 页的规则组已经保存')
+  })
+
+  it('summarizes each page from its latest typed rule-group activity while preserving recovered attempts', () => {
+    const activities = [
+      activity(1, 'inspectTeachingVisualPage|1|6', 'SUCCEEDED'),
+      activity(7, 'inspectTeachingVisualRepair|2|6|SCHEMA_MISMATCH', 'SUCCEEDED'),
+      activity(2, 'inspectTeachingVisualPage|2|6', 'REJECTED'),
+      activity(3, 'inspectTeachingVisualPage|3|6', 'FAILED'),
+      activity(8, 'inspectTeachingVisualRetry|3|6', 'SUCCEEDED'),
+      activity(4, 'inspectTeachingVisualPage|4|6', 'REJECTED'),
+      activity(9, 'transcribeTeachingVisualRepairPage|4|6', 'RUNNING'),
+      activity(5, 'inspectTeachingVisualPage|5|6', 'FAILED'),
+      activity(13, 'inspectTeachingVisualPage|5|6|unexpected', 'SUCCEEDED'),
+      activity(6, 'transcribeTeachingVisualPage|6|6', 'SUCCEEDED'),
+      activity(10, 'inspectTeachingVisualRepair|6|6', 'SUCCEEDED'),
+      activity(11, 'inspectTeachingVisualRepair|6|6|PAGE_BINDING_MISMATCH', 'REJECTED'),
+      activity(12, 'internalVisualPageNote|5|6', 'SUCCEEDED', 'inspectTeachingVisualRetry|5|6 succeeded'),
+      activity(14, 'persistTeachingVisualPage|1|6', 'SUCCEEDED'),
+      activity(15, 'persistTeachingVisualPage|2|6', 'SUCCEEDED'),
+      activity(16, 'persistTeachingVisualPage|3|6', 'SUCCEEDED'),
+    ]
+
+    expect(summarizeTeachingVisualPageRuleGroups(activities)).toEqual([
+      {
+        pageNumber: 1,
+        totalPages: 6,
+        latestSequence: 14,
+        latestStage: 'persistence',
+        latestAttempt: 'direct',
+        latestOutcome: 'SUCCEEDED',
+        state: 'directly-completed',
+      },
+      {
+        pageNumber: 2,
+        totalPages: 6,
+        latestSequence: 15,
+        latestStage: 'persistence',
+        latestAttempt: 'repair',
+        latestOutcome: 'SUCCEEDED',
+        state: 'completed-after-recovery',
+      },
+      {
+        pageNumber: 3,
+        totalPages: 6,
+        latestSequence: 16,
+        latestStage: 'persistence',
+        latestAttempt: 'temporary-retry',
+        latestOutcome: 'SUCCEEDED',
+        state: 'completed-after-recovery',
+      },
+      {
+        pageNumber: 4,
+        totalPages: 6,
+        latestSequence: 9,
+        latestStage: 'transcription',
+        latestAttempt: 'repair',
+        latestOutcome: 'RUNNING',
+        state: 'processing',
+      },
+      {
+        pageNumber: 5,
+        totalPages: 6,
+        latestSequence: 5,
+        latestStage: 'grouping',
+        latestAttempt: 'direct',
+        latestOutcome: 'FAILED',
+        state: 'no-rule-groups',
+      },
+      {
+        pageNumber: 6,
+        totalPages: 6,
+        latestSequence: 11,
+        latestStage: 'grouping',
+        latestAttempt: 'repair',
+        latestOutcome: 'REJECTED',
+        state: 'no-rule-groups',
+      },
+    ])
+  })
+
+  it('does not call a generated page complete when durable storage failed', () => {
+    const generatedOnly = [
+      activity(1, 'inspectTeachingVisualPage|4|12', 'SUCCEEDED'),
+    ]
+
+    expect(recentTeachingPreparationActivitySteps(generatedOnly).map(step => step.text)).toEqual([
+      '图像规则页第 4 / 12 页的规则整理已生成结果，正在保存',
+    ])
+    expect(summarizeTeachingVisualPageRuleGroups(generatedOnly, 'FAILED')).toEqual([
+      expect.objectContaining({
+        pageNumber: 4,
+        latestStage: 'grouping',
+        state: 'no-rule-groups',
+      }),
+    ])
+
+    const stored = [
+      ...generatedOnly,
+      activity(2, 'persistTeachingVisualPage|4|12', 'SUCCEEDED'),
+    ]
+    expect(summarizeTeachingVisualPageRuleGroups(stored, 'COMPLETED')).toEqual([
+      expect.objectContaining({
+        pageNumber: 4,
+        latestStage: 'persistence',
+        state: 'directly-completed',
+      }),
+    ])
   })
 
   it('shows a repair only when the backend actually emitted one', () => {

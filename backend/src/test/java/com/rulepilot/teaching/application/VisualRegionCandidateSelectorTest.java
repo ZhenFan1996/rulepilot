@@ -6,9 +6,11 @@ import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
+import com.rulepilot.teaching.VisualRegionProposer.Proposal;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -73,6 +75,29 @@ class VisualRegionCandidateSelectorTest {
                         new Rectangle(450, 0, 550, 550),
                         new Rectangle(0, 450, 550, 550),
                         new Rectangle(450, 450, 550, 550));
+    }
+
+    @Test
+    void givesPixelToolGeometryAnOpaqueCandidateWithoutLettingItHideIndependentCoverage() {
+        Rectangle detectedDiagram = new Rectangle(225, 310, 280, 190);
+        Rectangle nativeText = new Rectangle(70, 100, 760, 120);
+        RulebookUnderstanding understanding = understanding(List.of(
+                block(3, 0, 0, BlockRole.BODY, "prose above a component diagram", nativeText)));
+
+        var selected = selector.select(
+                understanding,
+                Set.of(3),
+                List.of("model prose is validation-only"),
+                Map.of(3, List.of(new Proposal(detectedDiagram))));
+
+        assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::rectangle)
+                .startsWith(
+                        detectedDiagram,
+                        new Rectangle(0, 0, 550, 550),
+                        nativeText)
+                .contains(new Rectangle(450, 450, 550, 550));
+        assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::candidateId)
+                .doesNotHaveDuplicates();
     }
 
     @Test

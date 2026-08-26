@@ -1,3 +1,5 @@
+import { playerJourneyRunIsTerminal } from './playerJourney'
+
 export interface PendingGuidePlan {
   documentVersionId: string
 }
@@ -84,7 +86,8 @@ export function buildPendingGuideJourneys(
     const preparation = job.documentVersionId ? preparationByVersion.get(job.documentVersionId) : undefined
     const document = job.documentVersionId ? documentByVersion.get(job.documentVersionId) : undefined
     const preparationFailed = preparation != null
-      && ['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(preparation.state)
+      && playerJourneyRunIsTerminal(preparation.state)
+      && preparation.state !== 'COMPLETED'
     const failed = job.stage === 'FAILED'
       || job.teachingHandoffState === 'FAILED'
       || document?.latestVersion.status === 'FAILED'
@@ -92,6 +95,7 @@ export function buildPendingGuideJourneys(
     const canRetryPreparation = Boolean(job.documentVersionId)
       && (preparationFailed || job.teachingHandoffState === 'FAILED')
       && document?.latestVersion.status !== 'FAILED'
+      && !teachingStorageRepairRequired(preparation?.lastErrorCode ?? job.teachingErrorCode)
     return [{
       id: `import:${job.id}`,
       title: job.title,
@@ -130,6 +134,7 @@ export function buildPendingGuideJourneys(
       || preparationFailed
     const canRetryPreparation = (preparationFailed || handoff.state === 'FAILED')
       && document?.latestVersion.status !== 'FAILED'
+      && !teachingStorageRepairRequired(preparation?.lastErrorCode ?? handoff.errorCode)
     return [{
       id: `upload:${handoff.id}`,
       title: gameTitle ?? handoff.rulebookTitle,
@@ -161,7 +166,7 @@ export function buildPendingGuideJourneys(
     const gameTitle = document.document.gameEditionId
       ? gameByEdition.get(document.document.gameEditionId)
       : null
-    const failed = ['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(run.state)
+    const failed = playerJourneyRunIsTerminal(run.state) && run.state !== 'COMPLETED'
     return [{
       id: `preparation:${run.id}`,
       title: gameTitle ?? document.document.title,
@@ -174,7 +179,7 @@ export function buildPendingGuideJourneys(
       state: failed ? 'failed' : 'active',
       progress: null,
       canReadRulebook: true,
-      retryAction: failed ? 'PREPARE_TEACHING' : null,
+      retryAction: failed && !teachingStorageRepairRequired(run.lastErrorCode) ? 'PREPARE_TEACHING' : null,
       updatedAt: run.updatedAt,
     }]
   })
@@ -183,7 +188,9 @@ export function buildPendingGuideJourneys(
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
 }
 
-const TERMINAL_PREPARATION_STATES = new Set(['COMPLETED', 'FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'])
+function teachingStorageRepairRequired(errorCode: string | null | undefined) {
+  return errorCode === 'TEACHING_PREPARATION_STORAGE_FAILED'
+}
 
 function latestPreparationByVersion(runs: PendingGuidePreparationRun[]) {
   const latest = new Map<string, PendingGuidePreparationRun>()
@@ -198,8 +205,8 @@ function latestPreparationByVersion(runs: PendingGuidePreparationRun[]) {
     const candidateIsNewer = Number.isFinite(candidateTime)
       && (!Number.isFinite(existingTime) || candidateTime > existingTime)
     const sameInstantButCandidateIsActive = candidateTime === existingTime
-      && TERMINAL_PREPARATION_STATES.has(existing.state)
-      && !TERMINAL_PREPARATION_STATES.has(run.state)
+      && playerJourneyRunIsTerminal(existing.state)
+      && !playerJourneyRunIsTerminal(run.state)
     if (candidateIsNewer || sameInstantButCandidateIsActive) latest.set(run.subjectId, run)
   }
   return latest
