@@ -5,6 +5,7 @@ import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.application.AnswerFeedbackService;
+import com.rulepilot.assistant.application.DocumentNativeToolAccess;
 import com.rulepilot.assistant.application.GameSessionConversationService;
 import com.rulepilot.assistant.application.PlayerFacingAnswerPresenter;
 import com.rulepilot.assistant.application.PlayerFacingRuleAnswer;
@@ -29,6 +30,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,6 +39,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
@@ -53,6 +56,7 @@ public class StructuredRuleAnswerController {
     private final AnswerFeedbackService feedback;
     private final TaskExecutor streamExecutor;
     private final AssistantRuns runs;
+    private final DocumentNativeToolAccess documentAccess;
 
     public StructuredRuleAnswerController(
             StructuredRuleAnswerService answers,
@@ -60,24 +64,28 @@ public class StructuredRuleAnswerController {
             GameSessionConversationService conversations,
             AnswerFeedbackService feedback,
             AssistantRuns runs,
+            DocumentNativeToolAccess documentAccess,
             @Qualifier("structuredRuleAnswerStreamExecutor") TaskExecutor streamExecutor) {
         this.answers = answers;
         this.sessions = sessions;
         this.conversations = conversations;
         this.feedback = feedback;
         this.runs = runs;
+        this.documentAccess = documentAccess;
         this.streamExecutor = streamExecutor;
     }
 
     @PostMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     AnswerResponse answer(
             @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
-        return createAnswer(versionId, request, principal.getName(), ignored -> {});
+        String username = requireOwnedReadyVersion(versionId, principal);
+        return createAnswer(versionId, request, username, ignored -> {});
     }
 
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     SseEmitter answerStream(
             @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
+        String username = requireOwnedReadyVersion(versionId, principal);
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AtomicBoolean open = new AtomicBoolean(true);
         emitter.onCompletion(() -> open.set(false));
@@ -85,7 +93,6 @@ public class StructuredRuleAnswerController {
         emitter.onError(ignored -> open.set(false));
         send(emitter, open, "accepted", new StreamAccepted("answer_received"));
         if (!open.get()) return emitter;
-        String username = principal.getName();
         try {
             streamExecutor.execute(() -> {
                 PlayerActivityPump[] activityPump = new PlayerActivityPump[1];
@@ -125,6 +132,14 @@ public class StructuredRuleAnswerController {
             sendError(emitter, open, "answer_unavailable");
         }
         return emitter;
+    }
+
+    private String requireOwnedReadyVersion(UUID versionId, Principal principal) {
+        String username = principal == null ? "" : principal.getName();
+        if (!documentAccess.canReadOwnedReadyVersion(username, versionId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "document version does not exist");
+        }
+        return username;
     }
 
     private AnswerResponse createAnswer(

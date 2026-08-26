@@ -78,7 +78,7 @@ class TeachingSourcePageEvidenceRefinerTest {
                 "Image-only page",
                 2,
                 2,
-                List.of(new RulePageImage(2, "image/png", new byte[] {1}, 100, 80)),
+                List.of(),
                 RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
         RuleEvidence laterClause = evidence(UUID.randomUUID(), 2, "A later exception on the same page.");
         var observation = new TeachingVisualEvidenceResolver.CanonicalPageObservation(
@@ -214,7 +214,7 @@ class TeachingSourcePageEvidenceRefinerTest {
                 "[rule-group:prepare-board] Put the board in the middle, then give every player one marker.",
                 2,
                 2,
-                List.of(new RulePageImage(2, "image/png", new byte[] {1, 2, 3}, 100, 80)),
+                List.of(),
                 RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
         RuleEvidence canonicalPlaceholder = new RuleEvidence(
                 sourceId,
@@ -233,6 +233,38 @@ class TeachingSourcePageEvidenceRefinerTest {
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
         assertThat(result.evidence()).containsExactly(visualTranscript);
+    }
+
+    @Test
+    void rejectsArbitraryTextThatReusesAVisualPlaceholderIdentity() {
+        UUID sourceId = UUID.randomUUID();
+        RuleEvidence arbitraryText = new RuleEvidence(
+                sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Different text that was not produced by the typed visual-transcription path.",
+                2,
+                2,
+                List.of(),
+                RuleEvidence.ContentKind.CANONICAL_TEXT);
+        RuleEvidence canonicalPlaceholder = new RuleEvidence(
+                sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Image-only page",
+                2,
+                2,
+                List.of(),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
+        TeachingPlan plan = plan(List.of(2));
+
+        var result = refiner(scopes(), tools(List.of(canonicalPlaceholder)), new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, verified(1, arbitraryText));
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.INVALID);
+        assertThat(result.evidence()).isEmpty();
     }
 
     @Test
