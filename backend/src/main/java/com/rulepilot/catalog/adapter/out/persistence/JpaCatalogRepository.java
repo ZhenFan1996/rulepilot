@@ -271,6 +271,23 @@ public class JpaCatalogRepository implements CatalogRepository {
         return Map.copyOf(result);
     }
 
+    @Override
+    public Map<UUID, Integer> findBggIdsByEditions(Collection<UUID> editionIds) {
+        if (editionIds == null || editionIds.isEmpty()) return Map.of();
+        return entityManager
+                .createQuery(
+                        "select e.id, m.bggId from CatalogGameEditionEntity e, CatalogBggGameMetadataEntity m "
+                                + "where e.id in :editionIds and m.gameId = e.gameId",
+                        Object[].class)
+                .setParameter("editionIds", editionIds)
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        row -> (UUID) row[0],
+                        row -> (Integer) row[1],
+                        (first, ignored) -> first));
+    }
+
     private Set<UUID> findCompatibleEditionIds(UUID expansionId) {
         return new LinkedHashSet<>(entityManager.createQuery(
                         "select compatibility.id.editionId from CatalogEditionExpansionEntity compatibility "

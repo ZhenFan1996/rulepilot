@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,7 +44,8 @@ class PublicLessonQuestionServiceTest {
                 "ANSWERED", "先放置标记。", "然后执行效果。",
                 List.of(new RuleAnswering.Citation("设置", 2, 2)), List.of(), "HIGH", null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("标记怎么放？"), eq(null), eq(PlayerLocale.ZH_CN)))
+                        eq(versionId), eq("标记怎么放？"), eq(null), eq(PlayerLocale.ZH_CN),
+                        eq(null), eq(Set.of(2, 3))))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
         var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", null));
@@ -75,7 +76,8 @@ class PublicLessonQuestionServiceTest {
                 "HIGH",
                 null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("这一步看哪几张图？"), eq(null), eq(PlayerLocale.ZH_CN)))
+                        eq(versionId), eq("这一步看哪几张图？"), eq(null), eq(PlayerLocale.ZH_CN),
+                        eq(null), eq(Set.of(2, 3))))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
         var result = service.answer(
@@ -103,7 +105,8 @@ class PublicLessonQuestionServiceTest {
                 "HIGH",
                 null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("完整流程需要看哪些图？"), eq(null), eq(PlayerLocale.ZH_CN)))
+                        eq(versionId), eq("完整流程需要看哪些图？"), eq(null), eq(PlayerLocale.ZH_CN),
+                        eq(null), eq(Set.of(2, 3))))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
         var result = service.answer(
@@ -135,7 +138,8 @@ class PublicLessonQuestionServiceTest {
                 "ANSWERED", "先放置标记。", "然后执行效果。",
                 List.of(new RuleAnswering.Citation("设置", 2, 2)), List.of(), "HIGH", null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("标记怎么放？"), eq(null), eq(PlayerLocale.ZH_CN)))
+                        eq(versionId), eq("标记怎么放？"), eq(null), eq(PlayerLocale.ZH_CN),
+                        eq(null), eq(Set.of(2, 3))))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(answerChunk)));
 
         var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", null));
@@ -203,7 +207,9 @@ class PublicLessonQuestionServiceTest {
                         eq(versionId),
                         eq("骑士的一个回合分成哪两个阶段？"),
                         eq(null),
-                        eq(PlayerLocale.ZH_CN)))
+                        eq(PlayerLocale.ZH_CN),
+                        eq(null),
+                        eq(Set.of(6))))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(answerChunk)));
 
         var result = service.answer(
@@ -226,7 +232,8 @@ class PublicLessonQuestionServiceTest {
                 "ANSWERED", "Place the marker first.", "Then resolve its effect.",
                 List.of(new RuleAnswering.Citation("Setup", 2, 2)), List.of(), "HIGH", null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("Where does the marker go?"), eq(null), eq(PlayerLocale.EN)))
+                        eq(versionId), eq("Where does the marker go?"), eq(null), eq(PlayerLocale.EN),
+                        eq(null), eq(Set.of(2, 3))))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
         var result = service.answer(
@@ -258,13 +265,14 @@ class PublicLessonQuestionServiceTest {
         when(lessons.find(planId)).thenReturn(Optional.of(publicLesson(planId, versionId, citedChunk)));
         RuleAnswering.Answer answer = new RuleAnswering.Answer(
                 "ANSWERED", "里程碑是轨道上的指定位置。", "规则书在轨道说明中定义了它。",
-                List.of(new RuleAnswering.Citation("声望轨道", 4, 4)), List.of(), "HIGH", null);
+                List.of(new RuleAnswering.Citation("声望轨道", 2, 2)), List.of(), "HIGH", null);
         when(answers.answerForPublicReader(
                         eq(versionId),
                         eq("请解释里程碑。"),
                         eq("里程碑什么时候结算？"),
                         eq(PlayerLocale.ZH_CN),
-                        eq(RuleAnswering.PublicLearningIntent.DEFINE)))
+                        eq(RuleAnswering.PublicLearningIntent.DEFINE),
+                        eq(Set.of(2, 3))))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
         var result = service.answer(
@@ -282,7 +290,43 @@ class PublicLessonQuestionServiceTest {
                 "请解释里程碑。",
                 "里程碑什么时候结算？",
                 PlayerLocale.ZH_CN,
-                RuleAnswering.PublicLearningIntent.DEFINE);
+                RuleAnswering.PublicLearningIntent.DEFINE,
+                Set.of(2, 3));
+    }
+
+    @Test
+    void withholdsAnAnswerWhenAnyCitationEscapesThePublishedLessonPages() {
+        UUID planId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID citedChunk = UUID.randomUUID();
+        when(lessons.find(planId)).thenReturn(Optional.of(publicLesson(planId, versionId, citedChunk)));
+        RuleAnswering.Answer escaped = new RuleAnswering.Answer(
+                "ANSWERED",
+                "这条结论来自另一页。",
+                "这条说明不应公开。",
+                List.of(new RuleAnswering.Citation("未公开章节", 4, 4)),
+                List.of(),
+                "HIGH",
+                null);
+        when(answers.answerForPublicReader(
+                        eq(versionId),
+                        eq("第四页怎么说？"),
+                        eq(null),
+                        eq(PlayerLocale.ZH_CN),
+                        eq(null),
+                        eq(Set.of(2, 3))))
+                .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), escaped, Set.of(citedChunk)));
+
+        var result = service.answer(
+                planId,
+                new PublicLessonQuestionService.QuestionRequest("第四页怎么说？", null));
+
+        assertThat(result).hasValueSatisfying(value -> {
+            assertThat(value.answer().status()).isEqualTo("INSUFFICIENT_EVIDENCE");
+            assertThat(value.answer().shortVerdict()).contains("未公开");
+            assertThat(value.answer().citations()).isEmpty();
+            assertThat(value.visualAids()).isEmpty();
+        });
     }
 
     @Test
@@ -291,11 +335,7 @@ class PublicLessonQuestionServiceTest {
         when(lessons.find(planId)).thenReturn(Optional.empty());
 
         assertThat(service.answer(planId, new PublicLessonQuestionService.QuestionRequest("能做什么？", null))).isEmpty();
-        verify(answers, never()).answerForPublicReader(
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any());
+        verifyNoInteractions(answers);
     }
 
     @Test

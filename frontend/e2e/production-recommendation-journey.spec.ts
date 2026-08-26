@@ -2,12 +2,59 @@ import { writeFile } from 'node:fs/promises'
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
+type RecommendationJourneyMode = 'ready_public' | 'verified_import'
+type ProductionModelRole = 'teaching' | 'visual' | 'answer' | 'recommendation'
+type RecommendationHarnessSafetyCategory =
+  | 'RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT'
+  | 'READY_PUBLIC_TEACHING_NO_IMPORT'
+  | 'VERIFIED_RULEBOOK_JOURNEY_IMPORT_OR_REUSE'
+
+function parseRecommendationJourneyMode(value: string | undefined): RecommendationJourneyMode {
+  const mode = value ?? 'ready_public'
+  if (mode === 'ready_public' || mode === 'verified_import') return mode
+  throw new Error(`Unsupported production recommendation journey mode: ${mode}`)
+}
+
+function recommendationHarnessSafetyCategory(
+  mode: RecommendationJourneyMode,
+  recommendationOnly: boolean,
+): RecommendationHarnessSafetyCategory {
+  if (recommendationOnly) return 'RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT'
+  return mode === 'ready_public'
+    ? 'READY_PUBLIC_TEACHING_NO_IMPORT'
+    : 'VERIFIED_RULEBOOK_JOURNEY_IMPORT_OR_REUSE'
+}
+
+function assertImportRequirementCompatible(
+  mode: RecommendationJourneyMode,
+  recommendationOnly: boolean,
+  requireFreshImport: boolean,
+) {
+  if (!recommendationOnly && mode === 'ready_public' && requireFreshImport) {
+    throw new Error('Fresh import cannot be required in ready_public journey mode')
+  }
+}
+
+function requiredProductionModelRoles(
+  mode: RecommendationJourneyMode,
+  recommendationOnly: boolean,
+): ProductionModelRole[] {
+  if (recommendationOnly) return ['recommendation']
+  return mode === 'ready_public'
+    ? ['recommendation', 'answer']
+    : ['recommendation', 'teaching', 'visual', 'answer']
+}
+
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
+const JOURNEY_MODE = parseRecommendationJourneyMode(
+  process.env.RULEPILOT_RECOMMENDATION_JOURNEY_MODE,
+)
 const RECOMMENDATION_OPENING_PROMPT = process.env.RULEPILOT_RECOMMENDATION_OPENING_PROMPT
   ?? '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
 const RECOMMENDATION_SELECTION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_SELECTION_PROMPT
-  ?? '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后还想接着找规则书、听讲解。'
+  ?? '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后想优先直接进入已有讲解，再按同一份规则书继续答疑。'
 const MAX_OPEN_GUIDANCE_MS = 15_000
+const MAX_OPEN_TERMINAL_DIAGNOSTIC_MS = 20_000
 const MAX_SELECTION_RECOMMENDATION_MS = 20_000
 // This wider window diagnoses a persisted semantic terminal after the interaction budget expires;
 // it does not relax the 20-second success budget.
@@ -19,6 +66,9 @@ const RULE_FOLLOW_UP = process.env.RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP
   ?? '你刚才列出的第二个准备步骤具体需要哪些组件？仍然只根据同一本规则书回答并标页码。'
 const REQUIRE_FRESH_IMPORT = process.env.RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT === 'true'
 const RECOMMENDATION_ONLY = process.env.RULEPILOT_RECOMMENDATION_ONLY === 'true'
+const REQUIRE_READY_TEACHING = JOURNEY_MODE === 'ready_public'
+const TESTED_SHA = process.env.RULEPILOT_RECOMMENDATION_TESTED_SHA ?? ''
+const ACTIVE_RELEASE_SHA = process.env.RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA ?? ''
 const EXPECTED_RECOMMENDATION_TITLE_TERM = (
   process.env.RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM ?? ''
 ).normalize('NFKC').trim().toLocaleLowerCase('en-US')
@@ -79,6 +129,25 @@ type RecommendationOutcome =
 
 interface RecommendationResultGame {
   game: { bggId: number; name: string; originalName: string }
+  teachingContinuation?: {
+    teachingPlanId: string
+    sectionCount: number
+    stepCount: number
+  } | null
+}
+
+type RecommendationContinuationAvailability =
+  | 'available_for_all'
+  | 'available_for_some'
+  | 'no_ready_candidate'
+  | 'availability_unavailable'
+
+interface RecommendationContinuationResult {
+  kind: 'guide_and_rule_qa'
+  learningGoal: string
+  availability: RecommendationContinuationAvailability
+  readyCount: number
+  candidateCount: number
 }
 
 interface RecommendationSessionResponse {
@@ -95,6 +164,7 @@ interface RecommendationSessionResponse {
     webResearchCalls?: number
     publicationRecovered?: boolean
     failureBoundary?: string | null
+    continuation?: RecommendationContinuationResult | null
     games: RecommendationResultGame[]
   }
 }
@@ -109,15 +179,52 @@ type RecommendationTerminalCategory =
   | 'PERSISTED_SESSION_TIMEOUT'
   | 'PERSISTED_SESSION_READ_FAILURE'
 
-type RecommendationHarnessSafetyCategory =
-  | 'RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT'
-  | 'FULL_JOURNEY_VERIFIED_RULEBOOK_IMPORT'
+type OpeningTerminalCategory =
+  | 'GUIDANCE_RENDERED_WITHIN_BUDGET'
+  | 'GUIDANCE_RENDERED_OVER_BUDGET'
+  | 'SEMANTIC_RECOMMENDATIONS'
+  | 'UNAVAILABLE_WITH_FAILURE_BOUNDARY'
+  | 'UNAVAILABLE_WITHOUT_FAILURE_BOUNDARY'
+  | 'STILL_PROCESSING'
+  | 'READ_FAILURE'
+  | 'UNEXPECTED_TERMINAL'
 
 interface RecommendationTerminalObservation {
   category: RecommendationTerminalCategory
   session: RecommendationSessionResponse | null
   elapsedMs: number
 }
+
+interface OpeningTerminalRead {
+  session: RecommendationSessionResponse | null
+  terminal: RecommendationSessionResponse['latestResponse']
+  observedMs: number
+  readFailed: boolean
+}
+
+interface OpeningTerminalDiagnostic {
+  outcome: RecommendationOutcome | null
+  terminalCategory: OpeningTerminalCategory
+  modelCalls: number | null
+  catalogCalls: number | null
+  failureBoundary: string | null
+}
+
+type ReadyTeachingFailureCategory =
+  | 'READY_TEACHING_NOT_REQUESTED'
+  | 'READY_TEACHING_NO_CANDIDATE'
+  | 'READY_TEACHING_AVAILABILITY_UNAVAILABLE'
+  | 'READY_TEACHING_NOT_ATTACHED'
+  | 'READY_TEACHING_LINK_NOT_RENDERED'
+  | 'READY_TEACHING_LINK_TARGET_MISMATCH'
+  | 'PUBLIC_GUIDE_NOT_READABLE'
+  | 'PUBLIC_QUESTION_ROUTE_UNAVAILABLE'
+  | 'PUBLIC_ANSWER_REQUEST_FAILED'
+  | 'PUBLIC_ANSWER_NON_PUBLISHING_STATUS'
+  | 'PUBLIC_ANSWER_MISSING_CITATION'
+  | 'PUBLIC_ANSWER_INVALID_CITATION_RANGE'
+  | 'PUBLIC_ANSWER_EVIDENCE_NOT_RENDERED'
+  | 'READY_TEACHING_STARTED_IMPORT'
 
 interface ImportJob {
   id: string
@@ -163,7 +270,9 @@ interface TeachingPlanResponse {
 interface AnswerResponse {
   answer: {
     status: string
-    citations: Array<{ pageFrom: number; pageTo: number }>
+    shortVerdict: string
+    explanation: string
+    citations: Array<{ heading: string; pageFrom: number; pageTo: number }>
   }
 }
 
@@ -223,6 +332,7 @@ interface ModelConfigurationResponse {
   providers: Array<{
     id: string
     configured: boolean
+    model: string
     visionCapable: boolean
   }>
   assignments: {
@@ -274,13 +384,36 @@ interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
   stage: string
+  testedSha: string | null
+  activeReleaseSha: string | null
+  journeyMode: RecommendationJourneyMode
   recommendationOnly: boolean
+  requireFreshImport: boolean
   recommendationHarnessSafetyCategory: RecommendationHarnessSafetyCategory
   selectedBggId: number | null
   selectedGameName: string | null
   recommendationConversationId: string | null
-  openGuidanceOutcome: string | null
+  openGuidanceClientTurnId: string | null
+  openGuidanceOutcome: RecommendationOutcome | null
+  openGuidanceTerminalCategory: OpeningTerminalCategory | null
+  openGuidanceTerminalObserved: boolean
+  openGuidanceTerminalObservedMs: number | null
+  openGuidanceSloMet: boolean | null
+  openGuidanceModelCalls: number | null
+  openGuidanceCatalogCalls: number | null
+  openGuidanceFailureBoundary: string | null
+  readyTeachingRequested: boolean
+  readyTeachingAvailability: string | null
+  readyTeachingReadyCount: number
+  readyTeachingCandidateCount: number
+  renderedReadyTeachingCardCount: number
+  readyTeachingGuideOpened: boolean
+  readyTeachingQuestionsOpened: boolean
+  readyTeachingFailureCategory: ReadyTeachingFailureCategory | null
+  publicAnswerRequestSucceeded: boolean
   modelAssignments: ModelConfigurationResponse['assignments'] | null
+  recommendationModelProvider: string | null
+  recommendationModel: string | null
   visualModelVisionCapable: boolean | null
   routeStayedOnDiscover: boolean
   journeyBackdropVisible: boolean
@@ -463,6 +596,179 @@ async function waitForPersistedRecommendationTerminal(
   }
 }
 
+function publicNonNegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null
+}
+
+type PublicRecommendationFailureBoundary =
+  | 'time_budget'
+  | 'model_response'
+  | 'service_configuration'
+  | 'action_budget'
+  | 'publication_boundary'
+  | 'service_failure'
+
+const publicRecommendationFailureBoundaries = new Set<PublicRecommendationFailureBoundary>([
+  'time_budget',
+  'model_response',
+  'service_configuration',
+  'action_budget',
+  'publication_boundary',
+  'service_failure',
+])
+
+function publicFailureBoundary(value: unknown): PublicRecommendationFailureBoundary | null {
+  return typeof value === 'string'
+    && publicRecommendationFailureBoundaries.has(value as PublicRecommendationFailureBoundary)
+    ? value as PublicRecommendationFailureBoundary
+    : null
+}
+
+function publicRecommendationOutcome(value: unknown): RecommendationOutcome | null {
+  return typeof value === 'string'
+    && ['conversation', 'needs_clarification', 'recommendations', 'no_match', 'unavailable'].includes(value)
+    ? value as RecommendationOutcome
+    : null
+}
+
+function readyContinuationMatchesPublishedGames(
+  continuation: RecommendationContinuationResult,
+  games: RecommendationResultGame[],
+) {
+  if (continuation.kind !== 'guide_and_rule_qa'
+    || typeof continuation.learningGoal !== 'string'
+    || !Number.isSafeInteger(continuation.readyCount)
+    || !Number.isSafeInteger(continuation.candidateCount)
+    || continuation.readyCount < 0
+    || continuation.candidateCount < 1
+    || continuation.candidateCount !== games.length) return false
+  const readyGames = games.filter(game => game.teachingContinuation != null)
+  if (!readyGames.every(validReadyTeachingAttachment)) return false
+  const attachedReadyCount = readyGames.length
+  if (continuation.readyCount !== attachedReadyCount) return false
+  if (continuation.availability === 'available_for_all') {
+    return continuation.readyCount === continuation.candidateCount
+  }
+  if (continuation.availability === 'available_for_some') {
+    return continuation.readyCount > 0 && continuation.readyCount < continuation.candidateCount
+  }
+  if (continuation.availability === 'no_ready_candidate'
+    || continuation.availability === 'availability_unavailable') {
+    return continuation.readyCount === 0
+  }
+  return false
+}
+
+function validReadyTeachingAttachment(game: RecommendationResultGame) {
+  const attachment = game.teachingContinuation
+  return attachment != null
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(attachment.teachingPlanId)
+    && Number.isSafeInteger(attachment.sectionCount)
+    && attachment.sectionCount > 0
+    && Number.isSafeInteger(attachment.stepCount)
+    && attachment.stepCount > 0
+}
+
+function diagnoseOpeningTerminal(
+  read: OpeningTerminalRead,
+  renderedWithinBudget: boolean,
+): OpeningTerminalDiagnostic {
+  const terminal = read.terminal
+  if (!terminal) {
+    return {
+      outcome: null,
+      terminalCategory: !read.readFailed && read.session?.processing === true
+        ? 'STILL_PROCESSING'
+        : 'READ_FAILURE',
+      modelCalls: null,
+      catalogCalls: null,
+      failureBoundary: null,
+    }
+  }
+  const outcome = publicRecommendationOutcome(terminal.outcome)
+  const modelCalls = publicNonNegativeInteger(terminal.modelCalls)
+  const catalogCalls = publicNonNegativeInteger(terminal.catalogCalls)
+  const failureBoundary = publicFailureBoundary(terminal.failureBoundary)
+  if (outcome === 'recommendations') {
+    return { outcome, terminalCategory: 'SEMANTIC_RECOMMENDATIONS', modelCalls, catalogCalls, failureBoundary }
+  }
+  if (outcome === 'unavailable') {
+    return {
+      outcome,
+      terminalCategory: failureBoundary
+        ? 'UNAVAILABLE_WITH_FAILURE_BOUNDARY'
+        : 'UNAVAILABLE_WITHOUT_FAILURE_BOUNDARY',
+      modelCalls,
+      catalogCalls,
+      failureBoundary,
+    }
+  }
+  if (outcome === 'conversation' || outcome === 'needs_clarification') {
+    return {
+      outcome,
+      terminalCategory: renderedWithinBudget
+        ? 'GUIDANCE_RENDERED_WITHIN_BUDGET'
+        : 'GUIDANCE_RENDERED_OVER_BUDGET',
+      modelCalls,
+      catalogCalls,
+      failureBoundary,
+    }
+  }
+  return { outcome, terminalCategory: 'UNEXPECTED_TERMINAL', modelCalls, catalogCalls, failureBoundary }
+}
+
+async function readOpeningPersistedTerminal(
+  request: APIRequestContext,
+  conversationId: string,
+  baselineRevision: number,
+  expectedClientTurnId: string,
+  startedAt: number,
+  deadlineAt: number,
+): Promise<OpeningTerminalRead> {
+  let latestSession: RecommendationSessionResponse | null = null
+  let observedReadableSession = false
+  while (Date.now() < deadlineAt) {
+    try {
+      const response = await request.get(
+        `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(conversationId)}`,
+        { timeout: Math.max(1, Math.min(5_000, deadlineAt - Date.now())) },
+      )
+      if (response.ok()) {
+        const session = await response.json() as RecommendationSessionResponse
+        if (session.conversationId !== conversationId) {
+          return { session: null, terminal: null, observedMs: elapsed(startedAt), readFailed: true }
+        }
+        observedReadableSession = true
+        latestSession = session
+        const terminal = session.latestResponse
+        if (!session.processing
+          && session.revision > baselineRevision
+          && terminal?.clientTurnId === expectedClientTurnId) {
+          return { session, terminal, observedMs: elapsed(startedAt), readFailed: false }
+        }
+        if (!session.processing
+          && session.revision > baselineRevision
+          && terminal?.clientTurnId
+          && terminal.clientTurnId !== expectedClientTurnId) {
+          return { session, terminal: null, observedMs: elapsed(startedAt), readFailed: true }
+        }
+      }
+    } catch {
+      // A later readable terminal or processing snapshot remains authoritative.
+    }
+    const remainingMs = deadlineAt - Date.now()
+    if (remainingMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(250, remainingMs)))
+  }
+  return {
+    session: latestSession,
+    terminal: null,
+    observedMs: elapsed(startedAt),
+    // A final readable processing=true snapshot is more useful than an earlier transient GET failure.
+    readFailed: !observedReadableSession || latestSession?.processing !== true,
+  }
+}
+
 function positiveDistinctBggIds(games: RecommendationResultGame[]) {
   const ids = games.map(entry => entry.game.bggId)
   return ids.length >= 2
@@ -489,7 +795,7 @@ function persistedDuration(from: string | null, to: string | null) {
 
 function configuredProductionRole(
   configuration: ModelConfigurationResponse,
-  role: 'teaching' | 'visual' | 'answer' | 'recommendation',
+  role: ProductionModelRole,
 ) {
   const assignment = configuration.assignments[role]
   expect(assignment, `Production ${role} role has no model assignment`).not.toBe('fake')
@@ -903,6 +1209,116 @@ async function opaqueSurface(locator: Locator) {
     && appearance.height > 0
 }
 
+function validPublicAnswerCitations(citations: AnswerResponse['answer']['citations']) {
+  return citations.length > 0 && citations.every(citation =>
+    typeof citation.heading === 'string'
+    && citation.heading.trim().length > 0
+    && Number.isSafeInteger(citation.pageFrom)
+    && Number.isSafeInteger(citation.pageTo)
+    && citation.pageFrom >= 1
+    && citation.pageTo >= citation.pageFrom)
+}
+
+async function expectReadableCitationImage(
+  request: APIRequestContext,
+  href: string,
+  description: string,
+) {
+  const response = await request.get(href, { timeout: 60_000 })
+  expect(response.ok(), `${description} returned HTTP ${response.status()}`).toBe(true)
+  expect(response.headers()['content-type'] ?? '', `${description} did not return an image`)
+    .toMatch(/^image\//i)
+  expect((await response.body()).byteLength, `${description} returned an empty image`).toBeGreaterThan(0)
+}
+
+function authenticatedCitationImagePath(
+  documentVersionId: string,
+  citation: AnswerResponse['answer']['citations'][number],
+) {
+  return `/api/v1/document-versions/${encodeURIComponent(documentVersionId)}/pages/${citation.pageFrom}/image`
+}
+
+async function expectRenderedPublicAnswerEvidence(
+  request: APIRequestContext,
+  article: Locator,
+  question: string,
+  planId: string,
+  citations: AnswerResponse['answer']['citations'],
+) {
+  await expect(article).toBeVisible({ timeout: 60_000 })
+  await expect(article.locator('xpath=preceding-sibling::*[1]')).toHaveText(question)
+  const citationLinks = article.locator(
+    `a[aria-label][href^="/api/public/lessons/${encodeURIComponent(planId)}/pages/"]`,
+  )
+  await expect(citationLinks).toHaveCount(citations.length)
+  for (const [index, citation] of citations.entries()) {
+    const link = citationLinks.nth(index)
+    const expectedHref = `/api/public/lessons/${encodeURIComponent(planId)}/pages/${citation.pageFrom}/image`
+    await expect(link).toHaveAttribute('href', expectedHref)
+    const renderedHref = await link.getAttribute('href')
+    expect(renderedHref, `Public citation ${index + 1} did not expose an href`).not.toBeNull()
+    const pageLabel = citation.pageFrom === citation.pageTo
+      ? String(citation.pageFrom)
+      : `${citation.pageFrom}–${citation.pageTo}`
+    expect(
+      await link.getAttribute('aria-label'),
+      `Citation ${index + 1} did not render its typed page range`,
+    ).toContain(pageLabel)
+    await expectReadableCitationImage(request, renderedHref!, `Public citation ${index + 1}`)
+  }
+}
+
+async function renderedRecommendationAnswerTurnCount(answerWorkspace: Locator) {
+  const historicalTurns = answerWorkspace.locator('ol[aria-label="本次答疑记录"] > li')
+  const currentTurn = answerWorkspace.locator('article[aria-live="polite"]')
+  return await historicalTurns.count() + await currentTurn.count()
+}
+
+function authenticatedCitationPageLabel(citation: AnswerResponse['answer']['citations'][number]) {
+  return citation.pageFrom === citation.pageTo
+    ? `第 ${citation.pageFrom} 页`
+    : `第 ${citation.pageFrom}–${citation.pageTo} 页`
+}
+
+async function expectRenderedRecommendationAnswerEvidence(
+  request: APIRequestContext,
+  answerWorkspace: Locator,
+  question: string,
+  documentVersionId: string,
+  answer: AnswerResponse['answer'],
+) {
+  expect(answer.shortVerdict.trim(), 'The persisted answer had no player-visible verdict').not.toBe('')
+  expect(validPublicAnswerCitations(answer.citations), 'The persisted answer citations were invalid').toBe(true)
+  const article = answerWorkspace.locator('article[aria-live="polite"]')
+  await expect(article).toBeVisible({ timeout: 60_000 })
+  await expect(article.getByText(question, { exact: true })).toBeVisible()
+  await expect(article.getByText(answer.shortVerdict, { exact: true })).toBeVisible()
+  if (answer.explanation.trim()) await expect(article).toContainText(answer.explanation.trim())
+
+  const evidence = article.locator('section[aria-labelledby="lesson-answer-evidence-title"]')
+  await expect(evidence).toBeVisible()
+  const primaryCitation = evidence.locator(':scope > article')
+  const additionalCitations = evidence.locator(':scope > details ol > li')
+  await expect(primaryCitation).toHaveCount(1)
+  await expect(additionalCitations).toHaveCount(answer.citations.length - 1)
+  const additionalCitationDetails = evidence.locator(':scope > details')
+  if (answer.citations.length > 1 && await additionalCitationDetails.getAttribute('open') === null) {
+    await additionalCitationDetails.locator(':scope > summary').click()
+  }
+
+  for (const [index, citation] of answer.citations.entries()) {
+    const item = index === 0 ? primaryCitation : additionalCitations.nth(index - 1)
+    await expect(item).toBeVisible()
+    await expect(item.getByText(citation.heading, { exact: true })).toBeVisible()
+    await expect(item.getByText(authenticatedCitationPageLabel(citation), { exact: true })).toBeVisible()
+    await expectReadableCitationImage(
+      request,
+      authenticatedCitationImagePath(documentVersionId, citation),
+      `Authenticated citation ${index + 1}`,
+    )
+  }
+}
+
 function requiresPersistedPublicationActivity(
   report: Pick<ProductionJourneyReport, 'importReused' | 'teachingEvidenceRefreshRequested'>,
 ) {
@@ -963,6 +1379,33 @@ function chooseRecommendationRecovery(
   }
   return { outcome: 'SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE', existingJourney: null, candidate: null }
 }
+
+test('production journey mode makes import safety explicit and rejects contradictory preflight input', () => {
+  expect(parseRecommendationJourneyMode(undefined)).toBe('ready_public')
+  expect(parseRecommendationJourneyMode('ready_public')).toBe('ready_public')
+  expect(parseRecommendationJourneyMode('verified_import')).toBe('verified_import')
+  expect(() => parseRecommendationJourneyMode('fresh_import')).toThrow(
+    'Unsupported production recommendation journey mode: fresh_import',
+  )
+
+  expect(recommendationHarnessSafetyCategory('ready_public', false))
+    .toBe('READY_PUBLIC_TEACHING_NO_IMPORT')
+  expect(recommendationHarnessSafetyCategory('verified_import', false))
+    .toBe('VERIFIED_RULEBOOK_JOURNEY_IMPORT_OR_REUSE')
+  expect(recommendationHarnessSafetyCategory('verified_import', true))
+    .toBe('RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT')
+  expect(() => assertImportRequirementCompatible('ready_public', false, true)).toThrow(
+    'Fresh import cannot be required in ready_public journey mode',
+  )
+  expect(() => assertImportRequirementCompatible('ready_public', true, true)).not.toThrow()
+  expect(() => assertImportRequirementCompatible('verified_import', false, true)).not.toThrow()
+  expect(requiredProductionModelRoles('ready_public', false))
+    .toEqual(['recommendation', 'answer'])
+  expect(requiredProductionModelRoles('verified_import', false))
+    .toEqual(['recommendation', 'teaching', 'visual', 'answer'])
+  expect(requiredProductionModelRoles('ready_public', true))
+    .toEqual(['recommendation'])
+})
 
 test('requires current publication telemetry for fresh imports and stale-evidence refreshes', () => {
   expect(requiresPersistedPublicationActivity({
@@ -1034,6 +1477,155 @@ test('recommendation-only acceptance distinguishes semantic terminals from an un
   expect(classifyRecommendationTerminal(result('recommendations', 1), 1, clientTurnId, 4_000)).toBeNull()
   expect(classifyRecommendationTerminal(result('recommendations'), 1, crypto.randomUUID(), 4_000))
     .toBeNull()
+})
+
+test('opening diagnostics distinguish budget, semantic, unavailable, processing, and read boundaries', () => {
+  const clientTurnId = 'f5da76a6-d94e-4a43-8dca-8336b5ba9c21'
+  const terminal = (outcome: RecommendationOutcome, failureBoundary: string | null = null): OpeningTerminalRead => ({
+    session: {
+      conversationId: '3d6fef52-521b-47ea-a5d4-ea980159c820',
+      revision: 2,
+      processing: false,
+      latestResponse: {
+        clientTurnId,
+        outcome,
+        assistantMessage: '',
+        modelCalls: 1,
+        catalogCalls: 0,
+        failureBoundary,
+        games: [],
+      },
+    },
+    terminal: {
+      clientTurnId,
+      outcome,
+      assistantMessage: '',
+      modelCalls: 1,
+      catalogCalls: 0,
+      failureBoundary,
+      games: [],
+    },
+    observedMs: 1_000,
+    readFailed: false,
+  })
+
+  expect(diagnoseOpeningTerminal(terminal('conversation'), true)).toMatchObject({
+    outcome: 'conversation', terminalCategory: 'GUIDANCE_RENDERED_WITHIN_BUDGET',
+  })
+  expect(diagnoseOpeningTerminal(terminal('conversation'), false)).toMatchObject({
+    terminalCategory: 'GUIDANCE_RENDERED_OVER_BUDGET',
+  })
+  expect(diagnoseOpeningTerminal(terminal('recommendations'), true)).toMatchObject({
+    outcome: 'recommendations', terminalCategory: 'SEMANTIC_RECOMMENDATIONS',
+  })
+  expect(diagnoseOpeningTerminal(terminal('unavailable', 'model_response'), true)).toMatchObject({
+    terminalCategory: 'UNAVAILABLE_WITH_FAILURE_BOUNDARY',
+    modelCalls: 1,
+    catalogCalls: 0,
+    failureBoundary: 'model_response',
+  })
+  expect(publicFailureBoundary('time_budget')).toBe('time_budget')
+  expect(publicFailureBoundary('service_configuration')).toBe('service_configuration')
+  expect(publicFailureBoundary('MODEL_CALL_FAILED')).toBeNull()
+  expect(publicFailureBoundary('unknown_boundary')).toBeNull()
+  expect(diagnoseOpeningTerminal({
+    session: { ...terminal('conversation').session!, processing: true },
+    terminal: null,
+    observedMs: 20_000,
+    readFailed: false,
+  }, false)).toMatchObject({ terminalCategory: 'STILL_PROCESSING' })
+  expect(diagnoseOpeningTerminal({
+    session: null, terminal: null, observedMs: 20_000, readFailed: true,
+  }, false)).toMatchObject({ terminalCategory: 'READ_FAILURE' })
+})
+
+test('ready continuation availability exactly matches its published typed card attachments', () => {
+  const result = (bggId: number, ready = false): RecommendationResultGame => ({
+    game: { bggId, name: `Game ${bggId}`, originalName: `Game ${bggId}` },
+    teachingContinuation: ready
+      ? { teachingPlanId: crypto.randomUUID(), sectionCount: 3, stepCount: 9 }
+      : null,
+  })
+  const continuation = (
+    availability: RecommendationContinuationAvailability,
+    readyCount: number,
+    candidateCount = 2,
+  ): RecommendationContinuationResult => ({
+    kind: 'guide_and_rule_qa',
+    learningGoal: 'Explain setup, then continue with cited Q&A.',
+    availability,
+    readyCount,
+    candidateCount,
+  })
+
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('available_for_all', 2),
+    [result(11, true), result(22, true)],
+  )).toBe(true)
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('available_for_some', 1),
+    [result(11, true), result(22)],
+  )).toBe(true)
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('no_ready_candidate', 0),
+    [result(11), result(22)],
+  )).toBe(true)
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('availability_unavailable', 0),
+    [result(11), result(22)],
+  )).toBe(true)
+
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('available_for_all', 1),
+    [result(11, true), result(22)],
+  )).toBe(false)
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('available_for_some', 2),
+    [result(11, true), result(22, true)],
+  )).toBe(false)
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('no_ready_candidate', 0, 3),
+    [result(11), result(22)],
+  )).toBe(false)
+  expect(readyContinuationMatchesPublishedGames(
+    { ...continuation('available_for_some', 1), learningGoal: '  ' },
+    [result(11, true), result(22)],
+  )).toBe(true)
+  expect(readyContinuationMatchesPublishedGames(
+    { ...continuation('available_for_some', 1), learningGoal: null as unknown as string },
+    [result(11, true), result(22)],
+  )).toBe(false)
+  expect(readyContinuationMatchesPublishedGames(
+    { ...continuation('available_for_some', 1), learningGoal: 42 as unknown as string },
+    [result(11, true), result(22)],
+  )).toBe(false)
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('available_for_some', 1),
+    [{
+      ...result(11, true),
+      teachingContinuation: { teachingPlanId: 'not-a-plan', sectionCount: 3, stepCount: 9 },
+    }, result(22)],
+  )).toBe(false)
+  expect(readyContinuationMatchesPublishedGames(
+    continuation('available_for_some', 1),
+    [{
+      ...result(11, true),
+      teachingContinuation: { teachingPlanId: crypto.randomUUID(), sectionCount: 0, stepCount: 9 },
+    }, result(22)],
+  )).toBe(false)
+  expect(readyContinuationMatchesPublishedGames(
+    {
+      ...continuation('no_ready_candidate', 0),
+      availability: 'unknown_availability' as RecommendationContinuationAvailability,
+    },
+    [result(11), result(22)],
+  )).toBe(false)
+})
+
+test('authenticated citation image paths stay bound to the typed document version and first cited page', () => {
+  expect(authenticatedCitationImagePath('version / one', {
+    heading: 'Setup', pageFrom: 4, pageTo: 6,
+  })).toBe('/api/v1/document-versions/version%20%2F%20one/pages/4/image')
 })
 
 test('recommendation-only cards require at least two positive distinct typed BGG identities', () => {
@@ -1150,9 +1742,15 @@ test('recommendation becomes one readable, taught, and answerable production jou
   if (!username || !password || !reportFile) {
     throw new Error('Production recommendation credentials and report path are required')
   }
+  if (!/^[0-9a-f]{40}$/.test(TESTED_SHA)
+    || !/^[0-9a-f]{40}$/.test(ACTIVE_RELEASE_SHA)
+    || TESTED_SHA !== ACTIVE_RELEASE_SHA) {
+    throw new Error('Production recommendation verification requires one exact active tested SHA')
+  }
   if (RECOMMENDATION_ONLY && EXPECTED_RECOMMENDATION_TITLE_TERM === '') {
     throw new Error('Recommendation-only production verification requires an expected title term')
   }
+  assertImportRequirementCompatible(JOURNEY_MODE, RECOMMENDATION_ONLY, REQUIRE_FRESH_IMPORT)
 
   const pageErrors: Error[] = []
   let guidesPage: Page | null = null
@@ -1177,13 +1775,27 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
   const report: ProductionJourneyReport = {
     generatedAt: new Date().toISOString(), completed: false, stage: 'login',
+    testedSha: TESTED_SHA, activeReleaseSha: ACTIVE_RELEASE_SHA,
+    journeyMode: JOURNEY_MODE,
     recommendationOnly: RECOMMENDATION_ONLY,
-    recommendationHarnessSafetyCategory: RECOMMENDATION_ONLY
-      ? 'RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT'
-      : 'FULL_JOURNEY_VERIFIED_RULEBOOK_IMPORT',
+    requireFreshImport: REQUIRE_FRESH_IMPORT,
+    recommendationHarnessSafetyCategory: recommendationHarnessSafetyCategory(
+      JOURNEY_MODE,
+      RECOMMENDATION_ONLY,
+    ),
     selectedBggId: null, selectedGameName: null,
-    recommendationConversationId: null, openGuidanceOutcome: null,
-    modelAssignments: null, visualModelVisionCapable: null,
+    recommendationConversationId: null, openGuidanceClientTurnId: null,
+    openGuidanceOutcome: null, openGuidanceTerminalCategory: null,
+    openGuidanceTerminalObserved: false, openGuidanceTerminalObservedMs: null,
+    openGuidanceSloMet: null, openGuidanceModelCalls: null,
+    openGuidanceCatalogCalls: null, openGuidanceFailureBoundary: null,
+    readyTeachingRequested: false, readyTeachingAvailability: null,
+    readyTeachingReadyCount: 0, readyTeachingCandidateCount: 0,
+    renderedReadyTeachingCardCount: 0,
+    readyTeachingGuideOpened: false, readyTeachingQuestionsOpened: false,
+    readyTeachingFailureCategory: null, publicAnswerRequestSucceeded: false,
+    modelAssignments: null, recommendationModelProvider: null, recommendationModel: null,
+    visualModelVisionCapable: null,
     routeStayedOnDiscover: false, journeyBackdropVisible: false, journeySurfaceOpaque: false,
     lessonBackdropVisible: false, lessonSurfaceOpaque: false,
     confirmedMilestonesAtSourceReview: 0, confirmedMilestonesFinal: 0,
@@ -1270,16 +1882,22 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(modelConfigurationResponse.ok(),
       `Model configuration returned HTTP ${modelConfigurationResponse.status()}`).toBe(true)
     const modelConfiguration = await modelConfigurationResponse.json() as ModelConfigurationResponse
-    configuredProductionRole(modelConfiguration, 'recommendation')
-    if (!RECOMMENDATION_ONLY) {
-      configuredProductionRole(modelConfiguration, 'teaching')
-      const visualProvider = configuredProductionRole(modelConfiguration, 'visual')
-      configuredProductionRole(modelConfiguration, 'answer')
-      expect(visualProvider.visionCapable,
-        `Production visual provider '${visualProvider.id}' cannot inspect rulebook page images`).toBe(true)
-      report.visualModelVisionCapable = visualProvider.visionCapable
+    for (const role of requiredProductionModelRoles(JOURNEY_MODE, RECOMMENDATION_ONLY)) {
+      const provider = configuredProductionRole(modelConfiguration, role)
+      if (role === 'visual') {
+        expect(provider.visionCapable,
+          `Production visual provider '${provider.id}' cannot inspect rulebook page images`).toBe(true)
+        report.visualModelVisionCapable = provider.visionCapable
+      }
     }
+    const recommendationProvider = configuredProductionRole(modelConfiguration, 'recommendation')
+    expect(recommendationProvider.id,
+      'Production recommendation role must use the measured low-latency provider').toBe('deepseek')
+    expect(recommendationProvider.model,
+      'Production recommendation role must use the paid-canary-verified model').toBe('deepseek-v4-flash')
     report.modelAssignments = modelConfiguration.assignments
+    report.recommendationModelProvider = recommendationProvider.id
+    report.recommendationModel = recommendationProvider.model
     await retainReport(reportFile, report)
     report.stage = 'recommendation'
     await page.goto('/discover')
@@ -1303,24 +1921,84 @@ test('recommendation becomes one readable, taught, and answerable production jou
     if (!RECOMMENDATION_ONLY) {
       const guidanceTurnCount = await page.getByTestId('assistant-conversation-turn').count()
       const guidanceStartedAt = performance.now()
+      const guidanceTerminalDeadlineAt = Date.now() + MAX_OPEN_TERMINAL_DIAGNOSTIC_MS
+      const guidanceRequestPromise = page.waitForRequest(request => {
+        const url = new URL(request.url())
+        return url.pathname === '/api/v1/bgg/recommendation-agent/stream'
+          && request.method() === 'POST'
+      }, { timeout: MAX_OPEN_GUIDANCE_MS })
       await composer.fill(RECOMMENDATION_OPENING_PROMPT)
       await page.getByRole('button', { name: '发送', exact: true }).click()
-      await expect.poll(() => page.getByTestId('assistant-conversation-turn').count(), {
+      const guidanceDomObservation = expect.poll(() => page.getByTestId('assistant-conversation-turn').count(), {
         timeout: MAX_OPEN_GUIDANCE_MS,
         message: 'The unknown-target opening did not produce a natural guidance turn',
       }).toBeGreaterThan(guidanceTurnCount)
-      report.openGuidanceMs = elapsed(guidanceStartedAt)
-      expect(report.openGuidanceMs, 'Open recommendation guidance exceeded its interaction budget')
-        .toBeLessThanOrEqual(MAX_OPEN_GUIDANCE_MS)
+        .then(() => ({ visible: true, observedMs: elapsed(guidanceStartedAt) }), () => ({
+          visible: false,
+          observedMs: elapsed(guidanceStartedAt),
+        }))
+      const guidanceRequest = await guidanceRequestPromise.catch(() => null)
+      const guidanceRequestBody = guidanceRequest?.postDataJSON() as {
+        conversationId?: unknown
+        revision?: unknown
+        clientTurnId?: unknown
+      } | null
+      const guidanceClientTurnId = typeof guidanceRequestBody?.clientTurnId === 'string'
+        ? guidanceRequestBody.clientTurnId
+        : null
+      const guidanceExpectedRevision = Number.isSafeInteger(guidanceRequestBody?.revision)
+        ? Number(guidanceRequestBody?.revision)
+        : null
+      report.openGuidanceClientTurnId = guidanceClientTurnId
+      const guidanceIdentityValid = guidanceRequestBody?.conversationId === createdConversation.conversationId
+        && guidanceExpectedRevision === createdConversation.revision
+        && guidanceClientTurnId !== null
+      const guidanceTerminalPromise = guidanceIdentityValid
+        ? readOpeningPersistedTerminal(
+            page.request,
+            createdConversation.conversationId,
+            guidanceExpectedRevision!,
+            guidanceClientTurnId!,
+            guidanceStartedAt,
+            guidanceTerminalDeadlineAt,
+          )
+        : Promise.resolve({
+            session: null,
+            terminal: null,
+            observedMs: elapsed(guidanceStartedAt),
+            readFailed: true,
+          } satisfies OpeningTerminalRead)
+      const [guidanceDom, guidanceTerminal] = await Promise.all([
+        guidanceDomObservation,
+        guidanceTerminalPromise,
+      ])
+      report.openGuidanceMs = guidanceDom.observedMs
+      report.openGuidanceSloMet = guidanceDom.visible && guidanceDom.observedMs <= MAX_OPEN_GUIDANCE_MS
+      report.openGuidanceTerminalObserved = guidanceTerminal.terminal !== null
+      report.openGuidanceTerminalObservedMs = guidanceTerminal.terminal === null
+        ? null
+        : guidanceTerminal.observedMs
+      const guidanceDiagnostic = diagnoseOpeningTerminal(
+        guidanceTerminal,
+        report.openGuidanceSloMet === true,
+      )
+      report.openGuidanceOutcome = guidanceDiagnostic.outcome
+      report.openGuidanceTerminalCategory = guidanceDiagnostic.terminalCategory
+      report.openGuidanceModelCalls = guidanceDiagnostic.modelCalls
+      report.openGuidanceCatalogCalls = guidanceDiagnostic.catalogCalls
+      report.openGuidanceFailureBoundary = guidanceDiagnostic.failureBoundary
+      await retainReport(reportFile, report)
+      expect(guidanceIdentityValid,
+        'Opening recommendation request did not preserve its conversation, revision, and client turn identity').toBe(true)
+      expect(report.openGuidanceSloMet, 'Open recommendation guidance exceeded its interaction budget').toBe(true)
+      expect(guidanceDiagnostic.terminalCategory,
+        'The unknown-target opening did not finish as useful guidance')
+        .toBe('GUIDANCE_RENDERED_WITHIN_BUDGET')
       await expect(page.getByTestId('assistant-conversation-turn').last()).toContainText(/\S/)
       await expect(recommendationCards).toHaveCount(0)
-      const guidanceSessionResponse = await page.request.get(
-        `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(createdConversation.conversationId)}`,
-      )
-      expect(guidanceSessionResponse.ok(),
-        `Recommendation session returned HTTP ${guidanceSessionResponse.status()}`).toBe(true)
-      const guidanceSession = await guidanceSessionResponse.json() as RecommendationSessionResponse
-      report.openGuidanceOutcome = guidanceSession.latestResponse?.outcome ?? null
+      const guidanceSession = guidanceTerminal.session
+      expect(guidanceSession, 'Opening recommendation terminal was not readable from the persisted session').not.toBeNull()
+      if (!guidanceSession) throw new Error('Opening recommendation terminal was not readable from the persisted session')
       expect(['conversation', 'needs_clarification'],
         'The unknown-target opening did not finish as useful guidance').toContain(report.openGuidanceOutcome)
       selectionBaselineRevision = guidanceSession.revision
@@ -1477,6 +2155,366 @@ test('recommendation becomes one readable, taught, and answerable production jou
       'The recommendation Agent should refine the unknown target into three choices within the interaction budget',
     ).toBeLessThanOrEqual(MAX_SELECTION_RECOMMENDATION_MS)
     await composer.fill(PRESERVED_DRAFT)
+
+    if (REQUIRE_READY_TEACHING) {
+    const selectionTerminal = await waitForPersistedRecommendationTerminal(
+      page.request,
+      createdConversation.conversationId,
+      selectionBaselineRevision,
+      selectionClientTurnId as string,
+      persistedTerminalStartedAt,
+    )
+    const selectionResult = selectionTerminal.session?.latestResponse ?? null
+    report.recommendationOutcome = selectionResult?.outcome ?? report.recommendationOutcome
+    report.recommendationPublishedGames = selectionResult?.games.map(entry => ({
+      bggId: entry.game.bggId,
+      name: entry.game.name,
+      originalName: entry.game.originalName,
+    })) ?? []
+    report.recommendationCompletedWork = selectionResult?.completedWork ?? []
+    report.recommendationModelCalls = publicNonNegativeInteger(selectionResult?.modelCalls)
+    report.recommendationCatalogCalls = publicNonNegativeInteger(selectionResult?.catalogCalls)
+    report.recommendationWebResearchCalls = publicNonNegativeInteger(selectionResult?.webResearchCalls)
+    report.recommendationPublicationRecovered = typeof selectionResult?.publicationRecovered === 'boolean'
+      ? selectionResult.publicationRecovered
+      : null
+    report.recommendationFailureBoundary = publicFailureBoundary(selectionResult?.failureBoundary)
+    if (selectionResult?.outcome !== 'recommendations') {
+      throw new Error(`The persisted selection terminal was ${selectionTerminal.category}, not recommendations`)
+    }
+
+    const renderedSelectionBggIds = await recommendationCards.evaluateAll(cards => cards.map(card =>
+      Number(card.getAttribute('data-bgg-id'))))
+    const persistedSelectionBggIds = selectionResult.games.map(entry => entry.game.bggId)
+    if (!positiveDistinctBggIds(selectionResult.games)
+      || renderedSelectionBggIds.length !== persistedSelectionBggIds.length
+      || renderedSelectionBggIds.some(id => !Number.isSafeInteger(id) || id < 1)
+      || new Set(renderedSelectionBggIds).size !== renderedSelectionBggIds.length
+      || [...renderedSelectionBggIds].sort((left, right) => left - right)
+        .some((id, index) => id !== [...persistedSelectionBggIds].sort((left, right) => left - right)[index])) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_NOT_ATTACHED'
+      throw new Error('READY_TEACHING_NOT_ATTACHED: rendered and persisted BGG card identities diverged')
+    }
+
+    const typedContinuation = selectionResult.continuation ?? null
+    report.readyTeachingRequested = typedContinuation?.kind === 'guide_and_rule_qa'
+    report.readyTeachingAvailability = typedContinuation?.availability ?? null
+    report.readyTeachingReadyCount = typedContinuation?.readyCount ?? 0
+    report.readyTeachingCandidateCount = typedContinuation?.candidateCount ?? 0
+    if (!typedContinuation || !report.readyTeachingRequested) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_NOT_REQUESTED'
+      throw new Error('READY_TEACHING_NOT_REQUESTED: the explicit guide-and-Q&A request was not preserved')
+    }
+    if (!readyContinuationMatchesPublishedGames(typedContinuation, selectionResult.games)) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_NOT_ATTACHED'
+      throw new Error(
+        `READY_TEACHING_NOT_ATTACHED: availability=${typedContinuation.availability}, ready=${typedContinuation.readyCount}, candidates=${typedContinuation.candidateCount}, games=${selectionResult.games.length}`,
+      )
+    }
+    if (typedContinuation.availability === 'no_ready_candidate') {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_NO_CANDIDATE'
+      throw new Error(
+        'READY_TEACHING_NO_CANDIDATE: no verified public guide matched the recommendation slate',
+      )
+    }
+    if (typedContinuation.availability === 'availability_unavailable') {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_AVAILABILITY_UNAVAILABLE'
+      throw new Error(
+        'READY_TEACHING_AVAILABILITY_UNAVAILABLE: public-guide availability could not be determined',
+      )
+    }
+
+    const readyGames = selectionResult.games.filter(entry => entry.teachingContinuation != null)
+    if (readyGames.length === 0 || readyGames.length !== typedContinuation.readyCount) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_NOT_ATTACHED'
+      throw new Error(
+        `READY_TEACHING_NOT_ATTACHED: terminal declared ${typedContinuation.readyCount} ready cards but attached ${readyGames.length}`,
+      )
+    }
+    const renderedReadyTeaching = page.getByTestId('open-ready-teaching')
+    report.renderedReadyTeachingCardCount = await renderedReadyTeaching.count()
+    if (report.renderedReadyTeachingCardCount !== readyGames.length) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_LINK_NOT_RENDERED'
+      throw new Error(
+        `READY_TEACHING_LINK_NOT_RENDERED: persisted ${readyGames.length}, rendered ${report.renderedReadyTeachingCardCount}`,
+      )
+    }
+    const renderedReadyBggIds = await renderedReadyTeaching.evaluateAll(links => links.map(link =>
+      Number(link.closest('[data-testid="recommendation-game-card"]')?.getAttribute('data-bgg-id'))))
+    const persistedReadyBggIds = readyGames.map(entry => entry.game.bggId)
+    if (renderedReadyBggIds.some(id => !Number.isSafeInteger(id) || id < 1)
+      || new Set(renderedReadyBggIds).size !== renderedReadyBggIds.length
+      || [...renderedReadyBggIds].sort((left, right) => left - right)
+        .some((id, index) => id !== [...persistedReadyBggIds].sort((left, right) => left - right)[index])) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_LINK_NOT_RENDERED'
+      throw new Error('READY_TEACHING_LINK_NOT_RENDERED: rendered and persisted ready BGG identities diverged')
+    }
+
+    report.stage = 'ready-public-guides'
+    report.readyTeachingFailureCategory = 'PUBLIC_GUIDE_NOT_READABLE'
+    for (const [index, candidate] of readyGames.entries()) {
+      const candidateBggId = candidate.game.bggId
+      const candidatePlanId = candidate.teachingContinuation!.teachingPlanId
+      const candidateGuidePath = `/read/${encodeURIComponent(candidatePlanId)}`
+      const candidateCard = page.locator(
+        `[data-testid="recommendation-game-card"][data-bgg-id="${candidateBggId}"]`,
+      )
+      const candidateLink = candidateCard.getByTestId('open-ready-teaching')
+      await expect(candidateLink,
+        `Ready card ${index + 1} did not render exactly one typed public-guide link`).toHaveCount(1)
+      const candidateHref = await candidateLink.getAttribute('href')
+      if (candidateHref !== candidateGuidePath) {
+        report.readyTeachingFailureCategory = 'READY_TEACHING_LINK_TARGET_MISMATCH'
+        throw new Error(
+          `READY_TEACHING_LINK_TARGET_MISMATCH: ready card ${index + 1} did not target its typed plan`,
+        )
+      }
+
+      const verificationPage = await page.context().newPage()
+      verificationPage.on('pageerror', error => pageErrors.push(error))
+      try {
+        const navigation = await verificationPage.goto(candidateGuidePath, {
+          waitUntil: 'domcontentloaded',
+          timeout: 60_000,
+        })
+        expect(navigation?.ok(),
+          `Ready card ${index + 1} public guide returned HTTP ${navigation?.status() ?? 'no response'}`)
+          .toBe(true)
+        const candidateGuide = verificationPage.getByTestId('public-lesson-reader')
+        await expect(candidateGuide).toBeVisible({ timeout: 60_000 })
+        const candidateIdentity = candidateGuide.locator('a[href^="/discover/"]')
+        await expect(candidateIdentity,
+          `Ready card ${index + 1} did not expose exactly one typed BGG identity`).toHaveCount(1)
+        await expect(candidateIdentity,
+          `Ready card ${index + 1} public guide belongs to another BGG game`)
+          .toHaveAttribute('href', `/discover/${candidateBggId}`)
+        const candidateSections = candidateGuide.locator('section[id^="public-chapter-"]')
+        await expect(candidateSections,
+          `Ready card ${index + 1} did not render its typed chapter count`)
+          .toHaveCount(candidate.teachingContinuation!.sectionCount)
+        expect(await candidateGuide.locator(
+          `a[href^="/api/public/lessons/${encodeURIComponent(candidatePlanId)}/pages/"]`,
+        ).count(), `Ready card ${index + 1} had no readable cited chapter`).toBeGreaterThan(0)
+      } finally {
+        await verificationPage.close()
+      }
+    }
+    report.readyTeachingFailureCategory = null
+
+    const readyGame = readyGames[0]!
+    const readyBggId = readyGame.game.bggId
+    const readyPlanId = readyGame.teachingContinuation!.teachingPlanId
+    if (!Number.isSafeInteger(readyBggId) || readyBggId < 1
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(readyPlanId)) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_NOT_ATTACHED'
+      throw new Error('READY_TEACHING_NOT_ATTACHED: the ready card identity is invalid')
+    }
+    const readyRank = selectionResult.games.findIndex(entry => entry.game.bggId === readyBggId) + 1
+    const readyCard = page.locator(
+      `[data-testid="recommendation-game-card"][data-bgg-id="${readyBggId}"]`,
+    )
+    const readyLink = readyCard.getByTestId('open-ready-teaching')
+    const expectedGuidePath = `/read/${encodeURIComponent(readyPlanId)}`
+    const actualGuidePath = await readyLink.getAttribute('href')
+    if (actualGuidePath !== expectedGuidePath) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_LINK_TARGET_MISMATCH'
+      throw new Error('READY_TEACHING_LINK_TARGET_MISMATCH: the ready card did not target its typed plan')
+    }
+
+    report.selectedRecommendationRank = readyRank
+    report.selectedBggId = readyBggId
+    report.selectedGameName = readyGame.game.name
+    report.teachingPlanId = readyPlanId
+    report.stage = 'ready-public-guide'
+    report.readyTeachingFailureCategory = 'PUBLIC_GUIDE_NOT_READABLE'
+    await readyLink.click()
+    await expect.poll(() => new URL(page.url()).pathname, {
+      timeout: 60_000,
+      message: 'The ready recommendation did not open its public guide',
+    }).toBe(expectedGuidePath)
+    const publicGuide = page.getByTestId('public-lesson-reader')
+    await expect(publicGuide).toBeVisible({ timeout: 60_000 })
+    const publicGuideGameIdentity = publicGuide.locator('a[href^="/discover/"]')
+    await expect(publicGuideGameIdentity,
+      'The public guide did not expose exactly one typed BGG game identity').toHaveCount(1)
+    await expect(publicGuideGameIdentity,
+      'The ready teaching plan belongs to a different BGG game than the recommendation card')
+      .toHaveAttribute('href', `/discover/${readyBggId}`)
+    report.readyTeachingGuideOpened = true
+    report.lessonStatus = 'PUBLIC_READY'
+    report.lessonSectionCount = await publicGuide.locator('section[id^="public-chapter-"]').count()
+    expect(report.lessonSectionCount,
+      'The ready public guide did not render a chapter').toBeGreaterThan(0)
+    expect(report.lessonSectionCount,
+      'The ready-card chapter count diverged from the public guide').toBe(readyGame.teachingContinuation!.sectionCount)
+    const citedGuideLinks = publicGuide.locator(
+      `a[href^="/api/public/lessons/${encodeURIComponent(readyPlanId)}/pages/"]`,
+    )
+    expect(await citedGuideLinks.count(),
+      'The ready public guide had no player-visible rulebook page citation').toBeGreaterThan(0)
+    report.citedLessonStep = true
+    report.readyTeachingFailureCategory = null
+
+    report.stage = 'ready-public-questions'
+    report.readyTeachingFailureCategory = 'PUBLIC_QUESTION_ROUTE_UNAVAILABLE'
+    const questionsEntry = page.getByTestId('lesson-questions-entry')
+    const expectedQuestionsPath = `${expectedGuidePath}/questions`
+    await expect(questionsEntry).toHaveAttribute('href', expectedQuestionsPath)
+    await questionsEntry.click()
+    await expect.poll(() => new URL(page.url()).pathname, {
+      timeout: 60_000,
+      message: 'The public guide did not open its question route',
+    }).toBe(expectedQuestionsPath)
+    const publicQuestions = page.getByTestId('public-questions-reader')
+    await expect(publicQuestions).toBeVisible({ timeout: 60_000 })
+    report.readyTeachingQuestionsOpened = true
+    report.readyTeachingFailureCategory = null
+
+    const publicAnswerPath = `/api/public/lessons/${encodeURIComponent(readyPlanId)}/answers`
+    const publicAnswerArticles = page.locator('article[id^="public-answer-"]')
+    await expect(publicAnswerArticles,
+      'The production probe opened with a stale public answer thread').toHaveCount(0)
+
+    report.stage = 'ready-public-answer'
+    report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_REQUEST_FAILED'
+    const publicAnswerStartedAt = performance.now()
+    const publicAnswerResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      if (response.request().method() !== 'POST' || url.pathname !== publicAnswerPath) return false
+      const body = response.request().postDataJSON() as { question?: unknown } | null
+      return body?.question === RULE_QUESTION
+    }, { timeout: 4 * 60_000 })
+    const publicQuestionInput = page.locator('#public-question')
+    await publicQuestionInput.fill(RULE_QUESTION)
+    await publicQuestionInput.locator('xpath=ancestor::form')
+      .locator('button[type="submit"]')
+      .click()
+    const publicAnswerResponse = await publicAnswerResponsePromise
+    if (!publicAnswerResponse.ok()) {
+      throw new Error(`PUBLIC_ANSWER_REQUEST_FAILED: HTTP ${publicAnswerResponse.status()}`)
+    }
+    const publicAnswerRequestBody = publicAnswerResponse.request().postDataJSON() as {
+      question?: unknown
+      previousQuestion?: unknown
+      language?: unknown
+      learningIntent?: unknown
+    }
+    expect(publicAnswerRequestBody,
+      'The first public answer request did not start a fresh typed thread').toEqual({
+      question: RULE_QUESTION,
+      previousQuestion: null,
+      language: 'zh-CN',
+      learningIntent: null,
+    })
+    report.publicAnswerRequestSucceeded = true
+    const publicAnswerResult = await publicAnswerResponse.json() as AnswerResponse
+    report.answerStatus = publicAnswerResult.answer.status
+    report.answerCitationCount = publicAnswerResult.answer.citations.length
+    report.answerMs = elapsed(publicAnswerStartedAt)
+    if (!['ANSWERED', 'ANSWERED_WITH_WARNING'].includes(report.answerStatus)) {
+      report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_NON_PUBLISHING_STATUS'
+      throw new Error(`PUBLIC_ANSWER_NON_PUBLISHING_STATUS: ${report.answerStatus}`)
+    }
+    if (report.answerCitationCount < 1) {
+      report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_MISSING_CITATION'
+      throw new Error('PUBLIC_ANSWER_MISSING_CITATION: the published answer had no citation')
+    }
+    if (!validPublicAnswerCitations(publicAnswerResult.answer.citations)) {
+      report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_INVALID_CITATION_RANGE'
+      throw new Error('PUBLIC_ANSWER_INVALID_CITATION_RANGE: the published answer citation was invalid')
+    }
+    report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_EVIDENCE_NOT_RENDERED'
+    await expect(publicAnswerArticles).toHaveCount(1)
+    await expectRenderedPublicAnswerEvidence(
+      page.request,
+      publicAnswerArticles.first(),
+      RULE_QUESTION,
+      readyPlanId,
+      publicAnswerResult.answer.citations,
+    )
+    report.citedAnswer = true
+    report.answerSessionTurnCount = 1
+    report.readyTeachingFailureCategory = null
+
+    report.stage = 'ready-public-follow-up'
+    report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_REQUEST_FAILED'
+    const followUpStartedAt = performance.now()
+    const followUpResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      if (response.request().method() !== 'POST' || url.pathname !== publicAnswerPath) return false
+      const body = response.request().postDataJSON() as { question?: unknown } | null
+      return body?.question === RULE_FOLLOW_UP
+    }, { timeout: 4 * 60_000 })
+    await expect.poll(() => new URL(page.url()).pathname, {
+      message: 'The public Q&A left the typed teaching plan before the follow-up',
+    }).toBe(expectedQuestionsPath)
+    await publicQuestionInput.fill(RULE_FOLLOW_UP)
+    await publicQuestionInput.locator('xpath=ancestor::form')
+      .locator('button[type="submit"]')
+      .click()
+    const followUpResponse = await followUpResponsePromise
+    if (!followUpResponse.ok()) {
+      throw new Error(`PUBLIC_ANSWER_REQUEST_FAILED: follow-up HTTP ${followUpResponse.status()}`)
+    }
+    const followUpRequestBody = followUpResponse.request().postDataJSON() as {
+      question?: unknown
+      previousQuestion?: unknown
+      language?: unknown
+      learningIntent?: unknown
+    }
+    expect(followUpRequestBody,
+      'The follow-up did not continue the first public question as a typed thread').toEqual({
+      question: RULE_FOLLOW_UP,
+      previousQuestion: RULE_QUESTION,
+      language: 'zh-CN',
+      learningIntent: null,
+    })
+    expect(new URL(followUpResponse.url()).pathname,
+      'The follow-up answer switched to a different teaching plan').toBe(publicAnswerPath)
+
+    const followUpResult = await followUpResponse.json() as AnswerResponse
+    report.followUpAnswerStatus = followUpResult.answer.status
+    report.followUpCitationCount = followUpResult.answer.citations.length
+    report.followUpAnswerMs = elapsed(followUpStartedAt)
+    if (!['ANSWERED', 'ANSWERED_WITH_WARNING'].includes(report.followUpAnswerStatus)) {
+      report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_NON_PUBLISHING_STATUS'
+      throw new Error(`PUBLIC_ANSWER_NON_PUBLISHING_STATUS: follow-up ${report.followUpAnswerStatus}`)
+    }
+    if (report.followUpCitationCount < 1) {
+      report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_MISSING_CITATION'
+      throw new Error('PUBLIC_ANSWER_MISSING_CITATION: the published follow-up had no citation')
+    }
+    if (!validPublicAnswerCitations(followUpResult.answer.citations)) {
+      report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_INVALID_CITATION_RANGE'
+      throw new Error('PUBLIC_ANSWER_INVALID_CITATION_RANGE: the follow-up citation was invalid')
+    }
+    report.readyTeachingFailureCategory = 'PUBLIC_ANSWER_EVIDENCE_NOT_RENDERED'
+    await expect(publicAnswerArticles).toHaveCount(2)
+    await expectRenderedPublicAnswerEvidence(
+      page.request,
+      publicAnswerArticles.nth(1),
+      RULE_FOLLOW_UP,
+      readyPlanId,
+      followUpResult.answer.citations,
+    )
+    await expect.poll(() => new URL(page.url()).pathname, {
+      message: 'The public follow-up did not stay in the same visible answer thread',
+    }).toBe(expectedQuestionsPath)
+    report.answerSessionTurnCount = 2
+    report.answerSessionPreserved = true
+    report.readyTeachingFailureCategory = null
+
+    if (importRequestCount !== 0) {
+      report.readyTeachingFailureCategory = 'READY_TEACHING_STARTED_IMPORT'
+      throw new Error(`READY_TEACHING_STARTED_IMPORT: observed ${importRequestCount} import requests`)
+    }
+    expect(pageErrors, 'The ready public teaching journey emitted uncaught browser errors').toEqual([])
+    report.completed = true
+    report.stage = 'completed-ready-public-teaching'
+    await retainReport(reportFile, report)
+    return
+    }
+
     type SelectedRecommendationJourney = {
       recommendationRank: number
       selectedCardBggId: number
@@ -2006,6 +3044,16 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.answerCitationCount = persistedAnswer!.answer.citations.length
     expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.answerStatus)
     expect(report.answerCitationCount).toBeGreaterThan(0)
+    await expectRenderedRecommendationAnswerEvidence(
+      page.request,
+      answerWorkspace,
+      RULE_QUESTION,
+      completedJob.documentVersionId!,
+      persistedAnswer!.answer,
+    )
+    const visibleAnswerTurnCountBeforeFollowUp = await renderedRecommendationAnswerTurnCount(answerWorkspace)
+    expect(visibleAnswerTurnCountBeforeFollowUp,
+      'The first persisted answer did not have exactly one player-visible turn').toBe(1)
     report.answerMs = elapsed(answerStartedAt)
     report.citedAnswer = true
 
@@ -2046,6 +3094,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const initialAnswerIndex = followUpConversation.findIndex(turn => turn.question === RULE_QUESTION)
     const followUpAnswerIndex = followUpConversation.findIndex(turn => turn.question === RULE_FOLLOW_UP)
     const persistedFollowUp = followUpConversation[followUpAnswerIndex]
+    expect(persistedFollowUp, 'The persisted follow-up turn disappeared before UI verification').toBeDefined()
     report.followUpAnswerTurnId = persistedFollowUp!.id
     report.answerSessionTurnCount = followUpConversation.length
     report.answerSessionPreserved = followUpRequest.gameSessionId === answerSessionId
@@ -2058,7 +3107,17 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.followUpAnswerMs = elapsed(followUpStartedAt)
     expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.followUpAnswerStatus)
     expect(report.followUpCitationCount).toBeGreaterThan(0)
-    await expect(answerWorkspace.getByText(RULE_FOLLOW_UP, { exact: true })).toBeVisible()
+    await expect.poll(() => renderedRecommendationAnswerTurnCount(answerWorkspace), {
+      timeout: 60_000,
+      message: 'The second persisted answer did not add one player-visible answer turn',
+    }).toBe(visibleAnswerTurnCountBeforeFollowUp + 1)
+    await expectRenderedRecommendationAnswerEvidence(
+      page.request,
+      answerWorkspace,
+      RULE_FOLLOW_UP,
+      completedJob.documentVersionId!,
+      persistedFollowUp!.answer,
+    )
 
     report.stage = 'role-switching'
     const roleSwitcher = page.getByTestId('agent-role-switcher')
@@ -2070,7 +3129,13 @@ test('recommendation becomes one readable, taught, and answerable production jou
     }).toBeGreaterThan(0)
     await expect(selectedDetailsButton.first()).toBeVisible()
     await roleSwitcher.getByRole('button', { name: '规则答疑' }).click()
-    await expect(answerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible()
+    await expectRenderedRecommendationAnswerEvidence(
+      page.request,
+      answerWorkspace,
+      RULE_FOLLOW_UP,
+      completedJob.documentVersionId!,
+      persistedFollowUp!.answer,
+    )
     await roleSwitcher.getByRole('button', { name: '继续推荐' }).click()
 
     report.stage = 'refresh-restoration'
@@ -2086,7 +3151,17 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const restoredRoleSwitcher = page.getByTestId('agent-role-switcher')
     await restoredRoleSwitcher.getByRole('button', { name: '规则答疑' }).click()
     const restoredAnswerWorkspace = page.getByTestId('recommendation-answer-workspace')
-    await expect(restoredAnswerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible({ timeout: 60_000 })
+    await expect.poll(() => renderedRecommendationAnswerTurnCount(restoredAnswerWorkspace), {
+      timeout: 60_000,
+      message: 'Refresh did not restore both grounded answer turns',
+    }).toBe(visibleAnswerTurnCountBeforeFollowUp + 1)
+    await expectRenderedRecommendationAnswerEvidence(
+      page.request,
+      restoredAnswerWorkspace,
+      RULE_FOLLOW_UP,
+      completedJob.documentVersionId!,
+      persistedFollowUp!.answer,
+    )
     report.answerRestored = true
     await restoredRoleSwitcher.getByRole('button', { name: '继续推荐' }).click()
 

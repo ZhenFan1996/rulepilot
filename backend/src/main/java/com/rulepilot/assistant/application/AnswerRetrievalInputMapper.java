@@ -29,7 +29,8 @@ final class AnswerRetrievalInputMapper {
         return new AnswerRetrievalContext(
                 source.documentVersionId(),
                 source.previousQuestion(),
-                learningIntent(source.learningIntent()));
+                learningIntent(source.learningIntent()),
+                source.allowedEvidencePages());
     }
 
     static AnswerRetrievalPlan plan(AnswerQuestionPlan source) {

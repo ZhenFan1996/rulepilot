@@ -72,6 +72,16 @@ describe('RecommendationAnswerWorkspace', () => {
     })
   }
 
+  it('keeps the interactive workspace out of a broad live region', () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)))
+    const wrapper = mountWorkspace()
+
+    expect(wrapper.get('[data-testid="recommendation-answer-workspace"]').attributes('aria-live'))
+      .toBeUndefined()
+    expect(wrapper.get('[role="status"]').text()).toContain('Restoring')
+    wrapper.unmount()
+  })
+
   it('creates one rulebook-bound session and attaches it to every answer request', async () => {
     const requests: Array<{ path: string; init?: RequestInit }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

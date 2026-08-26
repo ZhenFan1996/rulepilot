@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
@@ -134,7 +134,11 @@ export interface RecommendationJourneyStatus {
   lesson: IllustratedLesson | null
 }
 
-const props = defineProps<{ game: RecommendationGame; profile: RecommendationProfile }>()
+const props = defineProps<{
+  game: RecommendationGame
+  profile: RecommendationProfile
+  learningGoal?: string | null
+}>()
 const emit = defineEmits<{
   close: []
   change: []
@@ -149,7 +153,7 @@ const { locale } = useLocale()
 const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '从推荐到答疑', title: `已选《${props.game.name}》`, preparing: '正在加入“我的桌游”并寻找可审阅的规则书…',
   finding: '桌游已保存，正在查找出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择并核对来源', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；只有已核验的 PDF 或连续规则页可以导入。',
-  noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '当前结果只能继续查找文件或核对桌游信息；也可以改用公开链接或本地上传。',
+  noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '自动查找没有产出可直接导入的文件。可以继续查找，也可以提供公开 PDF / 规则页链接或上传自己的规则书。',
   identityOnlyTitle: '仅用于核对桌游身份', identityOnlyDetail: '这些页面没有可导入的规则书文件，不属于规则书选择。',
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
   capabilities: { DIRECT_DOCUMENT: '已核验为可下载文档', CONTIGUOUS_RULE_PAGES: '已核验为连续规则页', DOCUMENT_LISTING: '仅确认是文档列表页', GAME_INFO_ONLY: '仅有桌游信息，没有规则书文件', UNVERIFIED_PAGE: '尚未核验出可导入文档' },
@@ -157,16 +161,16 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   consent: '我确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
   identityChanged: '提交前目录或来源身份发生了变化。请重新比较上面的游戏、版本和语言后再次确认。',
   identityActive: '这个链接正在为另一个版本导入。请等待那次导入结束，或改用公开链接 / 本地上传；当前桌游选择不会丢失。',
-  import: '下载规则书并生成讲解', manual: '改用公开链接或本地上传',
+  import: '下载规则书并生成讲解', manual: '提供公开链接或自己的规则书',
   retryDiscovery: '继续查找',
   discoveryTerminal: {
-    PARTIAL: '部分来源未在本次预算内完成；下面只保留已经核验的结果。',
-    TIMED_OUT: '本次查找已到达最长等待时间，尚未找到可审阅结果。',
-    FAILED: '部分来源没有完成查找，尚未找到可审阅结果。',
+    PARTIAL: '部分来源未在本次预算内完成，自动查找已停下；下面只保留已核验结果。如果没有合适来源，可以提供公开链接或自己的规则书。',
+    TIMED_OUT: '来源查找阶段已到达整体等待上限，自动查找已停下。可以重试，也可以提供公开链接或自己的规则书。',
+    FAILED: '部分来源检查失败，自动查找已停下。可以重试，也可以提供公开链接或自己的规则书。',
   },
   discoveryTiming: (elapsed: number, budget: number) => `本次查找用时 ${elapsed} 秒，最长等待 ${budget} 秒。`,
   discoveryProviders: { CATALOG: '规则书目录', SOURCE_INSPECTION: '来源核验', WEB_SEARCH: '联网搜索' },
-  discoveryProviderStates: { FINISHED: '已完成', TIMED_OUT: '已超时', FAILED: '失败', SKIPPED: '未使用', UNAVAILABLE: '未配置' },
+  discoveryProviderStates: { FINISHED: '已完成', TIMED_OUT: '单个请求超时', FAILED: '失败', SKIPPED: '未使用', UNAVAILABLE: '未配置' },
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
   sourcePageHandoff: '这个结果不是可直接导入的规则书文档。请在来源网站继续查找或核对语言和版本，取得 PDF 后回到 RulePilot 上传；桌游和讲解偏好都已保留。',
   browserAction: '在来源网站继续下载',
@@ -180,17 +184,36 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     INTERRUPTED: '应用重启中断了这次导入。可以重试原来源，也可以换来源或上传本地文件。',
     OTHER: '这次规则书导入没有完成。请选择另一个来源，或改用公开链接 / 本地文件。',
   } satisfies Record<OfficialImportFailureKind, string>,
-  unavailable: '当前没有找到可审阅的规则书来源。你仍可粘贴公开 PDF 链接或上传自己的规则书。',
+  unavailable: '当前没有找到可审阅的规则书来源，自动查找已停下。你可以提供公开 PDF / 规则页链接或上传自己的规则书。',
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
-  error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。',
+  error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。现有内容不会丢失。',
   missingChapterEvidence: (titles: string) => `“${titles}”对应的规则页没有提供足够依据，所以没有猜测并发布；其他已校验章节仍可阅读。`,
   invalidChapterEvidence: (titles: string) => `“${titles}”读取到的依据没有通过来源或规则书版本校验，因此没有进入正文生成；其他已校验章节仍可阅读。`,
   invalidChapterAfterRetry: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验；后台已自动只重试这部分一次，仍未通过，因此保留其他已发布章节并停下。`,
   invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
-  retry: '重试当前步骤', pause: '暂停生成', resume: '继续生成', remove: '删除讲解', removeConfirm: '确认删除这份讲解及其生成任务？规则书会保留，已生成章节会被删除。', removeYes: '确认删除', removeNo: '先保留', close: '关闭小窗', change: '换一款',
-  safe: '可以关闭这个小窗继续聊天；下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。',
-  visualActive: '正在从规则书中挑选能帮助上桌的局部图示。', visualAdded: (count: number) => `已有 ${count} 节具备图示。`, visualNone: '这次没有找到可靠的局部图示；文字讲解仍可完整阅读。', visualFailed: '局部配图没有完成；文字讲解仍可完整阅读。', visualPartial: (count: number) => `已有 ${count} 节具备图示；后续配图没有完成，文字讲解仍可完整阅读。`, visualMissing: '文字讲解已完成，但连续两次都没有等到配图任务。已停止自动查询；可手动重试接收稍后完成的配图，文字和答疑不受影响。', visualRefreshFailed: '暂时无法确认最新配图状态；文字讲解仍可阅读。', visualRetry: '重试配图状态',
-  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。', generationAttemptHint: '单页本次未完成不等于整份讲解失败：逐字识别失败时只让该页退回原图；规则整理遇到被明确分类为临时服务异常时，原请求重试一次；返回格式、字段结构、重复规则组或页码绑定未通过时，会按失败类型修正一次。超时、中断、取消、预算耗尽、权限或参数错误、未知程序异常和保存失败都不会盲目重试。已确认页面始终保留。只有最终找不到可引用规则、章节规划或首章无法安全完成、运行预算或时限耗尽、服务无法继续，或任务被取消时，整次任务才会停下；上方会单独说明下一步。', generationShowHistory: (count: number) => `展开另外 ${count} 条历史`, generationHideHistory: '收起历史', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
+  retry: '重试当前步骤', stop: '停止本次生成', restart: '从已完成内容重新开始', retryFailed: '本次重试没有启动，后台不会自动继续重试。请检查连接后再手动操作。', stopFailed: '本次停止请求没有完成，当前运行可能仍在继续。请检查连接后再操作。', remove: '删除讲解', removeConfirm: '确认删除这份讲解及其生成任务？规则书会保留，已生成章节会被删除。', removeYes: '确认删除', removeNo: '先保留', close: '关闭小窗', change: '换一款',
+  safe: '可以关闭这个小窗继续聊天；正在运行的下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。', safeStopped: '可以关闭这个小窗继续聊天；已确认内容会保留，已停止的任务不会在后台自行重新开始。页面上的“讲解状态”入口会一直显示。',
+  visualActive: '正在从规则书中挑选能帮助上桌的局部图示。', visualAdded: (count: number) => `已有 ${count} 节具备图示。`, visualNone: '这次没有找到可靠的局部图示；文字讲解仍可完整阅读。', visualFailed: '局部配图没有完成；文字讲解仍可完整阅读。', visualPartial: (count: number) => `已有 ${count} 节具备图示；后续配图没有完成，文字讲解仍可完整阅读。`, visualMissing: '文字讲解已完成，但连续两次都没有等到配图任务。已停止自动查询；可手动重试接收稍后完成的配图。文字讲解可读，答疑入口仍保留。', visualRefreshFailed: '暂时无法确认最新配图状态；文字讲解仍可阅读。', visualRetry: '重试配图状态',
+  progress: '当前步骤进度', inProgress: '进行中', waiting: '等待你继续', stopped: '已停止', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。',
+  currentFailure: '本次属于',
+  currentFailureDetail: {
+    'local-degradation': '可用内容已经保留，只有可选或局部工作未完成；主流程不会因此回退。',
+    'preserved-stop': '当前运行已经停止，已确认页面和已发布章节保留；系统不会在后台自行重新开始。',
+    'external-repair': '当前错误不适合原样重试；请按下面实际提供的操作处理，若没有操作入口则需等待服务恢复或联系支持。',
+  },
+  failureRecoveryDetail: {
+    'retry-step': '后端允许你明确重试当前步骤；只有点击下面的按钮才会开始。',
+    'restart-from-completed': '重新开始会创建一次新的运行，并复用已经确认的内容。',
+    'choose-source': '请使用下面实际显示的换来源、上传或浏览器下载操作。',
+    'manual-repair': '这里没有安全的自动重试；修复权限、来源、输入或服务问题后再继续。',
+  },
+  generationLocalFailureTitle: '局部降级：可用内容保留',
+  generationLocalFailure: '单页逐字识别失败会改读该页原图；局部配图失败只省略配图。格式、字段、重复内容或页码绑定错误只修正当前结果一次；已确认页面不会丢失。',
+  generationPreservedStopTitle: '保留已完成内容后停止',
+  generationPreservedStop: '所有规划主题都找不到足够的可引用规则、章节规划契约无法成立、整条任务的总预算或全局时限耗尽，或任务被取消时，当前任务停止；已确认页面和已发布章节保留。',
+  generationRepairTitle: '需要你或运维修复后继续',
+  generationRepair: '权限/登录、非法参数或来源、服务持续不可用、未知异常或保存失败需先修复；界面只在有安全恢复动作时显示重试、换来源或上传。单个请求超时本身不归入这一类：它只影响当前请求，只有明确的临时异常会重试一次，不代表整条任务的全局时限已耗尽。',
+  generationShowHistory: (count: number) => `展开另外 ${count} 条历史`, generationHideHistory: '收起历史', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
     '图片页直接生成带页码绑定的结构化规则事实，文字层直接读取原文；只有结构化契约未通过时才退回 OCR 并修正一次',
     '按页面整理规则组，并记录规则书要求的外部资料',
@@ -223,7 +246,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
 } : {
   eyebrow: 'Recommendation to Q&A', title: `${props.game.name} selected`, preparing: 'Adding the game to My Games and finding reviewable rulebooks…',
   finding: 'Game saved. Searching publishers, BGG, Gstone, and trusted repositories ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose and verify a source', detail: 'Publisher sources come first, with useful community and trusted-repository results preserved. Review language and edition; only verified PDFs or ordered rule pages can be imported.',
-  noImportableTitle: 'No directly importable rulebook yet', noImportableDetail: 'The current results can only continue the file search or confirm game identity. You can also use a public URL or local upload.',
+  noImportableTitle: 'No directly importable rulebook yet', noImportableDetail: 'Automatic discovery did not produce an importable file. Continue the search, provide a public PDF or rule-page link, or upload your own rulebook.',
   identityOnlyTitle: 'Game identity references only', identityOnlyDetail: 'These pages do not contain an importable rulebook and are not rulebook choices.',
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
   capabilities: { DIRECT_DOCUMENT: 'Confirmed downloadable document', CONTIGUOUS_RULE_PAGES: 'Confirmed ordered rule pages', DOCUMENT_LISTING: 'Document listing only', GAME_INFO_ONLY: 'Game information only; no rulebook file', UNVERIFIED_PAGE: 'No importable document verified' },
@@ -231,16 +254,16 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   consent: 'I confirm that this source may provide the rulebook and authorize RulePilot to download it for my personal guide.',
   identityChanged: 'The catalog or source identity changed before submission. Compare the game, edition, and language above, then reconfirm.',
   identityActive: 'This URL is already being imported for another edition. Wait for it to finish or use a public URL / local upload; the selected game remains intact.',
-  import: 'Download and generate guide', manual: 'Use a public URL or local upload',
+  import: 'Download and generate guide', manual: 'Provide a public link or your own rulebook',
   retryDiscovery: 'Search again',
   discoveryTerminal: {
-    PARTIAL: 'Some sources did not finish within this search budget. Only verified results are shown below.',
-    TIMED_OUT: 'This search reached its time budget without a reviewable result.',
-    FAILED: 'Some source checks failed and no reviewable result is available yet.',
+    PARTIAL: 'Some sources did not finish within this search budget, so automatic discovery stopped. Only verified results are shown below. If none fits, provide a public link or your own rulebook.',
+    TIMED_OUT: 'The source-discovery phase reached its overall waiting limit, so automatic discovery stopped. Retry it, provide a public link, or upload your own rulebook.',
+    FAILED: 'Some source checks failed, so automatic discovery stopped. Retry it, provide a public link, or upload your own rulebook.',
   },
   discoveryTiming: (elapsed: number, budget: number) => `Search finished in ${elapsed}s with a ${budget}s maximum budget.`,
   discoveryProviders: { CATALOG: 'Rulebook catalog', SOURCE_INSPECTION: 'Source verification', WEB_SEARCH: 'Web search' },
-  discoveryProviderStates: { FINISHED: 'finished', TIMED_OUT: 'timed out', FAILED: 'failed', SKIPPED: 'not needed', UNAVAILABLE: 'not configured' },
+  discoveryProviderStates: { FINISHED: 'finished', TIMED_OUT: 'request timed out', FAILED: 'failed', SKIPPED: 'not needed', UNAVAILABLE: 'not configured' },
   browserRequired: 'The file was found, but its source requires an in-browser privacy choice, refreshed temporary link, or sign-in. Download it there, then return to upload it; the game, edition, and guide preferences are preserved.',
   sourcePageHandoff: 'This result is not a directly importable rulebook document. Continue the search or review language and edition on the source site, then return to upload the PDF; the game and guide preferences are preserved.',
   browserAction: 'Continue on the source site',
@@ -254,17 +277,36 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     INTERRUPTED: 'An application restart interrupted this import. Retry it, choose another source, or upload a local file.',
     OTHER: 'This rulebook import did not finish. Choose another source or use a public link / local file.',
   } satisfies Record<OfficialImportFailureKind, string>,
-  unavailable: 'No reviewable rulebook source was found. You can still paste a public PDF URL or upload your own rulebook.',
+  unavailable: 'No reviewable rulebook source was found, and automatic discovery has stopped. Provide a public PDF or rule-page link, or upload your own rulebook.',
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
-  error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.',
+  error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. Existing content remains available.',
   missingChapterEvidence: (titles: string) => `The cited rulebook pages did not provide enough support for “${titles}”, so RulePilot did not guess or publish it. Other validated chapters remain readable.`,
   invalidChapterEvidence: (titles: string) => `The evidence read for “${titles}” did not pass source or rulebook-version validation, so chapter writing did not start. Other validated chapters remain readable.`,
   invalidChapterAfterRetry: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks. The background run retried only that work once and stopped when it still did not pass; other published chapters remain readable.`,
   invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
-  retry: 'Retry this step', pause: 'Pause generation', resume: 'Resume generation', remove: 'Delete guide', removeConfirm: 'Delete this guide and its generation work? The rulebook stays, but published chapters are removed.', removeYes: 'Delete guide', removeNo: 'Keep it', close: 'Close', change: 'Choose another game',
-  safe: 'You may close this panel and keep chatting. Download and guide generation will continue. The “Guide status” shortcut stays visible, and My guides is always available.',
-  visualActive: 'Selecting focused rulebook visuals that help at the table.', visualAdded: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals.`, visualNone: 'No reliable focused visual was found; the text guide remains fully readable.', visualFailed: 'Focused visual enrichment did not finish. The text guide remains fully readable.', visualPartial: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals; later visual enrichment did not finish, and the text guide remains fully readable.`, visualMissing: 'The text guide is ready, but no visual task appeared in two consecutive checks. Automatic checks stopped; retry to pick up visuals that finish later. The guide and Q&A remain available.', visualRefreshFailed: 'The latest visual status is temporarily unavailable. The text guide remains readable.', visualRetry: 'Retry visual status',
-  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.', generationAttemptHint: 'A page not completing this time does not mean the whole guide failed: a transcription failure falls back to that page image; a rule-catalog request explicitly classified as a temporary service error is replayed once; and invalid formatting, fields, duplicate rule groups, or page binding receive one typed correction. Timeouts, interruption, cancellation, exhausted budgets, authorization or parameter errors, unknown program failures, and storage failures are never replayed blindly. Confirmed pages stay available. The whole task stops only when no citable rule remains, chapter planning or the first chapter cannot complete safely, the execution budget or deadline is exhausted, the service cannot continue, or the task is cancelled; a separate message above then explains the next action.', generationShowHistory: (count: number) => `Show ${count} earlier activities`, generationHideHistory: 'Hide earlier activities', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
+  retry: 'Retry this step', stop: 'Stop this run', restart: 'Start a new run from completed work', retryFailed: 'This retry did not start. Nothing is retrying in the background; check your connection and try the action again.', stopFailed: 'The stop request did not complete, so this run may still be active. Check your connection and try again.', remove: 'Delete guide', removeConfirm: 'Delete this guide and its generation work? The rulebook stays, but published chapters are removed.', removeYes: 'Delete guide', removeNo: 'Keep it', close: 'Close', change: 'Choose another game',
+  safe: 'You may close this panel and keep chatting. Downloads and guide runs that are still active will continue. The “Guide status” shortcut stays visible, and My guides is always available.', safeStopped: 'You may close this panel and keep chatting. Confirmed content remains available, and stopped work will not restart in the background. The “Guide status” shortcut stays visible.',
+  visualActive: 'Selecting focused rulebook visuals that help at the table.', visualAdded: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals.`, visualNone: 'No reliable focused visual was found; the text guide remains fully readable.', visualFailed: 'Focused visual enrichment did not finish. The text guide remains fully readable.', visualPartial: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals; later visual enrichment did not finish, and the text guide remains fully readable.`, visualMissing: 'The text guide is ready, but no visual task appeared in two consecutive checks. Automatic checks stopped; retry to pick up visuals that finish later. The guide remains readable and the Q&A entry remains available.', visualRefreshFailed: 'The latest visual status is temporarily unavailable. The text guide remains readable.', visualRetry: 'Retry visual status',
+  progress: 'Current-step progress', inProgress: 'In progress', waiting: 'Waiting for you', stopped: 'Stopped', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.',
+  currentFailure: 'This run is classified as',
+  currentFailureDetail: {
+    'local-degradation': 'Usable content remains available; only optional or page-local work did not finish, and the main flow does not roll back.',
+    'preserved-stop': 'This run has stopped. Confirmed pages and published chapters remain available, and the system will not restart it in the background.',
+    'external-repair': 'Repeating the same request is not a safe recovery. Use only the actions actually shown below; if none is available, wait for service recovery or contact support.',
+  },
+  failureRecoveryDetail: {
+    'retry-step': 'The backend allows an explicit retry of this step; it starts only when you use the button below.',
+    'restart-from-completed': 'Starting again creates a new run and reuses work that has already been confirmed.',
+    'choose-source': 'Use one of the source change, upload, or browser-download actions actually shown below.',
+    'manual-repair': 'There is no safe automatic retry here. Repair the authorization, source, input, or service problem before continuing.',
+  },
+  generationLocalFailureTitle: 'Local degradation: usable content remains',
+  generationLocalFailure: 'A failed page transcription falls back to that page image; a focused-visual failure omits only that visual. Formatting, field, duplicate-content, or page-binding errors receive one correction for the current result. Confirmed pages remain available.',
+  generationPreservedStopTitle: 'Stop after preserving completed work',
+  generationPreservedStop: 'The current task stops if every planned topic lacks enough citable rules, the chapter-plan contract cannot be satisfied, the whole task exhausts its total budget or global deadline, or the task is cancelled. Confirmed pages and published chapters remain available.',
+  generationRepairTitle: 'You or operations must repair this before continuing',
+  generationRepair: 'Authorization or sign-in issues, invalid parameters or sources, persistent service unavailability, unknown failures, and storage failures need repair first. The UI shows retry, source change, or upload only when that recovery is safe. A single request timeout is not this category by itself: it affects only that request, only an explicit temporary error retries once, and it does not mean the whole task exhausted its global deadline.',
+  generationShowHistory: (count: number) => `Show ${count} earlier activities`, generationHideHistory: 'Hide earlier activities', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
     'Generate typed, page-bound rule facts directly from image pages and read text layers as source text; fall back to OCR and one correction only when the typed contract fails validation',
     'Organise each page into rule groups and record any external material the rulebook requires',
@@ -317,10 +359,14 @@ const teachingRunId = ref<string | null>(null)
 const visualEnrichmentRun = ref<PlayerJourneyRun | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const pollingWarning = ref(false)
+const retryFailure = ref(false)
+const stopFailure = ref(false)
 const retrying = ref(false)
-const paused = ref(false)
+const generationStoppedByPlayer = ref(false)
 const deleteConfirmOpen = ref(false)
 const deleting = ref(false)
+const deleteTrigger = ref<HTMLButtonElement | null>(null)
+const deleteCancel = ref<HTMLButtonElement | null>(null)
 let csrf: CsrfResponse | null = null
 let sequence = 0
 let findingClock: ReturnType<typeof setInterval> | null = null
@@ -403,6 +449,7 @@ const projection = computed(() => derivePlayerJourney({
 const currentPhaseDetail = computed(() => copy.value.phase[projection.value.phase])
 const currentWorkStatus = computed(() => {
   const current = projection.value
+  const cancelled = current.errorCode === 'AGENT_CANCELLED'
   let stage: PlayerWorkStage
   if (current.phase === 'GAME_BINDING' || current.phase === 'RULEBOOK_DISCOVERY') stage = 'FINDING_RULEBOOK'
   else if (current.phase === 'SOURCE_REVIEW') stage = 'WAITING_FOR_PLAYER'
@@ -410,7 +457,7 @@ const currentWorkStatus = computed(() => {
   else if (current.phase === 'DOCUMENT_PROCESSING') stage = 'READING_RULEBOOK'
   else if (current.phase === 'LESSON_READABLE') stage = 'GUIDE_READABLE'
   else if (current.phase === 'LESSON_COMPLETE') stage = 'GUIDE_COMPLETE'
-  else if (current.phase === 'FAILED') stage = current.retryAction ? 'NEEDS_ACTION' : 'FAILED'
+  else if (current.phase === 'FAILED') stage = cancelled ? 'CANCELLED' : current.retryAction ? 'NEEDS_ACTION' : 'FAILED'
   else stage = 'ORGANIZING_GUIDE'
 
   const capability = current.canReadLesson ? 'guide' : current.canReadRulebook ? 'rulebook' : 'none'
@@ -419,10 +466,11 @@ const currentWorkStatus = computed(() => {
     : current.canReadLesson || current.canReadRulebook ? 'usable' : 'unavailable'
   const terminality = current.state === 'waiting'
     ? 'waiting'
-    : current.state === 'active' || current.state === 'ready' && !current.retryAction ? 'active' : 'terminal'
-  const outcome = current.retryAction
-    ? 'needs-action'
-    : current.state === 'failed' ? 'failed' : 'none'
+    : current.state === 'active' || current.state === 'ready' && !current.failureClassification ? 'active' : 'terminal'
+  const outcome = cancelled
+    ? 'cancelled'
+    : current.retryAction ? 'needs-action'
+      : current.state === 'failed' || current.failureClassification === 'external-repair' ? 'failed' : 'none'
   return playerWorkStatus(stage, { capability, readiness, terminality, outcome }, locale.value)
 })
 const sourceWorkStatus = computed(() => {
@@ -518,27 +566,32 @@ const journeyDetail = computed(() => {
   }
   return ''
 })
-const teachingFailureDetail = computed(() => {
-  const unfinished = lesson.value?.sections
-    .filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE') ?? []
-  if (unfinished.length === 0) return copy.value.partialFailure
-  const titles = unfinished.map(section => section.title).join(locale.value === 'zh-CN' ? '、' : ', ')
-  const activities = teachingRun.value?.activities ?? []
-  const rejectedPublications = activities.filter(activity =>
-    activity.outcome === 'REJECTED' && activity.operation.startsWith('publishTeachingSection|'))
-  const invalidEvidence = rejectedPublications.some(activity =>
-    activity.summary.includes('BASE_EVIDENCE_IDENTITY_INVALID')
-      || activity.summary.includes('RETRIEVED_EVIDENCE_INVALID'))
-  if (invalidEvidence) return copy.value.invalidChapterEvidence(titles)
-  const missingEvidence = rejectedPublications.some(activity =>
-    activity.summary.includes('NO_VALID_BASE_EVIDENCE'))
-  if (missingEvidence) return copy.value.missingChapterEvidence(titles)
-  const automaticallyRetried = activities.some(activity =>
-    activity.operation.startsWith('retryIncompleteTeachingSections'))
-  return automaticallyRetried
-    ? copy.value.invalidChapterAfterRetry(titles)
-    : copy.value.invalidChapter(titles)
+const currentFailureTitle = computed(() => {
+  const classification = projection.value.failureClassification
+  if (!classification) return ''
+  if (classification === 'local-degradation') return copy.value.generationLocalFailureTitle
+  if (classification === 'preserved-stop') return copy.value.generationPreservedStopTitle
+  return copy.value.generationRepairTitle
 })
+const currentFailureDetail = computed(() => {
+  const classification = projection.value.failureClassification
+  return classification ? copy.value.currentFailureDetail[classification] : copy.value.error
+})
+const currentFailureRecoveryDetail = computed(() => {
+  const recovery = projection.value.failureRecovery
+  return recovery ? copy.value.failureRecoveryDetail[recovery] : ''
+})
+const retryActionLabel = computed(() => projection.value.failureRecovery === 'restart-from-completed'
+  ? copy.value.restart
+  : copy.value.retry)
+const terminalAlertClass = computed(() => projection.value.failureClassification === 'local-degradation'
+  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+  : projection.value.failureClassification === 'preserved-stop'
+    ? 'border-amber-200 bg-amber-50 text-amber-950'
+    : 'border-red-200 bg-red-50 text-red-800')
+const safeCloseDetail = computed(() => projection.value.failureClassification || generationStoppedByPlayer.value
+  ? copy.value.safeStopped
+  : copy.value.safe)
 const journeyTeachingSteps = computed(() => {
   const preparationSteps = recentTeachingPreparationActivitySteps(
     (preparationRun.value?.activities ?? []) as unknown as TeachingActivity[],
@@ -599,23 +652,16 @@ const visibleJourneyTeachingSteps = computed(() => {
   }
   return [{ key: `phase-${phase}`, sequence: 0, outcome, text }]
 })
-const teachingProgressIsIndeterminate = computed(() => [
-  'TEACHING_PREPARATION_QUEUED', 'TEACHING_PREPARING',
-].includes(projection.value.phase))
 const journeyProgressLabel = computed(() => {
-  if (teachingProgressIsIndeterminate.value) return copy.value.planning
+  if (projection.value.failureClassification || generationStoppedByPlayer.value) return copy.value.stopped
+  if (projection.value.state === 'waiting') return copy.value.waiting
   if (projection.value.phase.startsWith('LESSON_') && projection.value.totalSections) {
     return copy.value.chapters(projection.value.availableSections, projection.value.totalSections)
   }
+  if (projection.value.progress === null) return copy.value.inProgress
   return `${projection.value.progress}%`
 })
-const journeyProgressValue = computed(() => {
-  if (teachingProgressIsIndeterminate.value) return null
-  if (projection.value.phase.startsWith('LESSON_') && projection.value.totalSections) {
-    return Math.round(projection.value.availableSections / projection.value.totalSections * 100)
-  }
-  return projection.value.progress
-})
+const journeyProgressValue = computed(() => projection.value.progress)
 const journeyStatus = computed<RecommendationJourneyStatus>(() => ({
   projection: projection.value,
   game: props.game,
@@ -664,6 +710,8 @@ function emitJourneyStatus(value: RecommendationJourneyStatus) {
     state: value.projection.state,
     progress: value.projection.progress,
     retryAction: value.projection.retryAction,
+    failureClassification: value.projection.failureClassification,
+    failureRecovery: value.projection.failureRecovery,
     canReadRulebook: value.projection.canReadRulebook,
     canReadLesson: value.projection.canReadLesson,
     canAskQuestions: value.projection.canAskQuestions,
@@ -1038,7 +1086,7 @@ async function enqueueImport() {
         officialSourceUrl: candidate.url,
         rightsConfirmed: true,
         startTeaching: true,
-        learningGoal: null,
+        learningGoal: props.learningGoal?.trim() || null,
         discoveredForEditionId: discoveryIdentity.value?.editionId ?? null,
         sourceEdition: candidate.edition || null,
         sourceLanguage: candidate.languageVerified ? candidate.language : null,
@@ -1219,6 +1267,8 @@ async function refreshJourney(request = sequence) {
 async function retryJourney() {
   if (retrying.value) return
   retrying.value = true
+  retryFailure.value = false
+  stopFailure.value = false
   pollingWarning.value = false
   try {
     const action = projection.value.retryAction
@@ -1264,7 +1314,7 @@ async function retryJourney() {
     }
     if (state.value === 'error') await (imported.value ? discover() : prepare())
   } catch {
-    if (state.value !== 'login') pollingWarning.value = true
+    if (state.value !== 'login') retryFailure.value = true
   } finally {
     retrying.value = false
     persistJourney()
@@ -1370,29 +1420,34 @@ const activeGenerationRunId = computed(() => {
   return null
 })
 
-async function pauseGeneration() {
+async function stopGeneration() {
   const runId = activeGenerationRunId.value
   if (!runId || retrying.value) return
   retrying.value = true
+  stopFailure.value = false
   try {
     const token = await csrfToken()
     const response = await fetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}/cancellation`, {
       method: 'POST', credentials: 'include', headers: { [token.headerName]: token.token },
     })
     if (!response.ok) throw new Error('teaching cancellation failed')
-    paused.value = true
+    generationStoppedByPlayer.value = true
     persistJourney()
     scheduleJourney(0)
+  } catch {
+    stopFailure.value = true
   } finally {
     retrying.value = false
   }
 }
 
-async function resumeGeneration() {
+async function restartGeneration() {
   if (retrying.value) return
   retrying.value = true
+  retryFailure.value = false
+  stopFailure.value = false
   try {
-    paused.value = false
+    generationStoppedByPlayer.value = false
     if (plan.value) {
       await launchLesson(plan.value.id, true)
     } else if (importJob.value) {
@@ -1411,9 +1466,22 @@ async function resumeGeneration() {
     }
     persistJourney()
     scheduleJourney(0)
+  } catch {
+    generationStoppedByPlayer.value = true
+    retryFailure.value = true
   } finally {
     retrying.value = false
   }
+}
+
+function openDeleteConfirmation() {
+  deleteConfirmOpen.value = true
+  void nextTick(() => deleteCancel.value?.focus())
+}
+
+function closeDeleteConfirmation() {
+  deleteConfirmOpen.value = false
+  void nextTick(() => deleteTrigger.value?.focus())
 }
 
 async function deleteTeachingJourney() {
@@ -1571,6 +1639,10 @@ function resetJourneyState() {
   visualIdentityBlocked.value = false
   lesson.value = null
   pollingWarning.value = false
+  retryFailure.value = false
+  stopFailure.value = false
+  generationStoppedByPlayer.value = false
+  deleteConfirmOpen.value = false
   teachingHistoryExpanded.value = false
   ensuredLessonPlans.clear()
 }
@@ -1665,7 +1737,7 @@ function persistJourney() {
       preparationRunId: preparationRunId.value,
       planId: plan.value?.id ?? null,
       teachingRunId: teachingRunId.value,
-      paused: paused.value,
+      generationStoppedByPlayer: generationStoppedByPlayer.value,
     }))
   } catch {
     // Server state remains authoritative when browser storage is unavailable.
@@ -1685,7 +1757,7 @@ function restoreJourney() {
       importJob?: OfficialImportJob
       preparationRunId?: string
       teachingRunId?: string
-      paused?: boolean
+      generationStoppedByPlayer?: boolean
     }
     if (!stored.imported) return false
     const restoredImported = normalizeImportedGame(stored.imported)
@@ -1703,7 +1775,7 @@ function restoreJourney() {
       importJob.value = normalizeImportJob(stored.importJob)
       preparationRunId.value = stored.preparationRunId ?? stored.importJob.teachingPreparationRunId
       teachingRunId.value = stored.teachingRunId ?? null
-      paused.value = stored.paused === true
+      generationStoppedByPlayer.value = stored.generationStoppedByPlayer === true
       consent.value = true
       identityConfirmed.value = true
       state.value = importJob.value.stage === 'FAILED' && importJob.value.recovery?.canOpenSourceInBrowser
@@ -1740,7 +1812,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <aside data-testid="player-journey-surface" class="isolate overflow-hidden rounded-2xl border border-copper/25 text-ink shadow-2xl" style="background-color: var(--color-paper); opacity: 1" aria-live="polite">
+  <aside data-testid="player-journey-surface" class="isolate overflow-hidden rounded-2xl border border-copper/25 text-ink shadow-2xl" style="background-color: var(--color-paper); opacity: 1">
     <div class="flex items-start gap-4 border-b border-copper/15 p-4 sm:p-5">
       <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="game.name" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
       <div class="min-w-0 flex-1">
@@ -1859,9 +1931,19 @@ onBeforeUnmount(() => {
         <div v-if="journeyProgressValue !== null" class="mt-3 h-2 overflow-hidden rounded-full bg-copper/10" role="progressbar" :aria-label="copy.progress" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="journeyProgressValue">
           <div class="h-full rounded-full bg-copper transition-[width] duration-500" :style="{ width: `${journeyProgressValue}%` }" />
         </div>
-        <div v-if="projection.state === 'failed' || projection.canReadLesson && projection.retryAction" data-testid="recommendation-journey-terminal-alert" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
+        <div
+          v-if="projection.failureClassification"
+          data-testid="recommendation-journey-terminal-alert"
+          class="mt-4 rounded-xl border p-4 text-sm"
+          :class="terminalAlertClass"
+          :data-failure-classification="projection.failureClassification"
+          role="alert"
+        >
+          <p data-testid="recommendation-current-failure-classification" class="font-semibold">{{ copy.currentFailure }}：{{ currentFailureTitle }}</p>
+          <p class="mt-1 leading-6">{{ currentFailureDetail }}</p>
+          <p v-if="currentFailureRecoveryDetail" class="mt-1 leading-6">{{ currentFailureRecoveryDetail }}</p>
           <template v-if="importJob?.stage === 'FAILED'">
-            <p class="leading-6">{{ importFailureDetail }}</p>
+            <p class="mt-2 leading-6">{{ importFailureDetail }}</p>
             <div class="mt-3 flex flex-wrap gap-3">
               <button v-if="importJob.recovery?.canChooseAnotherSource !== false" type="button" class="min-h-11 rounded-lg bg-indigo px-4 font-semibold text-white" @click="reviewAnotherSource">{{ copy.chooseAnotherSource }}</button>
               <RouterLink v-if="importJob.recovery?.canUseLocalUpload !== false" :to="manualRoute" class="inline-flex min-h-11 items-center rounded-lg border border-indigo/25 px-4 font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>
@@ -1870,8 +1952,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
-            <p>{{ projection.canReadLesson ? teachingFailureDetail : copy.error }}</p>
-            <button v-if="projection.retryAction" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
+            <button v-if="projection.retryAction && !generationStoppedByPlayer" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ retryActionLabel }}</button>
           </template>
         </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
@@ -1884,7 +1965,6 @@ onBeforeUnmount(() => {
           data-testid="recommendation-teaching-generation-steps"
           class="mt-4 rounded-xl border border-copper/15 bg-copper/5 px-4 py-3"
           :aria-label="copy.generationSteps"
-          aria-live="polite"
         >
           <p class="text-xs font-bold uppercase tracking-[0.1em] text-copper">{{ copy.generationSteps }}</p>
           <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.generationProcessHint }}</p>
@@ -1898,8 +1978,22 @@ onBeforeUnmount(() => {
               <span>{{ step }}</span>
             </li>
           </ol>
+          <div data-testid="recommendation-teaching-failure-boundary" class="mt-3 grid gap-2 lg:grid-cols-3">
+            <div data-failure-classification="local-degradation" :data-current-failure="projection.failureClassification === 'local-degradation' ? 'true' : undefined" class="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2" :class="projection.failureClassification === 'local-degradation' ? 'ring-2 ring-emerald-500/40' : ''">
+              <p class="text-xs font-semibold text-emerald-800">{{ copy.generationLocalFailureTitle }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationLocalFailure }}</p>
+            </div>
+            <div data-failure-classification="preserved-stop" :data-current-failure="projection.failureClassification === 'preserved-stop' ? 'true' : undefined" class="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2" :class="projection.failureClassification === 'preserved-stop' ? 'ring-2 ring-amber-500/40' : ''">
+              <p class="text-xs font-semibold text-amber-800">{{ copy.generationPreservedStopTitle }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationPreservedStop }}</p>
+            </div>
+            <div data-failure-classification="external-repair" :data-current-failure="projection.failureClassification === 'external-repair' ? 'true' : undefined" class="rounded-lg border border-red-200 bg-red-50/70 px-3 py-2" :class="projection.failureClassification === 'external-repair' ? 'ring-2 ring-red-500/40' : ''">
+              <p class="text-xs font-semibold text-red-800">{{ copy.generationRepairTitle }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationRepair }}</p>
+            </div>
+          </div>
           <p class="mt-3 text-[11px] font-bold uppercase tracking-[0.08em] text-ink/45">{{ copy.generationLatest }}</p>
-          <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.generationAttemptHint }}</p>
+          <p data-testid="recommendation-teaching-live-status" class="sr-only" aria-live="polite" aria-atomic="true">{{ visibleJourneyTeachingSteps[0]?.text }}</p>
           <ol data-testid="recommendation-teaching-activity-list" class="mt-2 grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
             <li
               v-for="step in visibleJourneyTeachingSteps"
@@ -1925,7 +2019,7 @@ onBeforeUnmount(() => {
             {{ teachingHistoryExpanded ? copy.generationHideHistory : copy.generationShowHistory(hiddenJourneyTeachingStepCount) }}
           </button>
         </section>
-        <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ copy.safe }}</p>
+        <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ safeCloseDetail }}</p>
         <div
           v-if="visualEnrichmentStatus"
           data-testid="recommendation-visual-enrichment-status"
@@ -1937,6 +2031,8 @@ onBeforeUnmount(() => {
           <button v-if="visualRefreshStopped" type="button" class="min-h-10 shrink-0 rounded-lg border border-current/30 px-3" @click="retryVisualStatus">{{ copy.visualRetry }}</button>
         </div>
         <p v-if="pollingWarning" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900" role="status">{{ copy.pollingWarning }}</p>
+        <p v-if="retryFailure" data-testid="recommendation-retry-failure" class="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-900" role="alert">{{ copy.retryFailed }}</p>
+        <p v-if="stopFailure" data-testid="recommendation-stop-failure" class="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-900" role="alert">{{ copy.stopFailed }}</p>
         <div v-if="projection.canReadRulebook" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65">
           <p>{{ projection.canReadLesson ? copy.rulebookAvailable : copy.rulebookReady }}</p>
           <button type="button" class="mt-3 min-h-11 rounded-lg border border-indigo/25 px-4 font-semibold text-indigo" @click="emit('open-rulebook', journeyStatus)">{{ copy.readRulebook }}</button>
@@ -1949,17 +2045,17 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="mt-4 flex flex-wrap gap-x-5 gap-y-2">
-          <button v-if="activeGenerationRunId && !paused" type="button" :disabled="retrying" class="min-h-11 text-sm font-semibold text-amber-700 underline disabled:opacity-40" @click="pauseGeneration">{{ copy.pause }}</button>
-          <button v-if="paused" type="button" :disabled="retrying" class="min-h-11 text-sm font-semibold text-indigo underline disabled:opacity-40" @click="resumeGeneration">{{ copy.resume }}</button>
-          <button type="button" :disabled="deleting" class="min-h-11 text-sm font-semibold text-red-700 underline disabled:opacity-40" @click="deleteConfirmOpen = true">{{ copy.remove }}</button>
+          <button v-if="activeGenerationRunId && !generationStoppedByPlayer" type="button" :disabled="retrying" class="min-h-11 text-sm font-semibold text-amber-700 underline disabled:opacity-40" @click="stopGeneration">{{ copy.stop }}</button>
+          <button v-if="generationStoppedByPlayer" type="button" :disabled="retrying" class="min-h-11 text-sm font-semibold text-indigo underline disabled:opacity-40" @click="restartGeneration">{{ copy.restart }}</button>
+          <button ref="deleteTrigger" type="button" :disabled="deleting" class="min-h-11 text-sm font-semibold text-red-700 underline disabled:opacity-40" @click="openDeleteConfirmation">{{ copy.remove }}</button>
           <RouterLink to="/catalog" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline">{{ copy.catalog }} →</RouterLink>
           <button type="button" class="min-h-11 text-sm font-semibold text-ink/50 underline" @click="emit('change')">{{ copy.change }}</button>
         </div>
-        <div v-if="deleteConfirmOpen" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900" role="alertdialog" :aria-label="copy.remove">
-          <p>{{ copy.removeConfirm }}</p>
+        <div v-if="deleteConfirmOpen" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900" role="alertdialog" aria-modal="true" :aria-label="copy.remove" :aria-describedby="`recommendation-delete-confirm-${game.bggId}`">
+          <p :id="`recommendation-delete-confirm-${game.bggId}`">{{ copy.removeConfirm }}</p>
           <div class="mt-3 flex flex-wrap gap-3">
             <button type="button" :disabled="deleting" class="min-h-11 rounded-lg bg-red-700 px-4 font-semibold text-white disabled:opacity-40" @click="deleteTeachingJourney">{{ copy.removeYes }}</button>
-            <button type="button" :disabled="deleting" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold disabled:opacity-40" @click="deleteConfirmOpen = false">{{ copy.removeNo }}</button>
+            <button ref="deleteCancel" type="button" :disabled="deleting" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold disabled:opacity-40" @click="closeDeleteConfirmation">{{ copy.removeNo }}</button>
           </div>
         </div>
       </div>

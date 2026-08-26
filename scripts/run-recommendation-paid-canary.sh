@@ -31,7 +31,7 @@ if [ "${#RULEPILOT_RECOMMENDATION_CANARY_LABEL}" -gt 80 ]; then
 fi
 
 case "$scenario" in
-	critical-path|comparison-only|deep-comparison|classic-awards|classic-awards-conversation|creator-alias|creator-alias-identity|wild-chat|imaginative|production-two-turn|availability-shortfall|direct-target|all) ;;
+	critical-path|ready-continuation|comparison-only|deep-comparison|classic-awards|classic-awards-conversation|creator-alias|creator-alias-identity|wild-chat|imaginative|production-two-turn|availability-shortfall|direct-target|all) ;;
 	*)
 		echo "FAIL unsupported recommendation canary scenario: $scenario"
 		exit 2
@@ -60,6 +60,8 @@ esac
 cd "$ROOT_DIR/backend"
 if [ "$scenario" = "critical-path" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#publishesOneClaimScopedRecommendationAfterValidation' test
+elif [ "$scenario" = "ready-continuation" ]; then
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#prefersAReadyGuideWhenThePlayerRequiresRecommendationTeachingAndQuestions' test
 elif [ "$scenario" = "comparison-only" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#preservesANaturalComparisonWithoutASeparateDecisionReviewTurn' test
 elif [ "$scenario" = "deep-comparison" ]; then

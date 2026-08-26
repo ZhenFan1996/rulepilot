@@ -3,6 +3,7 @@ package com.rulepilot.assistant;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.assistant.domain.LearningIntent;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public interface QuestionUnderstanding {
@@ -14,10 +15,11 @@ public interface QuestionUnderstanding {
             String previousQuestion,
             LearningIntent learningIntent,
             PlayerLocale outputLanguage,
-            PriorTurnReference priorTurnReference) {
+            PriorTurnReference priorTurnReference,
+            Set<Integer> allowedEvidencePages) {
 
         public QuestionContext(UUID documentVersionId) {
-            this(documentVersionId, null, null, PlayerLocale.ZH_CN, null);
+            this(documentVersionId, null, null, PlayerLocale.ZH_CN, null, null);
         }
 
         public QuestionContext(
@@ -25,7 +27,16 @@ public interface QuestionUnderstanding {
                 String previousQuestion,
                 LearningIntent learningIntent,
                 PlayerLocale outputLanguage) {
-            this(documentVersionId, previousQuestion, learningIntent, outputLanguage, null);
+            this(documentVersionId, previousQuestion, learningIntent, outputLanguage, null, null);
+        }
+
+        public QuestionContext(
+                UUID documentVersionId,
+                String previousQuestion,
+                LearningIntent learningIntent,
+                PlayerLocale outputLanguage,
+                PriorTurnReference priorTurnReference) {
+            this(documentVersionId, previousQuestion, learningIntent, outputLanguage, priorTurnReference, null);
         }
 
         public QuestionContext withLearningIntent(LearningIntent resolvedLearningIntent) {
@@ -35,7 +46,8 @@ public interface QuestionUnderstanding {
                     previousQuestion,
                     resolvedLearningIntent,
                     outputLanguage,
-                    priorTurnReference);
+                    priorTurnReference,
+                    allowedEvidencePages);
         }
 
         public QuestionContext withOutputLanguage(PlayerLocale resolvedOutputLanguage) {
@@ -45,7 +57,8 @@ public interface QuestionUnderstanding {
                     previousQuestion,
                     learningIntent,
                     resolvedOutputLanguage,
-                    priorTurnReference);
+                    priorTurnReference,
+                    allowedEvidencePages);
         }
 
         public QuestionContext {
@@ -57,6 +70,13 @@ public interface QuestionUnderstanding {
             if (priorTurnReference != null
                     && !documentVersionId.equals(priorTurnReference.documentVersionId())) {
                 throw new IllegalArgumentException("prior turn uses a different document version");
+            }
+            if (allowedEvidencePages != null) {
+                if (allowedEvidencePages.isEmpty()
+                        || allowedEvidencePages.stream().anyMatch(page -> page == null || page < 1)) {
+                    throw new IllegalArgumentException("allowed answer evidence pages are invalid");
+                }
+                allowedEvidencePages = Set.copyOf(allowedEvidencePages);
             }
         }
 

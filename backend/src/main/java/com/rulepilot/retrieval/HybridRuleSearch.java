@@ -13,7 +13,15 @@ public interface HybridRuleSearch {
      */
     List<HybridEvidenceHit> search(UUID documentVersionId, String query, RetrievalOptions options);
 
-    record RetrievalOptions(int limit, Set<String> sectionTypes, String currentSectionType) {
+    record RetrievalOptions(
+            int limit,
+            Set<String> sectionTypes,
+            String currentSectionType,
+            Set<Integer> allowedEvidencePages) {
+        public RetrievalOptions(int limit, Set<String> sectionTypes, String currentSectionType) {
+            this(limit, sectionTypes, currentSectionType, null);
+        }
+
         public RetrievalOptions {
             sectionTypes = sectionTypes == null
                     ? Set.of()
@@ -22,6 +30,13 @@ public interface HybridRuleSearch {
             currentSectionType = currentSectionType == null || currentSectionType.isBlank()
                     ? null
                     : currentSectionType.strip().toUpperCase();
+            if (allowedEvidencePages != null) {
+                if (allowedEvidencePages.isEmpty()
+                        || allowedEvidencePages.stream().anyMatch(page -> page == null || page < 1)) {
+                    throw new IllegalArgumentException("hybrid retrieval page scope is invalid");
+                }
+                allowedEvidencePages = Set.copyOf(allowedEvidencePages);
+            }
         }
     }
 }

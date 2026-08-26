@@ -52,6 +52,30 @@ class AnswerCacheScopePolicyTest {
     }
 
     @Test
+    void separatesPublicAnswersByTheirSortedPublishedPageScope() {
+        var first = AnswerCacheScopePolicy.key(
+                "answer-v99",
+                1,
+                question("How many cards can I draw?"),
+                new QuestionContext(documentVersionId, null, null, PlayerLocale.EN, null, Set.of(3, 2)));
+        var samePagesDifferentOrder = AnswerCacheScopePolicy.key(
+                "answer-v99",
+                1,
+                question("How many cards can I draw?"),
+                new QuestionContext(documentVersionId, null, null, PlayerLocale.EN, null, Set.of(2, 3)));
+        var differentPages = AnswerCacheScopePolicy.key(
+                "answer-v99",
+                1,
+                question("How many cards can I draw?"),
+                new QuestionContext(documentVersionId, null, null, PlayerLocale.EN, null, Set.of(2, 4)));
+
+        assertThat(first.normalizedQuestion())
+                .isEqualTo("PUBLIC_PAGES[2,3]:answer-v99:EN:How many cards can I draw?")
+                .isEqualTo(samePagesDifferentOrder.normalizedQuestion());
+        assertThat(differentPages.normalizedQuestion()).isNotEqualTo(first.normalizedQuestion());
+    }
+
+    @Test
     void rejectsAnUnversionedAnswerPolicyInsteadOfSilentlySharingOldAnswers() {
         assertThatThrownBy(() -> AnswerCacheScopePolicy.key(
                         " ",

@@ -66,6 +66,7 @@ public final class AnswerEvidenceRetriever {
         retrievePageHintCandidates(
                 assistantRunId,
                 context.documentVersionId(),
+                context.allowedEvidencePages(),
                 questionPlan,
                 evidenceById,
                 visualFactsByPage,
@@ -73,6 +74,7 @@ public final class AnswerEvidenceRetriever {
         retrieveRuleObjectBoundVisualFacts(
                 assistantRunId,
                 context.documentVersionId(),
+                context.allowedEvidencePages(),
                 questionPlan.currentRuleObjectSpans(),
                 visualFactsByPage,
                 directQuestionVisualFactPages);
@@ -95,7 +97,8 @@ public final class AnswerEvidenceRetriever {
                                                 ? 8
                                                 : 5,
                                         intent.sectionTypes(),
-                                        intent.currentSectionType())),
+                                        intent.currentSectionType(),
+                                        context.allowedEvidencePages())),
                         this::evidenceTokens);
                 successfulCoreRetrievals++;
             } catch (RuntimeException retrievalFailure) {
@@ -135,10 +138,16 @@ public final class AnswerEvidenceRetriever {
                         "Page-scoped visual rule facts retrieved",
                         () -> visualFacts.search(context.documentVersionId(), intent.query(), 2),
                         matches -> matches.size() * 80);
-                visualMatches.forEach(match -> visualFactsByPage.merge(
-                        match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
+                visualMatches.stream()
+                        .filter(match -> allowedPage(match.pageNumber(), context.allowedEvidencePages()))
+                        .forEach(match -> visualFactsByPage.merge(
+                                match.pageNumber(),
+                                match,
+                                (first, candidate) -> candidate.score() > first.score() ? candidate : first));
                 if (intent.directQuestion()) {
-                    visualMatches.forEach(match -> directQuestionVisualFactPages.add(match.pageNumber()));
+                    visualMatches.stream()
+                            .filter(match -> allowedPage(match.pageNumber(), context.allowedEvidencePages()))
+                            .forEach(match -> directQuestionVisualFactPages.add(match.pageNumber()));
                 }
             } catch (RuntimeException visualLookupFailure) {
                 if (invocations.executionStopped(visualLookupFailure)) throw visualLookupFailure;
@@ -168,12 +177,14 @@ public final class AnswerEvidenceRetriever {
     private void retrievePageHintCandidates(
             UUID assistantRunId,
             UUID documentVersionId,
+            Set<Integer> allowedPages,
             AnswerRetrievalPlan plan,
             Map<UUID, HybridEvidenceHit> evidenceById,
             Map<Integer, PageFactMatch> visualFactsByPage,
             Set<Integer> priorityPages) {
         Set<Integer> pageNumbers = plan.pageHints().stream()
                 .map(AnswerRetrievalPlan.PageHint::pageNumber)
+                .filter(page -> allowedPage(page, allowedPages))
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         if (pageNumbers.isEmpty()) return;
         try {
@@ -218,6 +229,7 @@ public final class AnswerEvidenceRetriever {
     private void retrieveRuleObjectBoundVisualFacts(
             UUID assistantRunId,
             UUID documentVersionId,
+            Set<Integer> allowedPages,
             List<String> currentRuleObjectSpans,
             Map<Integer, PageFactMatch> visualFactsByPage,
             Set<Integer> directQuestionVisualFactPages) {
@@ -230,7 +242,7 @@ public final class AnswerEvidenceRetriever {
                         "Page facts retrieved for an Agent-selected current-question rule object",
                         () -> visualFacts.search(documentVersionId, ruleObjectSpan, 4),
                         result -> result.size() * 80);
-                matches.forEach(match -> {
+                matches.stream().filter(match -> allowedPage(match.pageNumber(), allowedPages)).forEach(match -> {
                     visualFactsByPage.merge(
                             match.pageNumber(),
                             match,
@@ -261,6 +273,10 @@ public final class AnswerEvidenceRetriever {
 
     private int evidenceTokens(List<HybridEvidenceHit> evidence) {
         return evidence.stream().mapToInt(hit -> estimateTokens(hit.evidence().excerpt())).sum();
+    }
+
+    private boolean allowedPage(int pageNumber, Set<Integer> allowedPages) {
+        return allowedPages == null || allowedPages.contains(pageNumber);
     }
 
     private int estimateTokens(String value) {

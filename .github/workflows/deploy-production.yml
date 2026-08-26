@@ -259,7 +259,7 @@ jobs:
             'BGG_CACHE_PREWARM_LEASE_DURATION=PT30M' \
             'BGG_RECOMMENDATION_AGENT_ENABLED=true' \
             'BGG_RECOMMENDATION_PROVIDER=spring-ai' \
-            'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen' \
+            'BGG_RECOMMENDATION_MODEL_PROVIDER=deepseek' \
             'BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8' \
             'BGG_RECOMMENDATION_AGENT_TIMEOUT=PT45S' \
             'BGG_RECOMMENDATION_TEMPERATURE=0.0' \
@@ -349,6 +349,12 @@ jobs:
           release_dir="${application_root}/releases/${release_id}"
           current_release=$(readlink -f "${application_root}/current" 2>/dev/null || true)
 
+          safe_container_state() {
+            docker inspect --format \
+              'container={{.Id}} status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' \
+              "$1" || true
+          }
+
           diagnose_failure() {
             status=$?
             echo "Production activation failed; collecting safe diagnostics." >&2
@@ -370,9 +376,7 @@ jobs:
               -f infra/compose.production.yml ps -q postgres 2>/dev/null || true)
             if [[ -n "$postgres_container" ]]; then
               echo "PostgreSQL runtime state:"
-              docker inspect --format '{{json .State}}' "$postgres_container" || true
-              echo "Recent PostgreSQL logs:"
-              docker logs --tail 120 "$postgres_container" || true
+              safe_container_state "$postgres_container"
             fi
             api_container=$(docker compose --env-file .env \
               -f infra/compose.yml \
@@ -380,9 +384,7 @@ jobs:
               -f infra/compose.production.yml ps -q api 2>/dev/null || true)
             if [[ -n "$api_container" ]]; then
               echo "API runtime state:"
-              docker inspect --format '{{json .State}}' "$api_container" || true
-              echo "Recent API logs:"
-              docker logs --tail 160 "$api_container" || true
+              safe_container_state "$api_container"
             fi
             if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
               echo "Restoring API and worker from the current release after failed activation."

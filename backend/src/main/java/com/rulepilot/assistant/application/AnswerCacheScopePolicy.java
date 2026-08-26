@@ -34,6 +34,13 @@ final class AnswerCacheScopePolicy {
                         + " -> "
                         + question.normalizedQuestion();
         String scoped = policyVersion + ":" + context.outputLanguage().name() + ":" + conversation;
+        if (context.allowedEvidencePages() != null) {
+            String pageScope = context.allowedEvidencePages().stream()
+                    .sorted()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(","));
+            scoped = "PUBLIC_PAGES[" + pageScope + "]:" + scoped;
+        }
         return context.learningIntent() == null ? scoped : context.learningIntent().name() + ":" + scoped;
     }
 }

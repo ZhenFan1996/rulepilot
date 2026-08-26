@@ -344,6 +344,7 @@ public class BggRecommendationAgentController {
             List<ResearchSourceResponse> researchSources,
             List<String> completedWork,
             CandidateComparisonResponse comparison,
+            RecommendationContinuationResponse continuation,
             List<RecommendedGameResponse> games) {
         static RecommendationConversationResponse from(
                 ConversationResponse response,
@@ -379,6 +380,9 @@ public class BggRecommendationAgentController {
                     response.comparison() == null
                             ? null
                             : CandidateComparisonResponse.from(response.comparison(), taxonomy, locale, presentation),
+                    response.continuation() == null
+                            ? null
+                            : RecommendationContinuationResponse.from(response.continuation()),
                     response.games().stream()
                             .map(game -> RecommendedGameResponse.from(game, taxonomy, locale, presentation))
                             .toList());
@@ -574,7 +578,8 @@ public class BggRecommendationAgentController {
             List<String> tradeoffs,
             List<RecommendationReasonResponse> reasons,
             List<CandidateFitClaimResponse> fitClaims,
-            List<RecommendationReplyPartResponse> replyParts) {
+            List<RecommendationReplyPartResponse> replyParts,
+            TeachingContinuationResponse teachingContinuation) {
         static RecommendedGameResponse from(
                 RecommendedGame game,
                 LocalizedTaxonomy taxonomy,
@@ -593,7 +598,40 @@ public class BggRecommendationAgentController {
                             .toList(),
                     game.replyParts().stream()
                             .map(RecommendationReplyPartResponse::from)
-                            .toList());
+                            .toList(),
+                    game.teachingContinuation() == null
+                            ? null
+                            : TeachingContinuationResponse.from(game.teachingContinuation()));
+        }
+    }
+
+    record RecommendationContinuationResponse(
+            String kind,
+            String learningGoal,
+            String availability,
+            int readyCount,
+            int candidateCount) {
+        static RecommendationContinuationResponse from(
+                BoardGameRecommendationAgent.RecommendationContinuation value) {
+            return new RecommendationContinuationResponse(
+                    value.kind().name().toLowerCase(Locale.ROOT),
+                    value.learningGoal(),
+                    value.availability().name().toLowerCase(Locale.ROOT),
+                    value.readyCount(),
+                    value.candidateCount());
+        }
+    }
+
+    record TeachingContinuationResponse(
+            UUID teachingPlanId,
+            int sectionCount,
+            int stepCount) {
+        static TeachingContinuationResponse from(
+                BoardGameRecommendationAgent.TeachingContinuation value) {
+            return new TeachingContinuationResponse(
+                    value.teachingPlanId(),
+                    value.sectionCount(),
+                    value.stepCount());
         }
     }
 

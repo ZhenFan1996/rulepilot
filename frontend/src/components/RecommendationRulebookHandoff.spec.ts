@@ -101,7 +101,10 @@ describe('RecommendationRulebookHandoff', () => {
     localStorage.setItem('rulepilot:locale', 'zh-CN')
   })
 
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
 
   class FakeProgressEventSource {
     static instances: FakeProgressEventSource[] = []
@@ -124,7 +127,7 @@ describe('RecommendationRulebookHandoff', () => {
     close() { this.closed = true }
   }
 
-  async function mountHandoff(gameOverride = game) {
+  async function mountHandoff(gameOverride = game, learningGoal: string | null = null) {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -140,6 +143,7 @@ describe('RecommendationRulebookHandoff', () => {
     const wrapper = mount(RecommendationRulebookHandoff, {
       props: {
         game: gameOverride,
+        learningGoal,
         profile: {
           type: 'all',
           interaction: 'any',
@@ -327,7 +331,10 @@ describe('RecommendationRulebookHandoff', () => {
       }
       return new Response(null, { status: 404 })
     }))
-    const { wrapper, router } = await mountHandoff()
+    const { wrapper, router } = await mountHandoff(
+      game,
+      '先带新手完成设置和第一轮，再处理容易混淆的规则。',
+    )
     await flushPromises()
 
     expect(wrapper.text()).toContain('已选《展翅翱翔》')
@@ -377,7 +384,7 @@ describe('RecommendationRulebookHandoff', () => {
       officialSourceUrl: 'https://publisher.example/files/wingspan-rulebook.pdf',
       rightsConfirmed: true,
       startTeaching: true,
-      learningGoal: null,
+      learningGoal: '先带新手完成设置和第一轮，再处理容易混淆的规则。',
       discoveredForEditionId: 'edition-1',
       sourceEdition: 'Base game',
       sourceLanguage: 'en',
@@ -443,12 +450,16 @@ describe('RecommendationRulebookHandoff', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('暂未找到可直接导入的规则书')
-    expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text()).toContain('联网搜索：已超时')
+    expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text()).toContain('联网搜索：单个请求超时')
+    expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text())
+      .toContain('自动查找已停下')
+    expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text())
+      .toContain('可以提供公开链接或自己的规则书')
     expect(wrapper.findAll('button').some(button => button.text().includes('继续查找'))).toBe(true)
     expect(wrapper.get('[data-capability="GAME_INFO_ONLY"]').find('button').exists()).toBe(false)
     expect(wrapper.get('section[aria-label="仅用于核对桌游身份"]').text()).toContain('Opaque catalog entry')
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
-    const manualFallback = wrapper.findAll('a').find(link => link.text().includes('本地上传'))
+    const manualFallback = wrapper.findAll('a').find(link => link.text().includes('自己的规则书'))
     expect(manualFallback?.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=recommendation-agent')
 
     await wrapper.get('[data-capability="DOCUMENT_LISTING"] button').trigger('click')
@@ -950,7 +961,7 @@ describe('RecommendationRulebookHandoff', () => {
       const stopped = wrapper.get('[data-testid="recommendation-visual-enrichment-status"]')
       expect(stopped.text()).toContain('连续两次都没有等到配图任务')
       expect(stopped.text()).toContain('已停止自动查询')
-      expect(stopped.text()).toContain('文字和答疑不受影响')
+      expect(stopped.text()).toContain('文字讲解可读，答疑入口仍保留')
       expect(stopped.find('button').text()).toBe('重试配图状态')
 
       await vi.advanceTimersByTimeAsync(30_000)
@@ -1655,6 +1666,7 @@ describe('RecommendationRulebookHandoff', () => {
 
   it('retries failed teaching preparation without downloading or binding the game twice', async () => {
     const requests: Array<{ path: string; options?: RequestInit }> = []
+    let teachingRetryAttempts = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       const path = String(input)
       requests.push({ path, options })
@@ -1682,6 +1694,8 @@ describe('RecommendationRulebookHandoff', () => {
         return Response.json(failed)
       }
       if (path === '/api/v1/documents/official-imports/import-1/teaching-retry' && options?.method === 'POST') {
+        teachingRetryAttempts += 1
+        if (teachingRetryAttempts === 1) return new Response(null, { status: 503 })
         return Response.json({
           id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
           teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-retry',
@@ -1703,7 +1717,27 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
     expect(wrapper.findAll('[data-testid="recommendation-journey-terminal-alert"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid="recommendation-teaching-generation-steps"]')).toHaveLength(1)
-    expect(wrapper.text()).toContain('只有最终找不到可引用规则')
+    const failureBoundary = wrapper.get('[data-testid="recommendation-teaching-failure-boundary"]')
+    expect(failureBoundary.findAll('[data-failure-classification]')).toHaveLength(3)
+    expect(failureBoundary.get('[data-failure-classification="local-degradation"]').text())
+      .toContain('局部降级：可用内容保留')
+    expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').text())
+      .toContain('保留已完成内容后停止')
+    expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
+      .toContain('需要你或运维修复后继续')
+    expect(failureBoundary.text()).toContain('足够的可引用规则')
+    expect(wrapper.get('[data-testid="recommendation-current-failure-classification"]').text())
+      .toContain('本次属于：保留已完成内容后停止')
+    expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').attributes('data-current-failure'))
+      .toBe('true')
+
+    await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="recommendation-retry-failure"]').text())
+      .toContain('本次重试没有启动，后台不会自动继续重试')
+    expect(wrapper.text()).not.toContain('正在自动重试')
+    expect(requests.filter(request => request.path === '/api/v1/documents/official-imports/import-1/teaching-retry'))
+      .toHaveLength(1)
 
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
     await vi.waitFor(
@@ -1715,10 +1749,12 @@ describe('RecommendationRulebookHandoff', () => {
     expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
     const retry = requests.find(request => request.path === '/api/v1/documents/official-imports/import-1/teaching-retry')
     expect(JSON.parse(String(retry?.options?.body))).toEqual({ expectedPreparationRunId: 'preparation-failed' })
+    expect(requests.filter(request => request.path === '/api/v1/documents/official-imports/import-1/teaching-retry'))
+      .toHaveLength(2)
     expect(requests.filter(request => request.path === '/api/v1/document-versions/version-1/teaching-plans')).toHaveLength(0)
   })
 
-  it('keeps a published draft readable and exposes a safe retry when later teaching review degrades', async () => {
+  it('keeps a published draft readable without retrying an optional review degradation', async () => {
     const requests: Array<{ path: string; options?: RequestInit }> = []
     let lessonRequest = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
@@ -1768,18 +1804,120 @@ describe('RecommendationRulebookHandoff', () => {
     await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
 
-    await vi.waitFor(() => expect(wrapper.text()).toContain('已生成的章节仍可阅读'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('本次属于：局部降级：可用内容保留'))
     const status = wrapper.get('[data-testid="player-work-status"]')
     expect(status.text()).toBe('基础讲解可读')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
-    expect(status.attributes('data-player-work-outcome')).toBe('needs-action')
+    expect(status.attributes('data-player-work-outcome')).toBe('none')
     expect(wrapper.text()).not.toContain('REVIEW_UNAVAILABLE')
     expect(wrapper.text()).toContain('打开已生成的讲解')
-    await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
-    await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
+    expect(wrapper.findAll('button').some(button => button.text() === '重试当前步骤')).toBe(false)
+    expect(wrapper.get('[data-testid="recommendation-teaching-failure-boundary"] [data-failure-classification="local-degradation"]').attributes('data-current-failure'))
+      .toBe('true')
 
     expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
-    expect(requests.filter(request => request.path === '/api/v1/teaching-plans/plan-1/illustrated-lessons')).toHaveLength(1)
+    expect(requests.filter(request => request.path === '/api/v1/teaching-plans/plan-1/illustrated-lessons')).toHaveLength(0)
+  })
+
+  it('presents cancellation as stopping one run and restarts with a new run from retained work', async () => {
+    seedCompletedJourney()
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    let cancelled = false
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+        return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+      }
+      if (path === '/api/v1/assistant-runs/preparation-run-1') {
+        return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+        return Response.json(planFixture('plan-1', 'version-1'))
+      }
+      if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+        const snapshot = runSnapshot('teaching-run-1', cancelled ? 'FAILED' : 'LESSON_COMPOSITION')
+        return Response.json(cancelled
+          ? { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'AGENT_CANCELLED' } }
+          : snapshot)
+      }
+      if (path === '/api/v1/assistant-runs/run-restarted') {
+        return Response.json(runSnapshot('run-restarted', 'LESSON_COMPOSITION'))
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+        return Response.json({ ...lessonFixture('lesson-1'), status: 'DRAFT_READY' })
+      }
+      if (path === '/api/v1/assistant-runs/teaching-run-1/cancellation' && options?.method === 'POST') {
+        cancelled = true
+        return new Response(null, { status: 202 })
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons' && options?.method === 'POST') {
+        return Response.json({ assistantRunId: 'run-restarted', state: 'QUEUED', reused: false }, { status: 202 })
+      }
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('停止本次生成'))
+    expect(wrapper.text()).not.toContain('暂停生成')
+
+    await wrapper.findAll('button').find(button => button.text() === '停止本次生成')!.trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('从已完成内容重新开始'))
+    expect(requests.some(request => request.path === '/api/v1/assistant-runs/teaching-run-1/cancellation'))
+      .toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === '继续生成')).toBe(false)
+    expect(sessionStorage.getItem('rulepilot:recommendation-journey:266192'))
+      .toContain('"generationStoppedByPlayer":true')
+
+    await wrapper.findAll('button').find(button => button.text() === '从已完成内容重新开始')!.trigger('click')
+    await vi.waitFor(() => expect(requests.some(request =>
+      request.path === '/api/v1/teaching-plans/plan-1/illustrated-lessons'
+      && request.options?.method === 'POST')).toBe(true))
+    await vi.waitFor(() => expect(sessionStorage.getItem('rulepilot:recommendation-journey:266192'))
+      .toContain('"generationStoppedByPlayer":false'))
+  })
+
+  it('moves focus into the destructive confirmation and restores it when the player keeps the guide', async () => {
+    seedCompletedJourney()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+        return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+      }
+      if (path === '/api/v1/assistant-runs/preparation-run-1') {
+        return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+        return Response.json(planFixture('plan-1', 'version-1'))
+      }
+      if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+        return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+        return Response.json(lessonFixture('lesson-1'))
+      }
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    document.body.appendChild(wrapper.element)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
+    const trigger = wrapper.findAll('button').find(button => button.text() === '删除讲解')!
+    trigger.element.focus()
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.get('[role="alertdialog"]')
+    const cancel = wrapper.findAll('button').find(button => button.text() === '先保留')!
+    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(dialog.attributes('aria-describedby')).toBe('recommendation-delete-confirm-266192')
+    expect(document.activeElement).toBe(cancel.element)
+
+    await cancel.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(trigger.element)
   })
 
   it('polls quickly only until the first published chapter becomes readable', async () => {
@@ -1929,10 +2067,24 @@ describe('RecommendationRulebookHandoff', () => {
       expect(wrapper.text()).toContain('正在通读规则书并组织讲解章节')
       expect(wrapper.text()).not.toContain('重试当前步骤')
       expect(wrapper.text()).not.toContain('需要重试')
-      expect(wrapper.text()).toContain('单页本次未完成不等于整份讲解失败')
-      expect(wrapper.text()).toContain('规则整理遇到被明确分类为临时服务异常时，原请求重试一次')
-      expect(wrapper.text()).toContain('页码绑定未通过时，会按失败类型修正一次')
-      expect(wrapper.text()).toContain('超时、中断、取消、预算耗尽')
+      const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
+      const failureBoundary = wrapper.get('[data-testid="recommendation-teaching-failure-boundary"]')
+      expect(failureBoundary.get('[data-failure-classification="local-degradation"]').text())
+        .toContain('局部降级：可用内容保留')
+      expect(failureBoundary.text()).toContain('页码绑定错误只修正当前结果一次')
+      expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').text())
+        .toContain('全局时限耗尽')
+      expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
+        .toContain('单个请求超时本身不归入这一类')
+      expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
+        .toContain('不代表整条任务的全局时限已耗尽')
+
+      expect(wrapper.get('[data-testid="player-journey-surface"]').attributes('aria-live')).toBeUndefined()
+      expect(generationSteps.attributes('aria-live')).toBeUndefined()
+      const liveStatus = wrapper.get('[data-testid="recommendation-teaching-live-status"]')
+      expect(liveStatus.attributes()).toMatchObject({ 'aria-live': 'polite', 'aria-atomic': 'true' })
+      expect(liveStatus.text()).toContain('第 8 / 20 页')
+      expect(liveStatus.text()).not.toContain('局部降级')
 
       const activityList = wrapper.get('[data-testid="recommendation-teaching-activity-list"]')
       expect(activityList.findAll('li')).toHaveLength(5)
@@ -2036,7 +2188,7 @@ describe('RecommendationRulebookHandoff', () => {
       expect(generationSteps.text()).toContain('校验引用归属、规则书版本与章节结构')
       expect(generationSteps.text()).toContain('通过后立即发布当前章节')
       expect(generationSteps.text()).toContain('正在通读整本规则书，形成整局认识并规划讲解章节')
-      expect(wrapper.text()).toContain('规划中')
+      expect(wrapper.text()).toContain('进行中')
       expect(wrapper.text()).not.toContain('84%')
       expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
     } finally {
@@ -2138,7 +2290,7 @@ describe('RecommendationRulebookHandoff', () => {
     expect(bggLink.attributes('href')).toBe(
       'https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/wingspan-rules.pdf',
     )
-    expect(wrapper.text()).toContain('本地上传')
+    expect(wrapper.text()).toContain('自己的规则书')
     const chooseAnother = wrapper.findAll('button').find(button => button.text() === '重新选择来源')
     expect(chooseAnother).toBeDefined()
     await chooseAnother!.trigger('click')
@@ -2235,7 +2387,7 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.text()).toContain('当前没有找到可审阅的规则书来源')
     const fallback = wrapper.get('a')
     expect(fallback.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=recommendation-agent')
-    expect(fallback.text()).toContain('本地上传')
+    expect(fallback.text()).toContain('自己的规则书')
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
   })
 })

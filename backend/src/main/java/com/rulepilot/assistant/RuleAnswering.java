@@ -27,6 +27,18 @@ public interface RuleAnswering {
         return answerForPublicReader(documentVersionId, question, previousQuestion, outputLanguage);
     }
 
+    /**
+     * Answers through an anonymous lesson while limiting every published citation to pages that the lesson already
+     * exposes. The page scope is a publication boundary, not a retrieval hint.
+     */
+    AnswerResult answerForPublicReader(
+            UUID documentVersionId,
+            String question,
+            String previousQuestion,
+            PlayerLocale outputLanguage,
+            PublicLearningIntent learningIntent,
+            Set<Integer> allowedPublicPages);
+
     enum PublicLearningIntent {
         SIMPLIFY,
         EXAMPLE,

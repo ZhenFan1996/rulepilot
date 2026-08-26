@@ -4,17 +4,24 @@ import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.catalog.PublicTeachingContinuationCatalog;
+import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Availability;
+import com.rulepilot.catalog.PublicTeachingContinuationCatalog.AvailabilityStatus;
+import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Continuation;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.WebResearchUnavailableException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -30,12 +37,22 @@ public class BoardGameRecommendationTools {
 
     private final BoardGameRecommendationCatalog catalog;
     private final BoardGameRecommendationWebResearch webResearch;
+    private final PublicTeachingContinuationCatalog teachingContinuations;
 
     public BoardGameRecommendationTools(
             BoardGameRecommendationCatalog catalog,
             BoardGameRecommendationWebResearch webResearch) {
+        this(catalog, webResearch, ignored -> Availability.none());
+    }
+
+    @Autowired
+    public BoardGameRecommendationTools(
+            BoardGameRecommendationCatalog catalog,
+            BoardGameRecommendationWebResearch webResearch,
+            PublicTeachingContinuationCatalog teachingContinuations) {
         this.catalog = catalog;
         this.webResearch = webResearch;
+        this.teachingContinuations = teachingContinuations;
     }
 
     CatalogObservation searchCatalog(
@@ -107,6 +124,55 @@ public class BoardGameRecommendationTools {
         }
     }
 
+    CatalogObservation lookupReadyTeachingContinuations(List<Game> games) {
+        try {
+            Availability availability = teachingContinuations.continuationsFor(continuationCandidates(games));
+            if (availability.status() == AvailabilityStatus.UNAVAILABLE) {
+                return CatalogObservation.error(
+                        ToolName.LOOKUP_READY_TEACHING_CONTINUATIONS,
+                        "READY_TEACHING_CATALOG_UNAVAILABLE");
+            }
+            boolean partial = availability.status() == AvailabilityStatus.PARTIAL;
+            Map<Integer, Continuation> available = availability.status() == AvailabilityStatus.AVAILABLE || partial
+                    ? availability.continuations()
+                    : Map.of();
+            Map<Integer, Continuation> matched = new LinkedHashMap<>();
+            List<Game> readyGames = new ArrayList<>();
+            for (Game game : games) {
+                int bggId = game.ranking().bggId();
+                Continuation continuation = available.get(bggId);
+                if (continuation == null) continue;
+                matched.putIfAbsent(bggId, continuation);
+                readyGames.add(game);
+            }
+            String code = partial
+                    ? "READY_TEACHING_CATALOG_PARTIAL"
+                    : matched.isEmpty() ? "NO_READY_PUBLIC_TEACHING" : "";
+            return new CatalogObservation(
+                    partial ? ToolStatus.PARTIAL : ToolStatus.SUCCESS,
+                    ToolName.LOOKUP_READY_TEACHING_CONTINUATIONS,
+                    0,
+                    readyGames,
+                    List.of(),
+                    code,
+                    true,
+                    matched);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation target ready-teaching lookup failed");
+            return CatalogObservation.error(
+                    ToolName.LOOKUP_READY_TEACHING_CONTINUATIONS,
+                    "READY_TEACHING_CATALOG_UNAVAILABLE");
+        }
+    }
+
+    private List<PublicTeachingContinuationCatalog.Candidate> continuationCandidates(List<Game> games) {
+        return games.stream()
+                .map(game -> new PublicTeachingContinuationCatalog.Candidate(
+                        game.ranking().bggId(), game.ranking().sourceName()))
+                .distinct()
+                .toList();
+    }
+
     CatalogObservation lookupGame(int bggId) {
         try {
             return new CatalogObservation(
@@ -126,18 +192,7 @@ public class BoardGameRecommendationTools {
         return lookupGames(bggIds, ToolName.LOOKUP_BGG_CANDIDATES);
     }
 
-    /**
-     * Resolves title hypotheses and hydrates their BGG details as one Agent-facing read.
-     * The two catalog operations are mechanically dependent and do not need another
-     * model decision between them.
-     */
-    CatalogObservation inspectTitles(List<String> names) {
-        List<TitleHypothesis> hypotheses = IntStream.range(0, names.size())
-                .mapToObj(index -> new TitleHypothesis("title-" + (index + 1), names.get(index)))
-                .toList();
-        return inspectTitleHypotheses(hypotheses);
-    }
-
+    /** Resolves discovered title hypotheses and hydrates BGG details in one application-owned read. */
     CatalogObservation inspectTitleHypotheses(List<TitleHypothesis> hypotheses) {
         try {
             List<TitleResolution> resolutions = hypotheses.stream()
@@ -270,6 +325,7 @@ public class BoardGameRecommendationTools {
 
     enum ToolName {
         SEARCH_BGG_CATALOG,
+        LOOKUP_READY_TEACHING_CONTINUATIONS,
         LOOKUP_BGG_GAME,
         LOOKUP_BGG_CANDIDATES,
         INSPECT_BGG_TITLES,
@@ -294,7 +350,19 @@ public class BoardGameRecommendationTools {
             List<Game> games,
             List<TitleResolution> titleResolutions,
             String code,
-            boolean pageExhausted) {
+            boolean pageExhausted,
+            Map<Integer, Continuation> teachingContinuations) {
+        CatalogObservation(
+                ToolStatus status,
+                ToolName tool,
+                int sourceCount,
+                List<Game> games,
+                List<TitleResolution> titleResolutions,
+                String code,
+                boolean pageExhausted) {
+            this(status, tool, sourceCount, games, titleResolutions, code, pageExhausted, Map.of());
+        }
+
         CatalogObservation(
                 ToolStatus status,
                 ToolName tool,
@@ -302,12 +370,15 @@ public class BoardGameRecommendationTools {
                 List<Game> games,
                 List<TitleResolution> titleResolutions,
                 String code) {
-            this(status, tool, sourceCount, games, titleResolutions, code, true);
+            this(status, tool, sourceCount, games, titleResolutions, code, true, Map.of());
         }
 
         CatalogObservation {
             games = List.copyOf(games);
             titleResolutions = List.copyOf(titleResolutions);
+            teachingContinuations = teachingContinuations == null
+                    ? Map.of()
+                    : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(teachingContinuations));
         }
 
         static CatalogObservation error(ToolName tool, String code) {

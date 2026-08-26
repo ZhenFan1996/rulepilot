@@ -73,6 +73,35 @@ class HybridRuleSearchServiceTest {
     }
 
     @Test
+    void excludesEveryEvidenceRangeThatEscapesThePublishedPageScope() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit disallowedHighRank = hit(versionId, "ACTIONS", 1);
+        RuleEvidenceHit allowed = hit(versionId, "ACTIONS", 2);
+        RuleEvidenceHit crossingBoundary = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "ACTIONS", "Evidence", 2, 3, 0.5);
+        List<RuleEvidenceHit> indexed = List.of(disallowedHighRank, allowed, crossingBoundary);
+        var service = new HybridRuleSearchService(
+                (version, query, limit) -> indexed,
+                (version, query, limit) -> indexed,
+                (version, chunkIds) -> indexed.stream()
+                        .filter(candidate -> chunkIds.contains(candidate.chunkId()))
+                        .map(candidate -> complete(candidate, "Complete evidence"))
+                        .toList(),
+                new SimpleMeterRegistry());
+
+        var results = service.search(
+                versionId,
+                "legal action",
+                new RetrievalOptions(5, Set.of(), null, Set.of(2)));
+
+        assertThat(results).singleElement().satisfies(result -> {
+            assertThat(result.evidence().chunkId()).isEqualTo(allowed.chunkId());
+            assertThat(result.evidence().pageFrom()).isEqualTo(2);
+            assertThat(result.evidence().pageTo()).isEqualTo(2);
+        });
+    }
+
+    @Test
     void rejectsRankedHitsThatCannotBeCanonicallyHydrated() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit indexed = hit(versionId, "SETUP", 1);
