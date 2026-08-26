@@ -13,7 +13,7 @@ AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
 AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
 AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-teaching-page-canary agent-visual-real agent-context-real agent-recommendation-real agent-recommendation-canary agent-rulebook-acquisition-real agent-security-real agent-release-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-teaching-page-canary agent-visual-real agent-context-real agent-recommendation-real agent-recommendation-canary agent-rulebook-acquisition-real agent-security-real agent-release-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke format backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -115,6 +115,15 @@ backend-test: ## Run backend unit and application tests
 		(cd backend && ./mvnw test); \
 	else \
 		echo "backend-test is not available yet; P0-02 is pending."; \
+		exit 2; \
+	fi
+
+backend-runtime-image-smoke: ## Package and build the exact backend runtime image, including native visual-tool smoke
+	@if [ -f backend/mvnw ]; then \
+		(cd backend && ./mvnw -q -DskipTests package); \
+		docker build --file backend/Dockerfile.runtime --tag rulepilot-backend:ci-smoke backend; \
+	else \
+		echo "backend runtime image smoke is not available; the backend project is missing."; \
 		exit 2; \
 	fi
 

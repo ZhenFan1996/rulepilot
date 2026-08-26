@@ -34,7 +34,7 @@ public final class OpenCvVisualRegionProposer implements VisualRegionProposer {
     private static final int MAX_RESPONSE_BYTES = 64 * 1_024;
     private static final int MAX_INPUT_BYTES = 5 * 1_024 * 1_024;
     private static final long MAX_PAGE_PIXELS = 12_000_000L;
-    private static final long PROCESS_MEMORY_LIMIT_BYTES = 384L * 1_024 * 1_024;
+    private static final long PROCESS_WORKING_ADDRESS_SPACE_BYTES = 384L * 1_024 * 1_024;
     private static final Duration MAX_TOOL_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration TERMINATION_PHASE_WAIT = Duration.ofMillis(50);
     private static final Duration TERMINATION_WAIT = Duration.ofMillis(250);
@@ -116,7 +116,8 @@ public final class OpenCvVisualRegionProposer implements VisualRegionProposer {
                     "--page-height",
                     Integer.toString(page.height()));
             processBuilder.environment().put(
-                    "RULEPILOT_OPENCV_MEMORY_LIMIT_BYTES", Long.toString(PROCESS_MEMORY_LIMIT_BYTES));
+                    "RULEPILOT_OPENCV_WORKING_ADDRESS_SPACE_BYTES",
+                    Long.toString(PROCESS_WORKING_ADDRESS_SPACE_BYTES));
             processBuilder.environment().put(
                     "RULEPILOT_OPENCV_CPU_LIMIT_SECONDS", Integer.toString(cpuLimitSeconds(timeout)));
             process = processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD).start();

@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import resource
+import subprocess
 import sys
 
 sys.dont_write_bytecode = True
@@ -36,9 +37,31 @@ def main() -> None:
     cv2 = production.cv2
     np = production.np
 
-    memory_soft_limit, _ = resource.getrlimit(resource.RLIMIT_AS)
-    if memory_soft_limit > production.DEFAULT_MEMORY_LIMIT_BYTES:
-        raise AssertionError("the native proposal process does not own an independent memory ceiling")
+    address_space_limit, _ = resource.getrlimit(resource.RLIMIT_AS)
+    if address_space_limit != production.ADDRESS_SPACE_LIMIT_BYTES:
+        raise AssertionError("the native proposal process did not retain its applied address-space limit")
+    working_address_space = address_space_limit - production.ADDRESS_SPACE_BASELINE_BYTES
+    if working_address_space != production.DEFAULT_WORKING_ADDRESS_SPACE_BYTES:
+        raise AssertionError("the native proposal process escaped its bounded working address space")
+
+    original_proc_reader = production.proc_virtual_memory_bytes
+    original_ps_runner = production.subprocess.run
+    original_path_is_file = production.os.path.isfile
+    try:
+        def unavailable_proc_reader() -> int:
+            raise RuntimeError("synthetic non-Linux host")
+
+        production.proc_virtual_memory_bytes = unavailable_proc_reader
+        production.os.path.isfile = lambda candidate: candidate == "/bin/ps"
+        production.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout="123456\n"
+        )
+        if production.current_virtual_memory_bytes() != 123_456 * 1_024:
+            raise AssertionError("portable process address-space accounting changed units")
+    finally:
+        production.proc_virtual_memory_bytes = original_proc_reader
+        production.subprocess.run = original_ps_runner
+        production.os.path.isfile = original_path_is_file
 
     width, height = 1_200, 800
     blank = np.full((height, width, 3), 255, dtype=np.uint8)
@@ -118,12 +141,13 @@ def main() -> None:
 
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     peak_rss_bytes = peak_rss if sys.platform == "darwin" else peak_rss * 1_024
-    if peak_rss_bytes > memory_soft_limit:
-        raise AssertionError("high-texture proposal work exceeded its process memory ceiling")
+    if peak_rss_bytes > production.DEFAULT_WORKING_ADDRESS_SPACE_BYTES:
+        raise AssertionError("high-texture proposal work exceeded its resident-memory smoke boundary")
     print(
         "opencv smoke passed: "
         f"peak-rss-bytes={peak_rss_bytes} "
-        f"memory-limit-bytes={memory_soft_limit} "
+        f"address-space-baseline-bytes={production.ADDRESS_SPACE_BASELINE_BYTES} "
+        f"working-address-space-bytes={working_address_space} "
         f"working-pixels={diagnostics['workingPixels']}"
     )
 

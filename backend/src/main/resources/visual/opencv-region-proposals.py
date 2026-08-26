@@ -8,6 +8,7 @@ import json
 import math
 import os
 import resource
+import subprocess
 import sys
 
 
@@ -17,8 +18,8 @@ MAX_WORKING_PIXELS = 1_500_000
 MAX_WORKING_LONG_EDGE = 1_600
 MAX_CONTOURS_SCANNED_PER_ROUND = 4_096
 MAX_PROPOSALS_PER_ROUND = 512
-DEFAULT_MEMORY_LIMIT_BYTES = 384 * 1024 * 1024
-MAX_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
+DEFAULT_WORKING_ADDRESS_SPACE_BYTES = 384 * 1024 * 1024
+MAX_WORKING_ADDRESS_SPACE_BYTES = 512 * 1024 * 1024
 MAX_CPU_LIMIT_SECONDS = 31
 
 
@@ -32,28 +33,83 @@ def bounded_environment_integer(name: str, default: int, minimum: int, maximum: 
     return value
 
 
-def lower_process_limit(kind: int, requested: int) -> None:
+def lower_process_limit(kind: int, requested: int) -> int:
     _, hard = resource.getrlimit(kind)
     bounded = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
     resource.setrlimit(kind, (bounded, bounded))
+    return bounded
 
 
-def apply_process_limits() -> None:
-    memory_limit = bounded_environment_integer(
-        "RULEPILOT_OPENCV_MEMORY_LIMIT_BYTES",
-        DEFAULT_MEMORY_LIMIT_BYTES,
-        256 * 1024 * 1024,
-        MAX_MEMORY_LIMIT_BYTES,
-    )
+def apply_cpu_limit() -> None:
     cpu_limit = bounded_environment_integer(
         "RULEPILOT_OPENCV_CPU_LIMIT_SECONDS", 3, 1, MAX_CPU_LIMIT_SECONDS
     )
-    lower_process_limit(resource.RLIMIT_AS, memory_limit)
     lower_process_limit(resource.RLIMIT_CPU, cpu_limit)
 
 
-# Apply OS limits before native image libraries map memory or create worker pools.
-apply_process_limits()
+def proc_virtual_memory_bytes() -> int:
+    try:
+        with open("/proc/self/statm", encoding="ascii") as process_memory:
+            statm = process_memory.read().split()
+        pages = int(statm[0])
+        page_size = os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError) as failure:
+        raise RuntimeError("Linux process address-space accounting is unavailable") from failure
+    if pages < 1 or page_size < 1:
+        raise RuntimeError("Linux process address-space accounting is invalid")
+    return pages * page_size
+
+
+def ps_virtual_memory_bytes() -> int:
+    ps_command = next(
+        (candidate for candidate in ("/bin/ps", "/usr/bin/ps") if os.path.isfile(candidate)),
+        None,
+    )
+    if ps_command is None:
+        raise RuntimeError("POSIX process address-space accounting is unavailable")
+    try:
+        completed = subprocess.run(
+            [ps_command, "-o", "vsz=", "-p", str(os.getpid())],
+            check=True,
+            capture_output=True,
+            encoding="ascii",
+            timeout=1,
+        )
+        raw_kibibytes = completed.stdout.strip()
+        if not raw_kibibytes.isascii() or not raw_kibibytes.isdecimal():
+            raise ValueError("ps returned a non-numeric virtual-memory size")
+        virtual_memory_bytes = int(raw_kibibytes) * 1_024
+    except (OSError, subprocess.SubprocessError, ValueError) as failure:
+        raise RuntimeError("POSIX process address-space accounting is unavailable") from failure
+    if virtual_memory_bytes < 1:
+        raise RuntimeError("POSIX process address-space accounting is invalid")
+    return virtual_memory_bytes
+
+
+def current_virtual_memory_bytes() -> int:
+    try:
+        return proc_virtual_memory_bytes()
+    except RuntimeError:
+        return ps_virtual_memory_bytes()
+
+
+def apply_working_address_space_limit() -> tuple[int, int]:
+    working_allowance = bounded_environment_integer(
+        "RULEPILOT_OPENCV_WORKING_ADDRESS_SPACE_BYTES",
+        DEFAULT_WORKING_ADDRESS_SPACE_BYTES,
+        256 * 1024 * 1024,
+        MAX_WORKING_ADDRESS_SPACE_BYTES,
+    )
+    baseline = current_virtual_memory_bytes()
+    requested = baseline + working_allowance
+    applied = lower_process_limit(resource.RLIMIT_AS, requested)
+    if applied != requested:
+        raise MemoryError("OpenCV process cannot reserve its bounded working address space")
+    return baseline, applied
+
+
+# CPU time is independent of shared-library mappings and can be bounded before native imports.
+apply_cpu_limit()
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -64,6 +120,11 @@ import numpy as np  # noqa: E402
 cv2.setNumThreads(1)
 if hasattr(cv2, "ocl"):
     cv2.ocl.setUseOpenCL(False)
+
+# File-backed native libraries can reserve a large virtual range while using little resident memory. Bound new
+# working address space after those immutable mappings exist, so the limit constrains page work instead of making a
+# valid OpenCV runtime fail nondeterministically during import.
+ADDRESS_SPACE_BASELINE_BYTES, ADDRESS_SPACE_LIMIT_BYTES = apply_working_address_space_limit()
 
 
 def intersection_over_union(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:

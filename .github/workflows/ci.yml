@@ -27,6 +27,7 @@ jobs:
           cache: maven
           cache-dependency-path: backend/pom.xml
       - run: make backend-test
+      - run: make backend-runtime-image-smoke
 
   frontend:
     name: Frontend

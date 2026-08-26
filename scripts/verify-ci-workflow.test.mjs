@@ -75,6 +75,13 @@ test('E2E CI cannot regress to the deprecated Node 20 artifact action', () => {
   assert.doesNotMatch(ciWorkflow, /uses:\s*actions\/upload-artifact@v[1-5]\b/)
 })
 
+test('backend CI builds the exact native runtime image before production deployment', () => {
+  assert.match(ciWorkflow, /make backend-test[\s\S]*?make backend-runtime-image-smoke/)
+  assert.match(makefile,
+    /backend-runtime-image-smoke:[\s\S]*?docker build --file backend\/Dockerfile\.runtime/)
+  assert.match(deploymentWorkflow, /docker build[\s\S]*?--file backend\/Dockerfile\.runtime/)
+})
+
 test('production recommendation journey tests one exact deployed main-ancestry release without exposing its player credential', () => {
   assert.match(productionRecommendationWorkflow,
     /tested_sha:[\s\S]*?required: true[\s\S]*?type: string/)
@@ -715,7 +722,8 @@ test('production deployment does not couple release availability to a stochastic
 test('production deployment failure output includes service status but not application logs', () => {
   const deploymentCommands = deploymentWorkflow.replace(/\\\r?\n\s*/g, ' ')
   assert.match(deploymentWorkflow, /name: Collect production service status after a failed verification/)
-  assert.match(deploymentWorkflow, /if: failure\(\)/)
+  assert.match(deploymentWorkflow, /id: configure_ssh/)
+  assert.match(deploymentWorkflow, /if: failure\(\) && steps\.configure_ssh\.outcome == 'success'/)
   assert.match(deploymentWorkflow, /ps api worker frontend gateway/)
   assert.match(deploymentWorkflow, /Refusing to inspect an active release outside/)
   assert.match(deploymentWorkflow, /status=\{\{\.State\.Status\}\}/)
