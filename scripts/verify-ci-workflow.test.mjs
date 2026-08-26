@@ -503,6 +503,10 @@ test('production recommendation journey records exact-release single-user resour
     /docker ps -a --filter label=com\.docker\.compose\.project=rulepilot/)
   assert.match(productionRecommendationWorkflow,
     /\.RestartCount[\s\S]*?\.State\.OOMKilled[\s\S]*?\.State\.Running/)
+  assert.match(productionRecommendationWorkflow,
+    /docker inspect --format[\s\S]*?\{\{index \.Config\.Labels "com\.docker\.compose\.service"\}\}(?:\{\{"\\t"\}\}[\s\S]*?){4}\{\{\.State\.Running\}\}/)
+  assert.doesNotMatch(productionRecommendationWorkflow,
+    /\}\}\\t\{\{\.Id\}\}/)
   assert.match(productionRecommendationWorkflow, /MemAvailable:/)
   assert.match(productionRecommendationWorkflow, /docker stats --no-stream/)
   assert.match(productionRecommendationWorkflow,
@@ -549,6 +553,13 @@ test('public production recommendation artifacts contain only sanitized journey 
   assert.match(publicSummaryStep, /requireFreshImport/)
   assert.match(publicSummaryStep, /importReused/)
   assert.match(publicSummaryStep, /recommendationPublishedGames/)
+  assert.match(publicSummaryStep, /FIRST_VALIDATED_PLAYER_TEXT_RENDER/)
+  assert.match(publicSummaryStep, /generationMode/)
+  assert.match(publicSummaryStep, /firstSafeTextRendered/)
+  assert.match(publicSummaryStep, /firstSafeTextMs/)
+  assert.match(publicSummaryStep, /observationElapsedMs/)
+  assert.match(publicSummaryStep, /resultRenderedMs/)
+  assert.match(publicSummaryStep, /persistedTerminalMs/)
   assert.doesNotMatch(publicSummaryStep,
     /recommendationConversationId|modelAssignments|sourceUrl|lessonDockText|teachingPlanId|answerSessionId|TurnId|ErrorCode/)
   assert.doesNotMatch(productionRecommendationWorkflow, /api-diagnostics\.log|docker compose[^\n]*logs|Upload private/)
@@ -687,6 +698,12 @@ test('deployment forwards the local visual geometry tool kill switch and bounded
 test('production deployment enables the staged persistent Chinese catalog cache only with DeepSeek configured', () => {
   assert.match(deploymentWorkflow, /deepseek_enabled.*deepseek_key_present/s)
   assert.match(deploymentWorkflow, /'BGG_TRANSLATION_ENABLED=true'/)
+  assert.match(deploymentWorkflow, /managed_runtime_keys='[^']* DEEPSEEK_GENERATION_THINKING /)
+  assert.match(deploymentWorkflow, /'DEEPSEEK_GENERATION_THINKING=false'/)
+  assert.match(deploymentCompose,
+    /DEEPSEEK_GENERATION_THINKING: \$\{DEEPSEEK_GENERATION_THINKING:-false\}/)
+  assert.match(productionRecommendationWorkflow,
+    /docker inspect --format '\{\{range \.Config\.Env\}\}\{\{println \.\}\}\{\{end\}\}'[\s\S]*?DEEPSEEK_GENERATION_THINKING=[\s\S]*?runtime is not in non-thinking mode/)
   assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_ENABLED=true'/)
   assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_GAME_COUNT=10000'/)
   assert.match(deploymentWorkflow, /'BGG_CACHE_MAXIMUM_ENTRIES=20000'/)

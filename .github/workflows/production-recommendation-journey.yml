@@ -215,18 +215,49 @@ jobs:
             value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
             printf '%s' "$value"
           }
-          printf '%s\n%s' \
+          generation_thinking=$(read_value DEEPSEEK_GENERATION_THINKING)
+          if [[ "$generation_thinking" != false ]]; then
+            echo "Production recommendation generation must use non-thinking mode" >&2
+            exit 1
+          fi
+          for service in api worker; do
+            mapfile -t service_containers < <(
+              docker ps \
+                --filter label=com.docker.compose.project=rulepilot \
+                --filter label=com.docker.compose.service="$service" \
+                --format '{{.ID}}'
+            )
+            if (( ${#service_containers[@]} != 1 )); then
+              echo "Production recommendation runtime identity is ambiguous" >&2
+              exit 1
+            fi
+            mapfile -t effective_generation_modes < <(
+              docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+                "${service_containers[0]}" |
+                sed -n 's/^DEEPSEEK_GENERATION_THINKING=//p'
+            )
+            if (( ${#effective_generation_modes[@]} != 1 )) \
+              || [[ "${effective_generation_modes[0]}" != false ]]; then
+              echo "Production recommendation runtime is not in non-thinking mode" >&2
+              exit 1
+            fi
+          done
+          printf '%s\n%s\n%s' \
             "$(read_value RULEPILOT_USER_USERNAME)" \
-            "$(read_value RULEPILOT_USER_PASSWORD)"
+            "$(read_value RULEPILOT_USER_PASSWORD)" \
+            "$generation_thinking"
           REMOTE
           )
           mapfile -t credential_lines <<< "$credentials"
           player_username=${credential_lines[0]:-}
           player_password=${credential_lines[1]:-}
+          generation_thinking=${credential_lines[2]:-}
           test -n "$player_username"
           test -n "$player_password"
+          test "$generation_thinking" = false
           echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
+          printf 'RULEPILOT_RECOMMENDATION_GENERATION_MODE=NON_THINKING\n' >> "$GITHUB_ENV"
 
           trace_start_epoch_seconds=$(date +%s)
           read -r canary_trace_id canary_parent_span_id < <(
@@ -268,7 +299,7 @@ jobs:
             case "$service" in
               api|frontend|gateway|grafana|minio|postgres|prometheus|rabbitmq|redis|tempo|worker)
                 docker inspect --format \
-                  '{{index .Config.Labels "com.docker.compose.service"}}\t{{.Id}}\t{{.RestartCount}}\t{{.State.OOMKilled}}\t{{.State.Running}}' \
+                  '{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{.Id}}{{"\t"}}{{.RestartCount}}{{"\t"}}{{.State.OOMKilled}}{{"\t"}}{{.State.Running}}' \
                   "$container_id"
                 ;;
             esac
@@ -558,6 +589,7 @@ jobs:
             chmod 600 "$trace_evidence"
           fi
           jq --arg canaryAssertionOutcome "$CANARY_ASSERTION_OUTCOME" \
+            --arg generationMode "${RULEPILOT_RECOMMENDATION_GENERATION_MODE:-NOT_VERIFIED}" \
             --slurpfile traceEvidence "$trace_evidence" \
             --slurpfile resourceEvidence "$artifact_dir/resource-summary.json" '{
             generatedAt,
@@ -590,13 +622,17 @@ jobs:
             selectedGameName,
             routeStayedOnDiscover,
             opening: {
-              openGuidanceMs,
+              generationMode: $generationMode,
+              firstSafeTextRendered: .openGuidanceFirstSafeTextRendered,
+              firstSafeTextMs: .openGuidanceFirstSafeTextMs,
+              observationElapsedMs: .openGuidanceObservationElapsedMs,
+              resultRenderedMs: .openGuidanceResultRenderedMs,
               sloMs: 15000,
-              sloBasis: "UI_RENDER",
+              sloBasis: "FIRST_VALIDATED_PLAYER_TEXT_RENDER",
               sloMet: .openGuidanceSloMet,
               outcome: .openGuidanceOutcome,
               terminalObserved: .openGuidanceTerminalObserved,
-              terminalObservedMs: .openGuidanceTerminalObservedMs,
+              persistedTerminalMs: .openGuidanceTerminalObservedMs,
               terminalCategory: .openGuidanceTerminalCategory,
               modelCalls: .openGuidanceModelCalls,
               catalogCalls: .openGuidanceCatalogCalls,

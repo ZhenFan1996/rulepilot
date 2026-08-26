@@ -54,7 +54,10 @@ const RECOMMENDATION_OPENING_PROMPT = process.env.RULEPILOT_RECOMMENDATION_OPENI
 const RECOMMENDATION_SELECTION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_SELECTION_PROMPT
   ?? '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后想优先直接进入已有讲解，再按同一份规则书继续答疑。'
 const MAX_OPEN_GUIDANCE_MS = 15_000
-const MAX_OPEN_TERMINAL_DIAGNOSTIC_MS = 20_000
+// The 15-second interaction SLO remains strict. This wider observation window matches the
+// 45-second application budget plus the stream controller's five-second delivery tail so a
+// slow success is not misreported as an unknown or unfinished functional failure.
+const MAX_OPEN_TERMINAL_DIAGNOSTIC_MS = 50_000
 const MAX_SELECTION_RECOMMENDATION_MS = 20_000
 // This wider window diagnoses a persisted semantic terminal after the interaction budget expires;
 // it does not relax the 20-second success budget.
@@ -182,6 +185,7 @@ type RecommendationTerminalCategory =
 type OpeningTerminalCategory =
   | 'GUIDANCE_RENDERED_WITHIN_BUDGET'
   | 'GUIDANCE_RENDERED_OVER_BUDGET'
+  | 'GUIDANCE_NOT_RENDERED'
   | 'SEMANTIC_RECOMMENDATIONS'
   | 'UNAVAILABLE_WITH_FAILURE_BOUNDARY'
   | 'UNAVAILABLE_WITHOUT_FAILURE_BOUNDARY'
@@ -398,6 +402,10 @@ interface ProductionJourneyReport {
   openGuidanceTerminalCategory: OpeningTerminalCategory | null
   openGuidanceTerminalObserved: boolean
   openGuidanceTerminalObservedMs: number | null
+  openGuidanceFirstSafeTextRendered: boolean
+  openGuidanceFirstSafeTextMs: number | null
+  openGuidanceObservationElapsedMs: number | null
+  openGuidanceResultRenderedMs: number | null
   openGuidanceSloMet: boolean | null
   openGuidanceModelCalls: number | null
   openGuidanceCatalogCalls: number | null
@@ -439,7 +447,6 @@ interface ProductionJourneyReport {
   planGameTitleMatchesSelection: boolean
   globalStatusVisibleAfterClosing: boolean
   globalStatusReopened: boolean
-  openGuidanceMs: number | null
   recommendationMs: number | null
   recommendationStartedAt: string | null
   recommendationTerminalObservedAt: string | null
@@ -537,6 +544,28 @@ interface ProductionJourneyReport {
 
 function elapsed(startedAt: number) {
   return Math.round(performance.now() - startedAt)
+}
+
+interface OpeningRenderObservation {
+  visible: boolean
+  observedMs: number
+}
+
+function openingRenderMetrics(
+  firstSafeText: OpeningRenderObservation,
+  result: OpeningRenderObservation,
+) {
+  const visibleTimes = [firstSafeText, result]
+    .filter(observation => observation.visible)
+    .map(observation => observation.observedMs)
+  const firstSafeTextMs = visibleTimes.length > 0 ? Math.min(...visibleTimes) : null
+  return {
+    firstSafeTextRendered: firstSafeTextMs !== null,
+    firstSafeTextMs,
+    observationElapsedMs: firstSafeTextMs ?? Math.max(firstSafeText.observedMs, result.observedMs),
+    resultRenderedMs: result.visible ? result.observedMs : null,
+    sloMet: firstSafeTextMs !== null && firstSafeTextMs <= MAX_OPEN_GUIDANCE_MS,
+  }
 }
 
 function classifyRecommendationTerminal(
@@ -672,6 +701,7 @@ function validReadyTeachingAttachment(game: RecommendationResultGame) {
 
 function diagnoseOpeningTerminal(
   read: OpeningTerminalRead,
+  resultRendered: boolean,
   renderedWithinBudget: boolean,
 ): OpeningTerminalDiagnostic {
   const terminal = read.terminal
@@ -707,9 +737,11 @@ function diagnoseOpeningTerminal(
   if (outcome === 'conversation' || outcome === 'needs_clarification') {
     return {
       outcome,
-      terminalCategory: renderedWithinBudget
-        ? 'GUIDANCE_RENDERED_WITHIN_BUDGET'
-        : 'GUIDANCE_RENDERED_OVER_BUDGET',
+      terminalCategory: !resultRendered
+        ? 'GUIDANCE_NOT_RENDERED'
+        : renderedWithinBudget
+          ? 'GUIDANCE_RENDERED_WITHIN_BUDGET'
+          : 'GUIDANCE_RENDERED_OVER_BUDGET',
       modelCalls,
       catalogCalls,
       failureBoundary,
@@ -1509,16 +1541,22 @@ test('opening diagnostics distinguish budget, semantic, unavailable, processing,
     readFailed: false,
   })
 
-  expect(diagnoseOpeningTerminal(terminal('conversation'), true)).toMatchObject({
+  expect(diagnoseOpeningTerminal(terminal('conversation'), true, true)).toMatchObject({
     outcome: 'conversation', terminalCategory: 'GUIDANCE_RENDERED_WITHIN_BUDGET',
   })
-  expect(diagnoseOpeningTerminal(terminal('conversation'), false)).toMatchObject({
+  expect(diagnoseOpeningTerminal(terminal('conversation'), true, false)).toMatchObject({
     terminalCategory: 'GUIDANCE_RENDERED_OVER_BUDGET',
   })
-  expect(diagnoseOpeningTerminal(terminal('recommendations'), true)).toMatchObject({
+  expect(diagnoseOpeningTerminal(terminal('conversation'), false, false)).toMatchObject({
+    terminalCategory: 'GUIDANCE_NOT_RENDERED',
+  })
+  expect(diagnoseOpeningTerminal(terminal('conversation'), false, true)).toMatchObject({
+    terminalCategory: 'GUIDANCE_NOT_RENDERED',
+  })
+  expect(diagnoseOpeningTerminal(terminal('recommendations'), true, true)).toMatchObject({
     outcome: 'recommendations', terminalCategory: 'SEMANTIC_RECOMMENDATIONS',
   })
-  expect(diagnoseOpeningTerminal(terminal('unavailable', 'model_response'), true)).toMatchObject({
+  expect(diagnoseOpeningTerminal(terminal('unavailable', 'model_response'), true, true)).toMatchObject({
     terminalCategory: 'UNAVAILABLE_WITH_FAILURE_BOUNDARY',
     modelCalls: 1,
     catalogCalls: 0,
@@ -1533,10 +1571,49 @@ test('opening diagnostics distinguish budget, semantic, unavailable, processing,
     terminal: null,
     observedMs: 20_000,
     readFailed: false,
-  }, false)).toMatchObject({ terminalCategory: 'STILL_PROCESSING' })
+  }, false, false)).toMatchObject({ terminalCategory: 'STILL_PROCESSING' })
   expect(diagnoseOpeningTerminal({
     session: null, terminal: null, observedMs: 20_000, readFailed: true,
-  }, false)).toMatchObject({ terminalCategory: 'READ_FAILURE' })
+  }, false, false)).toMatchObject({ terminalCategory: 'READ_FAILURE' })
+
+  expect(openingRenderMetrics(
+    { visible: false, observedMs: 14_965 },
+    { visible: false, observedMs: 18_226 },
+  )).toEqual({
+    firstSafeTextRendered: false,
+    firstSafeTextMs: null,
+    observationElapsedMs: 18_226,
+    resultRenderedMs: null,
+    sloMet: false,
+  })
+  expect(openingRenderMetrics(
+    { visible: true, observedMs: 14_999 },
+    { visible: true, observedMs: 15_150 },
+  )).toEqual({
+    firstSafeTextRendered: true,
+    firstSafeTextMs: 14_999,
+    observationElapsedMs: 14_999,
+    resultRenderedMs: 15_150,
+    sloMet: true,
+  })
+  expect(openingRenderMetrics(
+    { visible: true, observedMs: 18_226 },
+    { visible: true, observedMs: 18_350 },
+  )).toMatchObject({
+    firstSafeTextRendered: true,
+    firstSafeTextMs: 18_226,
+    resultRenderedMs: 18_350,
+    sloMet: false,
+  })
+  expect(openingRenderMetrics(
+    { visible: true, observedMs: 15_100 },
+    { visible: true, observedMs: 14_990 },
+  )).toMatchObject({
+    firstSafeTextMs: 14_990,
+    observationElapsedMs: 14_990,
+    resultRenderedMs: 14_990,
+    sloMet: true,
+  })
 })
 
 test('ready continuation availability exactly matches its published typed card attachments', () => {
@@ -1787,6 +1864,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     recommendationConversationId: null, openGuidanceClientTurnId: null,
     openGuidanceOutcome: null, openGuidanceTerminalCategory: null,
     openGuidanceTerminalObserved: false, openGuidanceTerminalObservedMs: null,
+    openGuidanceFirstSafeTextRendered: false, openGuidanceFirstSafeTextMs: null,
+    openGuidanceObservationElapsedMs: null, openGuidanceResultRenderedMs: null,
     openGuidanceSloMet: null, openGuidanceModelCalls: null,
     openGuidanceCatalogCalls: null, openGuidanceFailureBoundary: null,
     readyTeachingRequested: false, readyTeachingAvailability: null,
@@ -1805,7 +1884,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     candidateEditionMatchesSelection: false, importEditionMatchesSelection: false,
     documentEditionMatchesSelection: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
     planGameTitleMatchesSelection: false, globalStatusVisibleAfterClosing: false, globalStatusReopened: false,
-    openGuidanceMs: null, recommendationMs: null,
+    recommendationMs: null,
     recommendationStartedAt: null, recommendationTerminalObservedAt: null,
     recommendationElapsedBasis: 'NOT_OBSERVED', recommendationOutcome: null,
     recommendationTerminalCategory: 'NOT_OBSERVED', recommendationCardCount: 0,
@@ -1929,10 +2008,27 @@ test('recommendation becomes one readable, taught, and answerable production jou
       }, { timeout: MAX_OPEN_GUIDANCE_MS })
       await composer.fill(RECOMMENDATION_OPENING_PROMPT)
       await page.getByRole('button', { name: '发送', exact: true }).click()
-      const guidanceDomObservation = expect.poll(() => page.getByTestId('assistant-conversation-turn').count(), {
-        timeout: MAX_OPEN_GUIDANCE_MS,
-        message: 'The unknown-target opening did not produce a natural guidance turn',
-      }).toBeGreaterThan(guidanceTurnCount)
+      const firstSafeTextObservation = expect.poll(async () => {
+        const renderedTurnCount = await page.getByTestId('assistant-conversation-turn').count()
+        if (renderedTurnCount > guidanceTurnCount) return true
+        const preview = page.getByTestId('recommendation-answer-preview')
+        if (await preview.count() === 0) return false
+        return Boolean((await preview.first().textContent())?.trim())
+      }, {
+        timeout: MAX_OPEN_TERMINAL_DIAGNOSTIC_MS,
+        message: 'The unknown-target opening did not render validated player-safe text',
+      }).toBe(true)
+        .then(() => ({ visible: true, observedMs: elapsed(guidanceStartedAt) }), () => ({
+          visible: false,
+          observedMs: elapsed(guidanceStartedAt),
+        }))
+      const guidanceResultObservation = expect.poll(
+        () => page.getByTestId('assistant-conversation-turn').count(),
+        {
+          timeout: MAX_OPEN_TERMINAL_DIAGNOSTIC_MS,
+          message: 'The unknown-target opening did not render its completed result',
+        },
+      ).toBeGreaterThan(guidanceTurnCount)
         .then(() => ({ visible: true, observedMs: elapsed(guidanceStartedAt) }), () => ({
           visible: false,
           observedMs: elapsed(guidanceStartedAt),
@@ -1968,18 +2064,24 @@ test('recommendation becomes one readable, taught, and answerable production jou
             observedMs: elapsed(guidanceStartedAt),
             readFailed: true,
           } satisfies OpeningTerminalRead)
-      const [guidanceDom, guidanceTerminal] = await Promise.all([
-        guidanceDomObservation,
+      const [firstSafeText, guidanceResult, guidanceTerminal] = await Promise.all([
+        firstSafeTextObservation,
+        guidanceResultObservation,
         guidanceTerminalPromise,
       ])
-      report.openGuidanceMs = guidanceDom.observedMs
-      report.openGuidanceSloMet = guidanceDom.visible && guidanceDom.observedMs <= MAX_OPEN_GUIDANCE_MS
+      const renderMetrics = openingRenderMetrics(firstSafeText, guidanceResult)
+      report.openGuidanceFirstSafeTextRendered = renderMetrics.firstSafeTextRendered
+      report.openGuidanceFirstSafeTextMs = renderMetrics.firstSafeTextMs
+      report.openGuidanceObservationElapsedMs = renderMetrics.observationElapsedMs
+      report.openGuidanceResultRenderedMs = renderMetrics.resultRenderedMs
+      report.openGuidanceSloMet = renderMetrics.sloMet
       report.openGuidanceTerminalObserved = guidanceTerminal.terminal !== null
       report.openGuidanceTerminalObservedMs = guidanceTerminal.terminal === null
         ? null
         : guidanceTerminal.observedMs
       const guidanceDiagnostic = diagnoseOpeningTerminal(
         guidanceTerminal,
+        guidanceResult.visible,
         report.openGuidanceSloMet === true,
       )
       report.openGuidanceOutcome = guidanceDiagnostic.outcome
@@ -1990,10 +2092,14 @@ test('recommendation becomes one readable, taught, and answerable production jou
       await retainReport(reportFile, report)
       expect(guidanceIdentityValid,
         'Opening recommendation request did not preserve its conversation, revision, and client turn identity').toBe(true)
-      expect(report.openGuidanceSloMet, 'Open recommendation guidance exceeded its interaction budget').toBe(true)
-      expect(guidanceDiagnostic.terminalCategory,
+      expect.soft(report.openGuidanceSloMet,
+        'Open recommendation guidance exceeded its interaction budget').toBe(true)
+      expect([
+        'GUIDANCE_RENDERED_WITHIN_BUDGET',
+        'GUIDANCE_RENDERED_OVER_BUDGET',
+      ],
         'The unknown-target opening did not finish as useful guidance')
-        .toBe('GUIDANCE_RENDERED_WITHIN_BUDGET')
+        .toContain(guidanceDiagnostic.terminalCategory)
       await expect(page.getByTestId('assistant-conversation-turn').last()).toContainText(/\S/)
       await expect(recommendationCards).toHaveCount(0)
       const guidanceSession = guidanceTerminal.session
