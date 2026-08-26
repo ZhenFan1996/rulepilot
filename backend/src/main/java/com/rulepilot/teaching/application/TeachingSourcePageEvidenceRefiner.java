@@ -302,16 +302,15 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
     /**
      * The canonical text index deliberately stores an image-only sentinel, while the visual evidence resolver can
      * project a complete, page-bound rule ledger onto that same immutable source identity. Re-reading the canonical
-     * page must not misclassify that derived transcript as a conflicting snapshot. Every other same-ID text change
-     * remains a hard conflict.
+     * page must not misclassify that typed derived transcript as a conflicting snapshot. The transcript remains
+     * durable evidence after the page facts have been cached, so its identity cannot depend on transporting the page
+     * image again. Every other same-ID text change remains a hard conflict.
      */
     private boolean isCanonicalPlaceholderForDerivedVisualTranscript(
             RuleEvidence derived, RuleEvidence canonical) {
         return sameEvidenceIdentity(derived, canonical)
-                && TeachingVisualEvidenceSelector.isVisualPageEvidence(canonical)
-                && !TeachingVisualEvidenceSelector.isVisualPageEvidence(derived)
-                && derived.pageImages().stream().anyMatch(image -> image.pageNumber() >= derived.pageFrom()
-                        && image.pageNumber() <= derived.pageTo());
+                && canonical.contentKind() == RuleEvidence.ContentKind.VISUAL_PLACEHOLDER
+                && derived.contentKind() == RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION;
     }
 
     private boolean sameEvidenceIdentity(RuleEvidence first, RuleEvidence second) {

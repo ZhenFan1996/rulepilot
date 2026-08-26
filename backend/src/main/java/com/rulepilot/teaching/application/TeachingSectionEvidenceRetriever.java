@@ -144,9 +144,21 @@ final class TeachingSectionEvidenceRetriever {
         if (evidence.isEmpty()) return new Result(List.of(), toolCalls, State.EMPTY);
         boolean verified;
         try {
-            verified = evidenceVerifier.verify(new VerificationRequest(
-                            plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
-                    .verified();
+            var verification = evidenceVerifier.verify(new VerificationRequest(
+                    plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()));
+            verified = verification.verified();
+            if (!verified) {
+                log.warn(
+                        "Teaching evidence identity verification rejected: documentVersionId={}, status={}, "
+                                + "issueCodes={}, sourceCount={}, sourceVersionCounts={}",
+                        plan.documentVersionId(),
+                        verification.status(),
+                        verification.issueCodes(),
+                        evidence.size(),
+                        evidence.stream().collect(java.util.stream.Collectors.groupingBy(
+                                RuleEvidence::documentVersionId,
+                                java.util.stream.Collectors.counting())));
+            }
         } catch (RuntimeException verificationFailure) {
             log.warn("Teaching evidence verification failed: {}", verificationFailure.getMessage());
             verified = false;
