@@ -113,6 +113,7 @@ jobs:
         working-directory: frontend
 
       - name: Configure production SSH trust
+        id: configure_ssh
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -836,7 +837,7 @@ jobs:
           retention-days: 7
 
       - name: Collect production service status after a failed verification
-        if: failure()
+        if: failure() && steps.configure_ssh.outcome == 'success'
         shell: bash
         run: |
           set -Eeuo pipefail

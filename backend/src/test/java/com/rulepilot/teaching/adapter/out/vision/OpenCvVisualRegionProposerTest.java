@@ -24,7 +24,8 @@ class OpenCvVisualRegionProposerTest {
         Files.writeString(
                 executable,
                 "#!/bin/sh\nprintf 'memory=%s\\ncpu=%s\\nargs=%s\\n' "
-                        + "\"$RULEPILOT_OPENCV_MEMORY_LIMIT_BYTES\" \"$RULEPILOT_OPENCV_CPU_LIMIT_SECONDS\" \"$*\" "
+                        + "\"$RULEPILOT_OPENCV_WORKING_ADDRESS_SPACE_BYTES\" "
+                        + "\"$RULEPILOT_OPENCV_CPU_LIMIT_SECONDS\" \"$*\" "
                         + "> \"$0.invocation\"\nprintf '%s' '{\"schemaVersion\":1,\"width\":2000,\"height\":1000,"
                         + "\"regions\":[{\"x\":200,\"y\":100,\"width\":400,\"height\":300}]}'\n");
         assertThat(executable.toFile().setExecutable(true)).isTrue();
