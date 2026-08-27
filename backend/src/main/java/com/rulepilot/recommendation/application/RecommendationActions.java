@@ -817,19 +817,12 @@ final class RecommendationActions {
                         "learningGoal",
                         "playerLead",
                         "offset",
-                        "preferenceUpdates",
-                        "candidateUse"));
+                        "preferenceUpdates"));
         PreferenceUpdatePlan preferencePlan =
                 evidenceReview.planPreferenceUpdates(arguments, state.profile, request);
         DiscoveryPurpose purpose = arguments.has("purpose")
                 ? enumValue(DiscoveryPurpose.class, arguments.path("purpose"), "CATALOG_PURPOSE_INVALID")
                 : DiscoveryPurpose.SELECTABLE_CARDS;
-        CandidateUse use = candidateUse(
-                arguments,
-                purpose == DiscoveryPurpose.SELECTABLE_CARDS
-                        ? CandidateUse.PUBLISH_CARDS
-                        : CandidateUse.CONTINUE_REACT,
-                purpose == DiscoveryPurpose.SELECTABLE_CARDS);
         List<BggGameType> requestedTypes = optionalGameTypeHints(arguments, state);
         List<BggGameType> types = preferencePlan.profile().type() == BggGameType.ALL
                 ? requestedTypes
@@ -898,12 +891,15 @@ final class RecommendationActions {
                 ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
                 : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
         int publicationCount = publicationCount(arguments, request);
-        TeachingContinuationDecision continuationDecision =
-                planTeachingContinuation(arguments, state, request, true);
+        TeachingContinuationDecision continuationDecision = planTeachingContinuation(
+                arguments,
+                state,
+                request,
+                purpose == DiscoveryPurpose.SELECTABLE_CARDS);
         commitTeachingContinuation(continuationDecision, state);
         if (activeTitleConstraint != null) state.titleConstraint = activeTitleConstraint;
         boolean continuationRequested = state.teachingContinuationRequested;
-        int eligibilityLimit = use == CandidateUse.CONTINUE_REACT
+        int eligibilityLimit = purpose == DiscoveryPurpose.IDENTITY_ONLY
                 ? limit
                 : Math.max(limit, publicationCount);
         Set<Integer> unavailableCandidateIds = new LinkedHashSet<>(state.excludedIds);
@@ -916,7 +912,7 @@ final class RecommendationActions {
                         + Math.min(
                                 Math.max(properties.resultCount(), unavailableCandidateIds.size()),
                                 MAX_LOCAL_CATALOG_SCAN_RESULTS));
-        int catalogLimit = use == CandidateUse.CONTINUE_REACT
+        int catalogLimit = purpose == DiscoveryPurpose.IDENTITY_ONLY
                 ? boundedPlanningWindow
                 : MAX_LOCAL_CATALOG_SCAN_RESULTS;
         int selectionLimit = continuationRequested
@@ -978,8 +974,7 @@ final class RecommendationActions {
                     preferencePlan.profile(),
                     unavailableCandidateIds,
                     selectionLimit);
-            if (use == CandidateUse.CONTINUE_REACT
-                    || purpose == DiscoveryPurpose.IDENTITY_ONLY
+            if (purpose == DiscoveryPurpose.IDENTITY_ONLY
                     || eligible.size() >= eligibilityLimit
                     || page.pageExhausted()
                     || page.games().isEmpty()
@@ -1077,11 +1072,13 @@ final class RecommendationActions {
             state.discoveredRelationshipNames = verifiedIdentityNames;
             state.actions.add("CATALOG_IDENTITY_VERIFIED");
         }
-        return candidateObservation(
+        if (purpose == DiscoveryPurpose.IDENTITY_ONLY) {
+            return ActionOutcome.observation(observation);
+        }
+        return publicationOutcome(
                 observation,
                 state,
                 eligible,
-                use,
                 publicationCount,
                 playerLead(arguments));
     }
@@ -1239,7 +1236,7 @@ final class RecommendationActions {
                 "guidance", inspection.games().isEmpty()
                         ? "Public search found source-backed title hypotheses, but none produced complete BGG details. Choose another retrieval action or respond transparently."
                         : purpose == DiscoveryPurpose.SELECTABLE_CARDS
-                                ? "The relationship and representative BGG games are verified. Follow the validated candidateUse: publish this slate when it answers the request, research it once when requested, or browse the local catalog when these games are only identity carriers."
+                                ? "The relationship and representative BGG games are verified. Follow the validated candidateUse: publish this slate when it answers the request, or browse the local catalog when these games are only identity carriers."
                                 : "The external relationship and representative BGG facts are verified. Naming the identity is the declared complete goal, so answer it naturally without turning the response into cardless recommendations.",
                 "teachingContinuationRequested", state.teachingContinuationRequested,
                 "readyTeachingBggIds", candidateGames.stream()
@@ -1250,11 +1247,13 @@ final class RecommendationActions {
         state.discoveryAttempted = true;
         state.discoveryPurpose = purpose;
         state.actions.add("DISCOVER_CANDIDATES");
-        return candidateObservation(
+        if (use == CandidateUse.CONTINUE_REACT) {
+            return ActionOutcome.observation(observation);
+        }
+        return publicationOutcome(
                 observation,
                 state,
                 candidateGames,
-                use,
                 requestedCount,
                 playerLead(arguments));
     }
@@ -2009,14 +2008,12 @@ final class RecommendationActions {
         return length >= 1 && length <= MAX_PLAYER_LEAD_CODE_POINTS ? lead : "";
     }
 
-    private ActionOutcome candidateObservation(
+    private ActionOutcome publicationOutcome(
             String observation,
             RecommendationAgentState state,
             List<Game> candidates,
-            CandidateUse use,
             int requestedCount,
             String playerLead) {
-        if (use == CandidateUse.CONTINUE_REACT) return ActionOutcome.observation(observation);
         Set<Integer> recommendable = new LinkedHashSet<>(runtime.recommendableIds(state));
         List<Integer> candidateIds = candidates.stream()
                 .map(game -> game.ranking().bggId())
@@ -2029,7 +2026,6 @@ final class RecommendationActions {
                 new PublicationSeed(
                         candidateIds,
                         state.comparisonReferenceIds.stream().toList(),
-                        use,
                         requestedCount,
                         playerLead));
     }

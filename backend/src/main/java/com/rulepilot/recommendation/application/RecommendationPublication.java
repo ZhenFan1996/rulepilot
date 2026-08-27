@@ -15,7 +15,6 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationShortfall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
-import com.rulepilot.recommendation.application.RecommendationAgentState.CandidateUse;
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -158,9 +157,6 @@ final class RecommendationPublication {
         Objects.requireNonNull(state, "recommendation state is required");
         Objects.requireNonNull(seed, "publication seed is required");
         Objects.requireNonNull(currentUserEvidenceIds, "current user evidence IDs are required");
-        if (seed.candidateUse() == CandidateUse.CONTINUE_REACT) {
-            throw invalid(Code.PUBLICATION_SEED_INVALID);
-        }
         Set<Integer> currentRecommendable = new LinkedHashSet<>(runtime.recommendableIds(state));
         if (!currentRecommendable.containsAll(seed.candidateBggIds())) {
             throw invalid(Code.PUBLICATION_SEED_INVALID);

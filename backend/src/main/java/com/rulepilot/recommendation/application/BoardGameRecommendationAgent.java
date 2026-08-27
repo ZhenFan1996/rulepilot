@@ -32,7 +32,7 @@ public class BoardGameRecommendationAgent {
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
-    static final String PROMPT_VERSION = "recommendation-agent-v80-evidence-owned-publication";
+    static final String PROMPT_VERSION = "recommendation-agent-v81-direct-publication";
 
     private final RecommendationReActLoop loop;
 

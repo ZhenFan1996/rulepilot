@@ -145,7 +145,9 @@ class RecommendationReActLifecycleTest {
                 """);
         RecommendationReActLoop loop = loop(
                 model,
-                new RecordingCatalog(game(498, "Four Voices", "四方声", "Players choose together.")));
+                new BoardGameRecommendationTools(
+                        new RecordingCatalog(game(498, "Four Voices", "四方声", "Players choose together.")),
+                        configuredResearchThatMustNotRun()));
 
         var response = loop.converse(
                 new ConversationRequest(
@@ -157,6 +159,10 @@ class RecommendationReActLifecycleTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(model.requests).hasSize(1);
+        assertThat(model.structuredRequests).hasSize(1);
         assertThat(response.assistantMessage())
                 .isEqualTo("四个人和一小时都是明确边界；这一款的重点，是你们愿不愿意把讨论本身当成乐趣。");
         assertThat(response.games()).singleElement().satisfies(game ->
@@ -210,6 +216,7 @@ class RecommendationReActLifecycleTest {
         assertThat(browseSchema.path("properties").path("preferenceUpdates").path("properties").path("interaction")
                         .toString())
                 .contains("COMPETITIVE");
+        assertThat(browseSchema.path("properties").has("candidateUse")).isFalse();
         assertThat(browseSchema.path("properties").has("playerLead")).isFalse();
 
         loop.stopBoundedCalls();
@@ -983,7 +990,6 @@ class RecommendationReActLifecycleTest {
                 """
                 {
                   "purpose":"SELECTABLE_CARDS",
-                  "candidateUse":"PUBLISH_CARDS",
                   "titleConstraint":{"operator":"CONTAINS","value":"  HARBOR  "},
                   "evidence":"U1",
                   "requestedCount":2,
@@ -1021,7 +1027,6 @@ class RecommendationReActLifecycleTest {
                 BoardGameRecommendationAgent.BROWSE_TOOL,
                 """
                 {
-                  "candidateUse":"PUBLISH_CARDS",
                   "evidence":"U1",
                   "requestedCount":1,
                   "requestedCountBasis":"U1",
@@ -1056,7 +1061,6 @@ class RecommendationReActLifecycleTest {
                 BoardGameRecommendationAgent.BROWSE_TOOL,
                 """
                 {
-                  "candidateUse":"PUBLISH_CARDS",
                   "requestedCount":1,
                   "requestedCountBasis":"U1",
                   "continuationGoal":"NONE",
@@ -1097,7 +1101,6 @@ class RecommendationReActLifecycleTest {
                           "evidence":"U9",
                           "subject":"Unverified collection",
                           "afterIdentity":"RECOMMEND_WITH_CARDS",
-                          "candidateUse":"PUBLISH_CARDS",
                           "requestedCount":1,
                           "requestedCountBasis":"U1",
                           "continuationGoal":"GUIDE_AND_RULE_QA",
@@ -1110,7 +1113,6 @@ class RecommendationReActLifecycleTest {
                         BoardGameRecommendationAgent.BROWSE_TOOL,
                         """
                         {
-                          "candidateUse":"PUBLISH_CARDS",
                           "requestedCount":1,
                           "requestedCountBasis":"U1",
                           "continuationGoal":"NONE",
@@ -1145,14 +1147,12 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void keepsTheFirstLearningGoalAcrossRepeatedGuideDecisionsWithoutRejectingTheRecommendation() {
-        ScriptedModel model = new ScriptedModel(List.of(
-                action(
-                        "inspect-with-guide",
+    void publishesTheFirstUsefulSlateWithTheRequestedGuideContinuation() {
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                        "publish-with-guide",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
                         """
                         {
-                          "candidateUse":"CONTINUE_REACT",
                           "requestedCount":1,
                           "requestedCountBasis":"U1",
                           "continuationGoal":"GUIDE_AND_RULE_QA",
@@ -1160,24 +1160,10 @@ class RecommendationReActLifecycleTest {
                           "learningGoal":"先学设置和首轮。",
                           "limit":1
                         }
-                        """),
-                action(
-                        "publish-with-rephrased-guide",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        """
-                        {
-                          "candidateUse":"PUBLISH_CARDS",
-                          "requestedCount":1,
-                          "requestedCountBasis":"U1",
-                          "continuationGoal":"GUIDE_AND_RULE_QA",
-                          "continuationEvidence":"U1",
-                          "learningGoal":"先讲开局，然后再答疑。",
-                          "limit":1
-                        }
                         """)));
-        RecommendationReActLoop loop = loop(
-                model,
-                new RecordingCatalog(game(608, "Signal Grove", "信号林", "A sticky guide fixture.")));
+        RecordingCatalog catalog =
+                new RecordingCatalog(game(608, "Signal Grove", "信号林", "A guide fixture."));
+        RecommendationReActLoop loop = loop(model, catalog);
 
         var response = loop.converse(
                 new ConversationRequest(
@@ -1193,8 +1179,9 @@ class RecommendationReActLifecycleTest {
                 .containsExactly(608);
         assertThat(response.continuation()).satisfies(continuation ->
                 assertThat(continuation.learningGoal()).isEqualTo("先学设置和首轮。"));
-        assertThat(response.harness().actions())
-                .doesNotContain("REJECTED_ACTION:TEACHING_CONTINUATION_CONFLICT");
+        assertThat(response.harness().modelCalls()).isOne();
+        assertThat(catalog.searches).hasValue(1);
+        assertThat(response.harness().catalogCalls()).isEqualTo(2);
         assertThat(response.harness().actions().stream()
                         .filter("TEACHING_CONTINUATION_REQUESTED"::equals)
                         .toList())
@@ -1286,53 +1273,6 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void keepsTheLiteralTitleBoundaryAcrossAContinuedReactRead() {
-        ScriptedModel model = new ScriptedModel(List.of(
-                action(
-                        "inspect-matching-titles",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        """
-                        {
-                          "candidateUse":"CONTINUE_REACT",
-                          "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
-                          "evidence":"U1",
-                          "requestedCount":2,
-                          "requestedCountBasis":"U1",
-                          "limit":3
-                        }
-                        """),
-                action(
-                        "publish-after-inspection",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        """
-                        {
-                          "candidateUse":"PUBLISH_CARDS",
-                          "requestedCount":2,
-                          "requestedCountBasis":"U1",
-                          "limit":3
-                        }
-                        """)));
-        RecommendationReActLoop loop = loop(
-                model,
-                new RecordingCatalog(
-                        game(631, "Harbor Lanterns", "港灯", "A matching fixture."),
-                        game(632, "Harbor Exchange", "港口交易所", "Another matching fixture."),
-                        game(633, "Mountain Lanterns", "山灯", "An unrelated eligible fixture.")));
-
-        var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "只推荐两款标题包含 Harbor 的游戏。"),
-                "zh-CN",
-                "player",
-                ignored -> {});
-
-        assertThat(response.games())
-                .extracting(game -> game.game().ranking().bggId())
-                .containsExactly(631, 632);
-        assertThat(response.harness().catalogCalls()).isEqualTo(2);
-        loop.stopBoundedCalls();
-    }
-
-    @Test
     void aDirectTargetCannotBypassTheTypedTitleBoundaryEstablishedByAnEarlierAction() {
         ScriptedModel model = new ScriptedModel(List.of(
                 action(
@@ -1340,7 +1280,6 @@ class RecommendationReActLifecycleTest {
                         BoardGameRecommendationAgent.BROWSE_TOOL,
                         """
                         {
-                          "candidateUse":"CONTINUE_REACT",
                           "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
                           "evidence":"U1",
                           "requestedCount":1,
@@ -1368,18 +1307,19 @@ class RecommendationReActLifecycleTest {
                         BoardGameRecommendationAgent.BROWSE_TOOL,
                         """
                         {
-                          "candidateUse":"PUBLISH_CARDS",
                           "requestedCount":1,
                           "requestedCountBasis":"U1",
                           "continuationGoal":"NONE",
                           "limit":2
                         }
                         """)));
-        RecommendationReActLoop loop = loop(
-                model,
-                new RecordingCatalog(
-                        game(634, "Harbor Signals", "港口信号", "A matching hard-boundary fixture."),
-                        game(635, "Catan", "卡坦岛", "An unrelated direct-target fixture.")));
+        Game harbor = game(634, "Harbor Signals", "港口信号", "A matching hard-boundary fixture.");
+        Game catan = game(635, "Catan", "卡坦岛", "An unrelated direct-target fixture.");
+        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
+        when(catalog.searchGames(any(CatalogFilters.class)))
+                .thenReturn(new CandidateSet(0, List.of()), new CandidateSet(1, List.of(harbor)));
+        when(catalog.resolveLocalReferenceTitle("Catan")).thenReturn(List.of(catan));
+        RecommendationReActLoop loop = loop(model, new BoardGameRecommendationTools(catalog, noResearch()));
 
         var response = loop.converse(
                 new ConversationRequest(
@@ -1769,9 +1709,9 @@ class RecommendationReActLifecycleTest {
 
     @Test
     void reusesASuccessfulReadWhileKeepingOneBoundedCurrentStateViewAndEveryCallResultPair() {
-        String browse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"CONTINUE_REACT\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}";
-        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"playerLead\":\"目录里已经有一张可继续查看的候选卡。\"}";
-        String userRequest = "我们没有明确目标，只想找一款四个人第一次见面也不会冷场的桌游。";
+        String browse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"continuationGoal\":\"NONE\"}";
+        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"continuationGoal\":\"NONE\",\"playerLead\":\"目录里已经有一张可继续查看的候选卡。\"}";
+        String userRequest = "先核对 Avery Stone 是否确实是目录游戏的设计师，再从核对过的方向里给我一款四个人第一次见面也不会冷场的桌游。";
         ScriptedModel model = new ScriptedModel(List.of(
                 action("read-1", BoardGameRecommendationAgent.BROWSE_TOOL, browse),
                 action("read-2", BoardGameRecommendationAgent.BROWSE_TOOL, browse),
@@ -1819,10 +1759,10 @@ class RecommendationReActLifecycleTest {
 
     @Test
     void executesOneMateriallyDifferentSupplementAfterAnEmptyReadButReusesAnIdenticalRetry() {
-        String strictBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\","
+        String strictBrowse = "{\"purpose\":\"SELECTABLE_CARDS\","
                 + "\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"limit\":8,"
                 + "\"mechanics\":[\"Negotiation\",\"Bluffing\"]}";
-        String relaxedBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\","
+        String relaxedBrowse = "{\"purpose\":\"SELECTABLE_CARDS\","
                 + "\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"limit\":8,"
                 + "\"mechanics\":[\"Negotiation\"]}";
         ScriptedModel model = new ScriptedModel(List.of(
@@ -1926,7 +1866,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "empty-current-browse",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"CONTINUE_REACT\",\"textQuery\":\"a materially different request\",\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}"),
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"textQuery\":\"a materially different request\",\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}"),
                 action(
                         "transparent-finish",
                         BoardGameRecommendationAgent.REPLY_TOOL,
@@ -1971,16 +1911,16 @@ class RecommendationReActLifecycleTest {
 
     @Test
     void readsAgainWhenAnInterveningActionChangesThePreferenceState() {
-        String initialBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"CONTINUE_REACT\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}";
-        String correctedBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\","
-                + "\"candidateUse\":\"CONTINUE_REACT\","
+        String initialBrowse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"continuationGoal\":\"NONE\"}";
+        String correctedBrowse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"continuationGoal\":\"NONE\","
                 + "\"preferenceUpdates\":[{\"field\":\"durationMinutes\","
                 + "\"value\":{\"minimum\":null,\"maximum\":60},"
                 + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}";
-        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"playerLead\":\"按刚补充的时长边界，先给你一张可继续查看的候选卡。\"}";
+        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"continuationGoal\":\"NONE\",\"playerLead\":\"按刚补充的时长边界，先给你一张可继续查看的候选卡。\"}";
         ScriptedModel model = new ScriptedModel(List.of(
                 action("initial-read", BoardGameRecommendationAgent.BROWSE_TOOL, initialBrowse),
                 action("corrected-read", BoardGameRecommendationAgent.BROWSE_TOOL, correctedBrowse),
+                action("re-read-after-correction", BoardGameRecommendationAgent.BROWSE_TOOL, initialBrowse),
                 action("read-after-correction", BoardGameRecommendationAgent.BROWSE_TOOL, publicationBrowse)));
         RecordingCatalog catalog = new RecordingCatalog(game(
                 504,
@@ -1992,7 +1932,7 @@ class RecommendationReActLifecycleTest {
         var response = loop.converse(
                 new ConversationRequest(
                         RecommendationProfile.empty(),
-                        "我们四个人想边聊边玩，刚确认今晚最多只有一小时；先帮我挑一款。"),
+                        "先核对 Avery Stone 是否确实是目录游戏的设计师；我们四个人想边聊边玩，刚确认今晚最多只有一小时，再帮我挑一款。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -2000,7 +1940,7 @@ class RecommendationReActLifecycleTest {
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.profile().durationMinutes()).satisfies(range ->
                 assertThat(range.maximum()).isEqualTo(60));
-        assertThat(catalog.searches).hasValue(3);
+        assertThat(catalog.searches).hasValue(4);
         assertThat(response.harness().actions())
                 .contains("RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE")
                 .doesNotContain("REUSED_READ_OBSERVATION");
@@ -2047,114 +1987,12 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void researchesAValidatedSlateOnceBeforeApplicationOwnedPublication() {
-        Game candidate = game(
-                513,
-                "Common Ground",
-                "共同语言",
-                "Four players discuss a shared display before choosing together.");
-        RecordingCatalog catalog = new RecordingCatalog(candidate);
-        AtomicReference<BoardGameRecommendationWebResearch.Request> observedResearch = new AtomicReference<>();
-        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
-            @Override
-            public boolean configured() {
-                return true;
-            }
-
-            @Override
-            public Optional<Research> research(Request request) {
-                observedResearch.set(request);
-                return Optional.of(new Research(
-                        List.of(new GameResearch(
-                                513,
-                                List.of(new Observation(
-                                        "Players report that the shared display gives a new group an immediate topic to discuss.",
-                                        List.of(1))))),
-                        List.of(new Source(
-                                1,
-                                "First-play discussion report",
-                                "https://tabletop.example.test/common-ground",
-                                "tabletop.example.test"))));
-            }
-        };
-        ScriptedModel model = new ScriptedModel(
-                List.of(
-                        action(
-                                "read-research-slate",
-                                BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"),
-                        action(
-                                "research-slate",
-                                BoardGameRecommendationAgent.RESEARCH_TOOL,
-                                "{\"bggIds\":[513],\"question\":\"第一次同桌时，玩家是否容易围绕局面自然开始讨论？\"}")),
-                """
-                {
-                  "lead":{
-                    "text":"你们第一次同桌，最值得看的不是标签，而是局面能不能自然给大家一个开口的话题。",
-                    "evidenceIds":["U1","R513:1"]
-                  },
-                  "cards":[{
-                    "bggId":513,
-                    "why":{
-                      "text":"有玩家报告，共享展示会让新组成的桌面很快出现可以一起讨论的内容。",
-                      "evidenceIds":["R513:1"]
-                    },
-                    "tradeoff":null
-                  }]
-                }
-                """);
-        RecommendationReActLoop loop = loop(model, new BoardGameRecommendationTools(catalog, research));
-
-        var response = loop.converse(
-                new ConversationRequest(
-                        RecommendationProfile.empty(),
-                        "我们四个人第一次一起玩，想认真挑一款容易自然聊起来的；可以先看看真实玩家怎么说。"),
-                "zh-CN",
-                "player",
-                ignored -> {});
-
-        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(response.games()).singleElement()
-                .satisfies(value -> assertThat(value.game().ranking().bggId()).isEqualTo(513));
-        assertThat(response.harness().modelCalls()).isEqualTo(3);
-        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
-        assertThat(response.harness().actions())
-                .containsSubsequence(
-                        "SEARCH_BGG_CATALOG",
-                        "RESEARCH_GAME_FIT",
-                        "WRITE_GROUNDED_RECOMMENDATION",
-                        "RECOMMEND_GAMES");
-        assertThat(model.requests).hasSize(2);
-        assertThat(model.requests.get(1).tools())
-                .extracting(BoardGameRecommendationModel.ToolSpec::name)
-                .containsExactly(BoardGameRecommendationAgent.RESEARCH_TOOL);
-        assertThat(response.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).singleElement().satisfies(part -> {
-                    assertThat(part.role()).isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT);
-                    assertThat(part.claim().text()).contains("有玩家报告", "共享展示");
-                    assertThat(part.claim().evidence()).singleElement().satisfies(evidence -> {
-                        assertThat(evidence.id()).isEqualTo("R513:1");
-                        assertThat(evidence.kind())
-                                .isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.ATTRIBUTED_REPORT);
-                    });
-                }));
-        assertThat(model.structuredRequests).hasSize(1);
-        assertThat(observedResearch.get()).satisfies(request -> {
-            assertThat(request.candidates()).singleElement()
-                    .satisfies(value -> assertThat(value.bggId()).isEqualTo(513));
-            assertThat(request.question()).contains("第一次同桌", "自然开始讨论");
-        });
-
-        loop.stopBoundedCalls();
-    }
-
-    @Test
-    void publishesDirectlyWhenASecondSlateRequestsResearchAfterTheRunAlreadyUsedIt() {
+    void keepsExplicitResearchAvailableForNamedContextBeforeDirectPublication() {
         Game candidate = game(
                 517,
                 "Single Research",
                 "单次调研",
-                "A verified candidate that survives an already-settled optional research read.");
+                "A verified candidate with an attributed research observation.");
         RecordingCatalog catalog = new RecordingCatalog(candidate);
         AtomicInteger researchCalls = new AtomicInteger();
         BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
@@ -2166,29 +2004,55 @@ class RecommendationReActLifecycleTest {
             @Override
             public Optional<Research> research(Request request) {
                 researchCalls.incrementAndGet();
-                return Optional.empty();
+                return Optional.of(new Research(
+                        List.of(new GameResearch(
+                                517,
+                                List.of(new Observation(
+                                        "有玩家报告说新手首局需要一点时间进入节奏。",
+                                        List.of(1))))),
+                        List.of(new Source(
+                                1,
+                                "Single Research 玩家报告",
+                                "https://reports.example.test/single-research",
+                                "reports.example.test"))));
             }
         };
-        ScriptedModel model = new ScriptedModel(List.of(
-                action(
-                        "seed-context",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"CONTINUE_REACT\",\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}"),
-                action(
-                        "research-once",
-                        BoardGameRecommendationAgent.RESEARCH_TOOL,
-                        "{\"bggIds\":[517],\"question\":\"新玩家第一次同桌时是否容易进入状态？\"}"),
-                action(
-                        "publish-after-research",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\","
-                                + "\"playerLead\":\"可选调研已经完成；我现在直接保留已核对的卡片和选择边界。\"}")));
+        ScriptedModel model = new ScriptedModel(
+                List.of(
+                        action(
+                                "resolve-named-context",
+                                BoardGameRecommendationAgent.RESOLVE_TOOL,
+                                "{\"title\":\"Single Research\",\"purpose\":\"DISCUSSION_SUBJECT\",\"evidence\":\"U1\",\"continuationGoal\":\"NONE\"}"),
+                        action(
+                                "research-once",
+                                BoardGameRecommendationAgent.RESEARCH_TOOL,
+                                "{\"bggIds\":[517],\"question\":\"新玩家第一次同桌时是否容易进入状态？\"}"),
+                        action(
+                                "publish-after-research",
+                                BoardGameRecommendationAgent.BROWSE_TOOL,
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"titleConstraint\":{\"operator\":\"CONTAINS\",\"value\":\"Single Research\"},\"evidence\":\"U1\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}")),
+                """
+                {
+                  "lead":{
+                    "text":"这款有可核对的玩家反馈；新手首局的进入节奏是最值得提前说明的边界。",
+                    "evidenceIds":["U1","R517:1"]
+                  },
+                  "cards":[{
+                    "bggId":517,
+                    "why":{
+                      "text":"有玩家报告说新手首局需要一点时间进入节奏，适合愿意边讲边熟悉的一桌。",
+                      "evidenceIds":["R517:1"]
+                    },
+                    "tradeoff":null
+                  }]
+                }
+                """);
         RecommendationReActLoop loop = loop(model, new BoardGameRecommendationTools(catalog, research));
 
         var response = loop.converse(
                 new ConversationRequest(
                         RecommendationProfile.empty(),
-                        "先核对候选和一次玩家反馈，然后直接给我卡片；不要重复调研。"),
+                        "先核对 Single Research 和一次玩家反馈，然后直接推荐这一款；不要重复调研。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -2196,137 +2060,19 @@ class RecommendationReActLifecycleTest {
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games()).singleElement()
                 .satisfies(game -> assertThat(game.game().ranking().bggId()).isEqualTo(517));
-        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().modelCalls()).isEqualTo(4);
         assertThat(response.harness().webResearchCalls()).isOne();
         assertThat(researchCalls).hasValue(1);
         assertThat(response.harness().actions())
-                .contains("RESEARCH_SKIPPED_FOR_PUBLICATION_ALREADY_ATTEMPTED", "RECOMMEND_GAMES");
-        loop.stopBoundedCalls();
-    }
-
-    @Test
-    void publishesAValidatedSlateWhenTheOptionalResearchDecisionChoosesAnUnavailableAction() {
-        Game candidate = game(
-                514,
-                "Budget Harbor",
-                "余量港",
-                "Four players coordinate a shared harbor within forty-five minutes.");
-        RecordingCatalog catalog = new RecordingCatalog(candidate);
-        ScriptedModel model = new ScriptedModel(List.of(
-                action(
-                        "read-research-slate",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"playerLead\":\"如果补不到额外体验资料，我也先保留已核对的目录候选。\"}"),
-                action(
-                        "unavailable-one",
-                        BoardGameRecommendationAgent.REPLY_TOOL,
-                        "{\"playerReply\":\"先再想一步。\"}")));
-        RecommendationReActLoop loop = loop(
-                model,
-                new BoardGameRecommendationTools(catalog, configuredResearchThatMustNotRun()));
-
-        var response = loop.converse(
-                new ConversationRequest(
-                        RecommendationProfile.empty(),
-                        "我们四个人想先拿到一款可以继续查看的候选；如果来不及补玩家反馈，不要把已验证卡片丢掉。"),
-                "zh-CN",
-                "player",
-                ignored -> {});
-
-        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(response.games()).singleElement()
-                .satisfies(value -> assertThat(value.game().ranking().bggId()).isEqualTo(514));
-        assertThat(response.harness().modelCalls()).isEqualTo(2);
-        assertThat(response.harness().webResearchCalls()).isZero();
-        assertThat(response.harness().actions())
-                .contains(
+                .containsSubsequence(
+                        "RESOLVE_BGG_REFERENCE",
+                        "RESEARCH_GAME_FIT",
                         "SEARCH_BGG_CATALOG",
-                        "REJECTED_UNAVAILABLE_ACTION",
-                        "RESEARCH_SKIPPED_FOR_PUBLICATION_ACTION_REJECTED",
                         "RECOMMEND_GAMES")
-                .doesNotContain("REACT_BUDGET_EXHAUSTED");
-        assertThat(response.harness().fallbackUsed()).isFalse();
-
-        loop.stopBoundedCalls();
-    }
-
-    @Test
-    void publishesAValidatedSlateWhenTheOptionalResearchDecisionReturnsNoTypedAction() {
-        Game candidate = game(
-                515,
-                "Typed Shelter",
-                "类型避风港",
-                "Four players coordinate a shared shelter within forty-five minutes.");
-        RecordingCatalog catalog = new RecordingCatalog(candidate);
-        String unsafeText = "这段没有 typed action 的调研计划不能直接显示，也不能抹掉候选。";
-        ScriptedModel model = new ScriptedModel(List.of(
-                action(
-                        "read-research-slate",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"playerLead\":\"可选调研失败时，我仍会保留已经核对过的目录候选。\"}"),
-                new Turn(unsafeText, List.of(), CompletionStatus.COMPLETE)));
-        RecommendationReActLoop loop = loop(
-                model,
-                new BoardGameRecommendationTools(catalog, configuredResearchThatMustNotRun()));
-
-        var response = loop.converse(
-                new ConversationRequest(
-                        RecommendationProfile.empty(),
-                        "我们四个人想先拿到一张候选卡；可选调研失败时保留目录结果。"),
-                "zh-CN",
-                "player",
-                ignored -> {});
-
-        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(response.assistantMessage()).doesNotContain(unsafeText);
-        assertThat(response.harness().modelCalls()).isEqualTo(2);
-        assertThat(response.harness().webResearchCalls()).isZero();
-        assertThat(response.harness().actions())
-                .contains(
-                        "RESEARCH_SKIPPED_FOR_PUBLICATION_ACTION_MISSING",
-                        "RECOMMEND_GAMES")
-                .noneMatch(action -> action.startsWith("UNAVAILABLE:"));
-
-        loop.stopBoundedCalls();
-    }
-
-    @Test
-    void publishesAValidatedSlateWhenTheOptionalResearchDecisionModelFails() {
-        Game candidate = game(
-                516,
-                "Failure Orchard",
-                "故障果园",
-                "Four players coordinate an orchard within forty-five minutes.");
-        RecordingCatalog catalog = new RecordingCatalog(candidate);
-        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
-        when(model.configured("player")).thenReturn(true);
-        when(model.next(any(Request.class), eq("player")))
-                .thenReturn(action(
-                        "read-research-slate",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"playerLead\":\"调研暂时不可用时，我仍会保留已核对的目录候选。\"}"))
-                .thenThrow(new IllegalStateException("optional research planner unavailable"));
-        RecommendationReActLoop loop = loop(
-                model,
-                new BoardGameRecommendationTools(catalog, configuredResearchThatMustNotRun()));
-
-        var response = loop.converse(
-                new ConversationRequest(
-                        RecommendationProfile.empty(),
-                        "我们四个人想先拿到一张候选卡；调研模型暂时失败时不要丢掉目录结果。"),
-                "zh-CN",
-                "player",
-                ignored -> {});
-
-        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(response.harness().modelCalls()).isEqualTo(2);
-        assertThat(response.harness().webResearchCalls()).isZero();
-        assertThat(response.harness().actions())
-                .contains(
-                        "RESEARCH_SKIPPED_FOR_PUBLICATION_MODEL_CALL_FAILED",
-                        "RECOMMEND_GAMES")
-                .doesNotContain("MODEL_CALL_FAILED");
-
+                .noneMatch(action -> action.startsWith("RESEARCH_SKIPPED_FOR_PUBLICATION_"));
+        assertThat(response.researchSources())
+                .singleElement()
+                .satisfies(source -> assertThat(source.domain()).isEqualTo("reports.example.test"));
         loop.stopBoundedCalls();
     }
 

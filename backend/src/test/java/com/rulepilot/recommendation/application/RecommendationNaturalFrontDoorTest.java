@@ -729,14 +729,17 @@ class RecommendationNaturalFrontDoorTest {
                         .orElseThrow()
                 .description())
                 .contains(
-                        "local BGG catalog for selectable cards",
+                        "local BGG catalog",
+                        "SELECTABLE_CARDS publishes the first useful verified slate immediately",
+                        "IDENTITY_ONLY reads creator identity context without publishing",
+                        "requires continuationGoal NONE",
                         "requestedCount/requestedCountBasis",
                         "defaultRecommendationCount",
                         "PRODUCT_DEFAULT",
                         "current-turn U id",
                         "textQuery is soft",
                         "titleConstraint is the hard",
-                        "Always set continuationGoal");
+                        "For SELECTABLE_CARDS");
         String system = first.messages().getFirst().content();
         assertThat(system)
                 .contains(
