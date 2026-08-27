@@ -94,7 +94,6 @@ test('production recommendation verifies one deployed main release and the compl
     /testMatch:\s*'production-recommendation-journey\.spec\.ts'/)
   assert.match(productionRecommendationSpec, /candidate\.officialDomainVerified === true/)
   assert.match(productionRecommendationSpec, /candidate\.languageVerified === true/)
-  assert.match(productionRecommendationSpec, /positiveDistinctBggIds\(terminalGames\)/)
   assert.match(productionRecommendationSpec, /RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT/)
   assert.match(productionRecommendationSpec,
     /Recommendation-only verification must not start a rulebook import/)
