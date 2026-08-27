@@ -160,6 +160,13 @@ public class TeachingPlanLauncher {
     }
 
     private String failureCode(Throwable failure, PreparationFailurePhase failurePhase) {
+        var lessonStartupFailure = immediateLessonStartupFailure(failure);
+        if (failurePhase == PreparationFailurePhase.FIRST_SECTION_STARTUP
+                && lessonStartupFailure != null
+                && lessonStartupFailure.failureCode() != null
+                && !lessonStartupFailure.failureCode().isBlank()) {
+            return lessonStartupFailure.failureCode();
+        }
         if (causedBy(failure, TeachingPreparationStorageException.class)) {
             return "TEACHING_PREPARATION_STORAGE_FAILED";
         }
@@ -169,6 +176,19 @@ public class TeachingPlanLauncher {
         return failurePhase == null
                 ? "TEACHING_PREPARATION_FAILED"
                 : failurePhase.failureCode;
+    }
+
+    private IllustratedLessonLauncher.ImmediateLessonStartupFailure immediateLessonStartupFailure(
+            Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof IllustratedLessonLauncher.ImmediateLessonStartupFailure startupFailure) {
+                return startupFailure;
+            }
+            if (current.getCause() == current) return null;
+            current = current.getCause();
+        }
+        return null;
     }
 
     private boolean causedBy(Throwable failure, Class<? extends Throwable> type) {

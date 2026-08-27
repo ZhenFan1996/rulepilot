@@ -105,8 +105,30 @@ public class IllustratedLessonLauncher {
             }
             run = lessons.begin(plan, ownerUsername);
         }
-        startAndScheduleContinuation(plan, ownerUsername, run);
+        try {
+            startAndScheduleContinuation(plan, ownerUsername, run);
+        } catch (RuntimeException startupFailure) {
+            throw new ImmediateLessonStartupFailure(
+                    run.id(), persistedFailureCode(run.id(), ownerUsername, startupFailure), startupFailure);
+        }
         return new LessonLaunch(run.id(), run.state(), false);
+    }
+
+    private String persistedFailureCode(
+            UUID runId,
+            String ownerUsername,
+            RuntimeException startupFailure) {
+        try {
+            return runs.findOwned(runId, ownerUsername)
+                    .map(AssistantRuns.RunDetails::run)
+                    .filter(run -> run.state().terminal())
+                    .map(RunSnapshot::lastErrorCode)
+                    .filter(code -> code != null && !code.isBlank())
+                    .orElse(null);
+        } catch (RuntimeException trackingFailure) {
+            startupFailure.addSuppressed(trackingFailure);
+            return null;
+        }
     }
 
     private void startAndScheduleContinuation(
@@ -215,6 +237,26 @@ public class IllustratedLessonLauncher {
             throw schedulingFailure;
         }
         return launch;
+    }
+
+    static final class ImmediateLessonStartupFailure extends RuntimeException {
+
+        private final UUID assistantRunId;
+        private final String failureCode;
+
+        ImmediateLessonStartupFailure(UUID assistantRunId, String failureCode, RuntimeException cause) {
+            super("Immediate teaching startup failed for run " + assistantRunId, cause);
+            this.assistantRunId = assistantRunId;
+            this.failureCode = failureCode;
+        }
+
+        UUID assistantRunId() {
+            return assistantRunId;
+        }
+
+        String failureCode() {
+            return failureCode;
+        }
     }
 
     public record LessonLaunch(UUID assistantRunId, AssistantRunState state, boolean reused) {}

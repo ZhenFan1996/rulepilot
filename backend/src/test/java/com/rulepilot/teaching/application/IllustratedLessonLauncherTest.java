@@ -80,6 +80,38 @@ class IllustratedLessonLauncherTest {
     }
 
     @Test
+    void immediateLaunchCarriesThePersistedTeachingFailureCodeToPreparation() {
+        RunSnapshot run = run(AssistantRunState.RECEIVED);
+        RunSnapshot failed = new RunSnapshot(
+                run.id(),
+                AssistantRunMode.TEACHING,
+                planId,
+                "alice",
+                AssistantRunState.FAILED,
+                1,
+                run.createdAt(),
+                run.updatedAt().plusSeconds(1),
+                run.updatedAt().plusSeconds(1),
+                "TEACHING_WORKFLOW_FAILED");
+        TeachingPlan plan = mock(TeachingPlan.class);
+        when(plan.id()).thenReturn(planId);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
+        when(lessons.begin(plan, "alice")).thenReturn(run);
+        when(lessons.startGeneration(plan, "alice", run))
+                .thenThrow(new IllegalStateException("provider contract failed"));
+        when(runs.findOwned(run.id(), "alice")).thenReturn(Optional.of(details(failed)));
+        var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor());
+
+        assertThatThrownBy(() -> launcher.launchImmediately(plan, "alice"))
+                .isInstanceOfSatisfying(
+                        IllustratedLessonLauncher.ImmediateLessonStartupFailure.class,
+                        failure -> {
+                            assertThat(failure.assistantRunId()).isEqualTo(run.id());
+                            assertThat(failure.failureCode()).isEqualTo("TEACHING_WORKFLOW_FAILED");
+                        });
+    }
+
+    @Test
     void enriches_visuals_only_after_the_base_lesson_is_finished() {
         RunSnapshot run = run(AssistantRunState.RECEIVED);
         var visuals = mock(VisualLessonEnrichmentService.class);

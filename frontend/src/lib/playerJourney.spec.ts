@@ -150,6 +150,47 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('keeps a causal teaching workflow failure non-retryable when preparation stopped with it', () => {
+    const preparation = run('FAILED')
+    preparation.run.lastErrorCode = 'TEACHING_WORKFLOW_FAILED'
+    const teaching = run('FAILED')
+    teaching.run.lastErrorCode = 'TEACHING_WORKFLOW_FAILED'
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
+      preparationRun: preparation,
+      teachingRun: teaching,
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: null,
+      errorCode: 'TEACHING_WORKFLOW_FAILED', canReadRulebook: true, canReadLesson: false,
+      failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+    })
+  })
+
+  it('keeps the bounded restart policy when preparation carries a teaching timeout', () => {
+    const preparation = run('FAILED')
+    preparation.run.lastErrorCode = 'AGENT_TIMEOUT'
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
+      preparationRun: preparation,
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
+      errorCode: 'AGENT_TIMEOUT', canReadRulebook: true, canReadLesson: false,
+      failureClassification: 'preserved-stop', failureRecovery: 'restart-from-completed',
+    })
+  })
+
   it('rejects a server-suggested blind retry for a typed invalid teaching plan', () => {
     expect(derivePlayerJourney(input({
       gameBound: true,

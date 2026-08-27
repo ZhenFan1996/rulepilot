@@ -17,6 +17,7 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunDetails;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.teaching.application.IllustratedLessonLauncher.ImmediateLessonStartupFailure;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -184,6 +185,39 @@ class TeachingPlanLauncherTest {
                 3,
                 "TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED",
                 "Teaching preparation failed safely");
+    }
+
+    @Test
+    void preservesTheCausalTeachingFailureInsteadOfAuthorizingAPhaseRetry() {
+        RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
+        RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
+        TeachingPlan plan = mock(TeachingPlan.class);
+        UUID teachingRunId = UUID.randomUUID();
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(Optional.empty());
+        when(runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(received);
+        when(runs.advance(received.id(), 1, AssistantRunState.DOCUMENT_READINESS,
+                        "Rulebook pages are ready for teaching"))
+                .thenReturn(ready);
+        when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
+                        "Reading rulebook pages and organizing the lesson"))
+                .thenReturn(planning);
+        when(plans.create(documentVersionId, null, "alice", received.id())).thenReturn(plan);
+        when(lessons.launchImmediately(plan, "alice"))
+                .thenThrow(new ImmediateLessonStartupFailure(
+                        teachingRunId,
+                        "TEACHING_WORKFLOW_FAILED",
+                        new IllegalArgumentException("generated lesson violated its contract")));
+        when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
+
+        launcher().launch(documentVersionId, "alice");
+
+        verify(runs).fail(
+                received.id(), 3, "TEACHING_WORKFLOW_FAILED", "Teaching preparation failed safely");
+        verify(runs, never()).advance(
+                eq(received.id()), eq(3L), eq(AssistantRunState.COMPLETED), anyString());
     }
 
     @Test
