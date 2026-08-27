@@ -210,6 +210,19 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     'choose-source': '请使用下面实际显示的换来源、上传或浏览器下载操作。',
     'manual-repair': '这里没有安全的自动重试；修复权限、来源、输入或服务问题后再继续。',
   },
+  failureCauseDetail: {
+    TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED: '失败发生在整理讲解结构时；规则书页面已经保留，第一段讲解尚未开始。',
+    TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED: '讲解结构已经形成；失败发生在生成并保存第一段带引用讲解时，规则书和结构都会保留。',
+    TEACHING_QUEUE_FULL: '正文生成任务尚未进入执行队列；已有规则书和讲解结构不受影响。',
+    TEACHING_CONTINUATION_QUEUE_FULL: '第一段带引用讲解已经可读；失败发生在其余章节进入后台队列时。',
+    TEACHING_WORKFLOW_FAILED: '失败发生在读取章节证据、生成正文或核对引用期间；已经发布的章节会保留。',
+    TEACHING_COMPLETION_FAILED: '讲解内容已经生成，但保存最终完成状态失败；已有可读章节会保留。',
+    AGENT_STEP_BUDGET: '本轮在限定步骤内仍未完成；已确认内容会保留，系统不会无限继续。',
+    AGENT_TOOL_BUDGET: '本轮已用完允许的规则检索次数；已确认内容会保留。',
+    AGENT_MODEL_BUDGET: '本轮已用完允许的模型调用次数；已确认内容会保留。',
+    AGENT_TOKEN_BUDGET: '本轮达到文字处理预算；已确认内容会保留。',
+    AGENT_TIMEOUT: '整轮讲解达到总时限后停止；已确认内容会保留。',
+  },
   generationLocalFailureTitle: '局部降级：可用内容保留',
   generationLocalFailure: '单页逐字识别失败会改读该页原图；局部配图失败只省略配图。格式、字段、重复内容或页码绑定错误只修正当前结果一次；已确认页面不会丢失。',
   generationPreservedStopTitle: '保留已完成内容后停止',
@@ -313,6 +326,19 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     'restart-from-completed': 'Starting again creates a new run and reuses work that has already been confirmed.',
     'choose-source': 'Use one of the source change, upload, or browser-download actions actually shown below.',
     'manual-repair': 'There is no safe automatic retry here. Repair the authorization, source, input, or service problem before continuing.',
+  },
+  failureCauseDetail: {
+    TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED: 'The failure occurred while organizing the guide structure. Rulebook pages remain available, and first-section writing had not started.',
+    TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED: 'The guide structure is ready. The failure occurred while generating and saving the first cited section; the rulebook and structure remain available.',
+    TEACHING_QUEUE_FULL: 'The writing run did not enter the execution queue. The rulebook and guide structure are unaffected.',
+    TEACHING_CONTINUATION_QUEUE_FULL: 'The first cited section is already readable. The failure occurred while queueing the remaining chapters.',
+    TEACHING_WORKFLOW_FAILED: 'The failure occurred while retrieving chapter evidence, writing content, or checking citations. Published chapters remain available.',
+    TEACHING_COMPLETION_FAILED: 'Guide content was generated, but its final completed state could not be saved. Readable chapters remain available.',
+    AGENT_STEP_BUDGET: 'This run stopped at its step limit. Confirmed content remains available, and work will not continue indefinitely.',
+    AGENT_TOOL_BUDGET: 'This run used its allowed rule-search calls. Confirmed content remains available.',
+    AGENT_MODEL_BUDGET: 'This run used its allowed model calls. Confirmed content remains available.',
+    AGENT_TOKEN_BUDGET: 'This run reached its text-processing budget. Confirmed content remains available.',
+    AGENT_TIMEOUT: 'The whole guide run stopped at its overall deadline. Confirmed content remains available.',
   },
   generationLocalFailureTitle: 'Local degradation: usable content remains',
   generationLocalFailure: 'A failed page transcription falls back to that page image; a focused-visual failure omits only that visual. Formatting, field, duplicate-content, or page-binding errors receive one correction for the current result. Confirmed pages remain available.',
@@ -607,6 +633,11 @@ const currentFailureDetail = computed(() => {
 const currentFailureRecoveryDetail = computed(() => {
   const recovery = projection.value.failureRecovery
   return recovery ? copy.value.failureRecoveryDetail[recovery] : ''
+})
+const currentFailureCauseDetail = computed(() => {
+  const errorCode = projection.value.errorCode
+  if (!errorCode) return ''
+  return (copy.value.failureCauseDetail as Record<string, string>)[errorCode] ?? ''
 })
 const retryActionLabel = computed(() => projection.value.failureRecovery === 'restart-from-completed'
   ? copy.value.restart
@@ -1977,6 +2008,7 @@ onBeforeUnmount(() => {
         >
           <p data-testid="recommendation-current-failure-classification" class="font-semibold">{{ copy.currentFailure }}：{{ currentFailureTitle }}</p>
           <p class="mt-1 leading-6">{{ currentFailureDetail }}</p>
+          <p v-if="currentFailureCauseDetail" data-testid="recommendation-current-failure-cause" class="mt-1 leading-6">{{ currentFailureCauseDetail }}</p>
           <p v-if="currentFailureRecoveryDetail" class="mt-1 leading-6">{{ currentFailureRecoveryDetail }}</p>
           <template v-if="importJob?.stage === 'FAILED'">
             <p class="mt-2 leading-6">{{ importFailureDetail }}</p>

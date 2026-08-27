@@ -217,7 +217,7 @@ jobs:
           mkdir -p "$artifact_dir"
           public_status="$artifact_dir/public-status.json"
           success_summary="$artifact_dir/success-summary.tmp"
-          printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","cleanupOutcome":"NOT_REQUIRED"}' > "$public_status"
+          printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED"}' > "$public_status"
           chmod 600 "$public_status"
           smoke_args=(--base-url http://127.0.0.1:18080 --result-file "$artifact_dir/result.json")
           preparation_mode=$(<"$RUNNER_TEMP/preparation-mode")
@@ -262,7 +262,7 @@ jobs:
             if [[ "$smoke_exit" == 0 ]]; then smoke_exit=1; fi
             jq -n --argjson exitCode "$smoke_exit" '
               {outcome: "FAILED", exitCode: $exitCode, lastCompletedStage: "status-unavailable",
-               failureCode: "UNEXPECTED_SMOKE_FAILURE", cleanupOutcome: "FAILED"}
+               failureCode: "UNEXPECTED_SMOKE_FAILURE", failureCauseCode: null, cleanupOutcome: "FAILED"}
             ' > "$public_status"
           fi
 
@@ -347,7 +347,7 @@ jobs:
             if [[ "$smoke_exit" == 0 ]]; then
               smoke_exit=1
               jq '{outcome: "FAILED", exitCode: 1, lastCompletedStage: "summary-unavailable",
-                   failureCode: "UNEXPECTED_SMOKE_FAILURE", cleanupOutcome}' "$public_status" \
+                   failureCode: "UNEXPECTED_SMOKE_FAILURE", failureCauseCode: null, cleanupOutcome}' "$public_status" \
                 > "$artifact_dir/public-status.tmp"
               mv "$artifact_dir/public-status.tmp" "$public_status"
             fi
