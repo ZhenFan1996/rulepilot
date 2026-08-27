@@ -28,11 +28,6 @@ import {
   parseDocumentProgressSnapshot,
   type DocumentProcessingSnapshot,
 } from '@/lib/documentProgress'
-import {
-  forgetPendingRulebookLesson,
-  readPendingRulebookLessons,
-  type PendingRulebookLesson,
-} from '@/lib/pendingRulebookLesson'
 import { useLocale } from '@/lib/locale'
 import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 import {
@@ -73,6 +68,11 @@ interface RulebookIntakeSnapshot {
   officialSourceUrl: string
   sourceType: string
   title: string
+}
+
+interface LessonPreparation {
+  versionId: string
+  learningGoal?: string
 }
 
 interface RulebookUploadPanelHandle {
@@ -700,10 +700,6 @@ async function recoverCurrentContext(initialRequest: number) {
   recoveredContextKey = contextKey
   try {
     if (username.value && importJobId) await recoverOfficialImport(importJobId, contextGeneration)
-    if (isCurrentRecoveryContext(contextGeneration, initialRequest)
-      && !officialImportJob.value && !importJobId && username.value) {
-      await recoverPendingHandoff()
-    }
   } finally {
     if (isCurrentRecoveryContext(contextGeneration, initialRequest) && !intakeReady.value) resetIntakeBaseline()
   }
@@ -891,10 +887,9 @@ function titleFromFile(selected: File) {
   return selected.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || t('documents.titleFallback')
 }
 
-function currentPreferences(versionId: string): PendingRulebookLesson {
+function currentPreferences(versionId: string): LessonPreparation {
   return {
     versionId,
-    ...(editionId.value ? { editionId: editionId.value } : {}),
     ...(learningGoal.value.trim() ? { learningGoal: learningGoal.value.trim() } : {}),
   }
 }
@@ -985,7 +980,7 @@ function preparationElapsedLabel() {
 
 async function waitForTeachingPreparation(
   runId: string,
-  preferences: PendingRulebookLesson,
+  preferences: LessonPreparation,
   csrf: CsrfResponse,
   generation: number,
   requestIdentityGeneration: number,
@@ -1030,7 +1025,7 @@ async function waitForTeachingPreparation(
 }
 
 async function openPreparedLesson(
-  preferences: PendingRulebookLesson,
+  preferences: LessonPreparation,
   csrf: CsrfResponse,
   generation: number,
   requestIdentityGeneration: number,
@@ -1057,7 +1052,6 @@ async function openPreparedLesson(
   if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)
     || typeof launch.assistantRunId !== 'string' || !launch.assistantRunId) return
   notifyTeachingLaunched({ planId: plan.id, runId: launch.assistantRunId })
-  if (username.value) forgetPendingRulebookLesson(localStorage, username.value, preferences.versionId)
   localStorage.setItem('rulepilot:last-plan-id', plan.id)
   await router.push({ name: 'lessons', query: { started: plan.id, run: launch.assistantRunId } })
 }
@@ -1125,7 +1119,7 @@ function cancelAllProgressWatches() {
   ])) cancelProgressWatch(versionId)
 }
 
-function watchProgress(pending: PendingRulebookLesson) {
+function watchProgress(pending: LessonPreparation) {
   const versionId = pending.versionId
   cancelProgressWatch(versionId)
   if (disposed) return
@@ -1172,7 +1166,7 @@ function isCurrentProgressWatch(
 }
 
 async function handleTerminalProgress(
-  pending: PendingRulebookLesson,
+  pending: LessonPreparation,
   stage: string,
   generation = progressGenerations.get(pending.versionId) ?? 0,
   requestIdentityGeneration = identityGeneration,
@@ -1208,7 +1202,6 @@ async function handleTerminalProgress(
   if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
   if (stage === 'READY') {
     if (serverTeachingVersions.delete(pending.versionId)) {
-      if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
       message.value = t('documents.background')
       return
     }
@@ -1222,7 +1215,6 @@ async function handleTerminalProgress(
     }
     return
   }
-  if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
   errorMessage.value = t('documents.progress.failed')
 }
 
@@ -1237,7 +1229,7 @@ function isCurrentProgressReconciliation(
 }
 
 async function reconcileProgressAfterDisconnect(
-  pending: PendingRulebookLesson,
+  pending: LessonPreparation,
   generation: number,
   requestIdentityGeneration: number,
 ) {
@@ -1260,7 +1252,6 @@ async function reconcileProgressAfterDisconnect(
       return
     }
     if (!status) {
-      if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
       processingVersionId.value = ''
       errorMessage.value = t('documents.progress.missing')
       return
@@ -1280,7 +1271,7 @@ async function reconcileProgressAfterDisconnect(
 }
 
 function scheduleProgressReconnect(
-  pending: PendingRulebookLesson,
+  pending: LessonPreparation,
   generation: number,
   requestIdentityGeneration: number,
 ) {
@@ -1301,27 +1292,6 @@ function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
     return parseDocumentProgressSnapshot(JSON.parse(value))
   } catch {
     return null
-  }
-}
-
-async function recoverPendingHandoff() {
-  if (!username.value || preparingVersionId.value) return
-  for (const pending of readPendingRulebookLessons(localStorage, username.value)) {
-    if (pending.learningGoal) learningGoal.value = pending.learningGoal
-    if (!editionId.value && pending.editionId && editionOptions.value.some(item => item.id === pending.editionId)) {
-      editionId.value = pending.editionId
-    }
-    const entry = documents.value.find((candidate) => candidate.latestVersion.id === pending.versionId)
-    if (!entry) {
-      forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
-      continue
-    }
-    if (entry.latestVersion.status === 'READY' || entry.latestVersion.status === 'FAILED') {
-      await handleTerminalProgress(pending, entry.latestVersion.status)
-      return
-    }
-    watchProgress(pending)
-    return
   }
 }
 
@@ -1385,7 +1355,6 @@ async function continueUploadedRulebook(
   const currentDocuments = receivedDocuments ?? await loadDocuments()
   if (receivedDocuments) documents.value = receivedDocuments
   if (result.version.status === 'READY') {
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, result.version.id)
     message.value = serverTeaching ? t('documents.background') : t('documents.readyToRead')
   } else if (result.version.status === 'FAILED') {
     await handleTerminalProgress(
@@ -1813,7 +1782,6 @@ async function confirmDeleteRulebook() {
     })
     if (!response.ok) throw new Error(t('documents.error'))
     documents.value = documents.value.filter(item => item.document.id !== documentId)
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, versionId)
     if (processingVersionId.value === versionId) {
       cancelProgressWatch(versionId)
       processingVersionId.value = ''

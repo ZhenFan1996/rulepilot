@@ -75,7 +75,7 @@ describe('recommendation conversation session', () => {
     expect(readRecommendationConversation(sessionStorage, 'alice')).toBeNull()
     expect(sessionStorage.getItem(key)).toBeNull()
 
-    sessionStorage.setItem(key, 'x'.repeat(50_001))
+    sessionStorage.setItem(key, 'x'.repeat(200_001))
     expect(readRecommendationConversation(sessionStorage, 'alice')).toBeNull()
     expect(sessionStorage.getItem(key)).toBeNull()
   })
@@ -101,60 +101,4 @@ describe('recommendation conversation session', () => {
     expect(readRecommendationConversation(sessionStorage, 'alice')?.pending?.message).toBe(pendingMessage)
   })
 
-  it('migrates the previous browser snapshot without inventing a server identity', () => {
-    rememberRecommendationConversation(sessionStorage, 'alice', snapshot)
-    const key = sessionStorage.key(0)!
-    const current = JSON.parse(sessionStorage.getItem(key)!) as Record<string, unknown>
-    const pending = current.pending as Record<string, unknown>
-    delete current.conversationId
-    delete current.revision
-    delete current.responseLocale
-    delete pending.clientTurnId
-    delete pending.responseLocale
-    current.profile = {
-      players: 4,
-      maxMinutes: 90,
-      maxWeight: 3,
-      type: 'all',
-      interaction: 'any',
-    }
-    current.version = 1
-    sessionStorage.setItem(key, JSON.stringify(current))
-
-    expect(readRecommendationConversation(sessionStorage, 'alice')).toMatchObject({
-      conversationId: null,
-      revision: 0,
-      responseLocale: null,
-      profile: {
-        type: 'all',
-        interaction: 'any',
-        playerCount: { minimum: 4, maximum: 4, strength: 'hard' },
-        durationMinutes: { minimum: null, maximum: 90, strength: 'hard' },
-        complexity: { minimum: null, maximum: 3, strength: 'hard' },
-      },
-      pending: { message: '换一批', clientTurnId: null, responseLocale: null },
-    })
-  })
-
-  it('migrates the server-identity snapshot that predates per-turn response language', () => {
-    rememberRecommendationConversation(sessionStorage, 'alice', snapshot)
-    const key = sessionStorage.key(0)!
-    const previous = JSON.parse(sessionStorage.getItem(key)!) as Record<string, unknown>
-    const pending = previous.pending as Record<string, unknown>
-    previous.version = 2
-    delete previous.responseLocale
-    delete pending.responseLocale
-    sessionStorage.setItem(key, JSON.stringify(previous))
-
-    expect(readRecommendationConversation(sessionStorage, 'alice')).toMatchObject({
-      conversationId: snapshot.conversationId,
-      revision: snapshot.revision,
-      responseLocale: null,
-      pending: {
-        message: snapshot.pending?.message,
-        clientTurnId: snapshot.pending?.clientTurnId,
-        responseLocale: null,
-      },
-    })
-  })
 })

@@ -11,13 +11,11 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
-import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.VisualQuantityObservation;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
@@ -50,40 +48,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final String QWEN_TEACHING_STARTUP_MODEL = "qwen3-vl-flash";
     private static final Set<String> RULE_GROUP_FIELDS = Set.of("identifier", "fact");
-    private static final Set<String> RULE_GROUP_FIELDS_WITH_REDUNDANT_INDEX =
-            Set.of("identifier", "fact", "ruleGroupIndex");
-    private static final Set<String> QUANTITY_OBSERVATION_FIELDS = Set.of(
-            "pageNumber",
-            "ruleGroupIdentifier",
-            "quantifierScope",
-            "variantAxis",
-            "variantCount",
-            "perVariantQuantity",
-            "derivedTotal",
-            "originalSpan",
-            "resolution");
-    private static final Set<String> BOUND_QUANTITY_OBSERVATION_FIELDS = Set.of(
-            "pageNumber",
-            "ruleGroupIndex",
-            "quantifierScope",
-            "variantAxis",
-            "variantCount",
-            "perVariantQuantity",
-            "derivedTotal",
-            "originalSpan",
-            "resolution");
-    private static final Set<String> PER_VARIANT_EXACT_QUANTITY_FIELDS = Set.of(
-            "kind",
-            "pageNumber",
-            "ruleGroupIndex",
-            "variantAxis",
-            "variantCount",
-            "perVariantQuantity",
-            "originalSpan");
-    private static final Set<String> TOTAL_EXACT_QUANTITY_FIELDS = Set.of(
-            "kind", "pageNumber", "ruleGroupIndex", "total", "originalSpan");
-    private static final Set<String> INSPECTION_QUANTITY_FIELDS = Set.of(
-            "kind", "pageNumber", "ruleGroupIndex", "variantAxis", "originalSpan");
     private static final Set<String> LITERAL_QUANTITY_SPAN_FIELDS = Set.of(
             "pageNumber", "ruleGroupIndex", "originalSpan");
     private static final Set<String> TEACHING_V6_ROOT_FIELDS = Set.of("pages");
@@ -109,7 +73,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private final FakeVisualRulebookPageCatalogModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final String teachingStartupPrompt;
-    private final String ocrModelName;
     private final int maxCompletionTokens;
 
     public SpringAiVisualRulebookPageCatalogModel(
@@ -117,7 +80,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt")
                     Resource teachingStartupPrompt,
-            @Value("${rulepilot.visual.ocr-model:qwen3.5-ocr}") String ocrModelName,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
         this.models = models;
@@ -129,49 +91,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         if (maxCompletionTokens < 800 || maxCompletionTokens > 8_000) {
             throw new IllegalArgumentException("visual page catalog output budget is invalid");
         }
-        if (ocrModelName == null || ocrModelName.isBlank()) {
-            throw new IllegalArgumentException("visual page OCR model must not be blank");
-        }
-        this.ocrModelName = ocrModelName.strip();
         this.maxCompletionTokens = maxCompletionTokens;
-    }
-
-    @Override
-    public boolean supportsTeachingPageTranscription(String owner) {
-        return !models.usesFake(Role.VISUAL, owner)
-                && models.supportsVision(Role.VISUAL, owner)
-                && "qwen".equals(models.providerFor(Role.VISUAL, owner));
-    }
-
-    @Override
-    public PageTranscript transcribeTeachingPage(PageImageInput page, String owner) {
-        if (!supportsTeachingPageTranscription(owner)) {
-            return VisualRulebookPageCatalogModel.super.transcribeTeachingPage(page, owner);
-        }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner))
-                .prompt()
-                .options(qwenOcrOptions(ocrModelName));
-        String content = prompt.user(user -> {
-                    user.text("""
-                            Copy all visible text from PDF page {pageNumber}. Preserve the original language, line
-                            breaks, digits, punctuation, headings, labels, table cells, and worked examples. Output
-                            only the copied text. Do not calculate, translate, summarize, repair, or infer missing
-                            characters. Write ? for a character that cannot be read reliably.
-                            """).param("pageNumber", page.pageNumber());
-                    PageImageInput readable = images.prepareForRuleTranscription(page);
-                    user.media(
-                            MimeTypeUtils.parseMimeType(readable.mediaType()),
-                            new ByteArrayResource(readable.content()));
-                })
-                .call()
-                .content();
-        return new PageTranscript(page.pageNumber(), content);
-    }
-
-    @Override
-    public Optional<ModelExecutionIdentity> teachingPageTranscriptionExecutionIdentity(String owner) {
-        if (!supportsTeachingPageTranscription(owner)) return Optional.empty();
-        return Optional.of(new ModelExecutionIdentity("qwen", ocrModelName));
     }
 
     @Override
@@ -230,13 +150,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     Supplied PDF page numbers: {pageNumbers}
                                     Rulebook title: {rulebookTitle}
                                     Attachment mapping: {attachmentOrder}
-                                    Independent page-bound OCR transcript:
-                                    {pageTranscripts}
-                                    Use each transcript only to copy literal text from its matching PDF page; use the
-                                    attached page to understand layout and which text belongs together. Do not replace
-                                    transcript digits with a calculated or inferred value. If a literal value is absent,
-                                    marked ?, or visibly conflicts with the image, omit that uncertain value and return
-                                    ruleGroupInventoryComplete=false instead of guessing.
+                                    Read literal text and page layout only from the attached page. If a literal value
+                                    is absent or cannot be read reliably, omit it and return
+                                    ruleGroupInventoryComplete=false instead of guessing or calculating it.
                                     Return a JSON object with a pages array. Every returned item must contain only
                                     pageNumber, printedTerms, keywords, externalDocumentDependencies,
                                     ruleGroups, and ruleGroupInventoryComplete. Each ruleGroups item binds one
@@ -256,8 +172,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                             .param("attachmentOrder", java.util.stream.IntStream.range(0, request.pages().size())
                                     .mapToObj(index -> "image " + (index + 1) + " = complete PDF page "
                                             + request.pages().get(index).pageNumber())
-                                    .collect(Collectors.joining("; ")))
-                            .param("pageTranscripts", pageTranscripts(request));
+                                    .collect(Collectors.joining("; ")));
                     request.pages().stream().map(images::prepare).forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
                 })
@@ -280,15 +195,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         };
     }
 
-    private static String pageTranscripts(CatalogRequest request) {
-        if (request.transcripts().isEmpty()) return "not supplied; rely on the attached pages without guessing";
-        return request.transcripts().stream()
-                .map(transcript -> "--- PDF page " + transcript.pageNumber() + " ---\n"
-                        + transcript.text()
-                        + "\n--- end PDF page " + transcript.pageNumber() + " ---")
-                .collect(Collectors.joining("\n"));
-    }
-
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName, int maxTokens) {
         return OpenAiChatOptions.builder()
                 .model(modelName)
@@ -300,14 +206,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
     }
 
-    static OpenAiChatOptions.Builder qwenOcrOptions(String modelName) {
-        return OpenAiChatOptions.builder()
-                .model(modelName)
-                // Qwen-OCR documents 0.01 as its deterministic default. Do not send JSON response-format or
-                // thinking extensions: OCR returns literal text and does not support a custom system message.
-                .temperature(0.01);
-    }
-
     static String teachingStartupModelName(String provider, String configuredModel) {
         // Teaching startup is a bounded image-to-typed-facts workload, not the provider's general reasoning role.
         // A paid trace on the same immutable source page established that Qwen's dedicated VL flash model retained
@@ -317,29 +215,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return "qwen".equals(provider) ? QWEN_TEACHING_STARTUP_MODEL : configuredModel;
     }
 
-    static CatalogDraft parseCatalog(String content) {
-        return parseCatalog(content, false, false);
-    }
-
-    static CatalogDraft parseTeachingCatalog(String content) {
-        return parseCatalog(content, true, false);
-    }
-
-    static CatalogDraft parseTeachingCatalogV3(String content) {
-        return parseCatalog(content, true, true);
-    }
-
-    static CatalogDraft parseTeachingCatalogV4(String content) {
-        return parseCatalog(content, true, true, true);
-    }
-
-    static CatalogDraft parseTeachingCatalogV5(String content) {
-        return parseCatalog(content, true, true, true, true);
-    }
-
     static CatalogDraft parseTeachingCatalogV6(String content) {
         try {
-            return parseCatalog(inlineQuantitySpansAsObservations(content), true, true, true, false, true);
+            return parseNormalizedTeachingCatalogV6(inlineQuantitySpansAsObservations(content));
         } catch (TeachingCatalogContractViolation violation) {
             throw violation;
         } catch (IllegalArgumentException schemaMismatch) {
@@ -356,8 +234,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         String json = content.strip();
         try {
-            JsonNode root = JSON.readTree(json);
-            requireExactObjectFields(root, TEACHING_V6_ROOT_FIELDS, "visual teaching catalog root");
+            ObjectNode root = retainDeclaredObjectFields(
+                    JSON.readTree(json), TEACHING_V6_ROOT_FIELDS, "visual teaching catalog root");
             JsonNode pages = root.get("pages");
             if (!pages.isArray() || pages.isEmpty()) {
                 throw new IllegalArgumentException("visual teaching catalog must return a non-empty pages array");
@@ -366,7 +244,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 if (!(page instanceof ObjectNode objectPage)) {
                     throw new IllegalArgumentException("visual teaching catalog page must be an object");
                 }
-                requireExactObjectFields(page, TEACHING_V6_PAGE_FIELDS, "visual teaching catalog page");
+                retainDeclaredObjectFields(page, TEACHING_V6_PAGE_FIELDS, "visual teaching catalog page");
                 int pageNumber = requiredInteger(page.get("pageNumber"), "pageNumber");
                 if (pageNumber < 1) {
                     throw new IllegalArgumentException("visual teaching catalog pageNumber must be positive");
@@ -388,7 +266,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     throw new IllegalArgumentException("visual teaching catalog ruleGroups must be an array of at most 32 items");
                 }
                 for (JsonNode group : groups) {
-                    requireExactObjectFields(
+                    retainDeclaredObjectFields(
                             group, TEACHING_V6_RULE_GROUP_FIELDS, "visual teaching catalog ruleGroups item");
                     requiredText(group.get("identifier"), "identifier", false);
                     String fact = requiredText(group.get("fact"), "fact", false);
@@ -446,7 +324,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         LinkedHashSet<String> titles = new LinkedHashSet<>();
         for (JsonNode dependency : value) {
-            requireExactObjectFields(
+            retainDeclaredObjectFields(
                     dependency,
                     EXTERNAL_DOCUMENT_DEPENDENCY_FIELDS,
                     "visual teaching catalog externalDocumentDependencies item");
@@ -510,58 +388,21 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return bounded;
     }
 
-    private static void requireExactObjectFields(JsonNode value, Set<String> expected, String contract) {
-        if (value == null || !value.isObject()) {
+    private static ObjectNode retainDeclaredObjectFields(
+            JsonNode value, Set<String> expected, String contract) {
+        if (!(value instanceof ObjectNode object)) {
             throw new IllegalArgumentException(contract + " must be an object");
         }
         LinkedHashSet<String> actual = new LinkedHashSet<>();
         value.fieldNames().forEachRemaining(actual::add);
-        if (!actual.equals(expected)) {
-            throw new IllegalArgumentException(contract + " must contain exactly " + expected);
+        if (!actual.containsAll(expected)) {
+            throw new IllegalArgumentException(contract + " must contain the declared fields " + expected);
         }
+        object.retain(expected);
+        return object;
     }
 
-    private static CatalogDraft parseCatalog(
-            String content, boolean requireSourceDependencies, boolean requireQuantityObservations) {
-        return parseCatalog(content, requireSourceDependencies, requireQuantityObservations, false);
-    }
-
-    private static CatalogDraft parseCatalog(
-            String content,
-            boolean requireSourceDependencies,
-            boolean requireQuantityObservations,
-            boolean requireBoundRuleGroups) {
-        return parseCatalog(
-                content,
-                requireSourceDependencies,
-                requireQuantityObservations,
-                requireBoundRuleGroups,
-                false,
-                false);
-    }
-
-    private static CatalogDraft parseCatalog(
-            String content,
-            boolean requireSourceDependencies,
-            boolean requireQuantityObservations,
-            boolean requireBoundRuleGroups,
-            boolean requireDiscriminatedQuantities) {
-        return parseCatalog(
-                content,
-                requireSourceDependencies,
-                requireQuantityObservations,
-                requireBoundRuleGroups,
-                requireDiscriminatedQuantities,
-                false);
-    }
-
-    private static CatalogDraft parseCatalog(
-            String content,
-            boolean requireSourceDependencies,
-            boolean requireQuantityObservations,
-            boolean requireBoundRuleGroups,
-            boolean requireDiscriminatedQuantities,
-            boolean requireLiteralQuantitySpans) {
+    private static CatalogDraft parseNormalizedTeachingCatalogV6(String content) {
         if (content == null || content.isBlank()) {
             throw new IllegalArgumentException("visual page catalog model returned no content");
         }
@@ -573,58 +414,27 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             }
             java.util.List<PageSummary> summaries = new java.util.ArrayList<>();
             for (JsonNode page : pages) {
-                JsonNode sourceDependencyInventory = requireLiteralQuantitySpans
-                        ? page.get("externalDocumentDependencies")
-                        : page.get("sourceDependencies");
-                if (requireSourceDependencies
-                        && (sourceDependencyInventory == null || !sourceDependencyInventory.isArray())) {
-                    throw new IllegalArgumentException(requireLiteralQuantitySpans
-                            ? "visual teaching catalog must return externalDocumentDependencies for every page"
-                            : "visual teaching catalog must return sourceDependencies for every page");
-                }
-                boolean externalDocumentShape = requireLiteralQuantitySpans
-                        && page.has("externalDocumentDependencies");
-                List<SourceDependency> dependencies = sourceDependencies(
-                        sourceDependencyInventory, externalDocumentShape ? "documentTitle" : "title");
-                JsonNode ruleGroupInventory = page.get("ruleGroupIdentifiers");
-                int pageNumber = page.path("pageNumber").asInt();
-                List<RuleGroupFact> boundRuleGroups = requireBoundRuleGroups
-                        ? strictBoundRuleGroups(pageNumber, page.get("ruleGroups"))
-                        : List.of();
-                JsonNode ruleGroupCompleteness = page.get("ruleGroupInventoryComplete");
-                if (requireSourceDependencies && !requireBoundRuleGroups
-                        && (ruleGroupInventory == null || !ruleGroupInventory.isArray())) {
+                JsonNode sourceDependencyInventory = page.get("externalDocumentDependencies");
+                if (sourceDependencyInventory == null || !sourceDependencyInventory.isArray()) {
                     throw new IllegalArgumentException(
-                            "visual teaching catalog must return ruleGroupIdentifiers for every page");
+                            "visual teaching catalog must return externalDocumentDependencies for every page");
                 }
-                if (requireSourceDependencies
-                        && (ruleGroupCompleteness == null || !ruleGroupCompleteness.isBoolean())) {
+                List<SourceDependency> dependencies = sourceDependencies(sourceDependencyInventory, "documentTitle");
+                int pageNumber = page.path("pageNumber").asInt();
+                List<RuleGroupFact> boundRuleGroups = strictBoundRuleGroups(pageNumber, page.get("ruleGroups"));
+                JsonNode ruleGroupCompleteness = page.get("ruleGroupInventoryComplete");
+                if (ruleGroupCompleteness == null || !ruleGroupCompleteness.isBoolean()) {
                     throw new IllegalArgumentException(
                             "visual teaching catalog must return ruleGroupInventoryComplete for every page");
                 }
-                List<String> ruleGroupIdentifiers = requireBoundRuleGroups
-                        ? boundRuleGroups.stream().map(RuleGroupFact::identifier).toList()
-                        : requireSourceDependencies
-                                ? strictRuleGroupIdentifiers(ruleGroupInventory)
-                        : ruleGroupInventory != null && ruleGroupInventory.isArray()
-                                ? normalizedStrings(ruleGroupInventory)
-                                : List.of();
-                boolean ruleGroupInventoryComplete = ruleGroupCompleteness != null
-                        && ruleGroupCompleteness.isBoolean()
-                        && ruleGroupCompleteness.booleanValue();
-                List<VisualQuantityObservation> quantityObservations = requireBoundRuleGroups
-                        ? requireLiteralQuantitySpans
-                                ? literalBoundQuantitySpans(
-                                        page.get("quantityObservations"), requireQuantityObservations, boundRuleGroups)
-                                : requireDiscriminatedQuantities
-                                ? discriminatedBoundQuantityObservations(
-                                        page.get("quantityObservations"), requireQuantityObservations, boundRuleGroups)
-                                : boundQuantityObservations(
-                                        page.get("quantityObservations"), requireQuantityObservations, boundRuleGroups)
-                        : quantityObservations(page.get("quantityObservations"), requireQuantityObservations);
+                List<String> ruleGroupIdentifiers =
+                        boundRuleGroups.stream().map(RuleGroupFact::identifier).toList();
+                boolean ruleGroupInventoryComplete = ruleGroupCompleteness.booleanValue();
+                List<VisualQuantityObservation> quantityObservations =
+                        literalBoundQuantitySpans(page.get("quantityObservations"), true, boundRuleGroups);
                 String printedTerms = joinedText(page.get("printedTerms"), "; ");
                 String factualSummary = joinedText(page.get("factualSummary"), "\n");
-                if (requireBoundRuleGroups && !boundRuleGroups.isEmpty()) {
+                if (!boundRuleGroups.isEmpty()) {
                     String boundFacts = boundRuleGroups.stream()
                             .map(group -> group.identifier() + ": [" + group.label() + "] " + group.fact())
                             .collect(java.util.stream.Collectors.joining("\n"));
@@ -646,19 +456,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                             ? dependencyFacts
                             : dependencyFacts + "\n" + factualSummary;
                 }
-                if (ruleGroupInventoryComplete && requireBoundRuleGroups) {
-                    validateRuleGroupFactBindings(ruleGroupIdentifiers, boundRuleGroups, "visual teaching");
-                }
-                // Historical V2/V3 fixtures supplied an identifier array plus prose. They remain readable as partial
-                // observations, but cannot claim a complete schema-36 ledger because the application no longer
-                // reconstructs JSON relationships from that prose.
-                ruleGroupInventoryComplete = ruleGroupInventoryComplete && requireBoundRuleGroups;
                 summaries.add(new PageSummary(
                         pageNumber,
                         printedTerms,
                         factualSummary,
                         normalizedStrings(page.get("keywords")),
-                        visualAnchors(page.get("visualAnchors")),
+                        List.of(),
                         dependencies,
                         ruleGroupIdentifiers,
                         ruleGroupInventoryComplete,
@@ -669,10 +472,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         } catch (JsonProcessingException invalidJson) {
             throw new IllegalArgumentException("visual page catalog model returned invalid JSON", invalidJson);
         }
-    }
-
-    private static List<String> strictRuleGroupIdentifiers(JsonNode value) {
-        return strictIdentifiers(value, "visual teaching catalog");
     }
 
     private static List<RuleGroupFact> strictBoundRuleGroups(int pageNumber, JsonNode value) {
@@ -690,15 +489,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             }
             Set<String> fields = new java.util.LinkedHashSet<>();
             item.fieldNames().forEachRemaining(fields::add);
-            boolean hasRedundantIndex = fields.equals(RULE_GROUP_FIELDS_WITH_REDUNDANT_INDEX);
-            if (!fields.equals(RULE_GROUP_FIELDS) && !hasRedundantIndex) {
+            if (!fields.equals(RULE_GROUP_FIELDS)) {
                 throw new IllegalArgumentException(
                         "visual teaching catalog ruleGroups item must contain exactly identifier and fact");
-            }
-            if (hasRedundantIndex
-                    && requiredInteger(item.get("ruleGroupIndex"), "ruleGroupIndex") != groups.size()) {
-                throw new IllegalArgumentException(
-                        "visual teaching catalog redundant ruleGroupIndex must equal the ruleGroups array position");
             }
             String label = requiredText(item.get("identifier"), "identifier", false).strip();
             String fact = requiredText(item.get("fact"), "fact", false).strip();
@@ -718,37 +511,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     "page-" + pageNumber + "-group-" + (groups.size() + 1), label, fact));
         }
         return List.copyOf(groups);
-    }
-
-    private static List<String> strictIdentifiers(JsonNode value, String contract) {
-        if (value == null || !value.isArray()) {
-            throw new IllegalArgumentException(contract + " must return a rule-group identifier array");
-        }
-        List<String> identifiers = new java.util.ArrayList<>();
-        java.util.LinkedHashSet<String> identities = new java.util.LinkedHashSet<>();
-        for (JsonNode item : value) {
-            if (!item.isTextual()) {
-                throw new IllegalArgumentException(contract + " rule-group identifier must be text");
-            }
-            String identifier = item.textValue().strip();
-            String identity = VisualSourceRuleGroupLedger.identity(identifier);
-            if (identifier.isBlank() || !identities.add(identity)) {
-                throw new IllegalArgumentException(contract + " rule-group identifier is invalid or duplicated");
-            }
-            identifiers.add(identifier);
-        }
-        return List.copyOf(identifiers);
-    }
-
-    private static void validateRuleGroupFactBindings(
-            List<String> identifiers, List<RuleGroupFact> facts, String contract) {
-        if (VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, facts)) return;
-        for (String identifier : identifiers) {
-            if (!VisualSourceRuleGroupLedger.hasExactFactBinding(identifier, facts)) {
-                throw new IllegalArgumentException(
-                        contract + " rule group has no same-page fact: " + identifier);
-            }
-        }
     }
 
     private static List<SourceDependency> sourceDependencies(JsonNode value, String titleField) {
@@ -787,148 +549,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             dependencies.add(new SourceDependency(titleValue.textValue(), coverageTags));
         }
         return List.copyOf(dependencies);
-    }
-
-    private static List<VisualQuantityObservation> quantityObservations(JsonNode value, boolean required) {
-        if (value == null || value.isMissingNode()) {
-            if (required) {
-                throw new IllegalArgumentException(
-                        "visual teaching catalog must return quantityObservations for every cataloged page");
-            }
-            return List.of();
-        }
-        if (!value.isArray()) {
-            throw new IllegalArgumentException("visual teaching quantityObservations are invalid");
-        }
-        List<VisualQuantityObservation> observations = new java.util.ArrayList<>();
-        for (JsonNode item : value) {
-            if (!item.isObject()) {
-                throw new IllegalArgumentException("visual teaching quantity observation must be an object");
-            }
-            Set<String> fields = new java.util.LinkedHashSet<>();
-            item.fieldNames().forEachRemaining(fields::add);
-            if (!fields.equals(QUANTITY_OBSERVATION_FIELDS)) {
-                throw new IllegalArgumentException(
-                        "visual teaching quantity observation must contain the exact fields");
-            }
-            try {
-                observations.add(quantityObservation(
-                        item, requiredText(item.get("ruleGroupIdentifier"), "ruleGroupIdentifier", false)));
-            } catch (IllegalArgumentException invalidObservation) {
-                throw new IllegalArgumentException(
-                        "visual teaching quantity observation is invalid: " + invalidObservation.getMessage(),
-                        invalidObservation);
-            }
-        }
-        return List.copyOf(observations);
-    }
-
-    private static List<VisualQuantityObservation> boundQuantityObservations(
-            JsonNode value, boolean required, List<RuleGroupFact> ruleGroups) {
-        if (value == null || value.isMissingNode()) {
-            if (required) {
-                throw new IllegalArgumentException(
-                        "visual teaching catalog must return quantityObservations for every cataloged page");
-            }
-            return List.of();
-        }
-        if (!value.isArray()) {
-            throw new IllegalArgumentException("visual teaching quantityObservations are invalid");
-        }
-        List<VisualQuantityObservation> observations = new java.util.ArrayList<>();
-        for (JsonNode item : value) {
-            if (!item.isObject()) {
-                throw new IllegalArgumentException("visual teaching quantity observation must be an object");
-            }
-            Set<String> fields = new java.util.LinkedHashSet<>();
-            item.fieldNames().forEachRemaining(fields::add);
-            if (!fields.equals(BOUND_QUANTITY_OBSERVATION_FIELDS)) {
-                throw new IllegalArgumentException(
-                        "visual teaching bound quantity observation must contain the exact fields");
-            }
-            try {
-                int ruleGroupIndex = requiredInteger(item.get("ruleGroupIndex"), "ruleGroupIndex");
-                if (ruleGroupIndex < 0 || ruleGroupIndex >= ruleGroups.size()) {
-                    throw new IllegalArgumentException("ruleGroupIndex must identify one ruleGroups item");
-                }
-                observations.add(quantityObservation(item, ruleGroups.get(ruleGroupIndex).identifier()));
-            } catch (IllegalArgumentException invalidObservation) {
-                throw new IllegalArgumentException(
-                        "visual teaching quantity observation is invalid: " + invalidObservation.getMessage(),
-                        invalidObservation);
-            }
-        }
-        return List.copyOf(observations);
-    }
-
-    private static List<VisualQuantityObservation> discriminatedBoundQuantityObservations(
-            JsonNode value, boolean required, List<RuleGroupFact> ruleGroups) {
-        if (value == null || value.isMissingNode()) {
-            if (required) {
-                throw new IllegalArgumentException(
-                        "visual teaching catalog must return quantityObservations for every cataloged page");
-            }
-            return List.of();
-        }
-        if (!value.isArray()) {
-            throw new IllegalArgumentException("visual teaching quantityObservations are invalid");
-        }
-        List<VisualQuantityObservation> observations = new java.util.ArrayList<>();
-        for (JsonNode item : value) {
-            if (!item.isObject()) {
-                throw new IllegalArgumentException("visual teaching quantity observation must be an object");
-            }
-            try {
-                ModelQuantityKind kind = ModelQuantityKind.valueOf(requiredText(item.get("kind"), "kind", false));
-                Set<String> fields = new java.util.LinkedHashSet<>();
-                item.fieldNames().forEachRemaining(fields::add);
-                Set<String> expectedFields = switch (kind) {
-                    case PER_VARIANT_EXACT -> PER_VARIANT_EXACT_QUANTITY_FIELDS;
-                    case TOTAL_EXACT -> TOTAL_EXACT_QUANTITY_FIELDS;
-                    case REQUIRES_PAGE_INSPECTION -> INSPECTION_QUANTITY_FIELDS;
-                };
-                if (!fields.equals(expectedFields)) {
-                    throw new IllegalArgumentException(
-                            "quantity kind " + kind + " must contain only its exact fields " + expectedFields);
-                }
-                int ruleGroupIndex = requiredInteger(item.get("ruleGroupIndex"), "ruleGroupIndex");
-                if (ruleGroupIndex < 0 || ruleGroupIndex >= ruleGroups.size()) {
-                    throw new IllegalArgumentException("ruleGroupIndex must identify one ruleGroups item");
-                }
-                String ruleGroupIdentifier = ruleGroups.get(ruleGroupIndex).identifier();
-                int pageNumber = requiredInteger(item.get("pageNumber"), "pageNumber");
-                String originalSpan = requiredText(item.get("originalSpan"), "originalSpan", false);
-                observations.add(switch (kind) {
-                    case PER_VARIANT_EXACT -> perVariantObservation(
-                            item, pageNumber, ruleGroupIdentifier, originalSpan);
-                    case TOTAL_EXACT -> new VisualQuantityObservation(
-                            pageNumber,
-                            ruleGroupIdentifier,
-                            QuantifierScope.TOTAL,
-                            "",
-                            null,
-                            null,
-                            requiredInteger(item.get("total"), "total"),
-                            originalSpan,
-                            QuantityResolution.EXACT);
-                    case REQUIRES_PAGE_INSPECTION -> new VisualQuantityObservation(
-                            pageNumber,
-                            ruleGroupIdentifier,
-                            QuantifierScope.UNRESOLVED,
-                            requiredText(item.get("variantAxis"), "variantAxis", true),
-                            null,
-                            null,
-                            null,
-                            originalSpan,
-                            QuantityResolution.REQUIRES_PAGE_INSPECTION);
-                });
-            } catch (IllegalArgumentException invalidObservation) {
-                throw new IllegalArgumentException(
-                        "visual teaching quantity observation is invalid: " + invalidObservation.getMessage(),
-                        invalidObservation);
-            }
-        }
-        return List.copyOf(observations);
     }
 
     private static List<VisualQuantityObservation> literalBoundQuantitySpans(
@@ -973,59 +593,11 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return List.copyOf(observations);
     }
 
-    private static VisualQuantityObservation perVariantObservation(
-            JsonNode item, int pageNumber, String ruleGroupIdentifier, String originalSpan) {
-        Integer variantCount = nullableInteger(item.get("variantCount"), "variantCount");
-        int perVariantQuantity = requiredInteger(item.get("perVariantQuantity"), "perVariantQuantity");
-        Integer derivedTotal = null;
-        if (variantCount != null) {
-            try {
-                derivedTotal = Math.multiplyExact(variantCount, perVariantQuantity);
-            } catch (ArithmeticException overflow) {
-                throw new IllegalArgumentException("visual quantity derived total is outside the safe range", overflow);
-            }
-        }
-        return new VisualQuantityObservation(
-                pageNumber,
-                ruleGroupIdentifier,
-                QuantifierScope.PER_VARIANT,
-                requiredText(item.get("variantAxis"), "variantAxis", false),
-                variantCount,
-                perVariantQuantity,
-                derivedTotal,
-                originalSpan,
-                QuantityResolution.EXACT);
-    }
-
-    private static VisualQuantityObservation quantityObservation(JsonNode item, String ruleGroupIdentifier) {
-        return new VisualQuantityObservation(
-                requiredInteger(item.get("pageNumber"), "pageNumber"),
-                ruleGroupIdentifier,
-                QuantifierScope.valueOf(requiredText(item.get("quantifierScope"), "quantifierScope", false)),
-                requiredText(item.get("variantAxis"), "variantAxis", true),
-                nullableInteger(item.get("variantCount"), "variantCount"),
-                nullableInteger(item.get("perVariantQuantity"), "perVariantQuantity"),
-                nullableInteger(item.get("derivedTotal"), "derivedTotal"),
-                requiredText(item.get("originalSpan"), "originalSpan", false),
-                QuantityResolution.valueOf(requiredText(item.get("resolution"), "resolution", false)));
-    }
-
-    private enum ModelQuantityKind {
-        PER_VARIANT_EXACT,
-        TOTAL_EXACT,
-        REQUIRES_PAGE_INSPECTION
-    }
-
     private static int requiredInteger(JsonNode value, String field) {
         if (value == null || !value.isIntegralNumber() || !value.canConvertToInt()) {
             throw new IllegalArgumentException(field + " must be an integer");
         }
         return value.intValue();
-    }
-
-    private static Integer nullableInteger(JsonNode value, String field) {
-        if (value == null || value.isNull()) return null;
-        return requiredInteger(value, field);
     }
 
     private static String requiredText(JsonNode value, String field, boolean allowEmpty) {
@@ -1082,28 +654,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .map(String::strip)
                 .distinct()
                 .toList();
-    }
-
-    /** Optional anchors must never make a page's textual visual ledger unusable. */
-    private static java.util.List<VisualAnchor> visualAnchors(JsonNode value) {
-        if (value == null || value.isNull() || !value.isArray()) return java.util.List.of();
-        java.util.List<VisualAnchor> anchors = new java.util.ArrayList<>();
-        value.forEach(anchor -> {
-            if (!anchor.isObject()) return;
-            try {
-                anchors.add(new VisualAnchor(
-                        joinedText(anchor.get("kind"), " "),
-                        joinedText(anchor.get("label"), " "),
-                        joinedText(anchor.get("visibleDescription"), " "),
-                        anchor.path("x").asInt(Integer.MIN_VALUE),
-                        anchor.path("y").asInt(Integer.MIN_VALUE),
-                        anchor.path("width").asInt(Integer.MIN_VALUE),
-                        anchor.path("height").asInt(Integer.MIN_VALUE)));
-            } catch (IllegalArgumentException invalidAnchor) {
-                // The main page ledger is still usable when an optional model-proposed rectangle is malformed.
-            }
-        });
-        return anchors;
     }
 
     static CatalogDraft normalizePageBindings(CatalogRequest request, CatalogDraft draft) {

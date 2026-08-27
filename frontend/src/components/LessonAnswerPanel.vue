@@ -5,9 +5,6 @@ import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { useLocale } from '@/lib/locale'
-import { playerFacingExplanation, playerFacingWalkthroughSteps } from '@/lib/playerFacingAnswer'
-import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
-import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { playerWorkStatus } from '@/lib/playerWorkStatus'
 import type {
   AnswerTurn,
@@ -107,7 +104,7 @@ const answerErrorStatus = computed(() => playerWorkStatus(
 ))
 const latestPriorAnswer = computed(() => props.answerTurns.at(-1) ?? null)
 const softBudgetCopy = computed(() => {
-  const responseLocale = playerTurnLocale(props.question, locale.value)
+  const responseLocale = locale.value
   const elapsed = responseLocale === 'en'
     ? `${props.answerElapsedSeconds} seconds`
     : `${props.answerElapsedSeconds} 秒`
@@ -283,7 +280,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
   return !!(
     answer.calculations?.length
     || answer.situationChecks?.length
-    || playerFacingWalkthroughSteps(answer).length
+    || answer.walkthroughSteps?.length
     || answer.decisionBranches?.length
     || answer.exceptionClauses?.length
     || answer.termDefinitions?.length
@@ -330,7 +327,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
             <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.history.open') }}</summary>
             <div class="mt-3 stack-y-md text-sm leading-6 text-ink/65">
               <p v-if="turn.answer.clarification" class="rounded-xl bg-amber-50 px-3 py-2 text-amber-950">{{ turn.answer.clarification }}</p>
-              <p v-else-if="playerFacingExplanation(turn.answer)">{{ playerFacingExplanation(turn.answer) }}</p>
+              <p v-else-if="turn.answer.explanation.trim()">{{ turn.answer.explanation.trim() }}</p>
               <div v-if="turn.answer.calculations?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}</p>
                 <ul class="mt-1 stack-y-xs font-mono text-xs text-indigo">
@@ -347,10 +344,10 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   </li>
                 </ul>
               </div>
-              <div v-if="playerFacingWalkthroughSteps(turn.answer).length" class="rounded-xl border border-copper/20 bg-copper/[0.04] px-3 py-2">
+              <div v-if="turn.answer.walkthroughSteps?.length" class="rounded-xl border border-copper/20 bg-copper/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
                 <ol class="mt-2 stack-y-sm">
-                  <li v-for="(step, stepIndex) in playerFacingWalkthroughSteps(turn.answer)" :key="`${stepIndex}-${step.instruction}`" class="flex gap-2">
+                  <li v-for="(step, stepIndex) in turn.answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-2">
                     <span class="font-semibold text-copper">{{ stepIndex + 1 }}.</span>
                     <div><p class="font-medium text-ink">{{ step.instruction }}</p><p class="text-xs text-ink/50">{{ step.explanation }}</p></div>
                   </li>
@@ -471,7 +468,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 <ol class="mt-2 stack-y-sm">
                   <li v-for="(citation, citationIndex) in turn.answer.citations" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-xl bg-paper px-3 py-2">
                     <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
-                    <p class="mt-1 text-xs leading-5 text-ink/55">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
+                    <p class="mt-1 text-xs leading-5 text-ink/55">{{ citation.excerpt }}</p>
                   </li>
                 </ol>
               </div>
@@ -580,7 +577,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.source === 'CONFIRMED' ? t('lesson.answer.source.confirmed') : answer.source === 'OFFICIAL' ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
               </div>
               <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
-              <p v-if="publishesConclusion(answer.status) && playerFacingExplanation(answer)" class="mt-3 text-sm leading-7 text-ink/70">{{ playerFacingExplanation(answer) }}</p>
+              <p v-if="publishesConclusion(answer.status) && answer.explanation.trim()" class="mt-3 text-sm leading-7 text-ink/70">{{ answer.explanation.trim() }}</p>
 
               <div v-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
                 <p>{{ answer.recovery?.message || answer.clarification || answerFailureMessage(answer.status) }}</p>
@@ -617,11 +614,11 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                       </li>
                     </ul>
                   </li>
-                  <li v-if="playerFacingWalkthroughSteps(answer).length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
+                  <li v-if="answer.walkthroughSteps?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
                     <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.walkthrough.description') }}</p>
                     <ol class="mt-3 stack-y-md">
-                      <li v-for="(step, stepIndex) in playerFacingWalkthroughSteps(answer)" :key="`${stepIndex}-${step.instruction}`" class="flex gap-3 rounded-xl bg-canvas px-3 py-3">
+                      <li v-for="(step, stepIndex) in answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-3 rounded-xl bg-canvas px-3 py-3">
                         <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-copper/15 text-sm font-bold text-copper">{{ stepIndex + 1 }}</span>
                         <div>
                           <div class="flex flex-wrap items-center gap-2"><p class="font-semibold text-ink">{{ step.instruction }}</p><span class="rounded-full bg-ink/6 px-2 py-0.5 text-[11px] font-semibold text-ink/55">{{ walkthroughBasisLabel(step.orderBasis) }}</span></div>
@@ -779,7 +776,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   <p class="font-semibold">{{ primaryCitation.heading }}</p>
                   <span class="text-xs font-semibold text-indigo">{{ citationPages(primaryCitation) }}</span>
                 </div>
-                <p class="mt-2 text-sm leading-6 text-ink/65">{{ playerFacingCitationExcerpt(primaryCitation.excerpt) }}</p>
+                <p class="mt-2 text-sm leading-6 text-ink/65">{{ primaryCitation.excerpt }}</p>
               </article>
               <details v-if="additionalCitations.length" class="mt-4">
                 <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.evidence.more', { count: additionalCitations.length }) }}</summary>
@@ -789,7 +786,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                       <p class="font-semibold">{{ citation.heading }}</p>
                       <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
                     </div>
-                    <p class="mt-2 text-sm leading-6 text-ink/65">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
+                    <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
                   </li>
                 </ol>
               </details>

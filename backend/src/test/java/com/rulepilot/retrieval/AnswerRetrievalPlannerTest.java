@@ -3,17 +3,13 @@ package com.rulepilot.retrieval;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.rulepilot.retrieval.AnswerRetrievalContext.LearningIntent;
 import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
 import com.rulepilot.retrieval.AnswerRetrievalQuestion.QuestionType;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class AnswerRetrievalPlannerTest {
-
-    private final UUID versionId = UUID.randomUUID();
 
     @Test
     void usesValidatedSubquestionsWithoutTranslatingEvidenceEnumsIntoKeywords() {
@@ -24,7 +20,7 @@ class AnswerRetrievalPlannerTest {
                         new AnswerRetrievalPlan.Subquestion("例外情况吗", Set.of(EvidenceNeed.EXCEPTION))),
                 false);
 
-        var intents = AnswerRetrievalPlanner.plan(question, context(), plan);
+        var intents = AnswerRetrievalPlanner.plan(question, plan);
 
         assertThat(intents.getFirst().query()).startsWith(question.currentQuestion());
         assertThat(intents).filteredOn(AnswerRetrievalPlanner.RetrievalIntent::directQuestion)
@@ -34,11 +30,6 @@ class AnswerRetrievalPlannerTest {
                         "例外情况吗")
                 .allSatisfy(query -> assertThat(query)
                         .doesNotContain("order timing procedure", "exception restriction"));
-        assertThat(intents).allSatisfy(intent -> {
-            assertThat(intent.sectionTypes()).isEmpty();
-            assertThat(intent.currentSectionType()).isNull();
-            assertThat(intent.purpose()).isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.GENERAL);
-        });
     }
 
     @Test
@@ -49,7 +40,7 @@ class AnswerRetrievalPlannerTest {
                         question.normalizedQuestion(), Set.of(EvidenceNeed.ADVICE))),
                 false);
 
-        var queries = AnswerRetrievalPlanner.plan(question, context(), plan).stream()
+        var queries = AnswerRetrievalPlanner.plan(question, plan).stream()
                 .map(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .toList();
 
@@ -72,7 +63,7 @@ class AnswerRetrievalPlannerTest {
                         List.of("phase end cleanup", "PHASE END CLEANUP"))),
                 false);
 
-        var intents = AnswerRetrievalPlanner.plan(question, context(), plan);
+        var intents = AnswerRetrievalPlanner.plan(question, plan);
 
         assertThat(intents.getFirst().directQuestion()).isTrue();
         assertThat(intents.getFirst().query()).isEqualTo("When does the phase end?");
@@ -84,7 +75,7 @@ class AnswerRetrievalPlannerTest {
     void fallbackPlanDoesNotInventRetrievalVocabulary() {
         AnswerRetrievalQuestion question = question("Can this action happen now?", List.of());
 
-        var intents = AnswerRetrievalPlanner.plan(question, context());
+        var intents = AnswerRetrievalPlanner.plan(question);
 
         assertThat(intents.getFirst().query()).isEqualTo("Can this action happen now?");
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
@@ -101,8 +92,6 @@ class AnswerRetrievalPlannerTest {
     @Test
     void keepsCurrentAndBoundReferenceQuestionsAsSeparateStructuredQueries() {
         AnswerRetrievalQuestion question = question("请解释上一条里的术语。", List.of("声望里程碑"));
-        AnswerRetrievalContext context = new AnswerRetrievalContext(
-                versionId, "声望轨道上的里程碑是什么意思？", LearningIntent.DEFINE);
         AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
                 List.of(
                         new AnswerRetrievalPlan.Subquestion(
@@ -119,7 +108,7 @@ class AnswerRetrievalPlannerTest {
                 List.of(),
                 List.of());
 
-        var queries = AnswerRetrievalPlanner.plan(question, context, plan).stream()
+        var queries = AnswerRetrievalPlanner.plan(question, plan).stream()
                 .map(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .toList();
 
@@ -142,7 +131,7 @@ class AnswerRetrievalPlannerTest {
                 List.of("A - 01", "ordinary action"),
                 List.of());
 
-        var queries = AnswerRetrievalPlanner.plan(question, context(), plan).stream()
+        var queries = AnswerRetrievalPlanner.plan(question, plan).stream()
                 .map(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .toList();
 
@@ -155,27 +144,6 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void doesNotLetUnselectedEarlierContextReplaceASelfContainedCurrentQuestion() {
-        AnswerRetrievalQuestion question = new AnswerRetrievalQuestion(
-                "Does the cobalt spindle return after the current interval?",
-                "How many marks does the amber lattice award? Follow-up: Does the cobalt spindle return after the current interval?",
-                QuestionType.RULE_QUERY,
-                List.of("cobalt spindle"));
-        AnswerRetrievalContext context = new AnswerRetrievalContext(
-                versionId,
-                "How many marks does the amber lattice award?",
-                LearningIntent.VERIFY);
-
-        var intents = AnswerRetrievalPlanner.plan(question, context);
-
-        assertThat(intents.getFirst().query())
-                .startsWith("Does the cobalt spindle return after the current interval?");
-        assertThat(intents)
-                .extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
-                .allSatisfy(query -> assertThat(query).doesNotContain("amber lattice"));
-    }
-
-    @Test
     void enforcesIntentCountAndQueryLengthBudgets() {
         AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
                 List.of(
@@ -184,7 +152,7 @@ class AnswerRetrievalPlannerTest {
                         subquestion("three"),
                         subquestion("four")),
                 false);
-        var intents = AnswerRetrievalPlanner.plan(question("question", List.of()), context(), plan);
+        var intents = AnswerRetrievalPlanner.plan(question("question", List.of()), plan);
 
         assertThat(intents).hasSize(5);
         assertThat(intents).allSatisfy(intent -> assertThat(intent.query().length()).isLessThanOrEqualTo(500));
@@ -204,12 +172,10 @@ class AnswerRetrievalPlannerTest {
 
     @Test
     void validatesPlannerInputsAndIntentShape() {
-        assertThatThrownBy(() -> AnswerRetrievalPlanner.plan(null, context()))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AnswerRetrievalPlanner.plan(question("question", List.of()), null))
+        assertThatThrownBy(() -> AnswerRetrievalPlanner.plan(null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AnswerRetrievalPlanner.RetrievalIntent(
-                        " ", Set.of(), null, true, AnswerRetrievalPlanner.RetrievalPurpose.GENERAL))
+                        " ", true))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -219,9 +185,5 @@ class AnswerRetrievalPlannerTest {
 
     private AnswerRetrievalQuestion question(String text, List<String> terms) {
         return new AnswerRetrievalQuestion(text, QuestionType.RULE_QUERY, terms);
-    }
-
-    private AnswerRetrievalContext context() {
-        return new AnswerRetrievalContext(versionId);
     }
 }

@@ -587,18 +587,14 @@ final class RecommendationActions {
         List<RecommendedGame> games = selector.present(
                 List.of(selected),
                 state.profile,
-                List.of(),
-                runtime.chinese(locale),
-                state.research);
+                runtime.chinese(locale));
         return ActionOutcome.terminalRead(response(
                 Outcome.RECOMMENDATIONS,
                 completion.playerReply(),
                 state,
                 locale,
                 null,
-                games,
-                null,
-                completion.playerReply()));
+                games));
     }
 
     private Optional<Game> verifiedReference(List<String> titles, RecommendationAgentState state) {
@@ -1350,43 +1346,9 @@ final class RecommendationActions {
             Clarification clarification,
             List<RecommendedGame> games,
             RecommendationShortfall shortfall) {
-        return response(outcome, message, state, locale, clarification, games, shortfall, null);
-    }
-
-    private ConversationResponse response(
-            Outcome outcome,
-            String message,
-            RecommendationAgentState state,
-            String locale,
-            Clarification clarification,
-            List<RecommendedGame> games,
-            RecommendationShortfall shortfall,
-            String recommendationLead) {
-        return response(
-                outcome,
-                DecisionMode.MODEL_ASSISTED,
-                message,
-                state,
-                locale,
-                clarification,
-                games,
-                shortfall,
-                recommendationLead);
-    }
-
-    private ConversationResponse response(
-            Outcome outcome,
-            DecisionMode mode,
-            String message,
-            RecommendationAgentState state,
-            String locale,
-            Clarification clarification,
-            List<RecommendedGame> games,
-            RecommendationShortfall shortfall,
-            String recommendationLead) {
         ConversationResponse response = new ConversationResponse(
                 outcome,
-                mode,
+                DecisionMode.MODEL_ASSISTED,
                 message,
                 state.profile,
                 clarification,
@@ -1403,8 +1365,7 @@ final class RecommendationActions {
                         state.elapsedMs()),
                 games,
                 state.comparison,
-                shortfall,
-                recommendationLead);
+                shortfall);
         return response;
     }
 
@@ -1447,44 +1408,12 @@ final class RecommendationActions {
                         > MAX_PUBLISHER_DESCRIPTION_CONTEXT_CODE_POINTS;
     }
 
-    Map<String, Object> finalResponseGameObservation(
-            Game game,
-            Research research,
-            Set<String> allowedEvidenceIds) {
-        Map<String, Object> value = new LinkedHashMap<>();
-        value.put("bggId", game.ranking().bggId());
-        value.put("name", game.ranking().sourceName());
-        putIfKnown(value, "year", game.ranking().publicationYear());
-        if (game.details() != null) putIfText(value, "officialChineseName", game.details().officialChineseName());
-        Map<String, List<String>> observations = narrativeObservations(game, research).entrySet().stream()
-                .filter(entry -> allowedEvidenceIds.contains(entry.getKey()))
-                .collect(java.util.stream.Collectors.toMap(
-                        Map.Entry::getKey,
-                        entry -> List.of(finalObservationKind(entry.getValue()), entry.getValue().value()),
-                        (first, ignored) -> first,
-                        LinkedHashMap::new));
-        value.put("observations", observations);
-        return value;
-    }
-
     private String observationKindCode(CandidateObservation observation) {
         return switch (observation.kind()) {
             case STRUCTURED_METADATA -> "M";
             case TAXONOMY -> "T";
             case ATTRIBUTED_REPORT -> "A";
             case RULEBOOK_FACT -> "R";
-        };
-    }
-
-    private String finalObservationKind(CandidateObservation observation) {
-        if ("publisherDescription".equals(observation.attribute())) {
-            return "publisher_description";
-        }
-        return switch (observation.kind()) {
-            case STRUCTURED_METADATA -> "verified_bgg_metadata";
-            case TAXONOMY -> "bgg_taxonomy_label";
-            case ATTRIBUTED_REPORT -> "attributed_public_report";
-            case RULEBOOK_FACT -> "verified_rulebook_fact";
         };
     }
 

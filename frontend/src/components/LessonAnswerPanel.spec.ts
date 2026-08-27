@@ -66,31 +66,6 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('voiceTranscript')).toEqual([['语音问题']])
   })
 
-  it('shows a readable legacy visual citation without its internal evidence instructions', () => {
-    const visualAnswer = {
-      ...answered,
-      citations: [{
-        heading: '目标计分',
-        pageFrom: 4,
-        pageTo: 4,
-        excerpt: 'Visual-transcribed rule evidence. Only the statements under Visible rule facts are rule evidence. '
-          + 'Do not derive a per-item value from a worked total.\nVisible rule facts: 每张完成的目标卡得 2 分。',
-      }],
-    }
-    const wrapper = mount(LessonAnswerPanel, {
-      props: {
-        ...baseProps,
-        answer: visualAnswer,
-        answeredQuestion: '目标卡怎么计分？',
-        answerTurns: [{ question: '目标卡怎么计分？', answer: visualAnswer, learningIntent: null }],
-      },
-      global: { stubs: { VoiceQuestionCapture: true } },
-    })
-
-    expect(wrapper.text()).toContain('每张完成的目标卡得 2 分。')
-    expect(wrapper.text()).not.toMatch(/Visual-transcribed|Do not derive|Visible rule facts/)
-  })
-
   it('disables thread reset while a ruling edit or save makes clearing unsafe', () => {
     const wrapper = mount(LessonAnswerPanel, {
       props: {
@@ -634,6 +609,7 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('8 秒')
     expect(wrapper.text()).not.toContain('如果结算被打断呢？：先完成结算')
 
+    setLocale('en')
     await wrapper.setProps({ question: 'What if scoring is interrupted?' })
     expect(wrapper.get('[data-testid="answer-soft-budget"]').text())
       .toContain('The previous verified answer and citations remain above')

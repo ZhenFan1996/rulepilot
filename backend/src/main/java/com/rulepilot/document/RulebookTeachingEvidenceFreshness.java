@@ -12,10 +12,6 @@ public interface RulebookTeachingEvidenceFreshness {
 
     ReuseAssessment assess(UUID documentVersionId, UUID preparationRunId, String ownerUsername);
 
-    default boolean requiresRefresh(UUID documentVersionId, UUID preparationRunId, String ownerUsername) {
-        return assess(documentVersionId, preparationRunId, ownerUsername) == ReuseAssessment.REFRESH_REQUIRED;
-    }
-
     enum ReuseAssessment {
         /** The referenced preparation run is still doing real work and must not be duplicated. */
         IN_PROGRESS,

@@ -26,7 +26,6 @@ import { useModalFocus } from '@/composables/useModalFocus'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { RecommendationRequestError, RecommendationStreamError, streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale, type AppLocale } from '@/lib/locale'
-import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 import {
   forgetRecommendationConversation,
@@ -111,7 +110,6 @@ const loadingCopy = {
 const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction, string>> = {
   'zh-CN': {
     understand_request: '读取当前消息与对话上下文',
-    direct_reply_fast_path: '正在组织回复',
     choose_next_action: '正在确认需要核对的资料',
     reply_to_user: '根据当前对话直接组织回答', ask_user: '确认一个会改变结果的必要信息',
     resolve_bgg_game: '在 BGG 核对玩家提到的完整游戏名',
@@ -122,7 +120,6 @@ const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction,
   },
   en: {
     understand_request: 'Read the current message and conversation context',
-    direct_reply_fast_path: 'Compose the reply',
     choose_next_action: 'Confirm what information needs checking',
     reply_to_user: 'Compose a direct response from the conversation', ask_user: 'Ask for one necessary choice that changes the result',
     resolve_bgg_game: 'Resolve the player-authored title in BGG',
@@ -176,8 +173,7 @@ function initialClarification(): RecommendationClarification {
   return { field: 'conversation', prompt: t('initial'), options: copy[locale.value].starters.map(label => ({ value: label, label })) }
 }
 
-const DRAFT_STORAGE_KEY = 'rulepilot:recommendation-draft:v1'
-const DRAFT_STORAGE_VERSION = 2
+const DRAFT_STORAGE_KEY = 'rulepilot:recommendation-draft:v2'
 
 function protocolUuid(value: unknown): value is string {
   if (typeof value !== 'string' || value.length !== 36) return false
@@ -212,9 +208,8 @@ function restoredDraft() {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY) ?? 'null') as unknown
     if (!parsed || typeof parsed !== 'object') return ''
-    const saved = parsed as { version?: unknown; draft?: unknown }
-    return (saved.version === 1 || saved.version === DRAFT_STORAGE_VERSION)
-      && typeof saved.draft === 'string'
+    const saved = parsed as { draft?: unknown }
+    return typeof saved.draft === 'string'
       ? saved.draft
       : ''
   } catch {
@@ -225,7 +220,7 @@ function restoredDraft() {
 function rememberDraft(value: string) {
   try {
     if (value) {
-      sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ version: DRAFT_STORAGE_VERSION, draft: value }))
+      sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ draft: value }))
     } else {
       sessionStorage.removeItem(DRAFT_STORAGE_KEY)
     }
@@ -243,7 +238,6 @@ const loading = ref(false)
 const loadingStage = ref<LoadingStage>('requesting')
 const reportedLoadingStages = ref<RecommendationProgressUpdate[]>([])
 const latestRecommendationProgress = ref<RecommendationProgressUpdate | null>(null)
-const streamedRecommendationMessage = ref('')
 const loadingElapsedSeconds = ref(0)
 const failed = ref(false)
 const unavailableFailure = ref(false)
@@ -350,6 +344,21 @@ useModalFocus({
 })
 
 const publiclyReportedActions = new Set<RecommendationProgressAction>([
+  'understand_request',
+  'reply_to_user',
+  'ask_user',
+  'resolve_bgg_game',
+  'inspect_candidate_titles',
+  'browse_bgg_catalog',
+  'discover_public_candidates',
+  'lookup_bgg_games',
+  'research_game_fit',
+  'compare_candidates',
+  'report_no_match',
+  'recommend_games',
+])
+
+const externalWorkActions = new Set<RecommendationProgressAction>([
   'resolve_bgg_game',
   'inspect_candidate_titles',
   'browse_bgg_catalog',
@@ -364,9 +373,9 @@ const publiclyReportedActions = new Set<RecommendationProgressAction>([
 const externalWorkActive = computed(() => {
   const progress = latestRecommendationProgress.value
   return Boolean(
-    progress?.action !== null && progress?.action !== undefined && publiclyReportedActions.has(progress.action)
+    progress?.action !== null && progress?.action !== undefined && externalWorkActions.has(progress.action)
     || reportedLoadingStages.value.some(update =>
-      update.action !== null && publiclyReportedActions.has(update.action)),
+      update.action !== null && externalWorkActions.has(update.action)),
   )
 })
 
@@ -385,9 +394,7 @@ const loadingWorkTitle = computed(() => translated(
 
 const loadingMessage = computed(() => {
   const turnLocale = activeTurnLocale.value ?? locale.value
-  const message = externalWorkActive.value
-    ? loadingCopy[turnLocale][publicLoadingStage.value]
-    : translated(turnLocale, 'replyingDetail')
+  const message = loadingCopy[turnLocale][publicLoadingStage.value]
   return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
 })
 
@@ -603,7 +610,6 @@ function beginLoading() {
   loadingStage.value = 'requesting'
   reportedLoadingStages.value = []
   latestRecommendationProgress.value = null
-  streamedRecommendationMessage.value = ''
   loadingElapsedSeconds.value = 0
   const startedAt = Date.now()
   loadingClock = setInterval(() => { loadingElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
@@ -641,7 +647,7 @@ async function sendTurn(
   requestedResponseLocale?: AppLocale,
 ) {
   if (!serverSessionReady.value) return
-  const responseLocale = requestedResponseLocale ?? playerTurnLocale(message, locale.value)
+  const responseLocale = requestedResponseLocale ?? locale.value
   let optimisticUserMessageId: number | null = null
   if (userLabel) {
     optimisticUserMessageId = ++messageId
@@ -730,8 +736,6 @@ async function submitPendingTurn(
         reportedLoadingStages.value = [...reportedLoadingStages.value, update].slice(-16)
       }
       loadingElapsedSeconds.value = Math.max(loadingElapsedSeconds.value, Math.floor(update.elapsedMs / 1000))
-    }, text => {
-      streamedRecommendationMessage.value = text
     })
     if (serverResponse.clientTurnId && serverResponse.clientTurnId !== pending.clientTurnId) {
       throw new Error('recommendation response belongs to another client turn')
@@ -756,7 +760,6 @@ async function submitPendingTurn(
     }
     activeTurnLocale.value = parsed.responseLocale ?? pending.responseLocale
     if (parsed.outcome === 'unavailable') {
-      streamedRecommendationMessage.value = ''
       profile.value = parsed.profile
       clarification.value = null
       failedTurnLocale.value = parsed.responseLocale ?? pending.responseLocale
@@ -787,7 +790,6 @@ async function submitPendingTurn(
     lastRequest.value = null
   } catch (error) {
     if (disposed || cancellationGeneration !== turnCancellationGeneration) return
-    streamedRecommendationMessage.value = ''
     failedTurnLocale.value = pending.responseLocale
     if (error instanceof RecommendationRequestError && error.status === 401) {
       if (optimisticUserMessageId !== null) {
@@ -1117,8 +1119,7 @@ function restoreRecommendationConversation(owner: string) {
     ? snapshot.pending?.responseLocale ?? snapshot.responseLocale
     : null
   if (snapshot.pending) {
-    const responseLocale = snapshot.pending.responseLocale
-      ?? playerTurnLocale(snapshot.pending.message, snapshot.responseLocale ?? locale.value)
+    const responseLocale = snapshot.pending.responseLocale ?? snapshot.responseLocale ?? locale.value
     activeFocusedBggId.value = snapshot.pending.focusedBggId
     lastRequest.value = {
       clientTurnId: snapshot.pending.clientTurnId ?? crypto.randomUUID(),
@@ -1609,7 +1610,6 @@ onBeforeUnmount(() => {
                     </li>
                   </ol>
                   <p v-if="recommendationEvidenceSummary" data-testid="recommendation-evidence-summary" class="mt-2 rounded-lg bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ recommendationEvidenceSummary }}</p>
-                  <p v-if="streamedRecommendationMessage" data-testid="recommendation-answer-preview" class="mt-2 max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-paper px-4 py-3 text-sm leading-6 text-ink/72">{{ streamedRecommendationMessage }}</p>
                   <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
                 </div>
               </div>

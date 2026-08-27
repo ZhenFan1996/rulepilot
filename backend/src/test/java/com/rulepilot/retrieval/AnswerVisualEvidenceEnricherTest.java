@@ -126,7 +126,13 @@ class AnswerVisualEvidenceEnricherTest {
                         4, fact(4, "Third"),
                         5, fact(5, "Fourth"),
                         6, fact(6, "Omitted"),
-                        8, new PageFactMatch(8, "High-score", "High-score", List.of("high-score"), 0.99)),
+                        8, new PageFactMatch(
+                                8,
+                                "High-score",
+                                "High-score",
+                                List.of("high-score"),
+                                0.99,
+                                RuleFactStatus.CURRENT_RULE_FACTS)),
                 Set.of(2));
 
         assertThat(evidence).containsKeys(priority.chunkId(), highScore.chunkId(), second.chunkId(), third.chunkId());
@@ -149,7 +155,13 @@ class AnswerVisualEvidenceEnricherTest {
     }
 
     private PageFactMatch fact(int pageNumber, String evidenceText) {
-        return new PageFactMatch(pageNumber, "Visible fact", evidenceText, List.of("visible"), 0.5);
+        return new PageFactMatch(
+                pageNumber,
+                "Visible fact",
+                evidenceText,
+                List.of("visible"),
+                0.5,
+                RuleFactStatus.CURRENT_RULE_FACTS);
     }
 
     private RuleEvidenceHit source(UUID chunkId, int page, String excerpt) {

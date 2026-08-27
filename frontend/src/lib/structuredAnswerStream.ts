@@ -42,8 +42,6 @@ export async function streamStructuredAnswer(
     headers,
   })
   if (!response.ok) throw new StructuredAnswerRequestError(response.status)
-  const contentType = response.headers.get('content-type') ?? ''
-  if (contentType.includes('application/json')) return await response.json() as unknown
   if (!response.body) throw new Error('structured answer stream unavailable')
 
   const reader = response.body.getReader()

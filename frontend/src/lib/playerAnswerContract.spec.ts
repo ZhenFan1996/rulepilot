@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  isPlayerFacingRuleAnswer,
   parsePlayerFacingRuleAnswer,
   type PlayerFacingRuleAnswer,
 } from './playerAnswerContract'
@@ -42,17 +41,17 @@ describe('playerAnswerContract', () => {
   })
 
   it('requires cited conclusions without rejecting useful prose for warning bookkeeping', () => {
-    expect(isPlayerFacingRuleAnswer({ ...answered, citations: [] })).toBe(false)
-    expect(isPlayerFacingRuleAnswer({ ...answered, answerBasis: null })).toBe(false)
-    expect(isPlayerFacingRuleAnswer({
+    expect(parsePlayerFacingRuleAnswer({ ...answered, citations: [] })).toBeNull()
+    expect(parsePlayerFacingRuleAnswer({ ...answered, answerBasis: null })).toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
       ...answered,
       status: 'ANSWERED_WITH_WARNING',
       warnings: [],
-    })).toBe(true)
-    expect(isPlayerFacingRuleAnswer({
+    })).not.toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
       ...answered,
       warnings: [{ type: 'LOW_CONFIDENCE' }],
-    })).toBe(true)
+    })).not.toBeNull()
   })
 
   it('preserves evidence-backed partial answers instead of requiring an empty fallback shape', () => {
@@ -71,8 +70,8 @@ describe('playerAnswerContract', () => {
       warnings: [],
     }
 
-    expect(isPlayerFacingRuleAnswer(insufficient)).toBe(true)
-    expect(isPlayerFacingRuleAnswer({
+    expect(parsePlayerFacingRuleAnswer(insufficient)).not.toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
       ...insufficient,
       explanation: '这页能确认行动发生在移动之后，但没有说明并列目标如何选择。',
       recovery: null,
@@ -81,11 +80,11 @@ describe('playerAnswerContract', () => {
         explanation: '保留模型基于引用给出的逐步说明。'.repeat(30),
         orderBasis: 'RULE_ORDER' as const,
       })),
-    })).toBe(true)
-    expect(isPlayerFacingRuleAnswer({
+    })).not.toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
       ...insufficient,
       status: 'MODEL_TIMEOUT',
-    })).toBe(true)
+    })).not.toBeNull()
   })
 
   it('does not reinterpret valid published prose with a browser-side keyword blacklist', () => {

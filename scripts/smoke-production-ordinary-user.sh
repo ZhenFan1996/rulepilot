@@ -492,11 +492,9 @@ page_attempt_report() {
 	            | select(($parts | length) == 4)
 	            | {page: ($parts[1] | tonumber), total: ($parts[2] | tonumber),
 	               repairCode: $parts[3], outcome}];
-	        [.activities[]? | select(.operation | startswith("transcribeTeachingVisualRepairPage|"))] as $rawRepairTranscriptions
-	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualPage|"))] as $rawInitial
+	        [.activities[]? | select(.operation | startswith("inspectTeachingVisualPage|"))] as $rawInitial
 	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualRetry|"))] as $rawRetries
 	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualRepair|"))] as $rawRepairs
-	        | three_part_attempts("transcribeTeachingVisualRepairPage") as $repairTranscriptions
 	        | three_part_attempts("inspectTeachingVisualPage") as $initial
 	        | three_part_attempts("inspectTeachingVisualRetry") as $retries
 	        | repair_attempts as $repairs
@@ -512,12 +510,10 @@ page_attempt_report() {
 	            | (($initial | map(select(.page == $page)) | length)
 	              + ($recoveries | map(select(.page == $page)) | length))] as $semanticAttemptCounts
 	        | [$pages[] as $page
-	            | ($repairTranscriptions | map(select(.page == $page)) | last) as $repairTranscription
 	            | ($initial | map(select(.page == $page)) | last) as $first
 	            | ($recoveries | map(select(.page == $page)) | last) as $recovery
 	            | {
 	                page: $page,
-	                repairTranscriptionOutcome: ($repairTranscription.outcome // null),
 	                initialOutcome: ($first.outcome // null),
 	                recoveryKind: ($recovery.recoveryKind // null),
 	                repairCode: ($recovery.repairCode // null),
@@ -528,10 +524,6 @@ page_attempt_report() {
 	              }] as $pageStats
 	        | {
 	            pages: $pageStats,
-	            repairTranscriptionAttempted: ($repairTranscriptions | length),
-	            repairTranscriptionSucceeded: ($repairTranscriptions | map(select(.outcome == "SUCCEEDED")) | length),
-	            repairTranscriptionFailed: ($repairTranscriptions | map(select(.outcome == "FAILED")) | length),
-	            repairTranscriptionRejected: ($repairTranscriptions | map(select(.outcome == "REJECTED")) | length),
 	            initialSucceeded: ($initial | map(select(.outcome == "SUCCEEDED")) | length),
 	            initialFailed: ($initial | map(select(.outcome == "FAILED")) | length),
 	            initialRejected: ($initial | map(select(.outcome == "REJECTED")) | length),
@@ -544,18 +536,13 @@ page_attempt_report() {
 	            finalUnavailablePages: $unavailable,
 	            maximumSemanticAttemptsForAnyPage: ($semanticAttemptCounts | max // 0),
 	            valid: (
-	              ($rawRepairTranscriptions | length) == ($repairTranscriptions | length)
-	              and ($rawInitial | length) == ($initial | length)
+	              ($rawInitial | length) == ($initial | length)
 	              and ($rawRetries | length) == ($retries | length)
 	              and ($rawRepairs | length) == ($repairs | length)
 	              and ($initial | length) == $expected
 	              and ($initial | map(.page) | unique) == $pages
 	              and all($initial[]; .total == $expected)
 	              and all($retries[]; .total == $expected)
-	              and all($repairTranscriptions[]; . as $transcription
-	                | .total == $expected
-	                and any($repairs[]; .page == $transcription.page))
-	              and ($repairTranscriptions | map(.page) | unique | length) == ($repairTranscriptions | length)
 	              and all($repairs[];
 	                .total == $expected
 	                and (.repairCode == "MALFORMED_JSON"

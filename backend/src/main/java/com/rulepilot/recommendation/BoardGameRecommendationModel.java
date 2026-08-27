@@ -1,7 +1,6 @@
 package com.rulepilot.recommendation;
 
 import java.util.List;
-import java.util.function.Consumer;
 
 /** Provider-neutral generation port for conversational replies and native recommendation actions. */
 public interface BoardGameRecommendationModel {
@@ -13,34 +12,10 @@ public interface BoardGameRecommendationModel {
         return configured();
     }
 
-    /**
-     * Whether this provider can run the final evidence-scoped structured prose turn. A missing capability degrades
-     * only card annotations; it never invalidates a slate that already passed the deterministic publication boundary.
-     */
-    default boolean structuredPublicationConfigured(String ownerUsername) {
-        return false;
-    }
-
     Turn next(Request request);
 
     default Turn next(Request request, String ownerUsername) {
         return next(request);
-    }
-
-    /**
-     * Streams raw JSON deltas for a final structured publication turn. This turn never advertises actions and the
-     * listener must not expose its protocol bytes directly to a player.
-     */
-    default StructuredTurn streamStructured(
-            Request request,
-            String ownerUsername,
-            Consumer<String> jsonDeltaListener) {
-        Turn turn = next(request, ownerUsername);
-        if (!turn.toolCalls().isEmpty()) {
-            throw new IllegalStateException("structured recommendation turn returned an action call");
-        }
-        if (!turn.text().isEmpty()) jsonDeltaListener.accept(turn.text());
-        return new StructuredTurn(turn.text(), turn.completionStatus());
     }
 
     record ToolSpec(String name, String description, String inputSchema) {
@@ -98,57 +73,26 @@ public interface BoardGameRecommendationModel {
     }
 
     enum ToolChoice {
-        REQUIRED,
-        NONE
-    }
-
-    record StructuredOutput(String name, String jsonSchema, boolean strictPreferred) {
-        public StructuredOutput {
-            if (blank(name) || blank(jsonSchema)) {
-                throw new IllegalArgumentException("recommendation structured output specification is invalid");
-            }
-        }
+        REQUIRED
     }
 
     record Request(
             List<Message> messages,
             List<ToolSpec> tools,
             int maxOutputTokens,
-            ToolChoice toolChoice,
-            StructuredOutput structuredOutput) {
-        public Request(
-                List<Message> messages,
-                List<ToolSpec> tools,
-                int maxOutputTokens,
-                ToolChoice toolChoice) {
-            this(messages, tools, maxOutputTokens, toolChoice, null);
-        }
-
+            ToolChoice toolChoice) {
         public Request {
             if (messages == null
                     || messages.isEmpty()
                     || tools == null
+                    || tools.isEmpty()
                     || maxOutputTokens < 128
                     || maxOutputTokens > 2_048
-                    || toolChoice == null) {
+                    || toolChoice != ToolChoice.REQUIRED) {
                 throw new IllegalArgumentException("recommendation model request is invalid");
             }
             messages = List.copyOf(messages);
             tools = List.copyOf(tools);
-            boolean actionTurn = !tools.isEmpty();
-            if (actionTurn && (toolChoice != ToolChoice.REQUIRED || structuredOutput != null)) {
-                throw new IllegalArgumentException("recommendation action turn cannot request structured output");
-            }
-            if (!actionTurn && (toolChoice != ToolChoice.NONE || structuredOutput == null)) {
-                throw new IllegalArgumentException("recommendation no-action turn requires structured output");
-            }
-        }
-    }
-
-    record StructuredTurn(String json, CompletionStatus completionStatus) {
-        public StructuredTurn {
-            if (blank(json)) throw new IllegalArgumentException("recommendation structured turn is empty");
-            completionStatus = completionStatus == null ? CompletionStatus.UNKNOWN : completionStatus;
         }
     }
 

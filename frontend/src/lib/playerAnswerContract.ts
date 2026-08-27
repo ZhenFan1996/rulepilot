@@ -115,10 +115,6 @@ export interface AnswerRulingReference {
   confirmedRulingVersion: number | null
 }
 
-export function isPlayerFacingRuleAnswer(value: unknown): boolean {
-  return parsePlayerFacingRuleAnswer(value) !== null
-}
-
 /** Validates the complete player-facing envelope before projecting operational fields away. */
 export function parsePlayerFacingRuleAnswer(value: unknown): PlayerFacingRuleAnswer | null {
   if (!isRecord(value)

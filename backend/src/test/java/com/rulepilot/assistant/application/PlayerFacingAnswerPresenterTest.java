@@ -54,7 +54,7 @@ class PlayerFacingAnswerPresenterTest {
                         List.of(chunkId))));
 
         var presented = PlayerFacingAnswerPresenter.present(
-                answer, "When does the cobalt spindle move?", PlayerLocale.ZH_CN);
+                answer, "When does the cobalt spindle move?", PlayerLocale.EN);
         String serialized = json.writeValueAsString(presented);
 
         assertThat(presented.language()).isEqualTo("en");
@@ -164,7 +164,7 @@ class PlayerFacingAnswerPresenterTest {
     }
 
     @Test
-    void usesTheCurrentQuestionLanguageForSafeFailureAndRecoveryInsteadOfInternalDiagnostics() {
+    void usesTheRequestedLanguageForSafeFailureAndRecoveryInsteadOfInternalDiagnostics() {
         UUID versionId = UUID.randomUUID();
         StructuredRuleAnswer failure = new StructuredRuleAnswer(
                 versionId,
@@ -180,7 +180,7 @@ class PlayerFacingAnswerPresenterTest {
                 null);
 
         var presented = PlayerFacingAnswerPresenter.present(
-                failure, "Why does the silver lattice resolve first?", PlayerLocale.ZH_CN);
+                failure, "Why does the silver lattice resolve first?", PlayerLocale.EN);
 
         assertThat(presented.language()).isEqualTo("en");
         assertThat(presented.shortVerdict()).isEqualTo("I couldn't verify a reliable answer from this attempt.");
@@ -193,30 +193,6 @@ class PlayerFacingAnswerPresenterTest {
         assertThat(presented.toString())
                 .doesNotContain("repairRuleTimingResolutions", "schema", "时序裁决")
                 .doesNotContainPattern("[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}");
-    }
-
-    @Test
-    void keepsAChineseCurrentTurnChineseWhenTheUiFallbackIsEnglish() {
-        StructuredRuleAnswer failure = new StructuredRuleAnswer(
-                UUID.randomUUID(),
-                AnswerStatus.INSUFFICIENT_EVIDENCE,
-                "internal evidence admission diagnostic",
-                "internal evidence admission diagnostic",
-                List.of(),
-                List.of(),
-                AnswerConfidence.LOW,
-                false,
-                null,
-                null,
-                null);
-
-        var presented = PlayerFacingAnswerPresenter.present(
-                failure, "青色棱柱什么时候结算？", PlayerLocale.EN);
-
-        assertThat(presented.language()).isEqualTo("zh-CN");
-        assertThat(presented.shortVerdict()).isEqualTo("现有依据还不足以可靠回答这个问题。");
-        assertThat(presented.recovery().actionLabel()).isEqualTo("补充细节");
-        assertThat(presented.toString()).doesNotContain("internal evidence admission diagnostic");
     }
 
     @Test

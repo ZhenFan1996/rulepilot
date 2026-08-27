@@ -87,20 +87,6 @@ public class BoardGameRecommendationAgent {
         return loop.converse(input, requestedLocale, modelConfigurationOwner, progressListener);
     }
 
-    public ConversationResponse converse(
-            ConversationRequest input,
-            String requestedLocale,
-            String modelConfigurationOwner,
-            Consumer<ProgressUpdate> progressListener,
-            Consumer<String> answerPartListener) {
-        return loop.converse(
-                input,
-                requestedLocale,
-                modelConfigurationOwner,
-                progressListener,
-                answerPartListener);
-    }
-
     ConversationRequest validatedConversationRequest(ConversationRequest input) {
         return loop.validate(input);
     }
@@ -123,29 +109,12 @@ public class BoardGameRecommendationAgent {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
-            Consumer<String> answerPartListener) {
-        return conversePersisted(
-                validatedRequestWithServerMemory,
-                requestedLocale,
-                modelConfigurationOwner,
-                progressListener,
-                answerPartListener,
-                ignored -> {});
-    }
-
-    ConversationResponse conversePersisted(
-            ConversationRequest validatedRequestWithServerMemory,
-            String requestedLocale,
-            String modelConfigurationOwner,
-            Consumer<ProgressUpdate> progressListener,
-            Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         return loop.converseValidated(
                 validatedRequestWithServerMemory,
                 requestedLocale,
                 modelConfigurationOwner,
                 progressListener,
-                answerPartListener,
                 checkpointListener);
     }
 
@@ -214,7 +183,6 @@ public class BoardGameRecommendationAgent {
     /** Player-safe execution actions. These expose capability use, never prompts, parameters, or private reasoning. */
     public enum ProgressAction {
         UNDERSTAND_REQUEST,
-        STREAM_NATURAL_REPLY,
         CHOOSE_NEXT_ACTION,
         REPLY_TO_USER,
         ASK_USER,
@@ -356,22 +324,6 @@ public class BoardGameRecommendationAgent {
             BggGameType type,
             InteractionPreference interaction) {
 
-        public RecommendationProfile(
-                Integer players,
-                Integer maxMinutes,
-                BigDecimal maxWeight,
-                BggGameType type,
-                InteractionPreference interaction) {
-            this(
-                    players == null ? null : ConstraintRange.hardExact(players),
-                    maxMinutes == null || maxMinutes == 0 ? null : ConstraintRange.hardAtMost(maxMinutes),
-                    maxWeight == null || maxWeight.compareTo(BigDecimal.ZERO) == 0
-                            ? null
-                            : ConstraintRange.hardAtMost(maxWeight),
-                    type,
-                    interaction);
-        }
-
         public RecommendationProfile {
             type = type == null ? BggGameType.ALL : type;
             interaction = interaction == null ? InteractionPreference.ANY : interaction;
@@ -379,42 +331,11 @@ public class BoardGameRecommendationAgent {
 
         public static RecommendationProfile empty() {
             return new RecommendationProfile(
-                    (ConstraintRange<Integer>) null,
+                    null,
                     null,
                     null,
                     BggGameType.ALL,
                     InteractionPreference.ANY);
-        }
-
-        /** Legacy exact-player projection retained while clients migrate to the range contract. */
-        public Integer players() {
-            return playerCount != null && playerCount.exact() ? playerCount.minimum() : null;
-        }
-
-        public Integer minPlayers() {
-            return playerCount == null ? null : playerCount.minimum();
-        }
-
-        public Integer maxPlayers() {
-            return playerCount == null ? null : playerCount.maximum();
-        }
-
-        /** Legacy upper-duration projection retained while clients migrate to the range contract. */
-        public Integer maxMinutes() {
-            return durationMinutes == null ? null : durationMinutes.maximum();
-        }
-
-        public Integer minMinutes() {
-            return durationMinutes == null ? null : durationMinutes.minimum();
-        }
-
-        /** Legacy upper-complexity projection retained while clients migrate to the range contract. */
-        public BigDecimal maxWeight() {
-            return complexity == null ? null : complexity.maximum();
-        }
-
-        public BigDecimal minWeight() {
-            return complexity == null ? null : complexity.minimum();
         }
     }
 
@@ -431,8 +352,7 @@ public class BoardGameRecommendationAgent {
             HarnessTrace harness,
             List<RecommendedGame> games,
             CandidateComparison comparison,
-            RecommendationShortfall shortfall,
-            String recommendationLead) {
+            RecommendationShortfall shortfall) {
 
         public ConversationResponse(
                 Outcome outcome,
@@ -455,7 +375,6 @@ public class BoardGameRecommendationAgent {
                     List.of(),
                     new HarnessTrace(0, 0, 0, false, List.of(), 0),
                     games,
-                    null,
                     null,
                     null);
         }
@@ -484,7 +403,6 @@ public class BoardGameRecommendationAgent {
                     researchSources,
                     harness,
                     games,
-                    null,
                     null,
                     null);
         }
@@ -515,38 +433,6 @@ public class BoardGameRecommendationAgent {
                     harness,
                     games,
                     comparison,
-                    null,
-                    null);
-        }
-
-        public ConversationResponse(
-                Outcome outcome,
-                DecisionMode mode,
-                String assistantMessage,
-                RecommendationProfile profile,
-                Clarification clarification,
-                int sourceCount,
-                int candidatesEvaluated,
-                UserModelView userModel,
-                List<ResearchSource> researchSources,
-                HarnessTrace harness,
-                List<RecommendedGame> games,
-                CandidateComparison comparison,
-                RecommendationShortfall shortfall) {
-            this(
-                    outcome,
-                    mode,
-                    assistantMessage,
-                    profile,
-                    clarification,
-                    sourceCount,
-                    candidatesEvaluated,
-                    userModel,
-                    researchSources,
-                    harness,
-                    games,
-                    comparison,
-                    shortfall,
                     null);
         }
 

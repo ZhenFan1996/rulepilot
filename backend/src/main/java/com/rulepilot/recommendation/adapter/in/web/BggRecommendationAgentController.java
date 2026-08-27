@@ -270,36 +270,16 @@ public class BggRecommendationAgentController {
     record KnownGameRequest(int bggId, String name, String originalName) {}
 
     record RecommendationProfileRequest(
-            Integer players,
-            Integer maxMinutes,
-            BigDecimal maxWeight,
             String type,
             String interaction,
             ConstraintRangeRequest<Integer> playerCount,
             ConstraintRangeRequest<Integer> durationMinutes,
             ConstraintRangeRequest<BigDecimal> complexity) {
-        RecommendationProfileRequest(
-                Integer players,
-                Integer maxMinutes,
-                BigDecimal maxWeight,
-                String type,
-                String interaction) {
-            this(players, maxMinutes, maxWeight, type, interaction, null, null, null);
-        }
-
         RecommendationProfile toProfile() {
             return new RecommendationProfile(
-                    playerCount == null
-                            ? players == null ? null : ConstraintRange.hardExact(players)
-                            : playerCount.toRange(),
-                    durationMinutes == null
-                            ? maxMinutes == null || maxMinutes == 0 ? null : ConstraintRange.hardAtMost(maxMinutes)
-                            : durationMinutes.toRange(),
-                    complexity == null
-                            ? maxWeight == null || maxWeight.compareTo(BigDecimal.ZERO) == 0
-                                    ? null
-                                    : ConstraintRange.hardAtMost(maxWeight)
-                            : complexity.toRange(),
+                    playerCount == null ? null : playerCount.toRange(),
+                    durationMinutes == null ? null : durationMinutes.toRange(),
+                    complexity == null ? null : complexity.toRange(),
                     enumValue(BggGameType.class, type, BggGameType.ALL),
                     enumValue(InteractionPreference.class, interaction, InteractionPreference.ANY));
         }
@@ -329,7 +309,6 @@ public class BggRecommendationAgentController {
             String responseLocale,
             String outcome,
             String assistantMessage,
-            String recommendationLead,
             RecommendationProfileResponse profile,
             ClarificationResponse clarification,
             RecommendationShortfallResponse shortfall,
@@ -338,7 +317,6 @@ public class BggRecommendationAgentController {
             int modelCalls,
             int catalogCalls,
             int webResearchCalls,
-            boolean publicationRecovered,
             String failureBoundary,
             UserModelResponse userModel,
             List<ResearchSourceResponse> researchSources,
@@ -362,7 +340,6 @@ public class BggRecommendationAgentController {
                     locale,
                     response.outcome().name().toLowerCase(Locale.ROOT),
                     response.assistantMessage(),
-                    response.recommendationLead(),
                     RecommendationProfileResponse.from(response.profile()),
                     response.clarification() == null ? null : ClarificationResponse.from(response.clarification()),
                     response.shortfall() == null ? null : RecommendationShortfallResponse.from(response.shortfall()),
@@ -371,7 +348,6 @@ public class BggRecommendationAgentController {
                     response.harness().modelCalls(),
                     response.harness().catalogCalls(),
                     response.harness().webResearchCalls(),
-                    publicationRecovered(response.harness().actions()),
                     publicFailureBoundary(response),
                     UserModelResponse.from(response.userModel()),
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
@@ -382,12 +358,6 @@ public class BggRecommendationAgentController {
                     response.games().stream()
                             .map(game -> RecommendedGameResponse.from(game, taxonomy, locale, presentation))
                             .toList());
-        }
-
-        private static boolean publicationRecovered(List<String> actions) {
-            return actions.stream()
-                    .anyMatch(action -> action.startsWith("RECOMMENDATION_PUBLICATION_RECOVERED:")
-                            || action.startsWith("RESEARCH_SKIPPED_FOR_PUBLICATION_"));
         }
 
         private static String publicFailureBoundary(ConversationResponse response) {
@@ -477,9 +447,6 @@ public class BggRecommendationAgentController {
     }
 
     record RecommendationProfileResponse(
-            Integer players,
-            Integer maxMinutes,
-            BigDecimal maxWeight,
             String type,
             String interaction,
             ConstraintRangeResponse<Integer> playerCount,
@@ -487,9 +454,6 @@ public class BggRecommendationAgentController {
             ConstraintRangeResponse<BigDecimal> complexity) {
         static RecommendationProfileResponse from(RecommendationProfile profile) {
             return new RecommendationProfileResponse(
-                    profile.players(),
-                    profile.maxMinutes(),
-                    profile.maxWeight(),
                     profile.type().name().toLowerCase(Locale.ROOT),
                     profile.interaction().name().toLowerCase(Locale.ROOT),
                     ConstraintRangeResponse.from(profile.playerCount()),

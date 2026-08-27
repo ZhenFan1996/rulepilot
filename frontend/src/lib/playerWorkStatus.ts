@@ -1,6 +1,6 @@
 import type { AppLocale } from './locale'
 
-export const PLAYER_WORK_LABELS = {
+const PLAYER_WORK_LABELS = {
   'zh-CN': {
     FINDING_GAME: '正在查找桌游',
     WAITING_FOR_PLAYER: '等待你继续',
@@ -43,7 +43,7 @@ export type PlayerReadiness = 'unavailable' | 'usable' | 'complete'
 export type PlayerTerminality = 'waiting' | 'active' | 'terminal'
 export type PlayerWorkOutcome = 'none' | 'needs-action' | 'failed' | 'cancelled'
 
-export interface PlayerWorkFacts {
+interface PlayerWorkFacts {
   capability: PlayerCapability
   readiness: PlayerReadiness
   terminality: PlayerTerminality

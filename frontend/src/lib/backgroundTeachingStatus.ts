@@ -31,11 +31,6 @@ export function backgroundWorkStorageKeys(username: string): BackgroundWorkStora
 
 export function clearBackgroundWorkStorage(storage: Storage, username: string) {
   for (const key of Object.values(backgroundWorkStorageKeys(username))) storage.removeItem(key)
-  clearLegacyBackgroundWorkStorage(storage)
-}
-
-export function clearLegacyBackgroundWorkStorage(storage: Storage) {
-  for (const key of Object.values(STORAGE_KEY_PREFIXES)) storage.removeItem(key)
 }
 
 export function reconcileBackgroundTeaching(

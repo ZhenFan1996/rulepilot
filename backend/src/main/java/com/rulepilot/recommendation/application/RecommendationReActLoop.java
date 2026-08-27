@@ -26,7 +26,6 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.StructuredOutput;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
@@ -55,7 +54,6 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Tur
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import com.rulepilot.recommendation.application.RecommendationPublication.Permit;
-import com.rulepilot.recommendation.application.RecommendationPublication.PublicationNarrative;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
 import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
 import com.rulepilot.shared.AsyncContextPropagation;
@@ -84,8 +82,7 @@ import org.slf4j.LoggerFactory;
 /** Owns the bounded observe-decide-act loop, budgets, and truthful degradation. */
 final class RecommendationReActLoop {
 
-    static final int MAX_MODEL_CALLS = 7;
-    private static final int MAX_DECISION_MODEL_CALLS = MAX_MODEL_CALLS - 1;
+    static final int MAX_MODEL_CALLS = 6;
     private static final int MAX_ACTION_CALLS = 6;
     private static final int ACTION_SELECTION_OUTPUT_TOKENS = 512;
     private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 2_048;
@@ -153,7 +150,7 @@ final class RecommendationReActLoop {
         maximumRunMillis = properties.timeout().toMillis();
         evidenceReview = new RecommendationEvidenceReview(json, this);
         actionExecutor = new RecommendationActions(tools, selector, properties, json, evidenceReview, this);
-        publication = new RecommendationPublication(selector, evidenceReview, actionExecutor, this, json);
+        publication = new RecommendationPublication(selector, evidenceReview, actionExecutor, this);
         this.observations = observations == null ? ObservationRegistry.NOOP : observations;
     }
 
@@ -166,26 +163,11 @@ final class RecommendationReActLoop {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener) {
-        return converse(
-                input,
-                requestedLocale,
-                modelConfigurationOwner,
-                progressListener,
-                ignored -> {});
-    }
-
-    public ConversationResponse converse(
-            ConversationRequest input,
-            String requestedLocale,
-            String modelConfigurationOwner,
-            Consumer<ProgressUpdate> progressListener,
-            Consumer<String> answerPartListener) {
         return converseValidated(
                 validate(input),
                 requestedLocale,
                 modelConfigurationOwner,
-                progressListener,
-                answerPartListener);
+                progressListener);
     }
 
     ConversationResponse converseValidated(
@@ -206,22 +188,6 @@ final class RecommendationReActLoop {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
-            Consumer<String> answerPartListener) {
-        return converseValidated(
-                request,
-                requestedLocale,
-                modelConfigurationOwner,
-                progressListener,
-                answerPartListener,
-                ignored -> {});
-    }
-
-    ConversationResponse converseValidated(
-            ConversationRequest request,
-            String requestedLocale,
-            String modelConfigurationOwner,
-            Consumer<ProgressUpdate> progressListener,
-            Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         Observation workflow = Observation.createNotStarted("rulepilot.recommendation.workflow", observations)
                 .contextualName("recommendation-react");
@@ -232,7 +198,6 @@ final class RecommendationReActLoop {
                         requestedLocale,
                         modelConfigurationOwner,
                         progressListener,
-                        answerPartListener,
                         checkpointListener);
                 workflow.lowCardinalityKeyValue(
                         "outcome", response.outcome().name().toLowerCase(Locale.ROOT));
@@ -249,7 +214,6 @@ final class RecommendationReActLoop {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
-            Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         long startedAt = System.nanoTime();
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
@@ -266,7 +230,6 @@ final class RecommendationReActLoop {
                     locale,
                     state,
                     progress,
-                    answerPartListener,
                     checkpointListener);
         } catch (RuntimeException | Error failure) {
             progress.abort(failure);
@@ -279,7 +242,6 @@ final class RecommendationReActLoop {
             String locale,
             RecommendationAgentState state,
             ProgressTracker progress,
-            Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         progress.start(ProgressStage.UNDERSTANDING_REQUEST, ProgressAction.UNDERSTAND_REQUEST);
         progress.complete();
@@ -305,7 +267,7 @@ final class RecommendationReActLoop {
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
         int stateEpoch = 0;
 
-        while (state.modelCalls < MAX_DECISION_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
+        while (state.modelCalls < MAX_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             state.modelCalls++;
             progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
             BoardGameRecommendationModel.Turn turn;
@@ -460,21 +422,17 @@ final class RecommendationReActLoop {
             if (outcome.response() != null) {
                 progress.complete();
                 return publishValidatedResponse(
-                        state,
                         progress,
-                        outcome.response(),
-                        answerPartListener);
+                        outcome.response());
             }
             PublicationSeed publicationSeed = outcome.publicationSeed();
             if (publicationSeed != null) {
                 progress.complete();
                 return publishRecommendationWithinBoundary(
                         state,
-                        request,
                         locale,
                         publicationSeed,
-                        progress,
-                        answerPartListener);
+                        progress);
             }
             if (outcome.rejected()) {
                 progress.retry();
@@ -519,16 +477,13 @@ final class RecommendationReActLoop {
     }
 
     private ConversationResponse publishValidatedResponse(
-            RecommendationAgentState state,
             ProgressTracker progress,
-            ConversationResponse decision,
-            Consumer<String> answerPartListener) {
-        progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.STREAM_NATURAL_REPLY);
+            ConversationResponse decision) {
+        progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.REPLY_TO_USER);
         if (decision.assistantMessage().isBlank()) {
             progress.fail();
             throw new IllegalStateException("validated recommendation decision omitted its player reply");
         }
-        answerPartListener.accept(decision.assistantMessage());
         progress.complete();
         logRun(decision);
         return decision;
@@ -536,19 +491,15 @@ final class RecommendationReActLoop {
 
     private ConversationResponse publishRecommendationWithinBoundary(
             RecommendationAgentState state,
-            ConversationRequest request,
             String locale,
             PublicationSeed seed,
-            ProgressTracker progress,
-            Consumer<String> answerPartListener) {
+            ProgressTracker progress) {
         try {
             return publishRecommendation(
                     state,
-                    request,
                     locale,
                     seed,
-                    progress,
-                    answerPartListener);
+                    progress);
         } catch (RuntimeException exception) {
             progress.fail();
             String code = publicationFailureCode(exception);
@@ -560,194 +511,15 @@ final class RecommendationReActLoop {
 
     private ConversationResponse publishRecommendation(
             RecommendationAgentState state,
-            ConversationRequest request,
             String locale,
             PublicationSeed seed,
-            ProgressTracker progress,
-            Consumer<String> answerPartListener) {
-        progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.STREAM_NATURAL_REPLY);
-        Permit permit = publication.permit(
-                state,
-                seed,
-                evidenceReview.preferenceEvidence(request).keySet());
-        PublicationNarrative narrative =
-                synthesizeRecommendationNarrative(state, request, locale, permit);
-        ConversationResponse response = publication.publish(state, seed, narrative, locale);
-        try {
-            answerPartListener.accept(response.assistantMessage());
-        } catch (RuntimeException exception) {
-            // The cards and evidence boundary are already complete. A disconnected optional stream listener must
-            // not erase them or create a second generation path; the durable response remains authoritative.
-            LOGGER.debug("Recommendation answer listener stopped accepting the completed lead");
-        }
+            ProgressTracker progress) {
+        progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.RECOMMEND_GAMES);
+        Permit permit = publication.permit(state, seed);
+        ConversationResponse response = publication.publish(state, permit, locale);
         progress.complete();
         logRun(response);
         return response;
-    }
-
-    private PublicationNarrative synthesizeRecommendationNarrative(
-            RecommendationAgentState state,
-            ConversationRequest request,
-            String locale,
-            Permit permit) {
-        if (!model.structuredPublicationConfigured(state.modelConfigurationOwner)) {
-            state.actions.add("RECOMMENDATION_NARRATIVE_SKIPPED:CAPABILITY_UNAVAILABLE");
-            return null;
-        }
-        if (state.modelCalls >= MAX_MODEL_CALLS) {
-            state.actions.add("RECOMMENDATION_NARRATIVE_SKIPPED:MODEL_BUDGET");
-            return null;
-        }
-
-        state.modelCalls++;
-        OperationObservation operation = startOperation(
-                "publication_model", "write_grounded_recommendation");
-        try {
-            Request modelRequest = recommendationNarrativeRequest(
-                    state,
-                    request,
-                    locale,
-                    permit);
-            BoardGameRecommendationModel.StructuredTurn turn = withinDeadline(
-                    state,
-                    () -> model.streamStructured(
-                            modelRequest,
-                            state.modelConfigurationOwner,
-                            ignored -> {}));
-            PublicationNarrative narrative = publication.validateNarrative(turn.json(), permit);
-            operation.stop(
-                    turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT
-                            ? "completed_at_output_limit"
-                            : "completed",
-                    false,
-                    null);
-            return narrative;
-        } catch (RunInterrupted interrupted) {
-            operation.stop("interrupted", false, interrupted);
-            throw interrupted;
-        } catch (RunDeadlineExceeded timeout) {
-            operation.stop("deadline", true, timeout);
-            state.actions.add("RECOMMENDATION_NARRATIVE_SKIPPED:TIME_BUDGET");
-            return null;
-        } catch (RuntimeException failure) {
-            operation.stop("invalid_or_unavailable", true, failure);
-            String code = failure instanceof BoardGameRecommendationModel.ProtocolFailure protocol
-                    ? "MODEL_PROTOCOL_" + protocol.code()
-                    : failure instanceof RecommendationPublication.InvalidPublication invalid
-                            ? invalid.code().name()
-                            : "MODEL_CALL_FAILED";
-            state.actions.add("RECOMMENDATION_NARRATIVE_SKIPPED:" + code);
-            LOGGER.warn(
-                    "Grounded recommendation narrative was skipped (type={}, code={})",
-                    failure.getClass().getSimpleName(),
-                    code);
-            return null;
-        }
-    }
-
-    private Request recommendationNarrativeRequest(
-            RecommendationAgentState state,
-            ConversationRequest request,
-            String locale,
-            Permit permit) {
-        Map<String, Object> input = new LinkedHashMap<>();
-        input.put("locale", locale);
-        input.put("recentConversation", conversationEvidence(request));
-        input.put("currentProfile", evidenceReview.profileForAgent(state.profile));
-        input.put("candidateOrder", permit.selectedGames().stream()
-                .map(game -> game.ranking().bggId())
-                .toList());
-        input.put("candidates", permit.selectedGames().stream()
-                .map(game -> actionExecutor.finalResponseGameObservation(
-                        game,
-                        state.research,
-                        permit.allowedEvidenceByGame().get(game.ranking().bggId()).keySet()))
-                .toList());
-        putIfNotEmpty(input, "researchSources", actionExecutor.sourceObservations(state.research.sources()));
-        try {
-            return new Request(
-                    List.of(
-                            Message.system(recommendationNarrativePrompt()),
-                            Message.user(json.writeValueAsString(input))),
-                    List.of(),
-                    EVIDENCE_RESPONSE_OUTPUT_TOKENS,
-                    ToolChoice.NONE,
-                    new StructuredOutput(
-                            "grounded_recommendation_publication",
-                            recommendationNarrativeSchema(permit),
-                            true));
-        } catch (JsonProcessingException failure) {
-            throw new IllegalStateException(
-                    "recommendation narrative input could not be serialized",
-                    failure);
-        }
-    }
-
-    private static String recommendationNarrativePrompt() {
-        return """
-                Write the final recommendation lead and candidate notes in the player's language. This is synthesis, not another selection or review: keep candidateOrder unchanged and return exactly one card object for each candidate. The lead is a typed part with text and evidenceIds; cite only current-request U evidence or observations owned by the selected candidates.
-
-                Connect the player's stated situation to the supplied candidate-scoped observations in fluent, specific prose. Select only evidenceIds that genuinely support each part. Add a tradeoff only when the supplied evidence supports a useful decision boundary; otherwise return null. BGG taxonomy is only a literal label, publisher description supports only its literal premise/features, and an attributed public report must remain visibly attributed.
-
-                Exact hard facts and numbers already appear in the card UI. Do not calculate, embellish, or introduce numerical, identity, rule, ranking, award, availability, or current-event facts outside the selected observations. Never mention evidence IDs, schemas, tools, validation, workflow, or hidden reasoning. Avoid repeated stock openings and labels such as “one verified reason” or “choice boundary”; write like a knowledgeable person helping this particular table choose.
-                """;
-    }
-
-    private static String recommendationNarrativeSchema(Permit permit) {
-        List<Integer> candidateIds = permit.selectedGames().stream()
-                .map(game -> game.ranking().bggId())
-                .toList();
-        List<String> evidenceIds = permit.selectedGames().stream()
-                .flatMap(game -> permit.allowedEvidenceByGame()
-                        .get(game.ranking().bggId())
-                        .keySet()
-                        .stream())
-                .distinct()
-                .toList();
-        int maximumCandidateEvidenceIds = permit.allowedEvidenceByGame().values().stream()
-                .mapToInt(Map::size)
-                .max()
-                .orElseThrow();
-        String evidenceIdSchema = "{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
-                + maximumCandidateEvidenceIds
-                + ",\"uniqueItems\":true,"
-                + "\"items\":{\"type\":\"string\",\"enum\":"
-                + jsonArray(evidenceIds)
-                + "}}";
-        String leadEvidenceIdSchema = "{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
-                + permit.allowedLeadEvidenceIds().size()
-                + ",\"uniqueItems\":true,"
-                + "\"items\":{\"type\":\"string\",\"enum\":"
-                + jsonArray(permit.allowedLeadEvidenceIds().stream().toList())
-                + "}}";
-        String leadSchema = "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                + "\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200},"
-                + "\"evidenceIds\":"
-                + leadEvidenceIdSchema
-                + "},\"required\":[\"text\",\"evidenceIds\"]}";
-        String partSchema = "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                + "\"text\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":320},"
-                + "\"evidenceIds\":"
-                + evidenceIdSchema
-                + "},\"required\":[\"text\",\"evidenceIds\"]}";
-        int count = candidateIds.size();
-        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                + "\"lead\":"
-                + leadSchema
-                + ","
-                + "\"cards\":{\"type\":\"array\",\"minItems\":"
-                + count
-                + ",\"maxItems\":"
-                + count
-                + ",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                + "\"bggId\":{\"type\":\"integer\",\"enum\":"
-                + candidateIds
-                + "},\"why\":"
-                + partSchema
-                + ",\"tradeoff\":{\"anyOf\":["
-                + partSchema
-                + ",{\"type\":\"null\"}]}},\"required\":[\"bggId\",\"why\",\"tradeoff\"]}}},"
-                + "\"required\":[\"lead\",\"cards\"]}";
     }
 
     private String publicationFailureCode(RuntimeException exception) {
@@ -1484,7 +1256,7 @@ final class RecommendationReActLoop {
             if (!(parsed instanceof ObjectNode object)) {
                 throw new IllegalStateException("recommendation observation must be a JSON object");
             }
-            object.put("remainingModelCalls", Math.max(0, MAX_DECISION_MODEL_CALLS - state.modelCalls));
+            object.put("remainingModelCalls", Math.max(0, MAX_MODEL_CALLS - state.modelCalls));
             object.put("remainingActionCalls", Math.max(0, MAX_ACTION_CALLS - state.actionCalls));
             object.set("availableCapabilities", json.valueToTree(availableCapabilities(state)));
             object.set("turnState", json.valueToTree(turnState(state)));

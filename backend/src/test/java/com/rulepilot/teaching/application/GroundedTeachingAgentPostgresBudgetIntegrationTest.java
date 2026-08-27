@@ -135,10 +135,9 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
 
         BudgetSnapshot budget = execution.budget(runId);
         List<ActivitySnapshot> activities = execution.activities(runId);
-        // The durable admission must cover the longest mutually exclusive page-catalog branch for every bound page:
-        // initial image semantics, OCR after a typed-contract failure, then semantics with the changed transcript.
+        // The durable admission covers the initial image interpretation plus one page-local repair or replay.
         // This fixture's visual catalog is unavailable, so its lower actual usage remains asserted independently.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 134));
+        assertThat(demand).isEqualTo(new WorkloadDemand(95, 115));
         assertThat(lesson.sections()).hasSize(19).allSatisfy(section ->
                 assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED));
         assertThat(model.maximumConcurrentCalls()).isGreaterThanOrEqualTo(3);

@@ -302,13 +302,9 @@ jobs:
                 pageCount: $source.pageCount,
                 pageAttempts: (if $source.pageAttempts == null then null else {
                   pages: [$source.pageAttempts.pages[]? | {
-                    page, ocrOutcome, initialOutcome, recoveryKind, repairCode,
+                    page, initialOutcome, recoveryKind, repairCode,
                     recoveryOutcome, semanticAttempts, finalOutcome
                   }],
-                  ocrSucceeded: $source.pageAttempts.ocrSucceeded,
-                  ocrFailed: $source.pageAttempts.ocrFailed,
-                  ocrRejected: $source.pageAttempts.ocrRejected,
-                  ocrRetryAttempted: $source.pageAttempts.ocrRetryAttempted,
                   initialSucceeded: $source.pageAttempts.initialSucceeded,
                   initialFailed: $source.pageAttempts.initialFailed,
                   initialRejected: $source.pageAttempts.initialRejected,

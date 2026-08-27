@@ -756,11 +756,9 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
       latencyMs: 900, occurredAt: '2026-08-25T00:00:04Z' },
     { sequence: 3, type: 'MODEL', operation: 'inspectTeachingVisualPage|3|3', outcome: 'SUCCEEDED',
       latencyMs: 900, occurredAt: '2026-08-25T00:00:04Z' },
-    { sequence: 4, type: 'MODEL', operation: 'transcribeTeachingVisualRepairPage|1|3', outcome: 'SUCCEEDED',
-      latencyMs: 1200, occurredAt: '2026-08-25T00:00:05Z' },
-    { sequence: 5, type: 'MODEL', operation: 'inspectTeachingVisualRepair|1|3|DUPLICATE_RULE_GROUP', outcome: 'SUCCEEDED',
+    { sequence: 4, type: 'MODEL', operation: 'inspectTeachingVisualRepair|1|3|DUPLICATE_RULE_GROUP', outcome: 'SUCCEEDED',
       latencyMs: 1100, occurredAt: '2026-08-25T00:00:05Z' },
-    { sequence: 6, type: 'MODEL', operation: 'inspectTeachingVisualRetry|2|3', outcome: 'SUCCEEDED',
+    { sequence: 5, type: 'MODEL', operation: 'inspectTeachingVisualRetry|2|3', outcome: 'SUCCEEDED',
       latencyMs: 1050, occurredAt: '2026-08-25T00:00:05Z' },
   ])
   const lessonRun = run(lessonRunId, 'COMPLETED', '2026-08-25T00:00:10Z', '2026-08-25T00:00:18Z', [
@@ -950,19 +948,15 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
     assert.equal(summary.pageCount, 3)
     assert.deepEqual(summary.pageAttempts, {
       pages: [
-        { page: 1, repairTranscriptionOutcome: 'SUCCEEDED', initialOutcome: 'FAILED',
+        { page: 1, initialOutcome: 'FAILED',
           recoveryKind: 'CONTRACT_REPAIR', repairCode: 'DUPLICATE_RULE_GROUP',
           recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2,
           finalOutcome: 'SUCCEEDED' },
-        { page: 2, repairTranscriptionOutcome: null, initialOutcome: 'FAILED', recoveryKind: 'TRANSIENT_RETRY',
+        { page: 2, initialOutcome: 'FAILED', recoveryKind: 'TRANSIENT_RETRY',
           repairCode: null, recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2, finalOutcome: 'SUCCEEDED' },
-        { page: 3, repairTranscriptionOutcome: null, initialOutcome: 'SUCCEEDED', recoveryKind: null,
+        { page: 3, initialOutcome: 'SUCCEEDED', recoveryKind: null,
           repairCode: null, recoveryOutcome: null, semanticAttempts: 1, finalOutcome: 'SUCCEEDED' },
       ],
-      repairTranscriptionAttempted: 1,
-      repairTranscriptionSucceeded: 1,
-      repairTranscriptionFailed: 0,
-      repairTranscriptionRejected: 0,
       initialSucceeded: 1,
       initialFailed: 2,
       initialRejected: 0,
@@ -1143,7 +1137,8 @@ test('production workflows never execute an operator-supplied Git ref with produ
   const candidates = await readFile(resolve('.github/workflows/public-lesson-candidate.yml'), 'utf8')
 
   assert.doesNotMatch(deployment, /inputs\.ref/)
-  assert.match(deployment, /workflow_run\.head_sha \|\| 'main'/)
+  assert.match(deployment, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/)
+  assert.doesNotMatch(deployment, /workflow_run\.head_sha\s*\|\|/)
   assert.doesNotMatch(smoke, /inputs\.ref/)
   assert.match(smoke, /ref: main/)
   assert.doesNotMatch(candidates, /inputs\.ref/)

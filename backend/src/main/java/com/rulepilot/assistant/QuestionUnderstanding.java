@@ -50,17 +50,6 @@ public interface QuestionUnderstanding {
                     allowedEvidencePages);
         }
 
-        public QuestionContext withOutputLanguage(PlayerLocale resolvedOutputLanguage) {
-            if (outputLanguage == resolvedOutputLanguage) return this;
-            return new QuestionContext(
-                    documentVersionId,
-                    previousQuestion,
-                    learningIntent,
-                    resolvedOutputLanguage,
-                    priorTurnReference,
-                    allowedEvidencePages);
-        }
-
         public QuestionContext {
             if (documentVersionId == null) {
                 throw new IllegalArgumentException("question context is invalid");

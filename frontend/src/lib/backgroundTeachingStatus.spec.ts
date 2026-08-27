@@ -51,12 +51,10 @@ describe('background teaching status', () => {
     expect(player.dismissedTeachingRuns).toBe('rulepilot:dismissed-teaching-runs:player%40example.com')
     sessionStorage.setItem(player.activeTeaching, 'player')
     sessionStorage.setItem(other.activeTeaching, 'other')
-    sessionStorage.setItem('rulepilot:active-teaching-runs', 'legacy')
 
     clearBackgroundWorkStorage(sessionStorage, 'player@example.com')
 
     expect(sessionStorage.getItem(player.activeTeaching)).toBeNull()
     expect(sessionStorage.getItem(other.activeTeaching)).toBe('other')
-    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toBeNull()
   })
 })

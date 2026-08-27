@@ -92,17 +92,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             });
             assertThat(response.assistantMessage()).isNotBlank();
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().modelCalls()).isEqualTo(2);
+            assertThat(response.harness().modelCalls()).isEqualTo(1);
             assertThat(response.harness().catalogCalls()).isEqualTo(1);
             assertThat(response.harness().webResearchCalls()).isZero();
             assertThat(response.harness().actions())
                     .noneMatch(action -> action.startsWith("REJECTED_")
                             || action.startsWith("FALLBACK_")
-                            || action.equals("RUN_DEADLINE_EXCEEDED")
-                            || action.equals("RECOMMENDATION_NARRATIVE_UNAVAILABLE"));
+                            || action.equals("RUN_DEADLINE_EXCEEDED"));
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.BROWSE_TOOL)).hasSize(1);
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL)).isEmpty();
-            assertThat(capture.structuredCallCount()).isOne();
             assertThat(totalMs).isLessThan(20_000L);
 
             ToolCall browse = capture.lastCandidateProducingToolCall();
@@ -147,34 +145,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             }
 
             @Override
-            public boolean structuredPublicationConfigured(String ownerUsername) {
-                return true;
-            }
-
-            @Override
             public Turn next(BoardGameRecommendationModel.Request request) {
                 long started = System.nanoTime();
                 int callIndex = capture.begin("react", request);
                 try {
                     Turn result = delegate.next(request);
                     capture.complete(callIndex, result, elapsed(started));
-                    return result;
-                } catch (RuntimeException | Error failure) {
-                    capture.fail(callIndex, failure, elapsed(started));
-                    throw failure;
-                }
-            }
-
-            @Override
-            public StructuredTurn streamStructured(
-                    BoardGameRecommendationModel.Request request,
-                    String ownerUsername,
-                    java.util.function.Consumer<String> jsonDeltaListener) {
-                long started = System.nanoTime();
-                int callIndex = capture.begin("structured_publication", request);
-                try {
-                    StructuredTurn result = delegate.streamStructured(request, ownerUsername, jsonDeltaListener);
-                    capture.completeStructured(callIndex, result, elapsed(started));
                     return result;
                 } catch (RuntimeException | Error failure) {
                     capture.fail(callIndex, failure, elapsed(started));
@@ -258,7 +234,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private final String model;
         private final List<Map<String, Object>> calls = new ArrayList<>();
         private final List<ToolCall> toolCalls = new ArrayList<>();
-        private int structuredCallCount;
 
         private Capture(String provider, String model) {
             this.provider = provider;
@@ -266,7 +241,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         }
 
         private synchronized int begin(String operation, BoardGameRecommendationModel.Request request) {
-            if ("structured_publication".equals(operation)) structuredCallCount++;
             Map<String, Object> call = new LinkedHashMap<>();
             call.put("ordinal", calls.size() + 1);
             call.put("operation", operation);
@@ -294,18 +268,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             toolCalls.addAll(turn.toolCalls());
         }
 
-        private synchronized void completeStructured(
-                int callIndex,
-                BoardGameRecommendationModel.StructuredTurn turn,
-                long latencyMs) {
-            Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
-            call.put("status", "COMPLETED");
-            call.put("latencyMs", latencyMs);
-            call.put("structuredJson", turn.json());
-            call.put("completionStatus", turn.completionStatus().name());
-            calls.set(callIndex, Map.copyOf(call));
-        }
-
         private synchronized void fail(int callIndex, Throwable failure, long latencyMs) {
             Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
             call.put("status", "FAILED");
@@ -323,10 +285,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
         private synchronized List<ToolCall> toolCalls(String toolName) {
             return toolCalls.stream().filter(call -> toolName.equals(call.name())).toList();
-        }
-
-        private synchronized int structuredCallCount() {
-            return structuredCallCount;
         }
     }
 

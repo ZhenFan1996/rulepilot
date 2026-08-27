@@ -7,7 +7,6 @@ import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
 import {
   backgroundWorkStorageKeys,
-  clearLegacyBackgroundWorkStorage,
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
   type BackgroundTeachingItem,
@@ -1255,7 +1254,6 @@ function switchAccount(nextUsername: string) {
   dismissedTeachingRunIds.value = new Set()
   dismissError.value = ''
   titles.clear()
-  clearLegacyBackgroundWorkStorage(sessionStorage)
   if (!account) {
     loading.value = false
     return

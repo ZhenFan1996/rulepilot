@@ -462,7 +462,8 @@ describe('PublicLessonView', () => {
     wrapper.unmount()
   })
 
-  it('uses the current English question for anonymous failure and transport recovery under a Chinese UI', async () => {
+  it('keeps anonymous English failures private and recoverable', async () => {
+    setLocale('en')
     const internalId = '11111111-1111-4111-8111-111111111111'
     const lesson = publicLessonPayload('plan-1', 'Opaque Rules')
     let answerRequests = 0

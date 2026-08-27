@@ -11,6 +11,7 @@ const EXPECTED_TITLE_TERM = (process.env.RULEPILOT_RECOMMENDATION_EXPECTED_TITLE
 const TESTED_SHA = process.env.RULEPILOT_RECOMMENDATION_TESTED_SHA ?? ''
 const ACTIVE_RELEASE_SHA = process.env.RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA ?? ''
 const INTERACTION_SLO_MS = 20_000
+const FIRST_PROGRESS_SLO_MS = 3_000
 const TERMINAL_OBSERVATION_MS = 50_000
 const PUBLIC_FAILURE_BOUNDARIES = new Set([
   'time_budget',
@@ -45,7 +46,6 @@ interface RecommendationResult {
   modelCalls?: number
   catalogCalls?: number
   webResearchCalls?: number
-  publicationRecovered?: boolean
   failureBoundary?: string | null
 }
 
@@ -87,6 +87,7 @@ interface ProductionRecommendationReport {
   recommendationOutcome: RecommendationOutcome | null
   recommendationTerminalCategory: TerminalCategory | 'NOT_OBSERVED'
   recommendationTerminalObserved: boolean
+  recommendationFirstProgressMs: number | null
   recommendationElapsedMs: number | null
   recommendationSloMet: boolean | null
   recommendationPublishedGames: Array<{
@@ -98,7 +99,6 @@ interface ProductionRecommendationReport {
   recommendationModelCalls: number | null
   recommendationCatalogCalls: number | null
   recommendationWebResearchCalls: number | null
-  recommendationPublicationRecovered: boolean | null
   recommendationFailureBoundary: string | null
   expectedRecommendationTitleTerm: string
   rawModelOutputCaptured: false
@@ -257,6 +257,7 @@ test('production returns one persisted player-visible recommendation slate', asy
     recommendationOutcome: null,
     recommendationTerminalCategory: 'NOT_OBSERVED',
     recommendationTerminalObserved: false,
+    recommendationFirstProgressMs: null,
     recommendationElapsedMs: null,
     recommendationSloMet: null,
     recommendationPublishedGames: [],
@@ -264,7 +265,6 @@ test('production returns one persisted player-visible recommendation slate', asy
     recommendationModelCalls: null,
     recommendationCatalogCalls: null,
     recommendationWebResearchCalls: null,
-    recommendationPublicationRecovered: null,
     recommendationFailureBoundary: null,
     expectedRecommendationTitleTerm: EXPECTED_TITLE_TERM,
     rawModelOutputCaptured: false,
@@ -299,6 +299,9 @@ test('production returns one persisted player-visible recommendation slate', asy
     }, { timeout: 30_000 })
     const startedAt = performance.now()
     const deadlineAt = Date.now() + TERMINAL_OBSERVATION_MS
+    const firstProgressPromise = page.getByTestId('recommendation-progress-steps')
+      .waitFor({ state: 'visible', timeout: FIRST_PROGRESS_SLO_MS })
+      .then(() => elapsed(startedAt), () => null)
     await page.getByRole('button', { name: '发送', exact: true }).click()
     const recommendationRequest = await requestPromise
     const requestBody = recommendationRequest.postDataJSON() as {
@@ -311,6 +314,9 @@ test('production returns one persisted player-visible recommendation slate', asy
     expect(requestBody?.clientTurnId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     )
+    report.recommendationFirstProgressMs = await firstProgressPromise
+    expect(report.recommendationFirstProgressMs,
+      'The recommendation did not expose causal server progress within 3 seconds').not.toBeNull()
 
     const clientTurnId = String(requestBody?.clientTurnId)
     const terminal = await waitForPersistedTerminal(
@@ -331,9 +337,6 @@ test('production returns one persisted player-visible recommendation slate', asy
     report.recommendationModelCalls = publicNonNegativeInteger(result?.modelCalls)
     report.recommendationCatalogCalls = publicNonNegativeInteger(result?.catalogCalls)
     report.recommendationWebResearchCalls = publicNonNegativeInteger(result?.webResearchCalls)
-    report.recommendationPublicationRecovered = typeof result?.publicationRecovered === 'boolean'
-      ? result.publicationRecovered
-      : null
     report.recommendationCompletedWork = Array.isArray(result?.completedWork)
       ? result.completedWork.filter((value): value is string => typeof value === 'string')
       : []

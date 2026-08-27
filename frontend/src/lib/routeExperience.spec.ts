@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   appScrollBehavior,
-  appStickyOffset,
   focusMainContent,
   routeDocumentTitle,
   routeNeedsContentFocus,
@@ -35,7 +34,6 @@ describe('route experience', () => {
   it('keeps hash targets below the shared header and a visible connectivity status', () => {
     document.documentElement.style.setProperty('--app-top-inset', '64px')
 
-    expect(appStickyOffset()).toBe(144)
     expect(appScrollBehavior(route('/lessons', '#ready'), route('/'), null)).toEqual({
       el: '#ready',
       top: 144,

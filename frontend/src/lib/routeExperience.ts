@@ -23,7 +23,7 @@ export const appScrollBehavior: RouterScrollBehavior = (to, from, savedPosition)
   return { left: 0, top: 0 }
 }
 
-export function appStickyOffset(root: Document = document) {
+function appStickyOffset(root: Document = document) {
   const connectivityInset = Number.parseFloat(
     getComputedStyle(root.documentElement).getPropertyValue('--app-top-inset'),
   )

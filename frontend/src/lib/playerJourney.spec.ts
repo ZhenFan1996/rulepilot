@@ -6,9 +6,10 @@ import {
   derivePlayerJourney,
   playerJourneyPollDelay,
   type PlayerJourneyImportJob,
-  type PlayerJourneyInput,
   type PlayerJourneyRun,
 } from './playerJourney'
+
+type PlayerJourneyInput = Parameters<typeof derivePlayerJourney>[0]
 
 describe('playerJourneyPollDelay', () => {
   it('checks quickly only while a plan is waiting for its first readable chapter', () => {

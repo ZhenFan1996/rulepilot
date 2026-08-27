@@ -62,7 +62,7 @@ agent-tool-probe: ## Probe enabled paid models with bounded synthetic required-t
 agent-teaching-real: ## Run the explicitly authorized complete real-rulebook teaching richness canary
 	@sh scripts/run-real-teaching-agent.sh
 
-agent-teaching-page-canary: ## Run one explicitly authorized paid Gstone image-page OCR/catalog canary
+agent-teaching-page-canary: ## Run one explicitly authorized paid Gstone image-page catalog canary
 	@sh scripts/run-gstone-visual-page-canary.sh
 
 agent-visual-real: ## Evaluate opaque visual-candidate selection on ignored local rulebook crops

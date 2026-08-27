@@ -19,7 +19,7 @@ public final class PlayerFacingAnswerPresenter {
             StructuredRuleAnswer answer, String currentQuestion, PlayerLocale requestedLanguage) {
         if (answer == null) throw new IllegalArgumentException("answer is required");
         String question = currentQuestion == null ? "" : currentQuestion;
-        PlayerLocale language = PlayerLocale.forQuestion(question, requestedLanguage);
+        PlayerLocale language = requestedLanguage == null ? PlayerLocale.ZH_CN : requestedLanguage;
         List<Citation> citations = answer.citations().stream()
                 .map(citation -> new Citation(
                         citation.heading(),
@@ -150,7 +150,7 @@ public final class PlayerFacingAnswerPresenter {
             AnswerStatus status, PlayerLocale language, String question, String clarification) {
         boolean english = language == PlayerLocale.EN;
         if (status == AnswerStatus.CLARIFICATION_REQUIRED) {
-            String detail = usableClarification(clarification, language)
+            String detail = usableClarification(clarification)
                     ? clarification
                     : english
                             ? "Name the exact card, action, effect, or area and when the situation occurs."
@@ -222,10 +222,8 @@ public final class PlayerFacingAnswerPresenter {
         return question;
     }
 
-    private static boolean usableClarification(String value, PlayerLocale expectedLanguage) {
-        return value != null
-                && !value.isBlank()
-                && PlayerLocale.forQuestion(value, expectedLanguage) == expectedLanguage;
+    private static boolean usableClarification(String value) {
+        return value != null && !value.isBlank();
     }
 
     private static SourceKind source(StructuredRuleAnswer answer) {

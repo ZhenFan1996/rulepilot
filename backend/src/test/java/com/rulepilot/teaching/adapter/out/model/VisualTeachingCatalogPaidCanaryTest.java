@@ -15,7 +15,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.testing.PaidCanaryTrace;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -90,26 +89,17 @@ class VisualTeachingCatalogPaidCanaryTest {
             var executionIdentity = catalog.teachingStartupExecutionIdentity(OWNER).orElseThrow();
 
             long started = System.nanoTime();
-            long ocrLatencyMs = -1L;
             long semanticLatencyMs = -1L;
             PageSummary page;
-            PageTranscript transcript = null;
             try {
                 PageImageInput pageImage = new PageImageInput(pageNumber, "image/jpeg", image);
-                long ocrStarted = System.nanoTime();
-                transcript = trace.observe(
-                        "teaching-visual-ocr",
-                        () -> catalog.transcribeTeachingPage(pageImage, OWNER));
-                ocrLatencyMs = Duration.ofNanos(System.nanoTime() - ocrStarted).toMillis();
-                List<PageTranscript> transcripts = List.of(transcript);
                 long semanticStarted = System.nanoTime();
                 page = trace.observe(
                                 "teaching-visual-semantic-catalog",
                                 () -> catalog.summarizeForTeaching(new CatalogRequest(
                                         List.of(pageImage),
                                         OWNER,
-                                        rulebookTitle,
-                                        transcripts)))
+                                        rulebookTitle)))
                         .pages()
                         .getFirst();
                 semanticLatencyMs = Duration.ofNanos(System.nanoTime() - semanticStarted).toMillis();
@@ -125,8 +115,6 @@ class VisualTeachingCatalogPaidCanaryTest {
                 failedArtifact.put("model", executionIdentity.model());
                 failedArtifact.put("traceId", trace.traceId());
                 failedArtifact.put("modelCalls", rawResponses.size());
-                failedArtifact.put("ocrTranscript", transcript == null ? null : transcript.text());
-                failedArtifact.put("ocrLatencyMs", ocrLatencyMs);
                 failedArtifact.put("semanticCatalogLatencyMs", semanticLatencyMs);
                 failedArtifact.put("latencyMs", Duration.ofNanos(System.nanoTime() - started).toMillis());
                 failedArtifact.put("failure", failure.toString());
@@ -141,7 +129,7 @@ class VisualTeachingCatalogPaidCanaryTest {
             assertThat(page.pageNumber()).isEqualTo(pageNumber);
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
             assertThat(page.ruleGroupIdentifiers()).isNotEmpty();
-            assertThat(rawResponses).hasSizeBetween(2, 3);
+            assertThat(rawResponses).hasSize(1);
 
             Map<String, Object> artifact = new LinkedHashMap<>();
             artifact.put("schemaVersion", 1);
@@ -154,10 +142,7 @@ class VisualTeachingCatalogPaidCanaryTest {
             artifact.put("traceId", trace.traceId());
             artifact.put("modelCalls", rawResponses.size());
             artifact.put("latencyMs", latencyMs);
-            artifact.put("ocrLatencyMs", ocrLatencyMs);
             artifact.put("semanticCatalogLatencyMs", semanticLatencyMs);
-            artifact.put("ocrModel", "qwen3.5-ocr");
-            artifact.put("ocrTranscript", transcript == null ? null : transcript.text());
             artifact.put("rawResponses", rawResponses.stream().map(this::rawJsonOrText).toList());
             artifact.put("pageSummary", json.valueToTree(page));
             writeArtifact(
@@ -176,7 +161,6 @@ class VisualTeachingCatalogPaidCanaryTest {
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
                 new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt"),
-                "qwen3.5-ocr",
                 4_800);
     }
 

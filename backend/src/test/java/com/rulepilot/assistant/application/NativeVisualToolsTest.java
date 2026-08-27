@@ -30,11 +30,15 @@ class NativeVisualToolsTest {
                 mapper,
                 ignored -> true);
 
-        assertThat(registry.specifications(Role.VISUAL)).extracting(spec -> spec.name())
+        assertThat(registry.specifications(
+                        Role.VISUAL,
+                        Set.of("crop_rule_page_image", "read_rule_page_image", "read_visual_page_facts")))
+                .extracting(spec -> spec.name())
                 .containsExactly("crop_rule_page_image", "read_rule_page_image", "read_visual_page_facts");
-        assertThat(registry.specifications(Role.ANSWER)).extracting(spec -> spec.name())
+        assertThat(registry.specifications(Role.ANSWER, Set.of("read_visual_page_facts")))
+                .extracting(spec -> spec.name())
                 .containsExactly("read_visual_page_facts");
-        assertThat(registry.specifications(Role.TEACHING)).isEmpty();
+        assertThat(registry.specifications(Role.TEACHING, Set.of("read_visual_page_facts"))).isEmpty();
 
         var rejected = registry.execute(
                 Role.ANSWER,

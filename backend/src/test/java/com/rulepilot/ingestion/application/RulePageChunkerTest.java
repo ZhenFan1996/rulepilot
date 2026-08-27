@@ -13,7 +13,7 @@ class RulePageChunkerTest {
 
     @Test
     void preservesEveryPageAndNeverCreatesBroadPageRanges() {
-        var chunks = chunker.chunk(List.of(
+        var chunks = chunk(List.of(
                 new ExtractedPage(4, "SETUP\nPlace the map in the center.\n\nGive each player two cards."),
                 new ExtractedPage(5, "YOUR TURN\nChoose one action, then draw a card.")));
 
@@ -26,7 +26,7 @@ class RulePageChunkerTest {
     void splitsLongPagesIntoRetrievalSizedChunks() {
         String paragraph = "Score one point. ".repeat(400);
 
-        var chunks = chunker.chunk(List.of(new ExtractedPage(12, "SCORING\n\n" + paragraph)));
+        var chunks = chunk(List.of(new ExtractedPage(12, "SCORING\n\n" + paragraph)));
 
         assertThat(chunks).hasSizeGreaterThan(2);
         assertThat(chunks).allMatch(chunk -> chunk.pageNumber() == 12);
@@ -84,12 +84,16 @@ class RulePageChunkerTest {
 
     @Test
     void retainsImageOnlyPagesAsVisualEvidenceInsteadOfRejectingTheRulebook() {
-        var chunks = chunker.chunk(List.of(new ExtractedPage(9, "")));
+        var chunks = chunk(List.of(new ExtractedPage(9, "")));
 
         assertThat(chunks).singleElement().satisfies(chunk -> {
             assertThat(chunk.heading()).isEqualTo("Visual rulebook page 9");
             assertThat(chunk.content()).isEqualTo(RulePageChunker.VISUAL_PAGE_PLACEHOLDER);
             assertThat(chunk.pageNumber()).isEqualTo(9);
         });
+    }
+
+    private List<RuleStructureRepository.DetectedRuleChunk> chunk(List<ExtractedPage> pages) {
+        return chunker.chunk(pages, new RulebookUnderstandingBuilder().build(pages));
     }
 }

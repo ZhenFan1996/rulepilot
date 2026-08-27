@@ -108,8 +108,7 @@ public class StructuredRuleAnswerController {
                                         open,
                                         runId,
                                         username,
-                                        PlayerLocale.forQuestion(
-                                                request.question(), PlayerLocale.fromRequest(request.language())));
+                                        PlayerLocale.fromRequest(request.language()));
                                 activityPump[0].start();
                             });
                     if (activityPump[0] != null) activityPump[0].finish();
@@ -151,8 +150,7 @@ public class StructuredRuleAnswerController {
         var priorTurn = session == null
                 ? null
                 : conversations.priorTurnReference(session.sessionId(), username, versionId).orElse(null);
-        PlayerLocale outputLanguage = PlayerLocale.forQuestion(
-                request.question(), PlayerLocale.fromRequest(request.language()));
+        PlayerLocale outputLanguage = PlayerLocale.fromRequest(request.language());
         AnswerCreation creation = answers.answerWithRun(
                 request.question(),
                 new QuestionContext(

@@ -43,6 +43,13 @@ async function expectWingspanRecommendationReady(page: Page) {
   await expect(turn.getByRole('button', { name: '选这款，找规则书' })).toBeVisible()
 }
 
+function answerStreamResult(result: unknown) {
+  return {
+    contentType: 'text/event-stream',
+    body: `event: result\ndata: ${JSON.stringify(result)}\n\n`,
+  }
+}
+
 const similarToMosaicField = {
   ...catalog.games[0],
   bggId: 600061,
@@ -219,7 +226,13 @@ async function mockPublicDiscovery(
       return
     }
     const body = request.postDataJSON() as {
-      profile: { players: number | null; maxMinutes: number | null; maxWeight: number | null }
+      profile: {
+        playerCount: unknown
+        durationMinutes: unknown
+        complexity: unknown
+        type: string
+        interaction: string
+      }
       message: string
       focusedBggId: number | null
       transcript: { role: string; text: string }[]
@@ -303,7 +316,12 @@ async function mockPublicDiscovery(
     }
     await fulfill({
       outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '明白：4 个人、90 分钟内，想要中等策略和有参与感的聚会气氛。我先按这些条件核对一批；哪一点不对，直接告诉我就行。',
-      profile: { players: 4, maxMinutes: 90, maxWeight: 3.2, type: 'all', interaction: 'any' }, clarification: null,
+      profile: {
+        type: 'all', interaction: 'any',
+        playerCount: { minimum: 4, maximum: 4, strength: 'hard', sourceText: '4 个人', confirmedTurn: 1 },
+        durationMinutes: { minimum: null, maximum: 90, strength: 'hard', sourceText: '90 分钟内', confirmedTurn: 1 },
+        complexity: { minimum: null, maximum: 3.2, strength: 'soft', sourceText: '中等策略', confirmedTurn: 1 },
+      }, clarification: null,
       sourceCount: 179737, candidatesEvaluated: 20,
       completedWork: ['browse_bgg_catalog', 'lookup_bgg_games', 'recommend_games'],
       games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
@@ -473,11 +491,11 @@ async function mockPublicDiscovery(
     expansionIds: [], playerCount: 1, roundNumber: 1, phase: '规则问答', activePlayer: null,
   } }))
   await page.route('**/api/v1/document-versions/version-1/answers/conversation?*', route => route.fulfill({ json: [] }))
-  await page.route('**/api/v1/document-versions/version-1/answers/stream', route => route.fulfill({ json: {
+  await page.route('**/api/v1/document-versions/version-1/answers/stream', route => route.fulfill(answerStreamResult({
     answer: ruleAnswer, conversationTurnId: 'turn-1', rulingReference: {
       citationIds: ['answer-chunk-1'], confirmedRulingId: null, confirmedRulingVersion: null,
     },
-  } }))
+  })))
   return {
     publishPlan: () => { planPublished = true },
     publishFirstLesson: () => { firstLessonPublished = true },

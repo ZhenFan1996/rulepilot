@@ -71,180 +71,11 @@ public interface NativeToolAgent {
             TerminalContract terminalContract,
             Map<String, Integer> finalResponseAfterToolSuccesses,
             boolean completeAfterRequiredTools) {
-        public RunRequest(
-                Role role,
-                ToolScope scope,
-                String systemPrompt,
-                String playerRequest,
-                String fallbackText,
-                int maxIterations,
-                int maxOutputTokens,
-                Set<String> allowedTools,
-                Set<String> requiredToolsBeforeCompletion,
-                int maxToolCalls,
-                String requiredTerminalStatus,
-                Map<String, Integer> finalResponseAfterToolSuccesses,
-                boolean completeAfterRequiredTools) {
-            this(
-                    role,
-                    scope,
-                    systemPrompt,
-                    playerRequest,
-                    fallbackText,
-                    maxIterations,
-                    maxOutputTokens,
-                    allowedTools,
-                    requiredToolsBeforeCompletion,
-                    maxToolCalls,
-                    requiredTerminalStatus == null || requiredTerminalStatus.isBlank()
-                            ? TerminalContract.none()
-                            : TerminalContract.exact(TerminalStatus.valueOf(requiredTerminalStatus)),
-                    finalResponseAfterToolSuccesses,
-                    completeAfterRequiredTools);
-        }
-
-        public RunRequest(
-                Role role,
-                ToolScope scope,
-                String systemPrompt,
-                String playerRequest,
-                String fallbackText,
-                int maxIterations,
-                int maxOutputTokens,
-                Set<String> allowedTools,
-                Set<String> requiredToolsBeforeCompletion,
-                int maxToolCalls,
-                String requiredTerminalText,
-                Map<String, Integer> finalResponseAfterToolSuccesses) {
-            this(
-                    role,
-                    scope,
-                    systemPrompt,
-                    playerRequest,
-                    fallbackText,
-                    maxIterations,
-                    maxOutputTokens,
-                    allowedTools,
-                    requiredToolsBeforeCompletion,
-                    maxToolCalls,
-                    requiredTerminalText == null || requiredTerminalText.isBlank()
-                            ? TerminalContract.none()
-                            : TerminalContract.exact(TerminalStatus.valueOf(requiredTerminalText)),
-                    finalResponseAfterToolSuccesses,
-                    true);
-        }
-
-        public RunRequest(
-                Role role,
-                ToolScope scope,
-                String systemPrompt,
-                String playerRequest,
-                String fallbackText,
-                int maxIterations,
-                int maxOutputTokens,
-                Set<String> allowedTools,
-                Set<String> requiredToolsBeforeCompletion,
-                int maxToolCalls,
-                String requiredTerminalText) {
-            this(
-                    role,
-                    scope,
-                    systemPrompt,
-                    playerRequest,
-                    fallbackText,
-                    maxIterations,
-                    maxOutputTokens,
-                    allowedTools,
-                    requiredToolsBeforeCompletion,
-                    maxToolCalls,
-                    requiredTerminalText == null || requiredTerminalText.isBlank()
-                            ? TerminalContract.none()
-                            : TerminalContract.exact(TerminalStatus.valueOf(requiredTerminalText)),
-                    Map.of(),
-                    true);
-        }
-
-        public RunRequest(
-                Role role,
-                ToolScope scope,
-                String systemPrompt,
-                String playerRequest,
-                String fallbackText,
-                int maxIterations,
-                int maxOutputTokens,
-                Set<String> allowedTools,
-                Set<String> requiredToolsBeforeCompletion,
-                int maxToolCalls) {
-            this(
-                    role,
-                    scope,
-                    systemPrompt,
-                    playerRequest,
-                    fallbackText,
-                    maxIterations,
-                    maxOutputTokens,
-                    allowedTools,
-                    requiredToolsBeforeCompletion,
-                    maxToolCalls,
-                    TerminalContract.none(),
-                    Map.of(),
-                    true);
-        }
-
-        public RunRequest(
-                Role role,
-                ToolScope scope,
-                String systemPrompt,
-                String playerRequest,
-                String fallbackText,
-                int maxIterations,
-                int maxOutputTokens) {
-            this(
-                    role,
-                    scope,
-                    systemPrompt,
-                    playerRequest,
-                    fallbackText,
-                    maxIterations,
-                    maxOutputTokens,
-                    Set.of(),
-                    Set.of(),
-                    Math.min(24, maxIterations * 4),
-                    TerminalContract.none(),
-                    Map.of(),
-                    true);
-        }
-
-        /** Compatibility constructor: an empty allow-list means every tool registered for the role. */
-        public RunRequest(
-                Role role,
-                ToolScope scope,
-                String systemPrompt,
-                String playerRequest,
-                String fallbackText,
-                int maxIterations,
-                int maxOutputTokens,
-                Set<String> requiredToolsBeforeCompletion) {
-            this(
-                    role,
-                    scope,
-                    systemPrompt,
-                    playerRequest,
-                    fallbackText,
-                    maxIterations,
-                    maxOutputTokens,
-                    Set.of(),
-                    requiredToolsBeforeCompletion,
-                    Math.min(24, maxIterations * 4),
-                    TerminalContract.none(),
-                    Map.of(),
-                    true);
-        }
-
         public RunRequest {
             if (role == null || scope == null || blank(systemPrompt) || blank(playerRequest) || blank(fallbackText)
                     || maxIterations < 1 || maxIterations > 12 || maxOutputTokens < 1 || maxOutputTokens > 8192
                     || allowedTools == null
+                    || allowedTools.isEmpty()
                     || requiredToolsBeforeCompletion == null
                     || maxToolCalls < 1 || maxToolCalls > 24
                     || terminalContract == null
@@ -262,10 +93,10 @@ public interface NativeToolAgent {
             allowedTools = Set.copyOf(allowedTools);
             requiredToolsBeforeCompletion = Set.copyOf(requiredToolsBeforeCompletion);
             finalResponseAfterToolSuccesses = Map.copyOf(finalResponseAfterToolSuccesses);
-            if (!allowedTools.isEmpty() && !allowedTools.containsAll(requiredToolsBeforeCompletion)) {
+            if (!allowedTools.containsAll(requiredToolsBeforeCompletion)) {
                 throw new IllegalArgumentException("required native tools must be included in the allow-list");
             }
-            if (!allowedTools.isEmpty() && !allowedTools.containsAll(finalResponseAfterToolSuccesses.keySet())) {
+            if (!allowedTools.containsAll(finalResponseAfterToolSuccesses.keySet())) {
                 throw new IllegalArgumentException("final-response native tools must be included in the allow-list");
             }
         }

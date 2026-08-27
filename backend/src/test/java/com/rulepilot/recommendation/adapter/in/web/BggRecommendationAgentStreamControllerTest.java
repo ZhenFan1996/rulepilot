@@ -56,7 +56,7 @@ class BggRecommendationAgentStreamControllerTest {
                 () -> "player");
 
         assertThat(emitter.getTimeout()).isEqualTo(50_000L);
-        verify(agent, never()).converse(any(), any(), any(), any(), any());
+        verify(agent, never()).converse(any(), any(), any(), any());
     }
 
     @Test
@@ -82,7 +82,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("event:progress")
                 .contains("understanding_request")
                 .contains("\"elapsedMs\":0");
-        verify(agent, never()).converse(any(), any(), any(), any(), any());
+        verify(agent, never()).converse(any(), any(), any(), any());
     }
 
     @Test
@@ -90,7 +90,7 @@ class BggRecommendationAgentStreamControllerTest {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         String accepted = "😀".repeat(1_500) + "  A\n中";
-        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any())).thenAnswer(invocation -> {
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
             var command = invocation.getArgument(0, BoardGameRecommendationAgent.ConversationRequest.class);
             assertThat(command.message()).isEqualTo(accepted);
             return new ConversationResponse(
@@ -124,7 +124,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .getResponse()
                 .getContentAsString(StandardCharsets.UTF_8);
         assertThat(stream).contains("event:result", "完整收到。");
-        verify(agent).converse(any(), eq("zh-CN"), eq("player"), any(), any());
+        verify(agent).converse(any(), eq("zh-CN"), eq("player"), any());
     }
 
     @Test
@@ -134,7 +134,7 @@ class BggRecommendationAgentStreamControllerTest {
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
-        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any())).thenAnswer(invocation -> {
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
             Consumer<ProgressUpdate> progress = invocation.getArgument(3);
             progress.accept(new ProgressUpdate(
                     ProgressStage.UNDERSTANDING_REQUEST,
@@ -206,70 +206,8 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("\"hardRejectedCandidates\":3")
                 .contains("\"modelCalls\":0", "\"catalogCalls\":0", "\"webResearchCalls\":0")
                 .doesNotContain("decisionCycle", "actionCalls")
-                .contains("event:answer_part")
                 .contains("event:result")
                 .contains("没有未经验证的推荐")
-                .containsSubsequence("event:progress", "event:answer_part", "event:result");
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void streamsConversationalTextWithoutExposingTheInternalFastRoute() throws Exception {
-        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
-        when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
-                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
-        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any())).thenAnswer(invocation -> {
-            Consumer<ProgressUpdate> progress = invocation.getArgument(3);
-            Consumer<String> answerParts = invocation.getArgument(4);
-            progress.accept(new ProgressUpdate(
-                    ProgressStage.COMPOSING_RESPONSE,
-                    BoardGameRecommendationAgent.ProgressPhase.STARTED,
-                    BoardGameRecommendationAgent.ProgressAction.STREAM_NATURAL_REPLY,
-                    2,
-                    1,
-                    1,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0));
-            answerParts.accept("嗨，");
-            answerParts.accept("嗨，今天想聊哪款桌游？");
-            return new ConversationResponse(
-                    Outcome.CONVERSATION,
-                    DecisionMode.MODEL_FAST_PATH,
-                    "嗨，今天想聊哪款桌游？",
-                    RecommendationProfile.empty(),
-                    null,
-                    0,
-                    0,
-                    List.of());
-        });
-        var controller = new BggRecommendationAgentStreamController(
-                agent, presentation, new SyncTaskExecutor());
-        var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
-
-        var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
-                        .principal(() -> "player")
-                        .queryParam("locale", "zh-CN")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .accept(MediaType.TEXT_EVENT_STREAM)
-                        .content("{\"profile\":null,\"message\":\"你好\"}"))
-                .andExpect(request().asyncStarted())
-                .andReturn();
-
-        String stream = mockMvc.perform(asyncDispatch(pending))
-                .andReturn()
-                .getResponse()
-                .getContentAsString(StandardCharsets.UTF_8);
-        assertThat(stream)
-                .contains("event:answer_part", "嗨，", "嗨，今天想聊哪款桌游？", "event:result")
-                .contains("\"stage\":\"composing_response\"")
-                .contains("\"action\":null")
-                .doesNotContain("stream_natural_reply", "\"decisionCycle\":1", "\"modelCalls\":1")
-                .containsSubsequence("嗨，", "嗨，今天想聊哪款桌游？", "event:result");
+                .containsSubsequence("event:progress", "event:result");
     }
 }

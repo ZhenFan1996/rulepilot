@@ -144,7 +144,7 @@ export type PlayerJourneyFailureRecovery =
   | 'manual-repair'
   | null
 
-export interface PlayerJourneyInput {
+interface PlayerJourneyInput {
   gameBound: boolean
   discovery: 'idle' | 'loading' | 'review' | 'unavailable' | 'failed'
   importJob: PlayerJourneyImportJob | null

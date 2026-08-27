@@ -7,10 +7,6 @@ export type RecommendationConstraintRange<T extends number = number> = {
 }
 
 export type RecommendationProfile = {
-  /** Rolling-deploy read compatibility only; canonical client writes omit these projections. */
-  players?: number | null
-  maxMinutes?: number | null
-  maxWeight?: number | null
   type: string
   interaction: string
   playerCount: RecommendationConstraintRange | null
@@ -126,8 +122,6 @@ export type RecommendationAgentResponse = {
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
   responseLocale?: 'zh-CN' | 'en'
   assistantMessage: string
-  /** Rolling-deploy wire compatibility only; the UI always renders assistantMessage. */
-  recommendationLead?: string | null
   profile: RecommendationProfile
   clarification: RecommendationClarification | null
   shortfall?: RecommendationShortfall | null
@@ -136,7 +130,6 @@ export type RecommendationAgentResponse = {
   modelCalls?: number
   catalogCalls?: number
   webResearchCalls?: number
-  publicationRecovered?: boolean
   failureBoundary?: RecommendationFailureBoundary | null
   userModel?: {
     summary: string
@@ -210,7 +203,6 @@ export type RecommendationProgressFocus = {
 
 export type RecommendationProgressAction =
   | 'understand_request'
-  | 'direct_reply_fast_path'
   | 'choose_next_action'
   | 'reply_to_user'
   | 'ask_user'

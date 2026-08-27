@@ -7,11 +7,11 @@ import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
-import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.CandidateClaim;
-import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
@@ -36,17 +36,14 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
-    void preservesAgentSelectionOrderWithoutGeneratingApplicationRecommendationProse() {
+    void preservesAgentSelectionOrderWhenNoProfileClaimsAreAvailable() {
         Game second = game(2, 50, new BigDecimal("2.2"), List.of("Open Drafting"));
         Game first = game(1, 45, new BigDecimal("2.0"), List.of("Pattern Building"));
-        Game reference = game(3, 55, new BigDecimal("2.1"), List.of("Open Drafting", "Tile Placement"));
 
         var result = selector.present(
                 List.of(second, first),
                 RecommendationProfile.empty(),
-                List.of(reference),
-                true,
-                Research.empty());
+                true);
 
         assertThat(result).extracting(value -> value.game().ranking().bggId()).containsExactly(2, 1);
         assertThat(result).allSatisfy(game -> {
@@ -64,7 +61,11 @@ class BoardGameRecommendationSelectorTest {
                 new BigDecimal("3.0"),
                 List.of("Hand Management", "Network and Route Building"));
         RecommendationProfile profile = new RecommendationProfile(
-                4, 120, null, BggGameType.ALL, InteractionPreference.ANY);
+                ConstraintRange.hardExact(4),
+                ConstraintRange.hardAtMost(120),
+                null,
+                BggGameType.ALL,
+                InteractionPreference.ANY);
 
         var observations = selector.observations(candidate);
 
@@ -76,10 +77,14 @@ class BoardGameRecommendationSelectorTest {
                             .isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.TAXONOMY);
                     assertThat(observation.value()).isEqualTo("Hand Management, Network and Route Building");
                 });
-        assertThat(selector.present(List.of(candidate), profile, List.of(), true, Research.empty()).getFirst())
+        assertThat(selector.present(List.of(candidate), profile, true).getFirst())
                 .satisfies(result -> {
-                    assertThat(result.reasons()).isEmpty();
+                    assertThat(result.matches()).hasSize(2);
+                    assertThat(result.reasons()).hasSize(2);
                     assertThat(result.tradeoffs()).isEmpty();
+                    assertThat(result.replyParts())
+                            .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
+                            .containsOnly(ReplyPartRole.WHY_FIT);
                 });
     }
 
@@ -110,9 +115,9 @@ class BoardGameRecommendationSelectorTest {
     @Test
     void appliesOnlyStructuredNumericFactsAsHardGatesWithoutParsingTaxonomyLabels() {
         RecommendationProfile profile = new RecommendationProfile(
-                4,
-                60,
-                new BigDecimal("2.5"),
+                ConstraintRange.hardExact(4),
+                ConstraintRange.hardAtMost(60),
+                ConstraintRange.hardAtMost(new BigDecimal("2.5")),
                 BggGameType.ALL,
                 InteractionPreference.COMPETITIVE);
 
@@ -157,10 +162,13 @@ class BoardGameRecommendationSelectorTest {
         assertThat(selector.eligible(missesOnePlayerCount, profile)).isFalse();
         assertThat(selector.eligible(tooLight, profile)).isFalse();
 
-        var presented = selector.present(
-                List.of(exactFit), profile, List.of(), true, Research.empty()).getFirst();
-        assertThat(presented.matches()).isEmpty();
-        assertThat(presented.reasons()).isEmpty();
+        var presented = selector.present(List.of(exactFit), profile, true).getFirst();
+        assertThat(presented.matches()).hasSize(3);
+        assertThat(presented.tradeoffs()).isEmpty();
+        assertThat(presented.reasons()).hasSize(3);
+        assertThat(presented.replyParts())
+                .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
+                .containsOnly(ReplyPartRole.WHY_FIT);
         assertThat(presented.claims())
                 .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
                 .extracting(CandidateClaim::relation)
@@ -190,10 +198,14 @@ class BoardGameRecommendationSelectorTest {
         assertThat(selector.eligible(shortCandidate, profile))
                 .as("a soft preference is reported honestly but does not exclude the candidate")
                 .isTrue();
-        var presented = selector.present(
-                        List.of(shortCandidate), profile, List.of(), false, Research.empty())
-                .getFirst();
+        var presented = selector.present(List.of(shortCandidate), profile, false).getFirst();
         assertThat(presented.matches()).isEmpty();
+        assertThat(presented.tradeoffs()).singleElement().isEqualTo(presented.claims().getFirst().text());
+        assertThat(presented.reasons()).hasSize(1);
+        assertThat(presented.replyParts())
+                .singleElement()
+                .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
+                .isEqualTo(ReplyPartRole.TRADEOFF);
         assertThat(presented.claims()).singleElement().satisfies(claim -> {
             assertThat(claim.subject()).isEqualTo("durationMinutes");
             assertThat(claim.strength()).isEqualTo(ConstraintRange.Strength.SOFT);
@@ -235,7 +247,11 @@ class BoardGameRecommendationSelectorTest {
     @Test
     void appliesTheRequestedBggRankingTypeToEveryCandidateRegardlessOfItsDiscoveryPath() {
         RecommendationProfile partyProfile = new RecommendationProfile(
-                2, null, null, BggGameType.PARTY, InteractionPreference.ANY);
+                ConstraintRange.hardExact(2),
+                null,
+                null,
+                BggGameType.PARTY,
+                InteractionPreference.ANY);
 
         assertThat(selector.eligible(
                         game(1, 45, new BigDecimal("1.5"), List.of("Voting"), BggGameType.PARTY),
@@ -255,7 +271,11 @@ class BoardGameRecommendationSelectorTest {
     @Test
     void broadBrowseFiltersExcludedAndIneligibleGamesWithoutReorderingTheRemainingPool() {
         RecommendationProfile profile = new RecommendationProfile(
-                4, 60, null, BggGameType.ALL, InteractionPreference.ANY);
+                ConstraintRange.hardExact(4),
+                ConstraintRange.hardAtMost(60),
+                null,
+                BggGameType.ALL,
+                InteractionPreference.ANY);
         List<Game> result = selector.eligible(
                 List.of(
                         game(1, 45, new BigDecimal("2"), List.of("Pattern Building")),

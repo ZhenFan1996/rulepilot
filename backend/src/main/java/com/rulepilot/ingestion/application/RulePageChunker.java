@@ -26,14 +26,11 @@ public class RulePageChunker {
     private static final Pattern PARAGRAPH_BREAK = Pattern.compile("(?:\\R\\s*){2,}");
     private static final Pattern SENTENCE_BREAK = Pattern.compile("(?<=[.!?。！？;；:：])\\s+");
 
-    public List<DetectedRuleChunk> chunk(List<ExtractedPage> pages) {
-        return chunk(pages, null);
-    }
-
     List<DetectedRuleChunk> chunk(List<ExtractedPage> pages, RulebookUnderstanding understanding) {
         if (pages == null || pages.isEmpty()) {
             throw new IllegalArgumentException("extracted pages are required");
         }
+        if (understanding == null) throw new IllegalArgumentException("rulebook understanding is required");
         List<DetectedRuleChunk> chunks = new ArrayList<>();
         for (ExtractedPage page : pages) {
             String text = page.text() == null ? "" : page.text().strip();
@@ -46,12 +43,10 @@ public class RulePageChunker {
                         DetectedRuleChunk.ContentKind.VISUAL_PLACEHOLDER));
                 continue;
             }
-            List<PageBlock> pageBlocks = understanding == null
-                    ? List.of()
-                    : understanding.pageBlocks().stream()
-                            .filter(block -> block.pageNumber() == page.pageNumber())
-                            .sorted(Comparator.comparingInt(PageBlock::readingOrder))
-                            .toList();
+            List<PageBlock> pageBlocks = understanding.pageBlocks().stream()
+                    .filter(block -> block.pageNumber() == page.pageNumber())
+                    .sorted(Comparator.comparingInt(PageBlock::readingOrder))
+                    .toList();
             for (LocalSection section : localSections(text, page.pageNumber(), pageBlocks)) {
                 String sectionType = weakSectionType(section.content());
                 for (String content : split(section.content())) {

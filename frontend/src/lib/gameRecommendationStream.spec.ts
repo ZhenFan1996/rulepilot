@@ -2,6 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RecommendationRequestError, RecommendationStreamError, streamGameRecommendation } from './gameRecommendationStream'
 
+const emptyProfile = {
+  type: 'all',
+  interaction: 'any',
+  playerCount: null,
+  durationMinutes: null,
+  complexity: null,
+}
+const fourPlayersInTwoHours = {
+  ...emptyProfile,
+  playerCount: { minimum: 4, maximum: 4, strength: 'hard', sourceText: '4', confirmedTurn: 1 },
+  durationMinutes: { minimum: null, maximum: 120, strength: 'hard', sourceText: '120', confirmedTurn: 1 },
+}
+
 describe('streamGameRecommendation', () => {
   afterEach(() => vi.unstubAllGlobals())
 
@@ -9,7 +22,7 @@ describe('streamGameRecommendation', () => {
     const encoder = new TextEncoder()
     const payload = {
       outcome: 'no_match', mode: 'model_assisted', assistantMessage: '没有匹配。',
-      profile: { players: 4, maxMinutes: 120, maxWeight: null, type: 'all', interaction: 'any' },
+      profile: fourPlayersInTwoHours,
       clarification: null, sourceCount: 179737, candidatesEvaluated: 20, games: [],
     }
     vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
@@ -32,7 +45,7 @@ describe('streamGameRecommendation', () => {
     const encoder = new TextEncoder()
     const payload = {
       outcome: 'recommendations', mode: 'model_fast_path', assistantMessage: '已找到《花砖物语》。',
-      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+      profile: emptyProfile,
       clarification: null, sourceCount: 0, candidatesEvaluated: 1, games: [],
     }
     let transportCancelled = false
@@ -53,7 +66,7 @@ describe('streamGameRecommendation', () => {
   it('preserves measured candidate and hard-constraint counts from progress events', async () => {
     const payload = {
       outcome: 'no_match', mode: 'model_assisted', assistantMessage: '没有匹配。',
-      profile: { players: 4, maxMinutes: 120, maxWeight: null, type: 'all', interaction: 'any' },
+      profile: fourPlayersInTwoHours,
       clarification: null, sourceCount: 20, candidatesEvaluated: 6, games: [],
     }
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
@@ -78,7 +91,7 @@ describe('streamGameRecommendation', () => {
   it('drops an unknown or unbounded focus without dropping honest progress', async () => {
     const payload = {
       outcome: 'conversation', mode: 'model_assisted', assistantMessage: '我会继续核对。',
-      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+      profile: emptyProfile,
       clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
     }
     const tooManyValues = ['one', 'two', 'three', 'four']
@@ -100,35 +113,6 @@ describe('streamGameRecommendation', () => {
     })])
   })
 
-  it('publishes only an explicitly validated message field as an answer preview', async () => {
-    const payload = {
-      outcome: 'conversation', mode: 'model_assisted', assistantMessage: '我会选左边这款。',
-      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
-      clarification: null, sourceCount: 1, candidatesEvaluated: 1, games: [],
-    }
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      `event: answer_part\ndata: {"field":"message","text":"我会选左边这款。"}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
-      { headers: { 'Content-Type': 'text/event-stream' } },
-    )))
-    const previews: string[] = []
-
-    await streamGameRecommendation('/stream', { method: 'POST' }, () => undefined, text => previews.push(text))
-
-    expect(previews).toEqual(['我会选左边这款。'])
-  })
-
-  it('keeps JSON response compatibility during a rolling deployment', async () => {
-    const payload = {
-      outcome: 'unavailable', mode: 'model_assisted', assistantMessage: '暂时不可用。',
-      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
-      clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
-    }
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json(payload)))
-
-    await expect(streamGameRecommendation('/stream', { method: 'POST' }, () => undefined))
-      .resolves.toMatchObject(payload)
-  })
-
   it('preserves the HTTP status so authentication failures are not shown as network failures', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
 
@@ -140,7 +124,7 @@ describe('streamGameRecommendation', () => {
     const encoder = new TextEncoder()
     const payload = {
       outcome: 'conversation', mode: 'model_assisted', assistantMessage: '这是一条完整回复。',
-      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+      profile: emptyProfile,
       clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
     }
     const bytes = encoder.encode(`event: result\ndata: ${JSON.stringify(payload)}\n\n`)

@@ -81,7 +81,8 @@ class BoundedNativeToolAgentTest {
                 List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
                 new RecordingInvocations());
 
-        var result = agent.run(request(scope(), 4));
+        var result = agent.run(request(
+                scope(), 4, Set.of("search_rule_evidence", "read_rule_pages")));
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.iterations()).isEqualTo(3);
@@ -110,7 +111,10 @@ class BoundedNativeToolAgentTest {
                 256,
                 Set.of("search_rule_evidence"),
                 Set.of(),
-                2);
+                2,
+                TerminalContract.none(),
+                Map.of(),
+                true);
 
         var result = agent.run(request);
 
@@ -137,7 +141,10 @@ class BoundedNativeToolAgentTest {
                 256,
                 Set.of("search_rule_evidence", "read_rule_pages"),
                 Set.of("search_rule_evidence", "read_rule_pages"),
-                1);
+                1,
+                TerminalContract.none(),
+                Map.of(),
+                true);
 
         var result = agent.run(request);
 
@@ -167,7 +174,10 @@ class BoundedNativeToolAgentTest {
                 256,
                 Set.of("search_rule_evidence", "read_rule_pages"),
                 Set.of("search_rule_evidence", "read_rule_pages"),
-                2);
+                2,
+                TerminalContract.none(),
+                Map.of(),
+                true);
 
         var result = agent.run(request);
 
@@ -206,7 +216,10 @@ class BoundedNativeToolAgentTest {
                 256,
                 Set.of("search_rule_evidence", "read_rule_pages"),
                 Set.of("read_rule_pages"),
-                3);
+                3,
+                TerminalContract.none(),
+                Map.of(),
+                true);
 
         var result = agent.run(request);
 
@@ -289,7 +302,10 @@ class BoundedNativeToolAgentTest {
                 256,
                 Set.of("search_rule_evidence", "read_rule_pages"),
                 Set.of("read_rule_pages"),
-                3);
+                3,
+                TerminalContract.none(),
+                Map.of(),
+                true);
 
         var result = agent.run(request);
 
@@ -322,7 +338,10 @@ class BoundedNativeToolAgentTest {
                 256,
                 Set.of("read_rule_pages"),
                 Set.of("read_rule_pages"),
-                2);
+                2,
+                TerminalContract.none(),
+                Map.of(),
+                true);
 
         var result = agent.run(request);
 
@@ -456,7 +475,12 @@ class BoundedNativeToolAgentTest {
                 "Insufficient verified evidence.",
                 4,
                 512,
-                Set.of("read_rule_pages"));
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("read_rule_pages"),
+                16,
+                TerminalContract.none(),
+                Map.of(),
+                true);
 
         var result = agent.run(request);
 
@@ -656,7 +680,13 @@ class BoundedNativeToolAgentTest {
                 "Locate one cited object.",
                 "No verified crop.",
                 3,
-                256);
+                256,
+                Set.of("read_rule_page_image"),
+                Set.of(),
+                12,
+                TerminalContract.none(),
+                Map.of(),
+                true);
         var result = agent.run(visualRequest);
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
@@ -690,8 +720,9 @@ class BoundedNativeToolAgentTest {
                 Set.of("search_rule_evidence", "read_rule_pages"),
                 Set.of(),
                 4,
-                "",
-                Map.of("read_rule_pages", 1));
+                TerminalContract.none(),
+                Map.of("read_rule_pages", 1),
+                true);
 
         var result = agent.run(request);
 
@@ -730,8 +761,9 @@ class BoundedNativeToolAgentTest {
                 Set.of("read_rule_pages"),
                 Set.of(),
                 3,
-                "",
-                Map.of("read_rule_pages", 1));
+                TerminalContract.none(),
+                Map.of("read_rule_pages", 1),
+                true);
 
         var result = agent.run(request);
 
@@ -888,6 +920,10 @@ class BoundedNativeToolAgentTest {
     }
 
     private RunRequest request(ToolScope scope, int iterations) {
+        return request(scope, iterations, Set.of("search_rule_evidence"));
+    }
+
+    private RunRequest request(ToolScope scope, int iterations, Set<String> allowedTools) {
         return new RunRequest(
                 Role.ANSWER,
                 scope,
@@ -895,7 +931,13 @@ class BoundedNativeToolAgentTest {
                 "Help the player verify one rule.",
                 "Insufficient verified evidence.",
                 iterations,
-                512);
+                512,
+                allowedTools,
+                Set.of(),
+                Math.min(24, iterations * 4),
+                TerminalContract.none(),
+                Map.of(),
+                true);
     }
 
     private ToolScope scope() {

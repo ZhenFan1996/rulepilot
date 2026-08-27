@@ -294,7 +294,7 @@ class TeachingSourceCoverageContractTest {
         TeachingPlan plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
 
         assertThat(new TeachingLessonAssemblyPolicy().status(plan, supportedSections(plan)))
-                .isEqualTo(LessonStatus.INCOMPLETE);
+                .isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(new LessonQualityEvaluator().evaluate(plan, lesson(plan, supportedSections(plan))).checks())
                 .filteredOn(check -> check.type() == CheckType.SOURCE_RULE_GROUP_COVERAGE)
                 .singleElement()
@@ -370,7 +370,7 @@ class TeachingSourceCoverageContractTest {
         TeachingPlan plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", unresolved);
 
         assertThat(new TeachingLessonAssemblyPolicy().status(plan, supportedSections(plan)))
-                .isEqualTo(LessonStatus.INCOMPLETE);
+                .isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(new LessonQualityEvaluator().evaluate(plan, lesson(plan, supportedSections(plan))).checks())
                 .filteredOn(check -> check.type() == CheckType.SOURCE_RULE_GROUP_COVERAGE)
                 .singleElement()

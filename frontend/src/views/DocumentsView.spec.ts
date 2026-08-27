@@ -1,9 +1,8 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setLocale } from '@/lib/locale'
-import { readPendingRulebookLessons, rememberPendingRulebookLesson } from '@/lib/pendingRulebookLesson'
 
 import DocumentsView from './DocumentsView.vue'
 
@@ -15,74 +14,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     FakeEventSource.instances = []
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
-  })
-
-  it.each([
-    ['session identity before route resources', true],
-    ['route resources before session identity', false],
-  ])('recovers once after %s and keeps AppShell as the only session owner', async (_label, identityFirst) => {
-    rememberPendingRulebookLesson(localStorage, 'player', { versionId: 'version-1' })
-    let releaseIdentity!: () => void
-    let releaseResources!: () => void
-    const identityGate = new Promise<void>((resolve) => { releaseIdentity = resolve })
-    const resourceGate = new Promise<void>((resolve) => { releaseResources = resolve })
-    const resourceStarts = new Set<string>()
-    let sessionReads = 0
-    const applicationFetch = mockApplicationFetch(() => 'READY')
-    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
-      const path = String(input)
-      if (path === '/api/auth/session') {
-        sessionReads += 1
-        await identityGate
-      }
-      if (path === '/api/v1/games' || path === '/api/v1/model-configuration' || path === '/api/v1/documents') {
-        resourceStarts.add(path)
-        await resourceGate
-      }
-      return applicationFetch(input, options)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    vi.stubGlobal('EventSource', FakeEventSource)
-
-    const { wrapper } = await mountDocuments()
-    await vi.waitFor(() => expect(resourceStarts.size).toBe(3))
-    if (identityFirst) releaseIdentity()
-    else releaseResources()
-    await flushPromises()
-    expect(fetchMock.mock.calls.filter(([input, options]) =>
-      String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')).toHaveLength(0)
-
-    if (identityFirst) releaseResources()
-    else releaseIdentity()
-    await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([input, options]) =>
-      String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')).toHaveLength(1))
-
-    expect(sessionReads).toBe(1)
-    wrapper.unmount()
-  })
-
-  it('resumes a ready upload into the same persisted background guide flow', async () => {
-    rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1',
-      learningGoal: '先让我能带大家开局，再讲容易混淆的行动。',
-    })
-    const fetchMock = mockApplicationFetch(() => 'READY')
-    vi.stubGlobal('fetch', fetchMock)
-    vi.stubGlobal('EventSource', FakeEventSource)
-    const { wrapper, router } = await mountDocuments()
-    await flushPromises()
-    await flushPromises()
-
-    const preparation = fetchMock.mock.calls.find(([input, options]) =>
-      String(input).includes('/document-versions/version-1/teaching-plans') && options?.method === 'POST')
-    expect(JSON.parse(String(preparation?.[1]?.body))).toEqual({
-      learningGoal: '先让我能带大家开局，再讲容易混淆的行动。',
-    })
-    expect(router.currentRoute.value).toMatchObject({
-      name: 'lessons', query: { started: 'plan-1', run: 'lesson-run-1' },
-    })
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
-    wrapper.unmount()
   })
 
   it('shows the selected game and edition handed off from discovery', async () => {
@@ -178,7 +109,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     })
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPromises()
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(wrapper.text()).toContain('已进入“我的讲解”')
     wrapper.unmount()
   })
@@ -246,15 +176,13 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 
   it('treats a failed terminal progress event as failure and never starts teaching', async () => {
-    rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1',
-    })
     let documentReads = 0
-    const fetchMock = mockApplicationFetch(() => (++documentReads === 1 ? 'EXTRACTING' : 'FAILED'))
+    const fetchMock = mockPendingUploadFetch(() => (++documentReads === 1 ? 'EXTRACTING' : 'FAILED'))
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
     const { wrapper } = await mountDocuments()
     await flushPromises()
+    await submitProcessingRulebook(wrapper)
 
     expect(FakeEventSource.instances).toHaveLength(1)
     FakeEventSource.instances[0]!.emitProgress({
@@ -264,19 +192,16 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     expect(wrapper.text()).toContain('规则书读取失败，没有启动讲解')
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/teaching-plans'))).toBe(false)
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     wrapper.unmount()
   })
 
   it('shows rendered page position instead of a generic reading wait', async () => {
-    rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1',
-    })
-    vi.stubGlobal('fetch', mockApplicationFetch(() => 'EXTRACTING'))
+    vi.stubGlobal('fetch', mockPendingUploadFetch(() => 'EXTRACTING'))
     vi.stubGlobal('EventSource', FakeEventSource)
 
     const { wrapper } = await mountDocuments()
     await flushPromises()
+    await submitProcessingRulebook(wrapper)
 
     FakeEventSource.instances[0]!.emitProgress({
       stage: 'RENDERING', percentage: 52, processedPages: 14, totalPages: 28, complete: false,
@@ -288,14 +213,12 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 
   it('names the structural pass that follows visual page rendering', async () => {
-    rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1',
-    })
-    vi.stubGlobal('fetch', mockApplicationFetch(() => 'EXTRACTING'))
+    vi.stubGlobal('fetch', mockPendingUploadFetch(() => 'EXTRACTING'))
     vi.stubGlobal('EventSource', FakeEventSource)
 
     const { wrapper } = await mountDocuments()
     await flushPromises()
+    await submitProcessingRulebook(wrapper)
 
     FakeEventSource.instances[0]!.emitProgress({
       stage: 'STRUCTURING', percentage: 75, processedPages: 28, totalPages: 28, complete: false,
@@ -314,15 +237,13 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
   it('shows an honest resumable stage while visual pages are being organized', async () => {
     vi.useFakeTimers()
-    rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1',
-    })
     const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING')
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
 
     const { wrapper } = await mountDocuments()
     await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('正在阅读图文并组织讲解顺序')
@@ -434,7 +355,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
       String(request).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')).toBe(false)
     expect(router.currentRoute.value.name).toBe('teach')
     expect(wrapper.text()).toContain('你可以离开这里，处理会在后台继续')
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     wrapper.unmount()
   })
 
@@ -853,7 +773,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPromises()
     expect(wrapper.text()).toContain('已进入“我的讲解”')
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(fetchMock.mock.calls.filter(([input, options]) =>
       String(input).includes('/api/v1/documents/official-imports/') && options?.method !== 'POST')).toHaveLength(1)
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/documents')).toHaveLength(2)
@@ -1110,7 +1029,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 
   it('rejects a preparation run whose subject is another document version', async () => {
-    rememberPendingRulebookLesson(localStorage, 'player', { versionId: 'version-1' })
     const applicationFetch = mockApplicationFetch(() => 'READY')
     const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       if (String(input).includes('/api/v1/assistant-runs/prep-run-1')) {
@@ -1124,6 +1042,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
     const { wrapper, router } = await mountDocuments()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('暂时无法处理规则书'))
     expect(router.currentRoute.value.path).toBe('/teach')
@@ -1131,16 +1051,16 @@ describe('DocumentsView recoverable lesson handoff', () => {
       String(input).endsWith('/document-versions/version-1/teaching-plans/latest'))).toBe(false)
     expect(fetchMock.mock.calls.some(([input, options]) =>
       String(input).includes('/illustrated-lessons') && options?.method === 'POST')).toBe(false)
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{ versionId: 'version-1' }])
     wrapper.unmount()
   })
 
   it('closes document progress on unmount and ignores a buffered terminal event', async () => {
-    rememberPendingRulebookLesson(localStorage, 'player', { versionId: 'version-1' })
-    const fetchMock = mockApplicationFetch(() => 'EXTRACTING')
+    const fetchMock = mockPendingUploadFetch(() => 'EXTRACTING')
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
     const { wrapper } = await mountDocuments()
+    await flushPromises()
+    await submitProcessingRulebook(wrapper)
     await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     const callsBeforeUnmount = fetchMock.mock.calls.length
     const progressSource = FakeEventSource.instances[0]!
@@ -1154,7 +1074,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     expect(fetchMock.mock.calls).toHaveLength(callsBeforeUnmount)
     expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{ versionId: 'version-1' }])
   })
 
   it('keeps manual upload available after a safe official-import failure', async () => {
@@ -1396,6 +1315,27 @@ async function mountDocuments(path = '/teach', attachToBody = false) {
     }),
     router,
   }
+}
+
+function mockPendingUploadFetch(documentStatus: () => string) {
+  const applicationFetch = mockApplicationFetch(documentStatus)
+  return vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+    if (String(input).endsWith('/api/v1/documents') && options?.method === 'POST') {
+      return response({ duplicate: false, version: { id: 'version-1', status: 'UPLOADED' } }, 201)
+    }
+    return applicationFetch(input, options)
+  })
+}
+
+async function submitProcessingRulebook(wrapper: VueWrapper) {
+  const input = wrapper.get('#rulebook-file')
+  Object.defineProperty(input.element, 'files', {
+    configurable: true,
+    value: [new File(['%PDF-1.7'], 'processing-rules.pdf', { type: 'application/pdf' })],
+  })
+  await input.trigger('change')
+  await wrapper.get('form.tabletop-panel').trigger('submit')
+  await flushPromises()
 }
 
 function mockApplicationFetch(
