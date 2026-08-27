@@ -1,4 +1,0 @@
-Grammatical-relation fidelity review v12:
-- Compare the grammatical owner of every location, printed-region, diagram, and relative phrase against its citation.
-- Report OVERREACH when an answer moves a phrase onto a nearby noun, such as changing “operate on an object in locations shown by a reference” into “the object is shown on the reference.”
-- Keep physical objects, their locations, and printed indicators distinct. An unseen image or nearby noun cannot repair an unsupported attachment.

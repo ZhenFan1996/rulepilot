@@ -12,7 +12,6 @@ import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
@@ -53,16 +52,18 @@ class GroundedTeachingAgentRetryTest {
         };
         CountingInvocations invocations = new CountingInvocations();
         GeneratedContentCritic critic = (request, risk) -> new GeneratedContentCritic.Review(true, List.of());
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
                 critic,
                 invocations,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
+                visualFacts,
                 1,
-                3);
+                3,
+                null,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
@@ -112,16 +113,18 @@ class GroundedTeachingAgentRetryTest {
             throw new InvalidOutputException("malformed structured output", null);
         };
         CountingInvocations invocations = new CountingInvocations();
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
                 (request, risk) -> new GeneratedContentCritic.Review(true, List.of()),
                 invocations,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
+                visualFacts,
                 1,
-                3);
+                3,
+                null,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,

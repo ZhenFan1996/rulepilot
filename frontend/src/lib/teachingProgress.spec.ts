@@ -76,9 +76,8 @@ describe('teaching progress', () => {
     const activities = [
       activity(1, 'composeTeachingSection|1', 'RUNNING'),
       activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
-      activity(3, 'reviewPublishedTeachingSection', 'RUNNING'),
-      activity(4, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: POST_PUBLICATION_REVIEW_ACCEPTED'),
-      activity(5, 'publishTeachingSection|2', 'REJECTED'),
+      activity(3, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: POST_PUBLICATION_REVIEW_ACCEPTED'),
+      activity(4, 'publishTeachingSection|2', 'REJECTED'),
     ]
     const snapshot = run('run-1', activities)
 
@@ -137,24 +136,6 @@ describe('teaching progress', () => {
     expect(teachingChapterFailureText(snapshot)).toBe('')
   })
 
-  it('explains that remaining visual pages are read only after the starter chapter is ready', () => {
-    const activities = [
-      activity(1, 'readRuleEvidencePages|1', 'SUCCEEDED'),
-      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
-      activity(3, 'readProgressiveVisualPages|2|1', 'SUCCEEDED'),
-      activity(4, 'prefetchProgressiveVisualPages|2', 'RUNNING'),
-    ]
-
-    expect(teachingActivityText(plan, activities, activities[0]))
-      .toBe('正在读取第 1 章“完成开局设置”引用的规则书页面')
-    expect(teachingActivityText(plan, activities, activities[2]))
-      .toContain('基础讲解已可读')
-    expect(teachingActivityText(plan, activities, activities[3]))
-      .toBe('基础讲解已可读，正在一次性读取后续页面要点')
-    expect(teachingActivityText(plan, activities, activities[3], 'en'))
-      .toContain('Starter guide ready')
-  })
-
   it('turns real chapter operations into a concrete player-visible generation sequence', () => {
     const activities = [
       activity(1, 'readTeachingSourcePages|1', 'SUCCEEDED'),
@@ -180,18 +161,16 @@ describe('teaching progress', () => {
 
   it('shows real chapter-planning work before the first teaching run exists', () => {
     const activities = [
-      activity(1, 'transcribeTeachingVisualPage|3|16', 'SUCCEEDED'),
-      activity(2, 'inspectTeachingVisualPage|3|16', 'SUCCEEDED'),
-      activity(3, 'persistTeachingVisualPage|3|16', 'SUCCEEDED'),
-      activity(4, 'organizeTeachingOutline', 'RUNNING'),
-      activity(5, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
-      activity(6, 'internalOutlineTelemetry', 'SUCCEEDED'),
+      activity(1, 'inspectTeachingVisualPage|3|16', 'SUCCEEDED'),
+      activity(2, 'persistTeachingVisualPage|3|16', 'SUCCEEDED'),
+      activity(3, 'organizeTeachingOutline', 'RUNNING'),
+      activity(4, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
+      activity(5, 'internalOutlineTelemetry', 'SUCCEEDED'),
     ]
 
     const steps = recentTeachingPreparationActivitySteps(activities)
 
     expect(steps.map(step => step.text)).toEqual([
-      '图像规则页第 3 / 16 页的逐字识别完成',
       '图像规则页第 3 / 16 页的规则整理已生成结果，正在保存',
       '图像规则页第 3 / 16 页的规则组已经保存',
       '正在通读规则书，先形成整局认识再规划讲解章节',
@@ -302,7 +281,7 @@ describe('teaching progress', () => {
   it('shows an unrecognized API activity outcome explicitly instead of treating it as progress or validation failure', () => {
     const activities = [{
       sequence: 1,
-      operation: 'transcribeTeachingVisualPage|4|10',
+      operation: 'inspectTeachingVisualPage|4|10',
       summary: 'provider added a new outcome',
       outcome: 'UNKNOWN' as const,
     }]
@@ -322,30 +301,17 @@ describe('teaching progress', () => {
     ])
   })
 
-  it('shows OCR and semantic grouping as two real visual-page steps', () => {
-    const activities = [
-      activity(1, 'transcribeTeachingVisualPage|7|16', 'RUNNING'),
-      activity(2, 'inspectTeachingVisualPage|7|16', 'RUNNING'),
-    ]
-
-    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      '正在逐字识别图像规则页第 7 / 16 页',
-      '正在整理图像规则页第 7 / 16 页的规则组',
-    ])
-  })
-
   it('keeps the complete real preparation history instead of hiding early pages behind a display cap', () => {
     const activities = Array.from({ length: 16 }, (_, index) => index + 1)
       .flatMap(page => [
-        activity(page * 3 - 2, `transcribeTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
-        activity(page * 3 - 1, `inspectTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
-        activity(page * 3, `persistTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+        activity(page * 2 - 1, `inspectTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+        activity(page * 2, `persistTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
       ])
 
     const steps = recentTeachingPreparationActivitySteps(activities)
 
-    expect(steps).toHaveLength(48)
-    expect(steps[0]?.text).toBe('图像规则页第 1 / 16 页的逐字识别完成')
+    expect(steps).toHaveLength(32)
+    expect(steps[0]?.text).toBe('图像规则页第 1 / 16 页的规则整理已生成结果，正在保存')
     expect(steps.at(-1)?.text).toBe('图像规则页第 16 / 16 页的规则组已经保存')
   })
 
@@ -360,7 +326,6 @@ describe('teaching progress', () => {
       activity(9, 'transcribeTeachingVisualRepairPage|4|6', 'RUNNING'),
       activity(5, 'inspectTeachingVisualPage|5|6', 'FAILED'),
       activity(13, 'inspectTeachingVisualPage|5|6|unexpected', 'SUCCEEDED'),
-      activity(6, 'transcribeTeachingVisualPage|6|6', 'SUCCEEDED'),
       activity(10, 'inspectTeachingVisualRepair|6|6', 'SUCCEEDED'),
       activity(11, 'inspectTeachingVisualRepair|6|6|PAGE_BINDING_MISMATCH', 'REJECTED'),
       activity(12, 'internalVisualPageNote|5|6', 'SUCCEEDED', 'inspectTeachingVisualRetry|5|6 succeeded'),
@@ -470,24 +435,6 @@ describe('teaching progress', () => {
     ])
   })
 
-  it('shows the one bounded unfinished-chapter retry as real progress', () => {
-    const activities = [
-      activity(1, 'publishTeachingSection|2', 'REJECTED', 'Teaching section withheld: BASE_DRAFT_WITHHELD'),
-      activity(2, 'retryIncompleteTeachingSections', 'SUCCEEDED'),
-      activity(3, 'composeTeachingSection|2', 'RUNNING'),
-    ]
-
-    expect(recentTeachingActivitySteps(plan, activities).map(step => step.text)).toEqual([
-      '第 2 章“走完第一轮”本次未发布，其他已校验章节不受影响',
-      '有章节草稿没有通过校验，正在只重试未完成章节一次；已发布内容不会重做',
-      '正在依据规则书编写第 2 章“走完第一轮”',
-    ])
-    expect(recentTeachingActivitySteps(plan, activities, 'en').map(step => step.text)).toEqual([
-      'chapter 2 “走完第一轮” was not published; other validated chapters remain available',
-      'A chapter draft did not pass its checks; retrying only the unfinished chapters once',
-      'Writing chapter 2 “走完第一轮” from the rulebook',
-    ])
-  })
 })
 
 function run(id: string, activities: TeachingActivity[]): TeachingRunProgress {

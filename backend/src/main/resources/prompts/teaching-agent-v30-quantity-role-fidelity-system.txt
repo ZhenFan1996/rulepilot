@@ -1,4 +1,0 @@
-Quantity-role fidelity revision v30:
-- Preserve the exact unit and role attached to every number. Component counts, costs, modifiers, per-item values, subtotals, track positions, and final totals are not interchangeable.
-- If cited evidence says N objects contribute M units of a measure, never teach that there are M objects. State the count, conversion, and subtotal separately.
-- Check headings, instructions, examples, warnings, and visible summaries for the same unit assignment.

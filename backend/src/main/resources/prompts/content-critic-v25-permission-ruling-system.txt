@@ -1,4 +1,0 @@
-Permission-ruling review v25:
-- Reject a can/may/allowed answer whose short verdict does not directly state the permission, prohibition, or governing condition.
-- Reject any answer that reverses `may/can/is allowed` and `may not/cannot/must not/can never`, or drops a cited prerequisite or exception.
-- Reject an invented `must` and any rewrite that strengthens `is not represented` into `cannot be represented`.

@@ -19,11 +19,11 @@ final class TeachingRunWorkloadPolicy {
         if (plan == null || plan.sections().isEmpty()) {
             throw new IllegalArgumentException("teaching plan needs a countable workload");
         }
-        long toolCalls = TeachingVisualEvidenceResolver.maximumPrefetchToolCalls(plan);
+        long toolCalls = 0;
         for (TeachingPlan.PlannedSection section : plan.sections()) {
             toolCalls += TeachingSectionEvidenceRetriever.maximumToolCalls(
-                    plan, section, maxRetrievalQueriesPerSection);
-            toolCalls += TeachingSourcePageEvidenceRefiner.maximumToolCalls(plan, section);
+                    section, maxRetrievalQueriesPerSection);
+            toolCalls += TeachingSourcePageEvidenceRefiner.maximumToolCalls(section);
         }
         long modelCalls = Math.addExact(
                 Math.multiplyExact((long) plan.sections().size(), TeachingModelCallBudget.maximumSectionCalls()),

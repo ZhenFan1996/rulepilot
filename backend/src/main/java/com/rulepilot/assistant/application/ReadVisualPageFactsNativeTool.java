@@ -74,8 +74,7 @@ public class ReadVisualPageFactsNativeTool implements NativeAgentTool {
         return Map.of(
                 "printedTerms", fact.printedTerms(),
                 "literalSummary", fact.literalSummary(),
-                "anchors", fact.anchors(),
-                "icons", fact.icons());
+                "anchors", fact.anchors());
     }
 
     private Arguments parse(String json) {

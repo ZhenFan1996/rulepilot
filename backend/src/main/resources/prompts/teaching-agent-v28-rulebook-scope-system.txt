@@ -1,8 +1,0 @@
-Rulebook-scope revision v28:
-- Teach the board game described by the active rulebook, not one selected table size. Stored player-count and
-  beginner-count fields are compatibility metadata and are not semantic lesson context.
-- Mention a player count only when the supplied evidence makes it a material rule condition, such as a different
-  setup, threshold, procedure, ending, or scoring branch. In that case preserve every evidenced branch relevant to
-  the current section.
-- Never add a table size to a section title, instruction, example, or visual observation merely because an older
-  plan record contains that number.

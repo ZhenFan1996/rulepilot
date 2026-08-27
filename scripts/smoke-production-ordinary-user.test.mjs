@@ -90,8 +90,6 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   const calls = []
   let planStarted = false
   let deleted = false
-  let includeBlockingVisualCatalog = false
-  let progressiveVisualPreparation = false
   let slowFirstLessonSection = false
   let regressLessonStatus = false
   let insufficientLesson = false
@@ -169,16 +167,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
           lastErrorCode: preparationFailureCode,
         },
         steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'LESSON_PLANNING', occurredAt: '2026-08-02T00:00:01Z' }],
-        activities: [
-          ...(progressiveVisualPreparation ? [{
-            sequence: 1, type: 'MODEL', operation: 'selectProgressiveTeachingStart', outcome: 'SUCCEEDED',
-            latencyMs: 9000, estimatedInputTokens: 4800, estimatedOutputTokens: 500,
-            occurredAt: '2026-08-02T00:00:10Z',
-          }, {
-            sequence: 2, type: 'VALIDATION', operation: 'publishProgressiveVisualTeachingPlan', outcome: 'SUCCEEDED',
-            latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
-            occurredAt: '2026-08-02T00:00:11Z',
-          }] : [{
+        activities: [{
             sequence: 1, type: 'MODEL', operation: 'organizeTeachingOutline', outcome: 'SUCCEEDED',
             latencyMs: 11_000, estimatedInputTokens: 1200, estimatedOutputTokens: 300,
             occurredAt: '2026-08-02T00:00:11Z',
@@ -187,13 +176,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
             sequence: 2, type: 'VALIDATION', operation: 'deferSelectedVisualPageCatalog', outcome: 'SUCCEEDED',
             latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
             occurredAt: '2026-08-02T00:00:12Z',
-          }]),
-          ...(includeBlockingVisualCatalog ? [{
-            sequence: 3, type: 'MODEL', operation: 'inspectTeachingVisualBatch|1', outcome: 'SUCCEEDED',
-            latencyMs: 19_000, estimatedInputTokens: 800, estimatedOutputTokens: 250,
-            occurredAt: '2026-08-02T00:00:12Z',
-          }] : []),
-        ],
+          }],
         budget: { usedModelCalls: 1, usedToolCalls: 0, usedTokens: 1500 },
       })
     }
@@ -415,7 +398,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
-    assert.match(result.stderr, /SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=20 backgroundPrefetchCalls=0 backgroundPrefetchLatencyMs=0/)
+    assert.match(result.stderr, /SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=20/)
 
     preparationFailureCode = 'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED'
     deleted = false
@@ -537,44 +520,6 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(checkpoint.lesson, undefined)
     assert.equal(deleted, true)
 
-    includeBlockingVisualCatalog = true
-    deleted = false
-    planStarted = false
-    const visualWarning = await spawnResult(
-      'bash',
-      [resolve('scripts/smoke-production-ordinary-user.sh'),
-        '--base-url', `http://127.0.0.1:${address.port}`,
-        '--pdf', pdf,
-        '--timeout-seconds', '10'],
-      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
-    )
-    assert.equal(visualWarning.code, 0, visualWarning.stderr)
-    assert.match(visualWarning.stderr, /SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan/)
-    assert.equal(deleted, true)
-
-    deleted = false
-    planStarted = false
-    expectedQuestion = 'What may a player take on a turn?'
-    includeBlockingVisualCatalog = false
-    progressiveVisualPreparation = true
-    const customVisualCatalog = await spawnResult(
-      'bash',
-      [resolve('scripts/smoke-production-ordinary-user.sh'),
-        '--base-url', `http://127.0.0.1:${address.port}`,
-        '--pdf', pdf,
-        '--preparation-mode', 'visual',
-        '--question', expectedQuestion,
-        '--timeout-seconds', '10'],
-      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
-    )
-    assert.equal(customVisualCatalog.code, 0, customVisualCatalog.stderr)
-    progressiveVisualPreparation = false
-    expectedQuestion = 'How many victory points is each lit dock worth during final scoring?'
-    assert.doesNotMatch(customVisualCatalog.stderr, /Text-rulebook preparation performed visual catalog work/)
-    assert.doesNotMatch(customVisualCatalog.stderr, /Visual-only rulebook preparation did not report progressive cited-page selection/)
-    assert.match(customVisualCatalog.stderr, /SMOKE_PERFORMANCE phase=preparation progressiveStartCalls=1 progressiveStartLatencyMs=9000 legacyFullFactCalls=0/)
-    assert.equal(deleted, true)
-
     visualRunEnabled = true
     visualRunReads = 0
     deleted = false
@@ -614,7 +559,6 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(textOnly.stderr, /SMOKE_STAGE visual-expectation-verified expectation=forbidden visualSteps=0 focusedVisualSteps=0/)
     assert.equal(deleted, true)
 
-    includeBlockingVisualCatalog = false
     slowFirstLessonSection = true
     deleted = false
     planStarted = false
@@ -806,21 +750,17 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
       usedToolCalls: 0, usedTokens: 1000 },
   })
   const preparation = run(preparationRunId, 'COMPLETED', '2026-08-25T00:00:00Z', '2026-08-25T00:00:10Z', [
-    { sequence: 1, type: 'MODEL', operation: 'transcribeTeachingVisualPage|1|3', outcome: 'SUCCEEDED',
-      latencyMs: 1200, occurredAt: '2026-08-25T00:00:02Z' },
-    { sequence: 2, type: 'MODEL', operation: 'transcribeTeachingVisualPage|2|3', outcome: 'SUCCEEDED',
-      latencyMs: 1400, occurredAt: '2026-08-25T00:00:03Z' },
-    { sequence: 3, type: 'MODEL', operation: 'transcribeTeachingVisualPage|3|3', outcome: 'SUCCEEDED',
-      latencyMs: 1300, occurredAt: '2026-08-25T00:00:03Z' },
-    { sequence: 4, type: 'MODEL', operation: 'inspectTeachingVisualPage|1|3', outcome: 'FAILED',
+    { sequence: 1, type: 'MODEL', operation: 'inspectTeachingVisualPage|1|3', outcome: 'FAILED',
       latencyMs: 1000, occurredAt: '2026-08-25T00:00:04Z' },
-    { sequence: 5, type: 'MODEL', operation: 'inspectTeachingVisualPage|2|3', outcome: 'FAILED',
+    { sequence: 2, type: 'MODEL', operation: 'inspectTeachingVisualPage|2|3', outcome: 'FAILED',
       latencyMs: 900, occurredAt: '2026-08-25T00:00:04Z' },
-    { sequence: 6, type: 'MODEL', operation: 'inspectTeachingVisualPage|3|3', outcome: 'SUCCEEDED',
+    { sequence: 3, type: 'MODEL', operation: 'inspectTeachingVisualPage|3|3', outcome: 'SUCCEEDED',
       latencyMs: 900, occurredAt: '2026-08-25T00:00:04Z' },
-    { sequence: 7, type: 'MODEL', operation: 'inspectTeachingVisualRepair|1|3|DUPLICATE_RULE_GROUP', outcome: 'SUCCEEDED',
+    { sequence: 4, type: 'MODEL', operation: 'transcribeTeachingVisualRepairPage|1|3', outcome: 'SUCCEEDED',
+      latencyMs: 1200, occurredAt: '2026-08-25T00:00:05Z' },
+    { sequence: 5, type: 'MODEL', operation: 'inspectTeachingVisualRepair|1|3|DUPLICATE_RULE_GROUP', outcome: 'SUCCEEDED',
       latencyMs: 1100, occurredAt: '2026-08-25T00:00:05Z' },
-    { sequence: 8, type: 'MODEL', operation: 'inspectTeachingVisualRetry|2|3', outcome: 'SUCCEEDED',
+    { sequence: 6, type: 'MODEL', operation: 'inspectTeachingVisualRetry|2|3', outcome: 'SUCCEEDED',
       latencyMs: 1050, occurredAt: '2026-08-25T00:00:05Z' },
   ])
   const lessonRun = run(lessonRunId, 'COMPLETED', '2026-08-25T00:00:10Z', '2026-08-25T00:00:18Z', [
@@ -1010,18 +950,19 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
     assert.equal(summary.pageCount, 3)
     assert.deepEqual(summary.pageAttempts, {
       pages: [
-        { page: 1, ocrOutcome: 'SUCCEEDED', initialOutcome: 'FAILED', recoveryKind: 'CONTRACT_REPAIR',
-          repairCode: 'DUPLICATE_RULE_GROUP', recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2,
+        { page: 1, repairTranscriptionOutcome: 'SUCCEEDED', initialOutcome: 'FAILED',
+          recoveryKind: 'CONTRACT_REPAIR', repairCode: 'DUPLICATE_RULE_GROUP',
+          recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2,
           finalOutcome: 'SUCCEEDED' },
-        { page: 2, ocrOutcome: 'SUCCEEDED', initialOutcome: 'FAILED', recoveryKind: 'TRANSIENT_RETRY',
+        { page: 2, repairTranscriptionOutcome: null, initialOutcome: 'FAILED', recoveryKind: 'TRANSIENT_RETRY',
           repairCode: null, recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2, finalOutcome: 'SUCCEEDED' },
-        { page: 3, ocrOutcome: 'SUCCEEDED', initialOutcome: 'SUCCEEDED', recoveryKind: null,
+        { page: 3, repairTranscriptionOutcome: null, initialOutcome: 'SUCCEEDED', recoveryKind: null,
           repairCode: null, recoveryOutcome: null, semanticAttempts: 1, finalOutcome: 'SUCCEEDED' },
       ],
-      ocrSucceeded: 3,
-      ocrFailed: 0,
-      ocrRejected: 0,
-      ocrRetryAttempted: 0,
+      repairTranscriptionAttempted: 1,
+      repairTranscriptionSucceeded: 1,
+      repairTranscriptionFailed: 0,
+      repairTranscriptionRejected: 0,
       initialSucceeded: 1,
       initialFailed: 2,
       initialRejected: 0,
@@ -1199,15 +1140,12 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
 test('production workflows never execute an operator-supplied Git ref with production credentials', async () => {
   const deployment = await readFile(resolve('.github/workflows/deploy-production.yml'), 'utf8')
   const smoke = await readFile(resolve('.github/workflows/production-ordinary-user-smoke.yml'), 'utf8')
-  const realRulebooks = await readFile(resolve('.github/workflows/production-real-rulebook-experience.yml'), 'utf8')
   const candidates = await readFile(resolve('.github/workflows/public-lesson-candidate.yml'), 'utf8')
 
   assert.doesNotMatch(deployment, /inputs\.ref/)
   assert.match(deployment, /workflow_run\.head_sha \|\| 'main'/)
   assert.doesNotMatch(smoke, /inputs\.ref/)
   assert.match(smoke, /ref: main/)
-  assert.doesNotMatch(realRulebooks, /inputs\.ref/)
-  assert.match(realRulebooks, /ref: main/)
   assert.doesNotMatch(candidates, /inputs\.ref/)
   assert.match(candidates, /ref: main/)
 })

@@ -964,17 +964,6 @@ function endPreparation() {
 function updatePreparationMessage(state: string, activities: TeachingPreparationRun['activities'] = []) {
   const active = [...activities].reverse().find((activity) => activity.outcome === 'RUNNING')
     ?? activities.at(-1)
-  if (active?.operation.startsWith('selectProgressiveTeachingStart')) {
-    message.value = t('documents.prepare.progressiveStart')
-    return
-  }
-  if (active?.operation.startsWith('inspectRulebookVisualBatch')) {
-    const batch = active.operation.split('|')[1]
-    message.value = batch
-      ? t('documents.prepare.visualBatch', { batch })
-      : t('documents.prepare.visual')
-    return
-  }
   if (active?.operation.startsWith('organizeTeachingOutline')) {
     message.value = t('documents.prepare.outline')
     return

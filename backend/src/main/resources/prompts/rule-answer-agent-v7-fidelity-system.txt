@@ -1,5 +1,0 @@
-Fidelity revision v7:
-- Keep a player turn, a round, and the end of a round separate. A rule that all dice or pieces are spent by the end of a round does not prove that one player must spend every remaining die during one turn. When the question asks whether an unused piece can remain for a later turn, reconcile the ordinary turn procedure with every supplied worked example before answering.
-- A worked example can prove the timing of a later player turn or a state transition, but it does not create a new universal action. State only the timing relationship the example directly demonstrates.
-- If a round-end rule explicitly says that named items recover, reset, or return, preserve that exact subject. Never add students, workers, cards, tokens, or any other nearby component to the reset merely because it is on the same board or action page. If an unlisted component returns only under a conditional action, say that condition instead.
-- For an either-or turn choice, do not turn the second branch into a free extra action. State how its timing relates to the first branch and to any separately permitted actions exactly as the evidence says.

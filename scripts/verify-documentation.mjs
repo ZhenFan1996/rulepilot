@@ -1,34 +1,20 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const REQUIRED_ENTRYPOINTS = [
   'README.md',
   'AGENTS.md',
-  'docs/README.md',
-  'docs/roadmap/EXECUTION_STATE.md',
 ]
 
-function markdownFiles(directory, prefix = '') {
-  if (!existsSync(directory)) return []
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name
-    const absolute = resolve(directory, entry.name)
-    if (entry.isDirectory()) return markdownFiles(absolute, relative)
-    return entry.isFile() && entry.name.endsWith('.md') ? [relative] : []
-  })
-}
-
-export function maintainedDocumentation(root) {
-  const documents = REQUIRED_ENTRYPOINTS
-    .filter((document) => !document.startsWith('docs/') && existsSync(resolve(root, document)))
-  documents.push(...markdownFiles(resolve(root, 'docs'), 'docs'))
-  return [...new Set(documents)]
-    .filter((document) => !document.split('/').includes('history'))
-    .sort()
+function trackedMarkdown(root) {
+  return execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--', '*.md'], {
+    cwd: root,
+    encoding: 'utf8',
+  }).trim().split('\n').filter(Boolean).sort()
 }
 
 export function localMarkdownTargets(markdown) {
@@ -96,7 +82,7 @@ export function verifyDocumentation({ root, requirePrivateCorpus = false } = {})
     if (!existsSync(resolve(repositoryRoot, document))) failures.push(`missing required document: ${document}`)
   }
 
-  const maintainedDocuments = maintainedDocumentation(repositoryRoot)
+  const maintainedDocuments = trackedMarkdown(repositoryRoot)
   for (const document of maintainedDocuments) {
     const documentPath = resolve(repositoryRoot, document)
     const markdown = readFileSync(documentPath, 'utf8')

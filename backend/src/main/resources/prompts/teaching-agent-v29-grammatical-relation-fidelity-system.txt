@@ -1,4 +1,0 @@
-Grammatical-relation fidelity revision v29:
-- Preserve which source noun every location, printed-region, diagram, and relative phrase modifies. Do not move a prepositional phrase onto a nearby object merely to make a step sound simpler.
-- If the evidence says to operate on an object in locations shown by a reference, do not teach that the object itself is shown on the reference. Keep physical objects, their locations, and printed indicators distinct.
-- When extracted prose leaves the attachment ambiguous, preserve the source relationship literally or omit the disputed spatial gloss. An unattached visual cannot resolve it.

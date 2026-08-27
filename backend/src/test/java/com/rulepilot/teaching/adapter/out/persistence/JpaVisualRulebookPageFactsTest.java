@@ -10,8 +10,6 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
 import jakarta.persistence.EntityManager;
@@ -57,8 +55,6 @@ class JpaVisualRulebookPageFactsTest {
                 "Cobalt spindle: The cobalt spindle returns after the final pulse.",
                 List.of("cobalt spindle"),
                 List.of(),
-                List.of(),
-                false,
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("Cobalt spindle"),
@@ -71,8 +67,6 @@ class JpaVisualRulebookPageFactsTest {
                 "A descriptive panel has no rule group.",
                 List.of("panel"),
                 List.of(),
-                List.of(),
-                false,
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of(),
@@ -164,35 +158,6 @@ class JpaVisualRulebookPageFactsTest {
     }
 
     @Test
-    void preserves_icon_meaning_evidence_and_page_scan_completeness() {
-        var icon = new IconOccurrence(
-                "energy",
-                "Energy",
-                "黄色闪电图标。",
-                "表示一份能量。",
-                "Energy resource",
-                IconMeaningStatus.EXPLICIT,
-                120,
-                240,
-                48,
-                48);
-        var original = new PageFact(
-                6,
-                "Energy",
-                "能量图标带有明确图例。",
-                List.of("Energy"),
-                List.of(),
-                List.of(icon),
-                true,
-                PageFact.CURRENT_SCHEMA_VERSION);
-
-        var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
-
-        assertThat(restored.iconOccurrences()).containsExactly(icon);
-        assertThat(restored.iconInventoryComplete()).isTrue();
-    }
-
-    @Test
     void preserves_external_source_dependencies_as_structured_evidence() {
         var dependency = new SourceDependency("First Session Booklet", List.of("setup"));
         var original = new PageFact(
@@ -201,10 +166,11 @@ class JpaVisualRulebookPageFactsTest {
                 "当前页指向另一份开局资料。",
                 List.of("PLAY A CARD"),
                 List.of(),
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(dependency),
                 List.of(),
                 false,
-                PageFact.CURRENT_SCHEMA_VERSION,
-                List.of(dependency));
+                List.of());
 
         var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
 
@@ -219,8 +185,6 @@ class JpaVisualRulebookPageFactsTest {
                 "MOVE: 移动有一条完整的可见规则。\nBUILD: 建造有一条完整的可见规则。",
                 List.of("MOVE", "BUILD"),
                 List.of(),
-                List.of(),
-                false,
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("MOVE", "BUILD"),
@@ -246,8 +210,6 @@ class JpaVisualRulebookPageFactsTest {
                 "MOVE: Historical prose ledger.",
                 List.of("MOVE"),
                 List.of(),
-                List.of(),
-                false,
                 PageFact.CURRENT_SCHEMA_VERSION - 1,
                 List.of(),
                 List.of("MOVE"),

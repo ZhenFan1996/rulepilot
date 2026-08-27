@@ -107,63 +107,6 @@ class BggRecommendationAgentControllerTest {
     }
 
     @Test
-    void exposesTheTypedGuideAndQuestionContinuationWithoutInterpretingAssistantProse() {
-        UUID teachingPlanId = UUID.randomUUID();
-        Game game = comparisonGame(316554, "Dune: Imperium", 120, List.of("Deck Building"));
-        var domain = new ConversationResponse(
-                Outcome.RECOMMENDATIONS,
-                DecisionMode.MODEL_ASSISTED,
-                "这款符合你的偏好。",
-                RecommendationProfile.empty(),
-                null,
-                1,
-                1,
-                new BoardGameRecommendationAgent.UserModelView("", List.of()),
-                List.of(),
-                new BoardGameRecommendationAgent.HarnessTrace(1, 1, 0, false, List.of("RECOMMEND_GAMES")),
-                List.of(new RecommendedGame(
-                        game,
-                        List.of("符合偏好"),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        new BoardGameRecommendationAgent.TeachingContinuation(teachingPlanId, 4, 11))),
-                null,
-                null,
-                "先从这款开始。",
-                new BoardGameRecommendationAgent.RecommendationContinuation(
-                        BoardGameRecommendationAgent.ContinuationKind.GUIDE_AND_RULE_QA,
-                        "先学会第一轮行动，再继续规则答疑",
-                        BoardGameRecommendationAgent.ContinuationAvailability.AVAILABLE_FOR_ALL,
-                        1,
-                        1));
-
-        var response = BggRecommendationAgentController.RecommendationConversationResponse.from(
-                domain,
-                new LocalizedTaxonomy(Map.of(), Map.of()),
-                "zh-CN",
-                presentation,
-                null,
-                null,
-                null,
-                false);
-
-        assertThat(response.continuation()).satisfies(continuation -> {
-            assertThat(continuation.kind()).isEqualTo("guide_and_rule_qa");
-            assertThat(continuation.learningGoal()).isEqualTo("先学会第一轮行动，再继续规则答疑");
-            assertThat(continuation.availability()).isEqualTo("available_for_all");
-            assertThat(continuation.readyCount()).isEqualTo(1);
-            assertThat(continuation.candidateCount()).isEqualTo(1);
-        });
-        assertThat(response.games()).singleElement().satisfies(recommended -> {
-            assertThat(recommended.teachingContinuation().teachingPlanId()).isEqualTo(teachingPlanId);
-            assertThat(recommended.teachingContinuation().sectionCount()).isEqualTo(4);
-            assertThat(recommended.teachingContinuation().stepCount()).isEqualTo(11);
-        });
-    }
-
-    @Test
     void doesNotPublishInternalExecutionTraceForAnOrdinaryConversationReply() {
         var domain = new ConversationResponse(
                 Outcome.CONVERSATION,

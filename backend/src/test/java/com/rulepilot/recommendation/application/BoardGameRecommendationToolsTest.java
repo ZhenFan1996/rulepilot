@@ -1,28 +1,19 @@
 package com.rulepilot.recommendation.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CandidateSet;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
-import com.rulepilot.catalog.PublicTeachingContinuationCatalog;
-import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Availability;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolName;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class BoardGameRecommendationToolsTest {
@@ -130,71 +121,6 @@ class BoardGameRecommendationToolsTest {
         assertThat(observation.status()).isEqualTo(ToolStatus.ERROR);
         assertThat(observation.code()).isEqualTo("CATALOG_UNAVAILABLE");
         assertThat(observation.games()).isEmpty();
-    }
-
-    @Test
-    void keepsAnUnavailableTeachingProjectionDistinctFromNoReadyCandidate() {
-        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
-        BoardGameRecommendationWebResearch research = mock(BoardGameRecommendationWebResearch.class);
-        PublicTeachingContinuationCatalog continuations = ignored -> Availability.unavailable();
-        BoardGameRecommendationTools tools = new BoardGameRecommendationTools(catalog, research, continuations);
-
-        BoardGameRecommendationTools.CatalogObservation observation =
-                tools.lookupReadyTeachingContinuations(List.of(game(20)));
-
-        assertThat(observation.status()).isEqualTo(ToolStatus.ERROR);
-        assertThat(observation.code()).isEqualTo("READY_TEACHING_CATALOG_UNAVAILABLE");
-        assertThat(observation.code()).isNotEqualTo("NO_READY_PUBLIC_TEACHING");
-    }
-
-    @Test
-    void preservesExactReadyTeachingFromAPartiallyResolvedProjection() {
-        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
-        BoardGameRecommendationWebResearch research = mock(BoardGameRecommendationWebResearch.class);
-        UUID planId = UUID.randomUUID();
-        PublicTeachingContinuationCatalog continuations = ignored -> Availability.partial(Map.of(
-                20,
-                new PublicTeachingContinuationCatalog.Continuation(20, planId, 4, 12)));
-        BoardGameRecommendationTools tools = new BoardGameRecommendationTools(catalog, research, continuations);
-
-        BoardGameRecommendationTools.CatalogObservation observation =
-                tools.lookupReadyTeachingContinuations(List.of(game(20), game(21)));
-
-        assertThat(observation.status()).isEqualTo(ToolStatus.PARTIAL);
-        assertThat(observation.code()).isEqualTo("READY_TEACHING_CATALOG_PARTIAL");
-        assertThat(observation.teachingContinuations()).containsOnlyKeys(20);
-        assertThat(observation.teachingContinuations().get(20).teachingPlanId()).isEqualTo(planId);
-    }
-
-    @Test
-    void joinsTargetTeachingAvailabilityByResolvedBggId() {
-        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
-        BoardGameRecommendationWebResearch research = mock(BoardGameRecommendationWebResearch.class);
-        AtomicReference<List<PublicTeachingContinuationCatalog.Candidate>> observed = new AtomicReference<>();
-        UUID planId = UUID.randomUUID();
-        PublicTeachingContinuationCatalog continuations = candidates -> {
-            observed.set(candidates);
-            return Availability.available(Map.of(
-                    20,
-                    new PublicTeachingContinuationCatalog.Continuation(20, planId, 4, 12),
-                    999,
-                    new PublicTeachingContinuationCatalog.Continuation(999, UUID.randomUUID(), 9, 27)));
-        };
-        BoardGameRecommendationTools tools = new BoardGameRecommendationTools(catalog, research, continuations);
-
-        BoardGameRecommendationTools.CatalogObservation observation =
-                tools.lookupReadyTeachingContinuations(List.of(game(20)));
-
-        assertThat(observed.get())
-                .singleElement()
-                .satisfies(candidate -> {
-                    assertThat(candidate.bggId()).isEqualTo(20);
-                    assertThat(candidate.authoritativeTitle()).isEqualTo("Synthetic 20");
-                });
-        assertThat(observation.status()).isEqualTo(ToolStatus.SUCCESS);
-        assertThat(observation.tool()).isEqualTo(ToolName.LOOKUP_READY_TEACHING_CONTINUATIONS);
-        assertThat(observation.teachingContinuations()).containsOnlyKeys(20);
-        assertThat(observation.teachingContinuations().get(20).teachingPlanId()).isEqualTo(planId);
     }
 
     private static Game game(int bggId) {

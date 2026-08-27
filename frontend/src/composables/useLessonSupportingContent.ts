@@ -2,13 +2,6 @@ import { ref } from 'vue'
 
 import type { LessonComprehensionReport } from '@/composables/lessonSupportingContent'
 
-export type MediaWarningCode =
-  | 'QUALITY_UNAVAILABLE'
-  | 'AUDIO_UNAVAILABLE'
-  | 'VIDEO_UNAVAILABLE'
-  | 'AUDIO_LOAD_FAILED'
-  | 'SOURCE_LANGUAGE_MEDIA'
-
 interface LoadSupportingContentRequest {
   planId: string
   signal: AbortSignal

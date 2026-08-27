@@ -57,8 +57,6 @@ class VisualRulebookPageFactsTest {
                 factualSummary,
                 List.of("move", "build"),
                 List.of(),
-                List.of(),
-                false,
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 identifiers,

@@ -29,8 +29,6 @@ const scriptContents = Object.fromEntries(
 const recommendation = scriptContents['scripts/run-recommendation-paid-canary.sh']
 const teachingPage = scriptContents['scripts/run-gstone-visual-page-canary.sh']
 const historicalTeaching = scriptContents['scripts/run-real-teaching-agent.sh']
-const formerTeachingCriticalPath = scriptContents['scripts/run-teaching-critical-path-canary.sh']
-const visualCatalog = scriptContents['scripts/run-visual-teaching-catalog-canary.sh']
 
 function withoutPaidAuthorization() {
   const environment = { ...process.env }
@@ -77,10 +75,7 @@ test('every retained paid or real shell entrypoint fails closed without explicit
 })
 
 test('the shared gate precedes credential loading, provider commands, and full verification', () => {
-  const delegatedEntrypoints = new Set([
-    'scripts/run-real-teaching-agent.sh',
-    'scripts/run-teaching-critical-path-canary.sh',
-  ])
+  const delegatedEntrypoints = new Set(['scripts/run-real-teaching-agent.sh'])
   for (const [script, contents] of Object.entries(scriptContents)) {
     if (delegatedEntrypoints.has(script)) {
       assert.match(contents, /exec sh .*run-teaching-richness-canary\.sh/)
@@ -107,9 +102,6 @@ test('recommendation canary has one representative direct-publication journey', 
 test('the teaching page canary stays on the single real image-page contract', () => {
   assert.match(teachingPage, /VisualTeachingCatalogPaidCanaryTest#catalogsOneRealGstonePageWithQuantityLineage/)
   assert.match(historicalTeaching, /exec sh .*run-teaching-richness-canary\.sh/)
-  assert.match(formerTeachingCriticalPath, /exec sh .*run-teaching-richness-canary\.sh/)
-  assert.match(visualCatalog, /require-paid-canary-authorization\.sh/)
-  assert.match(visualCatalog, /VisualTeachingCatalogPaidCanaryTest/)
   for (const [script, contents] of Object.entries(scriptContents)) {
     assert.doesNotMatch(
       contents,

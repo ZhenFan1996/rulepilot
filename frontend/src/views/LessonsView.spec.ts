@@ -359,7 +359,7 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
-  it('opens a complete cited draft immediately while detail review continues', async () => {
+  it('opens a complete cited draft immediately while its generation run continues', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T10:02:05Z'))
     let lessonReads = 0
@@ -382,7 +382,7 @@ describe('LessonsView', () => {
               outcome: 'SUCCEEDED', latencyMs: 0, occurredAt: '2026-07-20T10:01:50Z',
             },
             {
-              sequence: 2, type: 'CRITIC', operation: 'reviewPublishedTeachingSection', summary: 'Work started',
+              sequence: 2, type: 'MODEL', operation: 'reviseTeachingSection|1', summary: 'Work started',
               outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-20T10:02:00Z',
             },
           ],
@@ -423,7 +423,7 @@ describe('LessonsView', () => {
     const status = wrapper.get('[data-testid="player-work-status"]')
     expect(status.text()).toBe('正在补充图片或核对细节')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
-    expect(wrapper.text()).toContain('基础讲解已可用，正在核对第 1 章“完成开局设置”的细节')
+    expect(wrapper.text()).toContain('校验发现局部问题，正在修正第 1 章“完成开局设置”')
     expect(wrapper.text()).toContain('已处理 1/1 节')
     expect(wrapper.text()).not.toMatch(/模型调用|model calls|次内容处理/)
     expect(wrapper.text()).toContain('完整基础讲解已经可读')

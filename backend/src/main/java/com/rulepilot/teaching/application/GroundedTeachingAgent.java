@@ -10,7 +10,6 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.teaching.TeachingLessonModel;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.domain.IllustratedLesson;
@@ -32,7 +31,6 @@ import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -57,7 +55,6 @@ public class GroundedTeachingAgent {
     private final TeachingRunWorkloadPolicy workloadPolicy;
     private final int baseSectionParallelism;
 
-    @Autowired
     public GroundedTeachingAgent(
             AssistantReadTools tools,
             TeachingLessonModel model,
@@ -87,132 +84,6 @@ public class GroundedTeachingAgent {
                 new TeachingReviewCorrectionPolicy());
         this.workloadPolicy = new TeachingRunWorkloadPolicy(Math.max(1, baseMaxRetrievalQueriesPerSection));
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
-    }
-
-    public GroundedTeachingAgent(
-            AssistantReadTools tools,
-            TeachingLessonModel model,
-            EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
-            AuditedAgentInvocations invocations,
-            VisualRulebookPageFacts visualFacts,
-            VisualRulebookPageCatalogModel visualCatalog,
-            int baseSectionParallelism,
-            int baseMaxRetrievalQueriesPerSection,
-            TeachingEvidenceRefiner evidenceRefiner) {
-        this(
-                tools,
-                model,
-                evidenceVerifier,
-                critic,
-                invocations,
-                visualFacts,
-                baseSectionParallelism,
-                baseMaxRetrievalQueriesPerSection,
-                evidenceRefiner,
-                TeachingVisualEvidenceResolver.compatibilityCataloger(
-                        tools, invocations, visualFacts, visualCatalog));
-    }
-
-    public GroundedTeachingAgent(
-            AssistantReadTools tools,
-            TeachingLessonModel model,
-            EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
-            AuditedAgentInvocations invocations,
-            VisualRulebookPageFacts visualFacts,
-            VisualRulebookPageCatalogModel visualCatalog,
-            int baseSectionParallelism,
-            int baseMaxRetrievalQueriesPerSection) {
-        this(
-                tools,
-                model,
-                evidenceVerifier,
-                critic,
-                invocations,
-                visualFacts,
-                visualCatalog,
-                baseSectionParallelism,
-                baseMaxRetrievalQueriesPerSection,
-                null);
-    }
-
-    public GroundedTeachingAgent(
-            AssistantReadTools tools,
-            TeachingLessonModel model,
-            EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
-            AuditedAgentInvocations invocations,
-            VisualRulebookPageFacts visualFacts,
-            VisualRulebookPageCatalogModel visualCatalog,
-            int baseSectionParallelism) {
-        this(
-                tools,
-                model,
-                evidenceVerifier,
-                critic,
-                invocations,
-                visualFacts,
-                visualCatalog,
-                baseSectionParallelism,
-                3);
-    }
-
-    public GroundedTeachingAgent(
-            AssistantReadTools tools,
-            TeachingLessonModel model,
-            EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
-            AuditedAgentInvocations invocations,
-            VisualRulebookPageFacts visualFacts,
-            int baseSectionParallelism) {
-        this(
-                tools,
-                model,
-                evidenceVerifier,
-                critic,
-                invocations,
-                visualFacts,
-                VisualRulebookPageCatalogModel.unavailable(),
-                baseSectionParallelism,
-                3);
-    }
-
-    public GroundedTeachingAgent(
-            AssistantReadTools tools,
-            TeachingLessonModel model,
-            EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
-            AuditedAgentInvocations invocations,
-            int baseSectionParallelism) {
-        this(
-                tools,
-                model,
-                evidenceVerifier,
-                critic,
-                invocations,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
-                baseSectionParallelism,
-                3);
-    }
-
-    public GroundedTeachingAgent(
-            AssistantReadTools tools,
-            TeachingLessonModel model,
-            EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
-            AuditedAgentInvocations invocations) {
-        this(
-                tools,
-                model,
-                evidenceVerifier,
-                critic,
-                invocations,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
-                3,
-                3);
     }
 
     /**
@@ -329,9 +200,6 @@ public class GroundedTeachingAgent {
         List<LessonSection> sections = continuation.sections;
         List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(sections.size(), plan.sections().size());
         if (!remaining.isEmpty()) {
-            // The first section is already durable before this method runs. A progressive visual plan can therefore
-            // fill the remaining page-fact ledger now without extending the player's wait for first useful content.
-            evidenceRetriever.prefetchRemainingVisualFacts(plan, sections.size(), assistantRunId);
             List<PriorSectionContext> sharedContext = lessonAssembly.continuityContext(sections);
             Map<Integer, SectionOutcome> completed = new LinkedHashMap<>();
             int providerParallelism = Math.max(1, model.maxConcurrentSectionRequests(plan.createdBy()));
@@ -454,7 +322,7 @@ public class GroundedTeachingAgent {
                 assistantRunId,
                 queriesPerTopic,
                 planned.position() - 1,
-                GenerationMode.PROGRESSIVE_BASE,
+                GenerationMode.BASE,
                 allowValidationRevision);
     }
 
@@ -658,7 +526,7 @@ public class GroundedTeachingAgent {
             String invalidEvidenceCategory,
             String publishedCategory,
             String withheldCategory) {
-        private static final GenerationMode PROGRESSIVE_BASE = new GenerationMode(
+        private static final GenerationMode BASE = new GenerationMode(
                 true,
                 false,
                 true,

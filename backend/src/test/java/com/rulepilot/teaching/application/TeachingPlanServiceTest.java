@@ -33,11 +33,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.WholeGameUnderstandingDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -178,7 +174,6 @@ class TeachingPlanServiceTest {
                         TeachingWholeGameUnderstandingPolicy.CONTRACT_TAG));
         verify(publication).publish(any(TeachingPlan.class), eq("Example Game"));
         verify(outlines).organize(any());
-        verify(visualCataloger, never()).progressiveTeachingStart(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -234,7 +229,6 @@ class TeachingPlanServiceTest {
         TeachingPlan plan = service.create(documentVersionId, learningGoal, "alice", null);
 
         assertThat(plan.learningGoal()).isEqualTo(learningGoal);
-        verify(visualCataloger, never()).progressiveTeachingStart(any(), any(), any(), any(), any());
         ArgumentCaptor<OutlineRequest> request = ArgumentCaptor.forClass(OutlineRequest.class);
         verify(outlines).organize(request.capture());
         assertThat(request.getValue().pageImages()).isEmpty();
@@ -891,49 +885,6 @@ class TeachingPlanServiceTest {
                 slots,
                 true,
                 new WholeGameUnderstandingDraft(premise, concepts, dependencies));
-    }
-
-    private ProgressiveTeachingStartDraft progressiveStart() {
-        return new ProgressiveTeachingStartDraft(
-                List.of(
-                        new TeachingPageSketch(
-                                1, TeachingPageRole.NON_GAMEPLAY, "Example Game", List.of(), List.of()),
-                        new TeachingPageSketch(
-                                2,
-                                TeachingPageRole.GAMEPLAY_RULES,
-                                "Setup",
-                                List.of("market"),
-                                List.of("setup"),
-                                true,
-                                List.of(),
-                                List.of(new RuleGroupCoverage("market", SourceCoverageRole.SETUP))),
-                        new TeachingPageSketch(
-                                3,
-                                TeachingPageRole.GAMEPLAY_RULES,
-                                "Turn",
-                                List.of("turn cycle", "take cards"),
-                                List.of("core_loop"),
-                                true,
-                                List.of(),
-                                List.of(
-                                        new RuleGroupCoverage("turn cycle", SourceCoverageRole.CORE_LOOP),
-                                        new RuleGroupCoverage("take cards", SourceCoverageRole.LEGAL_ACTION))),
-                        new TeachingPageSketch(
-                                4,
-                                TeachingPageRole.GAMEPLAY_RULES,
-                                "Game end and scoring",
-                                List.of("game end", "score"),
-                                List.of("end", "scoring"),
-                                true,
-                                List.of(),
-                                List.of(
-                                        new RuleGroupCoverage("game end", SourceCoverageRole.ENDING),
-                                        new RuleGroupCoverage("score", SourceCoverageRole.SCORING)))),
-                new PageSummary(
-                        2,
-                        "market",
-                        "market：每位玩家按页面所示关系完成开局。",
-                        List.of("market", "setup")));
     }
 
     private TopicDraft topic(String key, List<String> tags, List<Integer> pages) {

@@ -1,15 +1,9 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.catalog.PublicGameCoverLookup;
-import com.rulepilot.catalog.PublicGameEditionIdentityLookup;
 import com.rulepilot.catalog.PublicGameIdentityLookup;
-import com.rulepilot.catalog.PublicTeachingContinuationCatalog;
-import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Availability;
-import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Candidate;
-import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Continuation;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -26,7 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** Anonymous discovery projection for usable lessons with publisher-owned source material. */
 @Service
 @Profile("!test")
-public class PublicLessonCatalog implements PublicTeachingContinuationCatalog {
+public class PublicLessonCatalog {
 
     private static final int CANDIDATE_LIMIT = 200;
     private static final long CACHE_TTL_NANOS = TimeUnit.SECONDS.toNanos(15);
@@ -34,7 +28,6 @@ public class PublicLessonCatalog implements PublicTeachingContinuationCatalog {
     private final IllustratedLessonRepository lessons;
     private final PublicRulebookReferenceLookup rulebooks;
     private final PublicGameCoverLookup covers;
-    private final PublicGameEditionIdentityLookup editionIdentities;
     private final PublicGameIdentityLookup gameIdentities;
     private final ConcurrentMap<Integer, CachedEntries> cachedEntries = new ConcurrentHashMap<>();
 
@@ -43,13 +36,11 @@ public class PublicLessonCatalog implements PublicTeachingContinuationCatalog {
             IllustratedLessonRepository lessons,
             PublicRulebookReferenceLookup rulebooks,
             PublicGameCoverLookup covers,
-            PublicGameEditionIdentityLookup editionIdentities,
             PublicGameIdentityLookup gameIdentities) {
         this.plans = plans;
         this.lessons = lessons;
         this.rulebooks = rulebooks;
         this.covers = covers;
-        this.editionIdentities = editionIdentities;
         this.gameIdentities = gameIdentities;
     }
 
@@ -65,130 +56,6 @@ public class PublicLessonCatalog implements PublicTeachingContinuationCatalog {
             cachedEntries.put(limit, new CachedEntries(entries, System.nanoTime() + CACHE_TTL_NANOS));
             return entries;
         }
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public Availability continuationsFor(List<Candidate> candidates) {
-        if (candidates == null || candidates.isEmpty()) return Availability.none();
-        try {
-            Map<Integer, Candidate> candidatesByBggId = candidates.stream()
-                    .collect(java.util.stream.Collectors.toMap(
-                            Candidate::bggId,
-                            candidate -> candidate,
-                            (first, ignored) -> first,
-                            LinkedHashMap::new));
-            List<TeachingPlanRepository.PlanReference> planReferences = plans.findRecentReferences(CANDIDATE_LIMIT);
-            Map<UUID, IllustratedLessonRepository.LessonSummary> lessonSummaries = lessons
-                    .findLatestSummariesByPlans(planReferences.stream()
-                            .map(TeachingPlanRepository.PlanReference::teachingPlanId)
-                            .toList())
-                    .stream()
-                    .collect(java.util.stream.Collectors.toMap(
-                            IllustratedLessonRepository.LessonSummary::teachingPlanId, summary -> summary));
-            Map<UUID, PublicRulebookReferenceLookup.Reference> references = rulebooks.findReferences(planReferences.stream()
-                    .map(TeachingPlanRepository.PlanReference::documentVersionId)
-                    .toList());
-            List<TeachingPlanRepository.PlanReference> readablePlans = planReferences.stream()
-                    .filter(plan -> {
-                        IllustratedLessonRepository.LessonSummary summary = lessonSummaries.get(plan.teachingPlanId());
-                        return summary != null
-                                && summary.status() != LessonStatus.INCOMPLETE
-                                && summary.publiclyReadable();
-                    })
-                    .toList();
-            boolean metadataComplete = readablePlans.stream()
-                    .allMatch(plan -> references.containsKey(plan.documentVersionId()));
-            List<LessonCandidate> usableLessons = readablePlans.stream()
-                    .map(plan -> candidate(
-                            plan,
-                            lessonSummaries.get(plan.teachingPlanId()),
-                            references.get(plan.documentVersionId())))
-                    .flatMap(Optional::stream)
-                    .filter(candidate -> candidate.reference().officialSourceUrl() != null
-                            && !candidate.reference().officialSourceUrl().isBlank())
-                    .toList();
-            if (usableLessons.isEmpty()) {
-                return metadataComplete
-                        ? exhaustedAvailability(planReferences)
-                        : Availability.unavailable();
-            }
-            boolean hasUnknownEditionIdentity = usableLessons.stream()
-                    .map(LessonCandidate::reference)
-                    .map(PublicRulebookReferenceLookup.Reference::gameEditionId)
-                    .anyMatch(java.util.Objects::isNull);
-            List<UUID> editionIds = usableLessons.stream()
-                    .map(LessonCandidate::reference)
-                    .map(PublicRulebookReferenceLookup.Reference::gameEditionId)
-                    .filter(java.util.Objects::nonNull)
-                    .distinct()
-                    .toList();
-            Map<UUID, Integer> bggIdsByEdition = editionIds.isEmpty()
-                    ? Map.of()
-                    : editionIdentities.findBggIds(editionIds);
-            if (bggIdsByEdition == null) return Availability.unavailable();
-            boolean editionIdentityComplete = !hasUnknownEditionIdentity
-                    && editionIds.stream().allMatch(editionId -> {
-                        Integer bggId = bggIdsByEdition.get(editionId);
-                        return bggId != null && bggId > 0;
-                    });
-            boolean continuationMetadataComplete = usableLessons.stream()
-                    .allMatch(PublicLessonCatalog::hasContinuationMetadata);
-            Map<Integer, Continuation> continuations = continuations(
-                    usableLessons.stream()
-                            .filter(PublicLessonCatalog::hasContinuationMetadata)
-                            .toList(),
-                    candidatesByBggId,
-                    bggIdsByEdition);
-            boolean exhaustive = planReferences.size() < CANDIDATE_LIMIT
-                    && metadataComplete
-                    && editionIdentityComplete
-                    && continuationMetadataComplete;
-            if (!continuations.isEmpty()) {
-                return exhaustive
-                        ? Availability.available(continuations)
-                        : Availability.partial(continuations);
-            }
-            return exhaustive
-                    ? Availability.none()
-                    : Availability.unavailable();
-        } catch (RuntimeException unavailable) {
-            return Availability.unavailable();
-        }
-    }
-
-    private Availability exhaustedAvailability(List<TeachingPlanRepository.PlanReference> planReferences) {
-        return planReferences.size() < CANDIDATE_LIMIT
-                ? Availability.none()
-                : Availability.unavailable();
-    }
-
-    private Map<Integer, Continuation> continuations(
-            List<LessonCandidate> usableLessons,
-            Map<Integer, Candidate> candidatesByBggId,
-            Map<UUID, Integer> bggIdsByEdition) {
-        Map<Integer, Continuation> continuations = new LinkedHashMap<>();
-        Set<UUID> documentVersions = new LinkedHashSet<>();
-        usableLessons.stream()
-                .filter(candidate -> documentVersions.add(candidate.plan().documentVersionId()))
-                .forEach(candidate -> {
-                    UUID editionId = candidate.reference().gameEditionId();
-                    Integer bggId = editionId == null ? null : bggIdsByEdition.get(editionId);
-                    Candidate requested = bggId == null ? null : candidatesByBggId.get(bggId);
-                    if (requested == null) return;
-                    continuations.putIfAbsent(
-                            requested.bggId(),
-                            new Continuation(
-                                    requested.bggId(),
-                                    candidate.plan().teachingPlanId(),
-                                    candidate.summary().sectionCount(),
-                                    candidate.summary().stepCount()));
-                });
-        return continuations;
-    }
-
-    private static boolean hasContinuationMetadata(LessonCandidate candidate) {
-        return candidate.summary().sectionCount() > 0 && candidate.summary().stepCount() > 0;
     }
 
     /**

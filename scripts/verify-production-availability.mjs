@@ -12,19 +12,9 @@ const readJson = async (response, label) => {
   }
 }
 
-const fetchWithin = (fetchImpl, url, timeoutMillis, traceparent) => fetchImpl(url, {
-  ...(traceparent ? { headers: { traceparent } } : {}),
+const fetchWithin = (fetchImpl, url, timeoutMillis) => fetchImpl(url, {
   signal: AbortSignal.timeout(timeoutMillis),
 })
-
-function validatedTraceparent(traceparent) {
-  if (traceparent === undefined) return undefined
-  const match = traceparent.match(/^00-([0-9a-f]{32})-([0-9a-f]{16})-01$/)
-  if (!match || /^0{32}$/.test(match[1]) || /^0{16}$/.test(match[2])) {
-    throw new Error('traceparent must be a sampled non-zero W3C version 00 value')
-  }
-  return traceparent
-}
 
 export async function verifyProductionAvailability({
   publicUrl,
@@ -33,27 +23,24 @@ export async function verifyProductionAvailability({
   timeoutMillis = DEFAULT_TIMEOUT_MILLIS,
   retryDelayMillis = DEFAULT_RETRY_DELAY_MILLIS,
   sleep = pause,
-  traceparent,
 } = {}) {
   if (typeof publicUrl !== 'string' || !publicUrl.startsWith('https://')) {
     throw new Error('RULEPILOT_PUBLIC_URL must be an HTTPS origin')
   }
   if (typeof fetchImpl !== 'function') throw new Error('fetch is unavailable')
   if (!Number.isInteger(attempts) || attempts < 1) throw new Error('attempts must be positive')
-  const canaryTraceparent = validatedTraceparent(traceparent)
-
   const origin = publicUrl.replace(/\/$/, '')
   let lastFailure = 'availability verification did not run'
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const page = await fetchWithin(fetchImpl, `${origin}/`, timeoutMillis, canaryTraceparent)
+      const page = await fetchWithin(fetchImpl, `${origin}/`, timeoutMillis)
       const html = await page.text()
       if (!page.ok || html.trim().length === 0) {
         throw new Error(`frontend returned an empty or unsuccessful HTTP ${page.status} response`)
       }
 
-      const csrf = await fetchWithin(fetchImpl, `${origin}/api/auth/csrf`, timeoutMillis, canaryTraceparent)
+      const csrf = await fetchWithin(fetchImpl, `${origin}/api/auth/csrf`, timeoutMillis)
       const csrfPayload = await readJson(csrf, 'CSRF endpoint')
       if (!csrf.ok
           || typeof csrfPayload.token !== 'string'
@@ -67,7 +54,6 @@ export async function verifyProductionAvailability({
         fetchImpl,
         `${origin}/api/v1/bgg/recommendations`,
         timeoutMillis,
-        canaryTraceparent,
       )
       const games = await readJson(recommendations, 'BGG recommendations')
       if (!recommendations.ok || !Array.isArray(games) || games.length === 0) {
@@ -85,7 +71,6 @@ export async function verifyProductionAvailability({
         fetchImpl,
         `${origin}/api/v1/bgg/games/${firstGame.bggId}?locale=zh-CN`,
         timeoutMillis,
-        canaryTraceparent,
       )
       const game = await readJson(detail, 'BGG game detail')
       if (!detail.ok
@@ -115,12 +100,8 @@ const isEntrypoint = process.argv[1] != null
   && new URL(import.meta.url).pathname === new URL(`file://${process.argv[1]}`).pathname
 
 if (isEntrypoint) {
-  if (!process.env.RULEPILOT_CANARY_TRACEPARENT) {
-    throw new Error('RULEPILOT_CANARY_TRACEPARENT is required for exact-release verification')
-  }
   const result = await verifyProductionAvailability({
     publicUrl: process.env.RULEPILOT_PUBLIC_URL,
-    traceparent: process.env.RULEPILOT_CANARY_TRACEPARENT,
   })
   console.log(
     `Verified public release availability on attempt ${result.attempt}; BGG ${result.bggId} ${result.gameName}`,

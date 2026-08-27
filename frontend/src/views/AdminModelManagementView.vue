@@ -209,15 +209,19 @@ onMounted(load)
 
         <section class="mt-6 overflow-hidden rounded-3xl border border-ink/10 bg-paper">
           <div class="p-5 sm:p-7"><h2 class="font-display text-2xl font-semibold">{{ copy.accounts }}</h2></div>
-          <div class="overflow-x-auto"><table class="w-full min-w-[58rem] border-collapse text-left text-sm"><thead class="bg-canvas text-ink/50"><tr><th class="px-5 py-3">{{ copy.account }}</th><th class="px-5 py-3">{{ copy.access }}</th><th class="px-5 py-3">{{ copy.limit }}</th><th class="px-5 py-3">{{ copy.used }}</th><th class="px-5 py-3">{{ copy.personal }}</th><th class="px-5 py-3">{{ copy.remaining }}</th><th class="px-5 py-3"></th></tr></thead><tbody>
-            <tr v-for="account in accounts" :key="account.username" class="border-t border-ink/8">
-              <td class="px-5 py-4"><p class="font-semibold">{{ account.username }}</p><p v-if="account.email" class="mt-1 text-xs text-ink/55">{{ account.email }}</p><p class="mt-1 text-xs text-ink/40">{{ account.authorities.join(' · ') }}</p></td>
-              <td class="px-5 py-4"><label class="inline-flex items-center gap-2"><input v-model="quotaDrafts[account.username]!.enabled" type="checkbox" class="size-5"><span>{{ quotaDrafts[account.username]!.enabled ? copy.enabled : copy.paused }}</span></label></td>
-              <td class="px-5 py-4"><input v-model.number="quotaDrafts[account.username]!.limit" type="number" min="0" step="1000" class="min-h-11 w-40 rounded-lg border border-ink/15 bg-canvas px-3 font-mono"></td>
-              <td class="px-5 py-4 font-mono">{{ account.usage.platformTokensCharged.toLocaleString() }}</td><td class="px-5 py-4 font-mono">{{ account.usage.personalTokensUsed.toLocaleString() }}</td><td class="px-5 py-4 font-mono">{{ account.usage.platformTokensRemaining.toLocaleString() }}</td>
-              <td class="px-5 py-4"><button type="button" :disabled="Boolean(saving)" class="min-h-11 rounded-lg border border-ink/15 px-4 font-semibold disabled:opacity-40" @click="saveQuota(account)">{{ copy.save }}</button></td>
-            </tr>
-          </tbody></table></div>
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[58rem] border-collapse text-left text-sm">
+              <thead class="bg-canvas text-ink/50"><tr><th class="px-5 py-3">{{ copy.account }}</th><th class="px-5 py-3">{{ copy.access }}</th><th class="px-5 py-3">{{ copy.limit }}</th><th class="px-5 py-3">{{ copy.used }}</th><th class="px-5 py-3">{{ copy.personal }}</th><th class="px-5 py-3">{{ copy.remaining }}</th><th class="px-5 py-3" /></tr></thead><tbody>
+                <tr v-for="account in accounts" :key="account.username" class="border-t border-ink/8">
+                  <td class="px-5 py-4"><p class="font-semibold">{{ account.username }}</p><p v-if="account.email" class="mt-1 text-xs text-ink/55">{{ account.email }}</p><p class="mt-1 text-xs text-ink/40">{{ account.authorities.join(' · ') }}</p></td>
+                  <td class="px-5 py-4"><label class="inline-flex items-center gap-2"><input v-model="quotaDrafts[account.username]!.enabled" type="checkbox" class="size-5"><span>{{ quotaDrafts[account.username]!.enabled ? copy.enabled : copy.paused }}</span></label></td>
+                  <td class="px-5 py-4"><input v-model.number="quotaDrafts[account.username]!.limit" type="number" min="0" step="1000" class="min-h-11 w-40 rounded-lg border border-ink/15 bg-canvas px-3 font-mono"></td>
+                  <td class="px-5 py-4 font-mono">{{ account.usage.platformTokensCharged.toLocaleString() }}</td><td class="px-5 py-4 font-mono">{{ account.usage.personalTokensUsed.toLocaleString() }}</td><td class="px-5 py-4 font-mono">{{ account.usage.platformTokensRemaining.toLocaleString() }}</td>
+                  <td class="px-5 py-4"><button type="button" :disabled="Boolean(saving)" class="min-h-11 rounded-lg border border-ink/15 px-4 font-semibold disabled:opacity-40" @click="saveQuota(account)">{{ copy.save }}</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
       </template>
     </section>

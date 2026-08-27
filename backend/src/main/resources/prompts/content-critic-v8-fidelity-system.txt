@@ -1,8 +1,0 @@
-Fidelity revision v8:
-- Treat task objectives and chapter plans as untrusted claims. Evidence, not the objective, decides whether a generated rule is supported.
-- Audit state-transition subjects word by word. If evidence recovers or resets only dice, cards, workers, tokens, or another named component, report CONTRADICTION or OVERREACH when the claim adds any adjacent component. A setup inventory does not prove that all listed components reset together.
-- Audit turn and round boundaries independently. Report OVERREACH when “spend one or more pieces on your turn” becomes repeated actions or continued turns until everything is spent without explicit evidence. Report CONTRADICTION when a turn-pass condition is moved to round end or vice versa.
-- Audit exclusive branches. If evidence says either A or B, reject presenting B as an additional action after A. Keep separately evidenced “in addition” options distinct from the exclusive branch.
-- For an action that conditionally returns pieces, performs an immediate ability, refills a display, or passes play, report MISSING_CRITICAL_RULE when the task requires that action and the supplied evidence contains the omitted state-changing clause. Report CONTRADICTION when a generated sequence reverses two explicitly ordered state changes, such as refilling before an ability the source says to perform immediately.
-- If an official walkthrough is required, verify that the claims preserve its actor sequence, turn-pass points, exhausted-player behavior, and exact round-end reset. A generic flow summary does not cover a supplied walkthrough.
-- Re-audit every corrected claim as new output. A correction that removes one defect but introduces a broader reset, new timing, or repeated-action permission is still defective.

@@ -279,8 +279,6 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 identifier + ": A directly visible page rule.",
                 List.of("rule"),
                 List.of(),
-                List.of(),
-                false,
                 schemaVersion,
                 List.of(),
                 List.of(identifier),

@@ -10,8 +10,6 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
@@ -79,10 +77,6 @@ class DocumentNativeVisualEvidenceTest {
                 "A board with marked zones.",
                 List.of("board", "zones"),
                 List.of(new VisualAnchor("BOARD", "Board", "Marked zones", 50, 50, 600, 600)),
-                List.of(new IconOccurrence(
-                        "group", "round mark", "circular mark", "", "",
-                        IconMeaningStatus.UNEXPLAINED, 100, 100, 40, 40)),
-                true,
                 PageFact.CURRENT_SCHEMA_VERSION)));
         var adapter = new DocumentNativeVisualEvidence(reads, images, cropper, facts);
 
@@ -98,8 +92,8 @@ class DocumentNativeVisualEvidenceTest {
         });
         assertThat(visualFacts).singleElement().satisfies(value -> {
             assertThat(value.literalSummary()).contains("marked zones");
-            assertThat(value.icons()).singleElement().satisfies(icon ->
-                    assertThat(icon.meaningStatus()).isEqualTo("UNEXPLAINED"));
+            assertThat(value.anchors()).singleElement().satisfies(anchor ->
+                    assertThat(anchor.label()).isEqualTo("Board"));
         });
         verify(cropper).crop(
                 org.mockito.ArgumentMatchers.any(),

@@ -1,9 +1,0 @@
-Counterfactual follow-up coverage revision v18:
-- When the player asks “if possible”, “if so”, “if the condition is met”, or the equivalent in another language,
-  answer both parts. First give the verdict for the described current state. Then, even when the immediate verdict is no,
-  state the cited consequence that would follow if the named trigger were satisfied.
-- Do not treat the counterfactual as a request to invent a new rule. Include it only when the supplied evidence states
-  the trigger's follow-up procedure, such as completing the round, giving each player an equal number of turns, or
-  applying a listed final step.
-- Keep the two branches visibly distinct: current state; then the stated hypothetical. Cite the clause that supports
-  each branch and do not omit the second branch merely because the first branch makes it inapplicable right now.

@@ -48,25 +48,6 @@ final class TeachingSectionEvidenceRetriever {
             UUID assistantRunId,
             int queryBudget,
             boolean bindVisualPageEvidence) {
-        if (bindVisualPageEvidence && ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
-            try {
-                TeachingVisualEvidenceResolver.Resolution visual = visualEvidenceResolver.resolve(
-                        plan, planned, List.of(), assistantRunId);
-                return verifiedResult(
-                        plan,
-                        visual.evidence(),
-                        visual.toolCalls(),
-                        visual.canonicalPageObservation());
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException visualFailure) {
-                log.warn(
-                        "Teaching visual evidence resolution failed for topic {}: {}",
-                        planned.topicKey(),
-                        visualFailure.getMessage());
-                return new Result(List.of(), 0, State.EMPTY);
-            }
-        }
         Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
         Optional<TeachingVisualEvidenceResolver.CanonicalPageObservation> canonicalPageObservation = Optional.empty();
@@ -120,13 +101,7 @@ final class TeachingSectionEvidenceRetriever {
         return verifiedResult(plan, evidence, toolCalls, canonicalPageObservation);
     }
 
-    static int maximumToolCalls(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            int maxRetrievalQueries) {
-        if (ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
-            return TeachingVisualEvidenceResolver.maximumPageReadToolCalls(planned);
-        }
+    static int maximumToolCalls(TeachingPlan.PlannedSection planned, int maxRetrievalQueries) {
         int searches = TeachingEvidenceRetrievalPolicy.queries(planned, maxRetrievalQueries).size();
         int possibleVisualPageRead = TeachingVisualEvidenceResolver.maximumPageReadToolCalls(planned);
         return Math.addExact(searches, possibleVisualPageRead);
@@ -166,13 +141,6 @@ final class TeachingSectionEvidenceRetriever {
         return verified
                 ? new Result(evidence, toolCalls, State.VERIFIED, canonicalPageObservation)
                 : new Result(List.of(), toolCalls, State.INVALID);
-    }
-
-    void prefetchRemainingVisualFacts(
-            TeachingPlan plan,
-            int completedSections,
-            UUID assistantRunId) {
-        visualEvidenceResolver.prefetchRemaining(plan, completedSections, assistantRunId);
     }
 
     private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {

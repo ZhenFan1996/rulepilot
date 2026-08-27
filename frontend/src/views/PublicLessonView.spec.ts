@@ -128,7 +128,6 @@ describe('PublicLessonView', () => {
     expect(wrapper.get('a[href="/api/public/lessons/plan-1/rulebook"]').text()).toContain('官方原规则书')
     expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="玩家板设置"]').attributes('src'))
       .toContain('/api/public/lessons/plan-1/pages/2/image/crop?x=100&y=200&width=500&height=300')
-    expect(wrapper.text()).not.toContain('图标速查表')
     expect(wrapper.find('#public-question').exists()).toBe(false)
     expect(wrapper.get('a[href="/read/plan-1/questions"]').text()).toContain('规则答疑')
   })
@@ -282,7 +281,6 @@ describe('PublicLessonView', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
-      if (path.endsWith('/icon-glossary')) return new Response(null, { status: 404 })
       if (path.endsWith('/answers') && init?.method === 'POST') {
         return Response.json({
           answer: {
@@ -326,7 +324,6 @@ describe('PublicLessonView', () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
-      if (path.endsWith('/icon-glossary')) return Promise.resolve(new Response(null, { status: 404 }))
       if (path.endsWith('/answers') && init?.method === 'POST') {
         answerSignal = init.signal ?? undefined
         return new Promise<Response>((_resolve, reject) => {
@@ -373,7 +370,6 @@ describe('PublicLessonView', () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
-      if (path.endsWith('/icon-glossary')) return Promise.resolve(new Response(null, { status: 404 }))
       if (path.endsWith('/answers') && init?.method === 'POST') {
         answerRequests += 1
         if (answerRequests === 1) return Promise.resolve(Response.json(publicAnswerPayload('上一条已核对结论')))
@@ -414,7 +410,6 @@ describe('PublicLessonView', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
-      if (path.endsWith('/icon-glossary')) return new Response(null, { status: 404 })
       if (path.endsWith('/answers') && init?.method === 'POST') {
         answerNumber += 1
         const clarification = answerNumber === 1
@@ -474,7 +469,6 @@ describe('PublicLessonView', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
-      if (path.endsWith('/icon-glossary')) return new Response(null, { status: 404 })
       if (path.endsWith('/answers') && init?.method === 'POST') {
         answerRequests += 1
         if (answerRequests > 1) return new Response(null, { status: 503 })

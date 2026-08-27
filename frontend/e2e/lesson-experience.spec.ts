@@ -59,7 +59,7 @@ async function mockSharedApis(page: Page) {
   await page.route('**/pages/2/image/crop?*', route => route.fulfill({ contentType: 'image/svg+xml', body: focusedDetail }))
 }
 
-test('uses one tabletop reading language for private and public guides', async ({ page }, testInfo) => {
+test('uses one tabletop reading language for private and public guides', async ({ page }) => {
   await mockSharedApis(page)
   await page.route('**/api/public/lessons/plan-1?language=*', route => route.fulfill({
     json: {
@@ -82,10 +82,6 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.getByText('定位框和特写只说明图上位置与外观')).toBeVisible()
   await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/lesson/plan-1/questions')
   await expect(page.locator('#lesson-question-panel')).toHaveCount(0)
-  if (process.env.RULEPILOT_VISUAL_QA) {
-    await page.screenshot({ path: testInfo.outputPath('private-guide.png'), fullPage: true })
-  }
-
   await page.goto('/read/plan-1')
   await expect(page.locator('header.tabletop-hero')).toBeVisible()
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
@@ -94,10 +90,6 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.getByTestId('lesson-visual-detail')).toBeVisible()
   await expect(page.locator('#public-question')).toHaveCount(0)
   await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/read/plan-1/questions')
-  if (process.env.RULEPILOT_VISUAL_QA) {
-    await page.screenshot({ path: testInfo.outputPath('public-guide.png'), fullPage: true })
-  }
-
   await page.getByTestId('lesson-questions-entry').click()
   await expect(page).toHaveURL('/read/plan-1/questions')
   await expect(page.getByTestId('public-questions-reader')).toBeVisible()
@@ -105,7 +97,7 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.locator('[data-testid="lesson-reading-column"]')).toHaveCount(0)
 })
 
-test('keeps the tabletop guide and agent workspace usable on mobile', async ({ page }, testInfo) => {
+test('keeps the tabletop guide and agent workspace usable on mobile', async ({ page }) => {
   let answerRequest: Record<string, unknown> | null = null
   await page.setViewportSize({ width: 390, height: 844 })
   await mockSharedApis(page)
@@ -141,10 +133,6 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   expect(storyboardBox).not.toBeNull()
   expect(storyboardBox!.width).toBeLessThanOrEqual(374)
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
-  if (process.env.RULEPILOT_VISUAL_QA) {
-    await storyboard.screenshot({ path: testInfo.outputPath('mobile-guide-storyboard.png') })
-  }
-
   await page.goto('/lesson/plan-1/questions')
   await expect(page.locator('header.tabletop-hero')).toBeVisible()
   await expect(page.getByRole('heading', { name: '向《Catalog Game》规则书提问' })).toBeVisible()
@@ -163,9 +151,6 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   expect(answerRequest).not.toHaveProperty('bggId')
   expect(answerRequest).not.toHaveProperty('catalogPresentation')
   expect(JSON.stringify(answerRequest)).not.toContain('Catalog Game')
-  if (process.env.RULEPILOT_VISUAL_QA) {
-    await page.screenshot({ path: testInfo.outputPath('mobile-question.png'), fullPage: true })
-  }
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )

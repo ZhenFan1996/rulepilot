@@ -16,7 +16,7 @@ class TeachingRunWorkloadPolicyTest {
 
     @Test
     void countsEverySectionFallbackReadAndItsSharedThreeCallRecovery() {
-        var demand = policy.demand(plan(19, true, false));
+        var demand = policy.demand(plan(19, true));
 
         // Three searches, one possible image read, and one canonical fallback read per section.
         assertThat(demand.requiredToolCalls()).isEqualTo(95);
@@ -27,7 +27,7 @@ class TeachingRunWorkloadPolicyTest {
 
     @Test
     void doesNotInflateACompactTextLessonToAnUnrelatedConfiguredFloor() {
-        var demand = policy.demand(plan(3, false, false));
+        var demand = policy.demand(plan(3, false));
 
         assertThat(demand.requiredToolCalls()).isEqualTo(9);
         assertThat(demand.requiredModelCalls()).isEqualTo(29);
@@ -35,24 +35,15 @@ class TeachingRunWorkloadPolicyTest {
 
     @Test
     void derivesAFiniteBudgetForALargerUnlikePlanWithoutAFixedPlanCeiling() {
-        var demand = policy.demand(plan(30, true, false));
+        var demand = policy.demand(plan(30, true));
 
         assertThat(demand.requiredToolCalls()).isEqualTo(150);
         assertThat(demand.requiredModelCalls()).isEqualTo(200);
     }
 
     @Test
-    void includesProgressivePagePrefetchAndPageInterpretation() {
-        var demand = policy.demand(plan(80, true, true));
-
-        // Prefetch now delegates to the page catalog owner and no longer performs a duplicate Assistant tool read.
-        assertThat(demand.requiredToolCalls()).isEqualTo(80);
-        assertThat(demand.requiredModelCalls()).isEqualTo(500);
-    }
-
-    @Test
     void countsVisualInterpretationFromTheImmutablePlanInsteadOfMutableCatalogAvailability() {
-        assertThat(policy.demand(plan(19, true, false)).requiredModelCalls()).isEqualTo(134);
+        assertThat(policy.demand(plan(19, true)).requiredModelCalls()).isEqualTo(134);
     }
 
     @Test
@@ -62,7 +53,7 @@ class TeachingRunWorkloadPolicyTest {
                 List.of(8), List.of(8, 9), List.of(9, 10), List.of(10), List.of(11),
                 List.of(12), List.of(13), List.of(14), List.of(15), List.of(16),
                 List.of(17), List.of(18, 20, 21), List.of(19), List.of(22));
-        TeachingPlan plan = plan(pageBindings, false);
+        TeachingPlan plan = plan(pageBindings);
         int visualCalls = TeachingVisualEvidenceResolver.maximumModelCalls(plan);
 
         assertThat(visualCalls).isEqualTo(63);
@@ -70,18 +61,18 @@ class TeachingRunWorkloadPolicyTest {
                 .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 140));
     }
 
-    private TeachingPlan plan(int sectionCount, boolean sourceBound, boolean progressive) {
+    private TeachingPlan plan(int sectionCount, boolean sourceBound) {
         List<List<Integer>> pageBindings = IntStream.rangeClosed(1, sectionCount)
                 .mapToObj(position -> sourceBound ? List.of(position) : List.<Integer>of())
                 .toList();
-        return plan(pageBindings, progressive);
+        return plan(pageBindings);
     }
 
-    private TeachingPlan plan(List<List<Integer>> pageBindings, boolean progressive) {
+    private TeachingPlan plan(List<List<Integer>> pageBindings) {
         List<PlannedSection> sections = IntStream.range(0, pageBindings.size())
                 .mapToObj(position -> new PlannedSection(
                         position + 1,
-                        (progressive ? "progressive-visual-page-rules-" : "topic-") + (position + 1),
+                        "topic-" + (position + 1),
                         "Topic " + (position + 1),
                         "Teach one independently bounded relation.",
                         true,

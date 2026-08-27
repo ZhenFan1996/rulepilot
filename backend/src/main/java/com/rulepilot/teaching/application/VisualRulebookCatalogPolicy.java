@@ -5,7 +5,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualQuantityObservation;
 import java.util.Collections;
 import java.util.Comparator;
@@ -74,19 +73,13 @@ final class VisualRulebookCatalogPolicy {
                                 refreshed.visualAnchors().isEmpty()
                                         ? existing.visualAnchors()
                                         : refreshed.visualAnchors(),
-                                refreshed.iconOccurrences().isEmpty()
-                                        ? existing.iconOccurrences()
-                                        : refreshed.iconOccurrences(),
-                                existing.iconInventoryComplete() || refreshed.iconInventoryComplete(),
                                 refreshed.schemaVersion(),
                                 refreshed.sourceDependencies(),
                                 refreshed.ruleGroupIdentifiers(),
                                 true,
                                 refreshed.ruleGroupFacts());
                     }
-                    if (refreshed.visualAnchors().isEmpty()
-                            && refreshed.iconOccurrences().isEmpty()
-                            && !refreshed.iconInventoryComplete()) return existing;
+                    if (refreshed.visualAnchors().isEmpty()) return existing;
                     return new PageFact(
                             existing.pageNumber(),
                             existing.printedTerms(),
@@ -95,10 +88,6 @@ final class VisualRulebookCatalogPolicy {
                             refreshed.visualAnchors().isEmpty()
                                     ? existing.visualAnchors()
                                     : refreshed.visualAnchors(),
-                            refreshed.iconOccurrences().isEmpty()
-                                    ? existing.iconOccurrences()
-                                    : refreshed.iconOccurrences(),
-                            existing.iconInventoryComplete() || refreshed.iconInventoryComplete(),
                             existing.schemaVersion(),
                             existing.sourceDependencies(),
                             existing.ruleGroupIdentifiers(),
@@ -125,8 +114,6 @@ final class VisualRulebookCatalogPolicy {
                         summary.factualSummary(), summary.quantityObservations()),
                 summary.keywords().stream().distinct().toList(),
                 summary.visualAnchors(),
-                IconEvidencePolicy.sanitize(summary.iconOccurrences()),
-                summary.iconInventoryComplete(),
                 PageFact.CURRENT_SCHEMA_VERSION,
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
@@ -188,7 +175,7 @@ final class VisualRulebookCatalogPolicy {
         return singlePageBatches(pages);
     }
 
-    /** Model output cannot promote the bounded Teaching ledger into a completed icon or spatial audit. */
+    /** The bounded Teaching ledger keeps only page-owned source facts; spatial enrichment remains independent. */
     static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary teachingStartupFact(
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
         if (summary.ruleGroupInventoryComplete()) {
@@ -200,64 +187,11 @@ final class VisualRulebookCatalogPolicy {
                 summary.factualSummary(),
                 summary.keywords(),
                 List.of(),
-                List.of(),
-                false,
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
                 summary.ruleGroupInventoryComplete(),
                 summary.quantityObservations(),
                 summary.ruleGroupFacts());
-    }
-
-    /**
-     * Audit an icon-bearing page at higher visual resolution when the full-page pass is empty despite an icon-bearing
-     * anchor, or when a label-dense page contains multiple proposed symbols. The latter catches overconfident partial
-     * inventories without relying on a particular game's vocabulary.
-     */
-    static boolean needsIconTileFallback(
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
-        return summary.iconOccurrences().isEmpty() && !summary.visualAnchors().isEmpty();
-    }
-
-    /**
-     * A tile audit is complementary evidence, not a replacement for the full-page pass. Keep every independently
-     * observed identity and atomic row fact, prefer a grounded definition or independently verified label on
-     * collisions, and let the four-tile result decide whether the audited inventory is complete.
-     */
-    static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary mergeIconTileAudit(
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary fullPage,
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary tileAudit) {
-        if (fullPage.pageNumber() != tileAudit.pageNumber()) {
-            throw new IllegalArgumentException("icon tile audit page does not match its full-page summary");
-        }
-        Map<String, IconOccurrence> icons = mergedIcons(fullPage, tileAudit);
-        // The four-tile pass is authorized to complete the icon inventory only. It has no whole-page rule-group
-        // contract, so even an overreaching model response cannot promote partial rule observations to completeness.
-        List<String> ruleGroups = fullPage.ruleGroupIdentifiers();
-        boolean ruleGroupsComplete = fullPage.ruleGroupInventoryComplete();
-        boolean fullPageOwnsCompleteFacts = ruleGroupsComplete
-                && hasRuleGroupFactBindings(ruleGroups, fullPage.ruleGroupFacts());
-        String mergedFacts = mergeTextBlocks(fullPage.factualSummary(), tileAudit.factualSummary(), "\n");
-        if (ruleGroupsComplete) {
-            validateRuleGroupFactBindings(ruleGroups, fullPage.ruleGroupFacts());
-        }
-        return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
-                fullPage.pageNumber(),
-                fullPage.printedTerms(),
-                mergedFacts,
-                Stream.concat(fullPage.keywords().stream(), tileAudit.keywords().stream())
-                        .distinct()
-                        .toList(),
-                fullPage.visualAnchors().isEmpty() ? tileAudit.visualAnchors() : fullPage.visualAnchors(),
-                List.copyOf(icons.values()),
-                tileAudit.iconInventoryComplete(),
-                Stream.concat(fullPage.sourceDependencies().stream(), tileAudit.sourceDependencies().stream())
-                        .distinct()
-                        .toList(),
-                ruleGroups,
-                ruleGroupsComplete && fullPageOwnsCompleteFacts,
-                compatibleQuantityObservations(ruleGroups, fullPage, tileAudit),
-                fullPage.ruleGroupFacts());
     }
 
     /**
@@ -269,13 +203,28 @@ final class VisualRulebookCatalogPolicy {
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary existing,
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary observation) {
         if (!observation.ruleGroupInventoryComplete()) {
-            return mergeIconTileAudit(existing, observation);
+            if (existing.pageNumber() != observation.pageNumber()) {
+                throw new IllegalArgumentException("persisted visual page observation does not match its existing page");
+            }
+            List<String> ruleGroups = existing.ruleGroupIdentifiers();
+            return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
+                    existing.pageNumber(),
+                    existing.printedTerms(),
+                    mergeTextBlocks(existing.factualSummary(), observation.factualSummary(), "\n"),
+                    Stream.concat(existing.keywords().stream(), observation.keywords().stream()).distinct().toList(),
+                    existing.visualAnchors().isEmpty() ? observation.visualAnchors() : existing.visualAnchors(),
+                    Stream.concat(existing.sourceDependencies().stream(), observation.sourceDependencies().stream())
+                            .distinct()
+                            .toList(),
+                    ruleGroups,
+                    existing.ruleGroupInventoryComplete(),
+                    compatibleQuantityObservations(ruleGroups, existing, observation),
+                    existing.ruleGroupFacts());
         }
         if (existing.pageNumber() != observation.pageNumber()) {
             throw new IllegalArgumentException("persisted visual page observation does not match its existing page");
         }
         validateRuleGroupFactBindings(observation.ruleGroupIdentifiers(), observation.ruleGroupFacts());
-        Map<String, IconOccurrence> icons = mergedIcons(observation, existing);
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 observation.pageNumber(),
                 observation.printedTerms(),
@@ -284,8 +233,6 @@ final class VisualRulebookCatalogPolicy {
                 observation.visualAnchors().isEmpty()
                         ? existing.visualAnchors()
                         : observation.visualAnchors(),
-                List.copyOf(icons.values()),
-                observation.iconInventoryComplete() || existing.iconInventoryComplete(),
                 observation.sourceDependencies(),
                 observation.ruleGroupIdentifiers(),
                 true,
@@ -311,8 +258,6 @@ final class VisualRulebookCatalogPolicy {
                 fact.factualSummary(),
                 fact.keywords(),
                 fact.visualAnchors(),
-                fact.iconOccurrences(),
-                fact.iconInventoryComplete(),
                 fact.sourceDependencies(),
                 fact.ruleGroupIdentifiers(),
                 fact.ruleGroupInventoryComplete(),
@@ -329,16 +274,6 @@ final class VisualRulebookCatalogPolicy {
                 .filter(observation -> identities.contains(observation.ruleGroupIdentifier()))
                 .distinct()
                 .toList();
-    }
-
-    private static Map<String, IconOccurrence> mergedIcons(
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary first,
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary second) {
-        Map<String, IconOccurrence> icons = new LinkedHashMap<>();
-        Stream.concat(first.iconOccurrences().stream(), second.iconOccurrences().stream())
-                .forEach(icon -> icons.merge(
-                        icon.groupKey(), icon, VisualRulebookCatalogPolicy::preferIconEvidence));
-        return icons;
     }
 
     static void validateRuleGroupFactBindings(
@@ -366,40 +301,6 @@ final class VisualRulebookCatalogPolicy {
         if (left.isBlank()) return right;
         if (right.isBlank() || left.equals(right)) return left;
         return left + separator + right;
-    }
-
-    /**
-     * A glossary crop must be a compact, bounded region rather than a page- or component-sized rectangle. Semantic
-     * classification belongs to the structured visual model; this gate checks geometry and a non-trivial label only.
-     */
-    static boolean publishableLocalizedIcon(
-            IconOccurrence icon, int x, int y, int width, int height) {
-        if (x < 0 || y < 0 || width < 12 || height < 12 || x + width > 1_000 || y + height > 1_000) return false;
-        int longSide = Math.max(width, height);
-        int shortSide = Math.min(width, height);
-        long area = (long) width * height;
-        if (longSide > 180 || area > 15_000L || (longSide >= 150 && area >= 12_000L)
-                || longSide > shortSide * 4) {
-            return false;
-        }
-        return icon.name().codePointCount(0, icon.name().length()) >= 2;
-    }
-
-    private static IconOccurrence preferIconEvidence(IconOccurrence first, IconOccurrence second) {
-        if (first.meaningStatus() != second.meaningStatus()) {
-            return meaningRank(first.meaningStatus()) > meaningRank(second.meaningStatus()) ? first : second;
-        }
-        if (first.verifiedVisualLabel().isBlank() && !second.verifiedVisualLabel().isBlank()) return second;
-        return first;
-    }
-
-    private static int meaningRank(
-            com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus status) {
-        return switch (status) {
-            case EXPLICIT -> 2;
-            case IDENTIFIED -> 1;
-            case UNEXPLAINED -> 0;
-        };
     }
 
     private static PageInput pageInput(int pageNumber, PageFact fact) {

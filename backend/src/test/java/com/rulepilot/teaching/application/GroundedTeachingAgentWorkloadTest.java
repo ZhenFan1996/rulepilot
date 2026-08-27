@@ -17,7 +17,6 @@ import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
@@ -60,17 +59,18 @@ class GroundedTeachingAgentWorkloadTest {
                         owner, documentVersionId, assistantRunId, Instant.now().plusSeconds(30)));
         var refiner = new TeachingSourcePageEvidenceRefiner(
                 scopes, tools, new PolicyEvidenceVerifier(), invocations);
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
                 critic,
                 invocations,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
+                visualFacts,
                 3,
                 3,
-                refiner);
+                refiner,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
         TeachingPlan plan = plan(versionId);
         WorkloadDemand demand = agent.workload(plan);
         invocations.admit(demand);

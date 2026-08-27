@@ -25,12 +25,12 @@ class TeachingVisualEvidenceResolverWorkloadTest {
 
     @Test
     void countsEveryBoundPageEvenWhenASectionBindsMoreThanOneReadBatch() {
-        TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)), false);
+        TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)));
 
         assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(18);
-        assertThat(TeachingSectionEvidenceRetriever.maximumToolCalls(plan, plan.sections().getFirst(), 3))
+        assertThat(TeachingSectionEvidenceRetriever.maximumToolCalls(plan.sections().getFirst(), 3))
                 .isEqualTo(3);
-        assertThat(TeachingSourcePageEvidenceRefiner.maximumToolCalls(plan, plan.sections().getFirst()))
+        assertThat(TeachingSourcePageEvidenceRefiner.maximumToolCalls(plan.sections().getFirst()))
                 .isEqualTo(2);
     }
 
@@ -51,28 +51,24 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 assertThat(pageNumbers).hasSizeLessThanOrEqualTo(5);
                 reads.incrementAndGet();
                 return pageNumbers.stream()
-                        .map(page -> new RuleEvidence(
-                                UUID.randomUUID(),
-                                documentVersionId,
-                                "RULES",
-                                "Page " + page,
-                                "Image-only page " + page,
-                                page,
-                                page,
-                                List.of(new RulePageImage(page, "image/png", new byte[] {1}, 1, 1)),
-                                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER))
+                        .map(page -> visualPage(documentVersionId, page, true))
                         .toList();
             }
         };
+        ImmediateAuditedAgentInvocations invocations = new ImmediateAuditedAgentInvocations();
+        VisualRulebookPageFacts facts = VisualRulebookPageFacts.empty();
         TeachingVisualEvidenceResolver resolver = new TeachingVisualEvidenceResolver(
                 tools,
-                new ImmediateAuditedAgentInvocations(),
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable());
-        TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)), true);
+                invocations,
+                facts,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, facts));
+        TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)));
+        List<RuleEvidence> retrieved = IntStream.rangeClosed(1, 6)
+                .mapToObj(page -> visualPage(plan.documentVersionId(), page, false))
+                .toList();
 
         var resolution = resolver.resolve(
-                plan, plan.sections().getFirst(), List.of(), UUID.randomUUID());
+                plan, plan.sections().getFirst(), retrieved, UUID.randomUUID());
 
         assertThat(reads).hasValue(2);
         assertThat(resolution.toolCalls()).isEqualTo(2);
@@ -98,22 +94,13 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                     UUID documentVersionId,
                     Set<Integer> pageNumbers,
                     boolean includePageImages) {
-                return List.of(new RuleEvidence(
-                        UUID.randomUUID(),
-                        versionId,
-                        "RULES",
-                        "Page 1",
-                        "Image-only page",
-                        1,
-                        1,
-                        List.of(new RulePageImage(1, "image/png", new byte[] {1}, 100, 100)),
-                        RuleEvidence.ContentKind.VISUAL_PLACEHOLDER));
+                return List.of(visualPage(versionId, 1, true));
             }
         };
         VisualRulebookPageCatalogModel catalog = new VisualRulebookPageCatalogModel() {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
-                throw new AssertionError("progressive teaching should use its page-scoped visual path");
+                throw new AssertionError("teaching page facts must use the typed teaching catalog contract");
             }
 
             @Override
@@ -128,8 +115,6 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                         List.of("turn"),
                         List.of(),
                         List.of(),
-                        false,
-                        List.of(),
                         List.of("turn"),
                         true,
                         List.of(),
@@ -142,11 +127,12 @@ class TeachingVisualEvidenceResolverWorkloadTest {
             }
         };
         StoredFacts facts = new StoredFacts();
+        ImmediateAuditedAgentInvocations invocations = new ImmediateAuditedAgentInvocations();
         TeachingVisualEvidenceResolver resolver = new TeachingVisualEvidenceResolver(
                 tools,
-                new ImmediateAuditedAgentInvocations(),
+                invocations,
                 facts,
-                catalog);
+                VisualRulebookCatalogerTestFixture.create(tools, invocations, facts, catalog));
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
@@ -154,7 +140,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 "Retry a failed page interpretation without repeating the page read.",
                 List.of(new TeachingPlan.PlannedSection(
                         1,
-                        "progressive-visual-page-rules-1",
+                        "turn",
                         "Turn",
                         "Teach the visible turn.",
                         true,
@@ -166,7 +152,10 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 Instant.now());
 
         var resolution = resolver.resolve(
-                plan, plan.sections().getFirst(), List.of(), UUID.randomUUID());
+                plan,
+                plan.sections().getFirst(),
+                List.of(visualPage(versionId, 1, false)),
+                UUID.randomUUID());
 
         assertThat(interpretations).hasValue(2);
         assertThat(resolution.toolCalls()).isOne();
@@ -205,7 +194,6 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 facts,
                 new ImmediateAuditedAgentInvocations(),
                 Duration.ofSeconds(2),
-                Duration.ofSeconds(2),
                 4,
                 1);
         AssistantReadTools tools = new AssistantReadTools() {
@@ -221,24 +209,16 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                     boolean includePageImages) {
                 assertThat(includePageImages).isFalse();
                 evidenceReads.incrementAndGet();
-                return List.of(new RuleEvidence(
-                        UUID.nameUUIDFromBytes((documentVersionId + ":1").getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-                        documentVersionId,
-                        "RULES",
-                        "Page 1",
-                        "Image-only page",
-                        1,
-                        1,
-                        List.of(),
-                        RuleEvidence.ContentKind.VISUAL_PLACEHOLDER));
+                return List.of(visualPage(documentVersionId, 1, false));
             }
         };
         TeachingVisualEvidenceResolver resolver = new TeachingVisualEvidenceResolver(
                 tools, new ImmediateAuditedAgentInvocations(), facts, cataloger);
-        TeachingPlan plan = plan(versionId, List.of(List.of(1), List.of(1), List.of(1)), true);
+        TeachingPlan plan = plan(versionId, List.of(List.of(1), List.of(1), List.of(1)));
 
         plan.sections().forEach(section -> {
-            var resolution = resolver.resolve(plan, section, List.of(), UUID.randomUUID());
+            var resolution = resolver.resolve(
+                    plan, section, List.of(visualPage(versionId, 1, false)), UUID.randomUUID());
             assertThat(resolution.evidence()).singleElement().satisfies(source -> {
                 assertThat(source.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
                 assertThat(source.excerpt()).contains("Perform the visible action");
@@ -281,12 +261,14 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                         .toList();
             }
         };
+        ImmediateAuditedAgentInvocations invocations = new ImmediateAuditedAgentInvocations();
+        VisualRulebookPageFacts facts = VisualRulebookPageFacts.empty();
         TeachingVisualEvidenceResolver resolver = new TeachingVisualEvidenceResolver(
                 tools,
-                new ImmediateAuditedAgentInvocations(),
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable());
-        TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)), true);
+                invocations,
+                facts,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, facts));
+        TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)));
         List<RuleEvidence> prior = IntStream.rangeClosed(1, 6)
                 .mapToObj(page -> new RuleEvidence(
                         UUID.randomUUID(),
@@ -297,7 +279,9 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                         page,
                         page,
                         List.of(),
-                        RuleEvidence.ContentKind.CANONICAL_TEXT))
+                        page == 1
+                                ? RuleEvidence.ContentKind.VISUAL_PLACEHOLDER
+                                : RuleEvidence.ContentKind.CANONICAL_TEXT))
                 .toList();
 
         var resolution = resolver.resolve(
@@ -314,23 +298,23 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     }
 
     @Test
-    void keepsAdmissionIndependentOfMutableCatalogAvailabilityAndAddsProgressivePrefetch() {
-        TeachingPlan plan = plan(List.of(List.of(1), List.of(2), List.of(3)), true);
+    void countsVisualInterpretationFromTheImmutablePageBindings() {
+        TeachingPlan plan = plan(List.of(List.of(1), List.of(2), List.of(3)));
 
         // Reserve the longest mutually exclusive owner branch: initial semantic, OCR, then changed typed semantic.
         // The ordinary path remains one image-to-typed-facts call per distinct page.
         assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(9);
     }
 
-    private TeachingPlan plan(List<List<Integer>> sourcePages, boolean progressive) {
-        return plan(UUID.randomUUID(), sourcePages, progressive);
+    private TeachingPlan plan(List<List<Integer>> sourcePages) {
+        return plan(UUID.randomUUID(), sourcePages);
     }
 
-    private TeachingPlan plan(UUID documentVersionId, List<List<Integer>> sourcePages, boolean progressive) {
+    private TeachingPlan plan(UUID documentVersionId, List<List<Integer>> sourcePages) {
         List<TeachingPlan.PlannedSection> sections = IntStream.range(0, sourcePages.size())
                 .mapToObj(index -> new TeachingPlan.PlannedSection(
                         index + 1,
-                        (progressive ? "progressive-visual-page-rules-" : "topic-") + (index + 1),
+                        "topic-" + (index + 1),
                         "Topic " + (index + 1),
                         "Teach only the bounded source-page relation.",
                         true,
@@ -349,6 +333,23 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 Instant.now());
     }
 
+    private static RuleEvidence visualPage(UUID documentVersionId, int pageNumber, boolean includeImage) {
+        return new RuleEvidence(
+                UUID.nameUUIDFromBytes((documentVersionId + ":" + pageNumber)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                documentVersionId,
+                "RULES",
+                "Page " + pageNumber,
+                "Image-only page " + pageNumber,
+                pageNumber,
+                pageNumber,
+                includeImage
+                        ? List.of(new RulePageImage(
+                                pageNumber, "image/png", new byte[] {1}, 100, 100))
+                        : List.of(),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
+    }
+
     private static PageFact completeFact(int pageNumber) {
         return new PageFact(
                 pageNumber,
@@ -356,8 +357,6 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 "TURN: Perform the visible action.",
                 List.of("turn"),
                 List.of(),
-                List.of(),
-                false,
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("turn"),

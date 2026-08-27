@@ -53,7 +53,6 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
             TeachingPlan.PlannedSection planned,
             UUID assistantRunId,
             TeachingSectionEvidenceRetriever.Result deterministic) {
-        if (ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) return deterministic;
         if (!TeachingEvidenceRefinementPolicy.requiresRefinement(planned, deterministic)) return deterministic;
         if (scopes.create(plan.createdBy(), plan.documentVersionId(), assistantRunId).isEmpty()) return deterministic;
         List<Integer> plannedSourcePages = plannedSourcePages(planned);
@@ -123,10 +122,8 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                 totalToolCalls);
     }
 
-    static int maximumToolCalls(TeachingPlan plan, TeachingPlan.PlannedSection planned) {
-        if (plan == null || planned == null
-                || ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
-                || planned.sourcePageNumbers().isEmpty()) {
+    static int maximumToolCalls(TeachingPlan.PlannedSection planned) {
+        if (planned == null || planned.sourcePageNumbers().isEmpty()) {
             return 0;
         }
         return TeachingVisualEvidenceResolver.maximumPageReadToolCalls(planned);

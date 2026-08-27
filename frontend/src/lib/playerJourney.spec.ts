@@ -488,7 +488,7 @@ describe('journey snapshot acceptance', () => {
       ...run('LESSON_PLANNING'),
       activities: [{
         sequence: 1,
-        operation: 'transcribeTeachingVisualPage|4|10',
+        operation: 'inspectTeachingVisualPage|4|10',
         summary: 'Provider added a new outcome',
         outcome: 'PAUSED_BY_PROVIDER',
       }],
@@ -496,7 +496,7 @@ describe('journey snapshot acceptance', () => {
 
     expect(acceptJourneyRun(null, incoming).activities).toEqual([{
       sequence: 1,
-      operation: 'transcribeTeachingVisualPage|4|10',
+      operation: 'inspectTeachingVisualPage|4|10',
       summary: 'Provider added a new outcome',
       outcome: 'UNKNOWN',
     }])

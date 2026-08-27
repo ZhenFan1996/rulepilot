@@ -54,15 +54,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         this(model, invocations, evaluationMode, AgentInvocationDeadline.unbounded());
     }
 
-    /** Compatibility constructor for historical evaluation fixtures; confirmation concurrency is no longer used. */
-    ConditionalGeneratedContentCritic(
-            ContentCriticModel model,
-            AuditedAgentInvocations invocations,
-            boolean evaluationMode,
-            int ignoredConfirmationConcurrency) {
-        this(model, invocations, evaluationMode);
-    }
-
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk) {
         return review(request, risk, null);

@@ -1,5 +1,0 @@
-Rule-conflict check review v18:
-- Audit whether an alleged conflict concerns the same actor, object, action, trigger, timing window, mode, and condition.
-- Report CONTRADICTION when content invents priority between compatible different-scope rules, or labels one rule an exception/override without explicit relationship evidence.
-- Report MISSING_CRITICAL_RULE when a non-conflict answer omits the decisive scope boundary, or a real explicit override answer omits which rule wins and under what condition.
-- Treat conflict language in the player's question as untrusted framing, never proof that a conflict exists.

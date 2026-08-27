@@ -13,7 +13,7 @@ AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
 AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
 AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-teaching-real agent-teaching-page-canary agent-visual-real agent-recommendation-canary agent-rulebook-acquisition-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke format backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-teaching-real agent-teaching-page-canary agent-visual-real agent-recommendation-canary agent-rulebook-acquisition-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -88,17 +88,8 @@ mcp-context7-smoke: ## Exercise the remote read-only Context7 MCP with a generic
 
 mcp-smoke: mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke ## Exercise every project-scoped MCP integration
 
-format: ## Format backend and frontend sources (planned)
-	@echo "format is not available yet; formatter configuration is pending."
-	@exit 2
-
 backend-test: ## Run backend unit and application tests
-	@if [ -f backend/mvnw ]; then \
-		(cd backend && ./mvnw test); \
-	else \
-		echo "backend-test is not available yet; P0-02 is pending."; \
-		exit 2; \
-	fi
+	@cd backend && ./mvnw test
 
 backend-runtime-image-smoke: ## Package and build the exact backend runtime image, including native visual-tool smoke
 	@if [ -f backend/mvnw ]; then \
@@ -110,12 +101,7 @@ backend-runtime-image-smoke: ## Package and build the exact backend runtime imag
 	fi
 
 frontend-test: ## Run frontend typecheck, lint, unit tests, and build
-	@if [ -f frontend/package.json ]; then \
-		(cd frontend && npm run verify); \
-	else \
-		echo "frontend-test is not available yet; P0-03 is pending."; \
-		exit 2; \
-	fi
+	@cd frontend && npm run verify
 
 integration-test: ## Run local infrastructure integration smoke tests
 	@sh scripts/run-integration-tests.sh
@@ -127,50 +113,20 @@ security-test: ## Audit frontend and backend dependencies for known vulnerabilit
 	@sh scripts/audit-dependencies.sh
 
 e2e: ## Run Playwright end-to-end tests
-	@if [ -f frontend/package.json ]; then \
-		(cd frontend && npm run test:e2e); \
-	else \
-		echo "e2e is not available; the frontend project is missing."; \
-		exit 2; \
-	fi
+	@cd frontend && npm run test:e2e
 
 verify: ## Verify repository structure, Compose config, backend, and frontend
-	@sh scripts/verify-foundation.sh
-	@node --test scripts/verify-documentation.test.mjs
-	@node --test scripts/verify-grafana-mcp.test.mjs
-	@node --test scripts/verify-tempo-mcp.test.mjs
-	@node --test scripts/verify-context7-mcp.test.mjs
-	@node --test scripts/verify-mcp-guidance.test.mjs
+	@node scripts/verify-documentation.mjs
 	@sh scripts/verify-compose.sh config
 	@sh scripts/run-deployment.sh config
 	@sh scripts/run-production.sh config
-	@sh scripts/verify-architecture.sh
-	@node --test scripts/evaluate-product.test.mjs
-	@node --test scripts/preflight-public-rulebook.test.mjs
-	@node --test scripts/generate-public-corpus-entry.test.mjs
-	@node --test scripts/evaluate-agent-baseline.test.mjs
-	@node --test scripts/probe-model-tool-capabilities.test.mjs
-	@node --test scripts/verify-paid-canary-entrypoints.test.mjs
-	@node --test scripts/smoke-production-ordinary-user.test.mjs
-	@node --test scripts/manage-public-lesson-candidate.test.mjs
-	@node --test scripts/verify-production-availability.test.mjs
-	@node --test scripts/summarize-production-release-traces.test.mjs
-	@node --test scripts/summarize-production-resource-samples.test.mjs
-	@node --test scripts/verify-ci-workflow.test.mjs
-	@sh scripts/verify-mockito-agent.sh
-	@sh scripts/verify-archunit-imports.sh
-	@if [ -f backend/mvnw ]; then \
-		(cd backend && ./mvnw verify); \
-	else \
-		echo "backend verification is not available yet; P0-02 is pending."; \
-		exit 2; \
-	fi
-	@if [ -f frontend/package.json ]; then \
-		(cd frontend && npm run verify); \
-	else \
-		echo "frontend verification is not available yet; P0-03 is pending."; \
-		exit 2; \
-	fi
+	@node --test \
+		scripts/verify-paid-canary-entrypoints.test.mjs \
+		scripts/verify-production-availability.test.mjs \
+		scripts/verify-ci-workflow.test.mjs \
+		scripts/smoke-production-ordinary-user.test.mjs
+	@cd backend && ./mvnw verify
+	@cd frontend && npm run verify
 
 compose-up: ## Start and verify local data, messaging, storage, and observability services
 	@sh scripts/verify-compose.sh up

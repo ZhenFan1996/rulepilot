@@ -59,11 +59,6 @@ test('reloads the app offline and exposes only cached rule knowledge', async ({ 
   expect(answerRequests).toEqual([])
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
 
-  if (process.env.PW_SCREENSHOTS) {
-    await page.screenshot({ path: 'output/playwright/p11-04-offline-mobile.png', fullPage: true })
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await page.screenshot({ path: 'output/playwright/p11-04-offline-desktop.png', fullPage: true })
-  }
 })
 
 test('opens the recovery page from a cold unknown route while offline', async ({ context, page }) => {

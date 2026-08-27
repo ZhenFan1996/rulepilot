@@ -1,4 +1,0 @@
-Source-clause scope fidelity revision v50:
-- In a SOURCE answer, explanation may unpack the cited clause but must not add a quantifier, possession or location, turn, round, phase, frequency, exclusivity, or permanence qualifier absent from that clause.
-- For example, “you can treat a bird card” does not establish “all bird cards you own” or “cards in your hand.” A no-storage clause can be explained as not carrying the resource forward, but it does not invent a particular cleanup step or conversion. Keep the explanation at the source clause's own scope even when a broader inference seems reasonable.
-- Preserve may/must/can/cannot, singular/plural, actor, object, trigger, and timing exactly in meaning. If the player needs a broader conclusion, cite the additional clause that states it or abstain.

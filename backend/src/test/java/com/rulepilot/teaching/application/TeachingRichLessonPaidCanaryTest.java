@@ -7,7 +7,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
@@ -16,7 +15,6 @@ import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
-import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.PlayerLocale;
@@ -33,7 +31,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.adapter.out.model.SpringAiTeachingLessonModel;
 import com.rulepilot.teaching.adapter.out.model.SpringAiTeachingOutlineModel;
@@ -91,10 +88,6 @@ class TeachingRichLessonPaidCanaryTest {
             ".local/agent-evaluation/teaching-iteration-2-captain-is-dead-canary.json";
     private static final String CANARY_FAILURE_OUTPUT =
             ".local/agent-evaluation/teaching-iteration-2-captain-is-dead-outline-failure.json";
-    private static final String GSTONE_VISUAL_CANARY_INPUT =
-            ".local/agent-evaluation/gstone-endeavor-visual-teaching-preparation-v1.json";
-    private static final String GSTONE_VISUAL_LESSON_OUTPUT =
-            ".local/agent-evaluation/gstone-endeavor-visual-teaching-lesson-v1.json";
     private static final String OWNER = "teaching-richness-canary";
 
     private final ObjectMapper mapper = JsonMapper.builder().findAndAddModules().build();
@@ -129,39 +122,28 @@ class TeachingRichLessonPaidCanaryTest {
                 "请根据当前规则书自己决定最适合第一次开局的完整教学结构；复杂规则要拆成可照做的单元。",
                 OWNER);
         OutlineDraft outline;
-        boolean outlineReplayed =
-                "true".equalsIgnoreCase(System.getenv("RULEPILOT_REUSE_ITERATION_2_TEACHING_OUTLINE"));
         long outlineStarted = System.nanoTime();
-        if (outlineReplayed) {
-            Path captured = root.resolve(CANARY_OUTPUT);
-            var capturedNode = mapper.readTree(captured.toFile());
-            String raw = capturedNode.path("result").path("rawOutlineProviderResponses").get(0).asText();
-            rawOutlineResponses.add(raw);
-            outline = mapper.readValue(raw, OutlineDraft.class);
-            TeachingSourceCoverageContract.requireCompleteModelContract(outlineRequest, outline);
-        } else {
-            RuntimeModelConfiguration outlineConfiguration = configuration(
-                    provider, recordingChatModel(provider, rawOutlineResponses));
-            SpringAiTeachingOutlineModel outlineModel = new SpringAiTeachingOutlineModel(
-                    outlineConfiguration, prompts);
-            try {
-                outline = outlineModel.organize(outlineRequest);
-            } catch (RuntimeException failure) {
-                Path failureOutput = root.resolve(CANARY_FAILURE_OUTPUT);
-                Files.createDirectories(failureOutput.getParent());
-                Files.writeString(
-                        failureOutput,
-                        mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
-                                "generatedAt", Instant.now().toString(),
-                                "latencyMs", elapsedMillis(outlineStarted),
-                                "failureType", failure.getClass().getName(),
-                                "failureMessage", String.valueOf(failure.getMessage()),
-                                "rawOutlineProviderResponses", List.copyOf(rawOutlineResponses))) + "\n",
-                        StandardCharsets.UTF_8);
-                throw failure;
-            } finally {
-                outlineModel.close();
-            }
+        RuntimeModelConfiguration outlineConfiguration = configuration(
+                provider, recordingChatModel(provider, rawOutlineResponses));
+        SpringAiTeachingOutlineModel outlineModel = new SpringAiTeachingOutlineModel(
+                outlineConfiguration, prompts);
+        try {
+            outline = outlineModel.organize(outlineRequest);
+        } catch (RuntimeException failure) {
+            Path failureOutput = root.resolve(CANARY_FAILURE_OUTPUT);
+            Files.createDirectories(failureOutput.getParent());
+            Files.writeString(
+                    failureOutput,
+                    mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                            "generatedAt", Instant.now().toString(),
+                            "latencyMs", elapsedMillis(outlineStarted),
+                            "failureType", failure.getClass().getName(),
+                            "failureMessage", String.valueOf(failure.getMessage()),
+                            "rawOutlineProviderResponses", List.copyOf(rawOutlineResponses))) + "\n",
+                    StandardCharsets.UTF_8);
+            throw failure;
+        } finally {
+            outlineModel.close();
         }
         long outlineLatencyMs = elapsedMillis(outlineStarted);
         Instant outlineCompletedAt = Instant.now();
@@ -196,25 +178,24 @@ class TeachingRichLessonPaidCanaryTest {
                 new ToolScope(OWNER, versionId, runId, Instant.now().plusSeconds(300))));
         var refiner = new TeachingSourcePageEvidenceRefiner(
                 scopes, corpus, new PolicyEvidenceVerifier(), audit);
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 corpus,
                 sections,
                 new PolicyEvidenceVerifier(),
                 publicationCritic,
                 audit,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
+                visualFacts,
                 3,
                 3,
-                refiner);
+                refiner,
+                VisualRulebookCatalogerTestFixture.unavailable(corpus, audit, visualFacts));
         List<IllustratedLesson> progressSnapshots = new CopyOnWriteArrayList<>();
         long lessonStarted = System.nanoTime();
         IllustratedLesson lesson = agent.createBase(plan, runId, null, progressSnapshots::add);
         long lessonLatencyMs = elapsedMillis(lessonStarted);
-        Map<String, Object> criticProbe = criticProbe(plan, lesson, sections, provider, prompts, audit, runId);
 
         Map<String, Object> result = result(
-                root,
                 provider,
                 outline,
                 plan,
@@ -224,14 +205,12 @@ class TeachingRichLessonPaidCanaryTest {
                 rawSectionResponses,
                 rawCriticResponses,
                 audit,
-                outlineReplayed,
                 teachingTemperature,
                 outlineLatencyMs,
                 lessonLatencyMs,
                 progressSnapshots,
                 outlineCompletedAt,
-                planReloadedAt,
-                criticProbe);
+                planReloadedAt);
         Path output = root.resolve(canaryOutput(provider.provider()));
         Files.createDirectories(output.getParent());
         Files.writeString(
@@ -269,164 +248,8 @@ class TeachingRichLessonPaidCanaryTest {
         assertThat(rawSectionResponses).isNotEmpty();
     }
 
-    @Test
-    void publishesTheCapturedCompleteGstoneVisualLedgerAsARichLesson() throws Exception {
-        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_GSTONE_VISUAL_LESSON_CANARY")));
-        Path root = Path.of(System.getProperty("user.dir")).getParent();
-        Path input = root.resolve(GSTONE_VISUAL_CANARY_INPUT);
-        assumeTrue(Files.isRegularFile(input), "complete ignored Gstone visual preparation artifact is required");
-        JsonNode preparation = mapper.readTree(input.toFile());
-        assertThat(preparation.path("catalogStageComplete").asBoolean()).isTrue();
-        assertThat(preparation.path("outlineStageComplete").asBoolean()).isTrue();
-        assertThat(preparation.path("canonicalSlotCount").asInt()).isGreaterThan(128);
-
-        String providerName = java.util.Optional.ofNullable(System.getenv("RULEPILOT_TEACHING_CANARY_PROVIDER"))
-                .filter(value -> !value.isBlank())
-                .orElse("deepseek")
-                .toLowerCase(Locale.ROOT);
-        Provider provider = provider(providerName);
-        OutlineDraft outline = mapper.treeToValue(preparation.path("outline"), OutlineDraft.class);
-        UUID versionId = UUID.nameUUIDFromBytes(
-                "gstone-endeavor-deep-sea-visual-v1".getBytes(StandardCharsets.UTF_8));
-        String learningGoal = "先理解整局，再把复杂规则拆成第一次开桌能照做的清晰教学单元。";
-        TeachingPlan generatedPlan = new TeachingPlanFactory().create(versionId, learningGoal, OWNER, outline);
-        TeachingPlan plan = TeachingPlanPersistenceRoundTrip.serializeAndReload(generatedPlan);
-        CatalogEvidence corpus = new CatalogEvidence(versionId, visualPageEvidence(preparation));
-
-        List<String> rawSectionResponses = Collections.synchronizedList(new ArrayList<>());
-        List<String> rawCriticResponses = Collections.synchronizedList(new ArrayList<>());
-        VersionedAgentPrompts prompts = prompts();
-        RuntimeModelConfiguration configuration = configuration(
-                provider,
-                recordingChatModel(provider, rawSectionResponses),
-                recordingChatModel(provider, rawCriticResponses));
-        RecordingTeachingModel sections = new RecordingTeachingModel(new SpringAiTeachingLessonModel(
-                configuration, prompts, 0.2d));
-        CanaryInvocations audit = new CanaryInvocations();
-        GeneratedContentCritic publicationCritic = new ConditionalGeneratedContentCritic(
-                new SpringAiContentCriticModel(configuration, prompts), audit, false);
-        UUID runId = UUID.randomUUID();
-        NativeToolScopes scopes = mock(NativeToolScopes.class);
-        when(scopes.create(eq(OWNER), eq(versionId), eq(runId))).thenReturn(java.util.Optional.of(
-                new ToolScope(OWNER, versionId, runId, Instant.now().plusSeconds(300))));
-        var refiner = new TeachingSourcePageEvidenceRefiner(
-                scopes, corpus, new PolicyEvidenceVerifier(), audit);
-        GroundedTeachingAgent agent = new GroundedTeachingAgent(
-                corpus,
-                sections,
-                new PolicyEvidenceVerifier(),
-                publicationCritic,
-                audit,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
-                3,
-                3,
-                refiner);
-        List<IllustratedLesson> progressSnapshots = new CopyOnWriteArrayList<>();
-        long lessonStarted = System.nanoTime();
-        IllustratedLesson lesson = agent.createBase(plan, runId, null, progressSnapshots::add);
-        long lessonLatencyMs = elapsedMillis(lessonStarted);
-        List<Map<String, Object>> fieldDiffs = lesson.sections().stream()
-                .map(section -> fieldDiff(section, sections.draftAttempts(section.topicKey())))
-                .toList();
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("schemaVersion", 1);
-        result.put("generatedAt", Instant.now().toString());
-        result.put("caseId", "gstone-endeavor-deep-sea-visual-v1");
-        result.put("sourceUrl", preparation.path("sourceUrl").asText());
-        result.put("provider", provider.provider());
-        result.put("model", provider.model());
-        result.put("visualCatalogModelCalls", preparation.path("visualModelCalls").asInt());
-        result.put("visualCatalogLatencyMs", preparation.path("visualCatalogLatencyMs").asLong());
-        result.put("visualCatalogParallelism", preparation.path("peakVisualParallelism").asInt());
-        result.put("outlineModelCalls", preparation.path("outlineModelCalls").asInt());
-        result.put("outlineLatencyMs", preparation.path("outlineLatencyMs").asLong());
-        result.put("sectionModelCalls", audit.modelCalls.get());
-        result.put("toolCalls", audit.toolCalls.get());
-        result.put("criticCalls", audit.criticCalls.get());
-        result.put("lessonLatencyMs", lessonLatencyMs);
-        result.put("lessonStatus", lesson.status().name());
-        result.put("sectionCount", lesson.sections().size());
-        result.put("stepCount", lesson.sections().stream().mapToInt(section -> section.steps().size()).sum());
-        result.put("visibleCharacterCount", visibleCharacters(lesson));
-        result.put("progressSnapshotCount", progressSnapshots.size());
-        result.put("activityTimeline", List.copyOf(audit.events));
-        result.put("modelOperations", List.copyOf(audit.modelOperations));
-        result.put("toolOperations", List.copyOf(audit.toolOperations));
-        result.put("wholeGameUnderstanding", plan.wholeGameContext());
-        result.put("planTeachingUnits", visiblePlanUnits(plan));
-        result.put("publishedLesson", visibleLesson(lesson));
-        result.put("rawStructuredDrafts", sections.visibleDrafts());
-        result.put("rawSectionProviderResponses", List.copyOf(rawSectionResponses));
-        result.put("rawCriticProviderResponses", List.copyOf(rawCriticResponses));
-        result.put("fieldPreservation", fieldDiffs);
-        result.put("allPlayerFacingFieldsPreserved", fieldDiffs.stream()
-                .allMatch(diff -> Boolean.TRUE.equals(diff.get("playerFacingFieldsExact"))));
-        result.put("allPublishedFieldsComeFromRaw", fieldDiffs.stream()
-                .allMatch(diff -> Boolean.TRUE.equals(diff.get("publishedFieldsAreExactRawSubset"))));
-        result.put("allPlannedUnitsCovered", fieldDiffs.stream()
-                .allMatch(diff -> Boolean.TRUE.equals(diff.get("plannedUnitsCovered"))));
-        result.put("localProseDeletionCount", 0);
-        result.put("planContextSurvivedPersistenceRoundTrip", plan.wholeGameContext().equals(generatedPlan.wholeGameContext()));
-        Path output = root.resolve(GSTONE_VISUAL_LESSON_OUTPUT);
-        Files.createDirectories(output.getParent());
-        Files.writeString(
-                output,
-                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(result) + "\n",
-                StandardCharsets.UTF_8);
-
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections()).hasSize(plan.sections().size()).hasSizeGreaterThanOrEqualTo(10);
-        assertThat(lesson.sections()).allSatisfy(section -> {
-            assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
-            assertThat(section.steps()).isNotEmpty();
-        });
-        assertThat(fieldDiffs).allSatisfy(diff -> assertThat(diff)
-                .containsEntry("playerFacingFieldsExact", true)
-                .containsEntry("publishedFieldsAreExactRawSubset", true)
-                .containsEntry("plannedUnitsCovered", true));
-        assertThat(audit.criticCalls.get()).isPositive();
-        assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
-        assertThat(rawSectionResponses).isNotEmpty();
-        assertThat(lessonLatencyMs).isLessThan(180_000L);
-    }
-
-    private Map<Integer, String> visualPageEvidence(JsonNode preparation) {
-        Map<Integer, String> pages = new java.util.TreeMap<>();
-        for (JsonNode response : preparation.path("rawCatalogResponses")) {
-            for (JsonNode page : response.path("body").path("pages")) {
-                if (!page.path("ruleGroupInventoryComplete").asBoolean()) continue;
-                StringBuilder evidence = new StringBuilder();
-                JsonNode pageSummary = page.path("factualSummary");
-                if (pageSummary.isArray()) {
-                    pageSummary.forEach(item -> evidence.append(item.asText()).append('\n'));
-                } else if (pageSummary.isTextual()) {
-                    evidence.append(pageSummary.asText()).append('\n');
-                }
-                for (JsonNode group : page.path("ruleGroups")) {
-                    evidence.append(group.path("identifier").asText())
-                            .append(": ")
-                            .append(group.path("fact").asText())
-                            .append('\n');
-                }
-                for (JsonNode quantity : page.path("quantityObservations")) {
-                    evidence.append("Visible quantity: ")
-                            .append(quantity.path("originalSpan").asText())
-                            .append('\n');
-                }
-                String text = evidence.toString().strip();
-                if (!text.isBlank()) pages.put(page.path("pageNumber").asInt(), text);
-            }
-        }
-        if (pages.size() != preparation.path("pageCount").asInt()) {
-            throw new IllegalArgumentException("captured visual ledger omitted a complete page");
-        }
-        return Map.copyOf(pages);
-    }
 
     private Map<String, Object> result(
-            Path root,
             Provider provider,
             OutlineDraft outline,
             TeachingPlan plan,
@@ -436,14 +259,12 @@ class TeachingRichLessonPaidCanaryTest {
             List<String> rawSectionResponses,
             List<String> rawCriticResponses,
             CanaryInvocations audit,
-            boolean outlineReplayed,
             double teachingTemperature,
             long outlineLatencyMs,
             long lessonLatencyMs,
             List<IllustratedLesson> progressSnapshots,
             Instant outlineCompletedAt,
-            Instant planReloadedAt,
-            Map<String, Object> criticProbe) throws IOException {
+            Instant planReloadedAt) throws IOException {
         List<Map<String, Object>> fieldDiffs = lesson.sections().stream()
                 .map(section -> fieldDiff(section, model.draftAttempts(section.topicKey())))
                 .toList();
@@ -460,16 +281,12 @@ class TeachingRichLessonPaidCanaryTest {
         result.put("lessonLatencyMs", lessonLatencyMs);
         result.put("totalLatencyMs", outlineLatencyMs + lessonLatencyMs);
         result.put("withinLatencyBudget", outlineLatencyMs + lessonLatencyMs < 180_000);
-        int currentOutlineModelCalls = outlineReplayed ? 0 : rawOutlineResponses.size();
-        result.put("outlineReplayed", outlineReplayed);
-        result.put("capturedOutlineResponsesUsed", outlineReplayed ? rawOutlineResponses.size() : 0);
-        result.put("outlineModelCalls", currentOutlineModelCalls);
+        result.put("outlineModelCalls", rawOutlineResponses.size());
         result.put("sectionModelCalls", audit.modelCalls.get());
-        result.put("totalModelCalls", currentOutlineModelCalls + audit.modelCalls.get() + audit.criticCalls.get());
+        result.put("totalModelCalls", rawOutlineResponses.size() + audit.modelCalls.get() + audit.criticCalls.get());
         result.put("toolCalls", audit.toolCalls.get());
         result.put("toolOperations", List.copyOf(audit.toolOperations));
         result.put("criticCalls", audit.criticCalls.get());
-        result.put("criticProbe", criticProbe);
         result.put("modelOperations", List.copyOf(audit.modelOperations));
         result.put("activityTimeline", List.copyOf(audit.events));
         result.put("progressSnapshotCount", progressSnapshots.size());
@@ -522,67 +339,10 @@ class TeachingRichLessonPaidCanaryTest {
                 && !firstRequestAt.isBefore(outlineCompletedAt)
                 && !firstRequestAt.isBefore(planReloadedAt)
                 && validationPrecedesModel);
-        result.put("historicalWholeRulebookBaseline", historicalBaseline(root));
         result.put("publicationBoundary",
                 "schema + plan-owned teaching units + citation ID/version/scope + quantitative + visual geometry; "
                         + "no independent semantic entailment model");
         return Map.copyOf(result);
-    }
-
-    private Map<String, Object> criticProbe(
-            TeachingPlan plan,
-            IllustratedLesson lesson,
-            RecordingTeachingModel sections,
-            Provider provider,
-            VersionedAgentPrompts prompts,
-            CanaryInvocations audit,
-            UUID runId) {
-        if (!criticProbeEnabled()) return Map.of("performed", false);
-        List<String> rawResponses = Collections.synchronizedList(new ArrayList<>());
-        ChatModel chatModel = recordingChatModel(provider, rawResponses);
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(chatModel);
-        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(chatModel);
-        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.provider());
-        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(provider.provider());
-        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.model());
-        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(provider.model());
-        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(false);
-        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(false);
-        when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
-                .thenReturn("deepseek".equals(provider.provider()));
-        when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC, OWNER))
-                .thenReturn("deepseek".equals(provider.provider()));
-        var critic = new ConditionalGeneratedContentCritic(
-                new SpringAiContentCriticModel(configuration, prompts), audit, true);
-        var batch = LessonReviewPlanner.plan(plan, sections.reviewCandidates(plan, lesson), runId);
-        long started = System.nanoTime();
-        var review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, OWNER);
-        return Map.of(
-                "performed", true,
-                "latencyMs", elapsedMillis(started),
-                "issueCount", review.issues().size(),
-                "issues", review.issues(),
-                "rawProviderResponses", List.copyOf(rawResponses));
-    }
-
-    private boolean criticProbeEnabled() {
-        return "true".equalsIgnoreCase(System.getenv("RULEPILOT_TEACHING_CANARY_CRITIC_PROBE"));
-    }
-
-    private Map<String, Object> historicalBaseline(Path root) throws IOException {
-        Path input = root.resolve(".local/public-corpus/runs/dune-imperium.json");
-        if (!Files.isRegularFile(input)) return Map.of("available", false);
-        var node = mapper.readTree(input.toFile());
-        var historical = node.path("result");
-        return Map.of(
-                "available", true,
-                "scope", "historical complete 20-page production run; timing is not directly comparable to bounded canary",
-                "generatorVersion", historical.path("generatorVersion").asText("unknown"),
-                "elapsedSeconds", historical.path("elapsedSeconds").asInt(0),
-                "sectionCount", historical.path("sectionCount").asInt(0),
-                "stepCount", historical.path("stepCount").asInt(0),
-                "sectionTitles", mapper.convertValue(historical.path("sectionTitles"), List.class));
     }
 
     private Map<String, Object> fieldDiff(LessonSection published, List<SectionDraft> rawAttempts) {
@@ -974,36 +734,6 @@ class TeachingRichLessonPaidCanaryTest {
             return Map.copyOf(visible);
         }
 
-        private List<TeachingSectionDraftCandidate> reviewCandidates(
-                TeachingPlan plan, IllustratedLesson lesson) {
-            Map<String, LessonSection> published = lesson.sections().stream()
-                    .collect(java.util.stream.Collectors.toMap(LessonSection::topicKey, section -> section));
-            return java.util.stream.IntStream.range(0, plan.sections().size())
-                    .mapToObj(index -> {
-                        TeachingPlan.PlannedSection planned = plan.sections().get(index);
-                        SectionRequest request = requestIndex.get(planned.topicKey());
-                        List<SectionDraft> attempts = draftAttempts(planned.topicKey());
-                        List<RuleEvidence> evidence = request.evidence().stream()
-                                .map(source -> new RuleEvidence(
-                                        source.chunkId(),
-                                        plan.documentVersionId(),
-                                        source.sectionType(),
-                                        source.heading(),
-                                        source.excerpt(),
-                                        source.pageFrom(),
-                                        source.pageTo()))
-                                .toList();
-                        return new TeachingSectionDraftCandidate(
-                                index,
-                                planned,
-                                evidence,
-                                request,
-                                attempts.getLast(),
-                                published.get(planned.topicKey()));
-                    })
-                    .toList();
-        }
-
         private Instant firstRequestAt() {
             return firstRequestAt.get();
         }
@@ -1115,67 +845,6 @@ class TeachingRichLessonPaidCanaryTest {
         }
     }
 
-    private static final class CatalogEvidence implements AssistantReadTools {
-        private static final Pattern TERMS = Pattern.compile("[\\p{L}\\p{N}]{2,}");
-        private final UUID versionId;
-        private final List<RuleEvidence> chunks;
-
-        private CatalogEvidence(UUID versionId, Map<Integer, String> pages) {
-            this.versionId = versionId;
-            this.chunks = pages.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey())
-                    .map(entry -> new RuleEvidence(
-                            UUID.nameUUIDFromBytes((versionId + ":visual-page:" + entry.getKey())
-                                    .getBytes(StandardCharsets.UTF_8)),
-                            versionId,
-                            "VISUAL_PAGE_LEDGER",
-                            "Visual rulebook page " + entry.getKey(),
-                            entry.getValue(),
-                            entry.getKey(),
-                            entry.getKey()))
-                    .toList();
-        }
-
-        @Override
-        public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
-            if (!versionId.equals(request.documentVersionId())) return List.of();
-            Set<String> terms = terms(request.query());
-            return chunks.stream()
-                    .map(source -> new Scored(source, score(source.excerpt(), terms)))
-                    .filter(candidate -> candidate.score() > 0)
-                    .sorted(Comparator.comparingInt(Scored::score).reversed())
-                    .limit(request.limit())
-                    .map(Scored::source)
-                    .toList();
-        }
-
-        @Override
-        public List<RuleEvidence> readRuleEvidencePages(
-                UUID documentVersionId, Set<Integer> pageNumbers, boolean includePageImages) {
-            if (!versionId.equals(documentVersionId) || includePageImages) return List.of();
-            return chunks.stream().filter(source -> pageNumbers.contains(source.pageFrom())).toList();
-        }
-
-        @Override
-        public List<RuleEvidence> readRuleEvidenceIds(UUID documentVersionId, Set<UUID> evidenceIds) {
-            if (!versionId.equals(documentVersionId)) return List.of();
-            return chunks.stream().filter(source -> evidenceIds.contains(source.chunkId())).toList();
-        }
-
-        private Set<String> terms(String query) {
-            Matcher matcher = TERMS.matcher(query == null ? "" : query.toLowerCase(Locale.ROOT));
-            LinkedHashSet<String> terms = new LinkedHashSet<>();
-            while (matcher.find()) terms.add(matcher.group());
-            return Set.copyOf(terms);
-        }
-
-        private int score(String excerpt, Set<String> terms) {
-            String lower = excerpt.toLowerCase(Locale.ROOT);
-            return (int) terms.stream().filter(lower::contains).count();
-        }
-
-        private record Scored(RuleEvidence source, int score) {}
-    }
 
     private static final class PdfEvidence implements AssistantReadTools {
         private static final Pattern TERMS = Pattern.compile("[\\p{L}\\p{N}]{3,}");

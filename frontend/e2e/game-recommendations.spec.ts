@@ -873,109 +873,6 @@ test('stops closed reader transport while the durable guide remains reopenable',
   expect(cancellationRequests).toBe(0)
 })
 
-test('keeps recommendation, rulebook reading, progressive teaching, and grounded Q&A in one recoverable workspace', async ({ page }) => {
-  await mockPublicDiscovery(page, true)
-  await page.goto('/discover')
-
-  const recommendationComposer = page.getByLabel('聊聊你想玩的游戏')
-  await recommendationComposer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
-  await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expectWingspanRecommendationReady(page)
-  await recommendationComposer.fill('稍后还想继续找一款合作游戏')
-
-  await page.getByRole('button', { name: '查看完整资料：展翅翱翔' }).click()
-  const details = page.getByRole('dialog', { name: '桌游详细资料' })
-  await expect(details.getByText('在不同栖息地吸引鸟类并建立引擎。')).toBeVisible()
-  await expect(page).toHaveURL(/\/discover$/)
-  await details.getByRole('button', { name: '选这款，继续找规则书' }).click()
-
-  await expect(page.getByRole('heading', { name: '已选《展翅翱翔》' })).toBeVisible()
-  const journeySurface = page.getByTestId('player-journey-surface')
-  await expectOpaqueSurface(journeySurface)
-  await expect(page.getByTestId('player-journey-backdrop')).toBeVisible()
-  await expect(journeySurface.locator('[data-fact-confirmed="true"]')).toHaveCount(1)
-  await expect(page.getByText('Wingspan Rulebook')).toBeVisible()
-  await expect(page.getByText('出版社 / 权利方来源')).toBeVisible()
-  await page.getByRole('button', { name: '选择这份' }).click()
-  const handoff = page.getByRole('button', { name: '下载规则书并生成讲解' })
-  await expect(handoff).toBeDisabled()
-  await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
-  await page.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
-
-  const officialImport = page.waitForRequest(request => request.url().endsWith('/api/v1/documents/official-imports'))
-  await handoff.click()
-  const request = await officialImport
-  expect(request.postDataJSON()).toEqual({
-    editionId: 'edition-1',
-    title: 'Wingspan Rulebook',
-    sourceType: 'BASE_RULEBOOK',
-    officialSourceUrl: 'https://publisher.example/wingspan.pdf',
-    rightsConfirmed: true,
-    startTeaching: true,
-    learningGoal: null,
-    discoveredForEditionId: 'edition-1',
-    sourceEdition: 'Base game',
-    sourceLanguage: 'en',
-    sourceLanguageVerified: true,
-    identityConfirmed: true,
-  })
-  await expect(page).toHaveURL(/\/discover$/)
-
-  await expect(page.getByText('规则书已经可以阅读；讲解会继续在后台生成。')).toBeVisible({ timeout: 8_000 })
-  await expect.poll(() => journeySurface.locator('[data-fact-confirmed="true"]').count()).toBeGreaterThanOrEqual(3)
-  await page.getByRole('button', { name: '先阅读原规则书' }).click()
-  const rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
-  await expect(rulebook.getByText('你可以先阅读原规则书；讲解仍在后台生成')).toBeVisible()
-  await expect(rulebook.getByRole('img', { name: '规则书第 1 页' })).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/1/image')
-  await rulebook.getByRole('button', { name: /第 7 页/ }).click()
-  await expect(rulebook.getByRole('img', { name: '规则书第 7 页' })).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/7/image')
-  await page.waitForTimeout(1_500)
-  await rulebook.getByRole('button', { name: '关闭规则书' }).click()
-
-  const journeyDock = page.getByTestId('player-journey-dock')
-  await expect(journeyDock).toContainText('基础讲解可读', { timeout: 8_000 })
-  await journeyDock.click()
-  const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
-  await expectOpaqueSurface(page.getByTestId('recommendation-lesson-surface'))
-  await expect(page.getByTestId('recommendation-lesson-backdrop')).toBeVisible()
-  await expect(lesson.getByText('通过鸟类、奖励牌和蛋获得分数。')).toBeVisible()
-  await expect(lesson.getByText('选择一个栖息地行动并依次结算。')).toBeVisible()
-  await expect(page.getByTestId('player-journey-surface').locator('[data-fact-confirmed="true"]')).toHaveCount(5)
-  await expect(page).toHaveURL(/\/discover$/)
-
-  const sessionRequestPromise = page.waitForRequest(request =>
-    request.url().endsWith('/api/v1/game-sessions') && request.method() === 'POST')
-  await lesson.getByRole('button', { name: '切换到规则答疑' }).click()
-  const sessionRequest = await sessionRequestPromise
-  expect(sessionRequest.postDataJSON()).toMatchObject({
-    editionId: 'edition-1', documentVersionId: 'version-1', expansionIds: [], playerCount: 1,
-  })
-  await expect(page.getByTestId('recommendation-answer-workspace')).toContainText('已绑定规则书，可以开始提问')
-
-  const answerRequestPromise = page.waitForRequest(request =>
-    request.url().endsWith('/api/v1/document-versions/version-1/answers/stream') && request.method() === 'POST')
-  await page.getByLabel('向规则书提问').fill('获得食物以后，什么时候发动棕色能力？')
-  await page.getByRole('button', { name: '提交问题' }).click()
-  const answerRequest = await answerRequestPromise
-  expect(answerRequest.postDataJSON()).toMatchObject({
-    question: '获得食物以后，什么时候发动棕色能力？',
-    gameSessionId: 'session-1',
-    language: 'zh-CN',
-  })
-  await expect(page.getByText('获得食物后，再发动该栖息地中从右到左的棕色能力。')).toBeVisible()
-  await expect(page.getByText('获得食物', { exact: true })).toBeVisible()
-
-  await page.getByTestId('agent-role-switcher').getByRole('button', { name: '继续推荐' }).click()
-  await expect(recommendationComposer).toBeVisible()
-  await expect(recommendationComposer).toHaveValue('稍后还想继续找一款合作游戏')
-  await expectWingspanRecommendationReady(page)
-  await expect(page).toHaveURL(/\/discover$/)
-
-  await page.goto('/lessons')
-  await expect(page.getByRole('heading', { name: '展翅翱翔', exact: true })).toBeVisible()
-  await expect(page.getByText('Wingspan Rulebook')).toHaveCount(0)
-})
-
 test('hands persisted recommendation work to global guides before the preparation run finishes', async ({ page }) => {
   let lessonLaunchRequests = 0
   page.on('request', (request) => {
@@ -1240,27 +1137,6 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   await viewProgress.click()
   await expect(page.getByTestId('player-journey-backdrop')).toBeVisible()
 })
-
-async function expectOpaqueSurface(locator: import('@playwright/test').Locator) {
-  await expect(locator).toBeVisible()
-  const appearance = await locator.evaluate((element) => {
-    const style = getComputedStyle(element)
-    const match = style.backgroundColor.match(/^rgba?\(([^)]+)\)$/)
-    const channels = match?.[1]?.split(',').map(value => Number(value.trim())) ?? []
-    const alpha = channels.length >= 4 ? channels[3]! : 1
-    const bounds = element.getBoundingClientRect()
-    return {
-      alpha,
-      opacity: Number(style.opacity),
-      width: bounds.width,
-      height: bounds.height,
-    }
-  })
-  expect(appearance.alpha).toBe(1)
-  expect(appearance.opacity).toBe(1)
-  expect(appearance.width).toBeGreaterThan(0)
-  expect(appearance.height).toBeGreaterThan(0)
-}
 
 function isGuideRead(url: string) {
   return url.includes('/teaching-plans/plan-1')

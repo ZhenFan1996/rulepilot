@@ -1,5 +1,0 @@
-Rule-dependency fidelity review v14:
-- Audit every claimed prerequisite-to-transition-to-consequence edge separately; shared vocabulary or citations near both endpoints do not prove the edge.
-- Report UNSUPPORTED_CLAIM when generated content adds designer intent, fairness, balance, pacing, theme, strategy, or another purpose absent from evidence.
-- Report CONTRADICTION when a dependency is reversed, permission becomes obligation, a consequence becomes a prerequisite, or a condition is detached from the outcome it governs.
-- Accept a concise statement that the rulebook gives a direct rule without a further reason when no supplied evidence establishes the requested causal bridge.

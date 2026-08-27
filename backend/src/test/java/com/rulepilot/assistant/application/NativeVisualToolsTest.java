@@ -113,7 +113,7 @@ class NativeVisualToolsTest {
         assertThat(result.code()).isEqualTo("VISUAL_FACTS_FOUND");
         assertThat(result.data()).containsEntry("mechanicalRuleAuthority", false);
         assertThat(result.media()).isEmpty();
-        assertThat(result.data().toString()).contains("visible board layout", "UNEXPLAINED");
+        assertThat(result.data().toString()).contains("visible board layout", "literal zones");
     }
 
     private ToolScope scope() {
@@ -152,9 +152,7 @@ class NativeVisualToolsTest {
                             4,
                             "printed label",
                             "visible board layout",
-                            List.of(new VisualAnchor("BOARD", "layout", "literal zones", 100, 100, 300, 300)),
-                            List.of(new VisualIcon(
-                                    "symbol", "round mark", "UNEXPLAINED", "", 200, 200, 40, 40))))
+                            List.of(new VisualAnchor("BOARD", "layout", "literal zones", 100, 100, 300, 300))))
                     : List.of();
         }
     }
