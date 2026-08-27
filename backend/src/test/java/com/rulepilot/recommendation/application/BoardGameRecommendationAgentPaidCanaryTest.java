@@ -186,7 +186,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 model,
                 new BoardGameRecommendationTools(
                         new CanaryCatalog(List.of(101, 105, 108)),
-                        noResearch()),
+                        configuredResearchThatMustNotRun()),
                 new BoardGameRecommendationSelector(properties),
                 properties,
                 json);
@@ -197,11 +197,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             var response = agent.converse(
                     new ConversationRequest(
                             RecommendationProfile.empty(),
-                            "请只推荐两款正式标题中明确包含 Harbor 的桌游；主题像港口但标题不含这个词的不要补位。"),
+                            "请只推荐两款正式英文标题中包含 Harbor 的独立桌游。比较核心机制、四人体验、教学难度与局势变化，把最适合两位新手和两位熟手同桌、90 分钟内完成的一款放第一；不要推荐扩展。"),
                     "zh-CN");
             long totalMs = elapsed(started);
             visibleTurns.add(visible(
-                    "literal-title-boundary",
+                    "complex-literal-title-boundary",
                     response,
                     totalMs,
                     List.of(),
@@ -223,7 +223,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             || action.equals("RECOMMENDATION_NARRATIVE_UNAVAILABLE"));
             assertTerminalProsePreserved(capture, response);
             assertThat(response.harness().modelCalls()).isEqualTo(2);
-            assertThat(totalMs).isLessThan(25_000L);
+            assertThat(response.harness().webResearchCalls()).isZero();
+            assertThat(capture.toolCalls(BoardGameRecommendationAgent.BROWSE_TOOL)).hasSize(1);
+            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL)).isEmpty();
+            assertThat(capture.structuredCallCount()).isOne();
+            assertThat(totalMs).isLessThan(20_000L);
             ToolCall producingCall = capture.lastCandidateProducingToolCall();
             assertThat(producingCall.name()).isEqualTo(BoardGameRecommendationAgent.BROWSE_TOOL);
             JsonNode arguments = json.readTree(producingCall.argumentsJson());
@@ -231,6 +235,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(arguments.path("titleConstraint").path("value").asText())
                     .containsIgnoringCase("Harbor");
             assertThat(arguments.path("evidence").asText()).isEqualTo("U1");
+            assertThat(arguments.has("candidateUse")).isFalse();
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
@@ -2003,9 +2008,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(arguments.path("purpose").asText("SELECTABLE_CARDS"))
                     .as("omitted purpose uses the action contract's selectable-card default")
                     .isEqualTo("SELECTABLE_CARDS");
-            assertThat(arguments.path("candidateUse").asText())
-                    .as("a direct result request must make every candidate read terminal when useful")
-                    .isEqualTo("PUBLISH_CARDS");
+            assertThat(arguments.has("candidateUse"))
+                    .as("catalog purpose alone owns whether a useful read publishes")
+                    .isFalse();
         }
 
         Set<Map<String, Object>> distinctQueryShapes = reads.stream()
@@ -2307,6 +2312,20 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             @Override
             public Optional<Research> research(Request request) {
                 return Optional.empty();
+            }
+        };
+    }
+
+    private BoardGameRecommendationWebResearch configuredResearchThatMustNotRun() {
+        return new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("a useful selectable slate must publish before optional research");
             }
         };
     }

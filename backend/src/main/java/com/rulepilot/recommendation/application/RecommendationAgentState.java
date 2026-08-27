@@ -269,7 +269,6 @@ final class RecommendationAgentState {
 
     enum CandidateUse {
         PUBLISH_CARDS,
-        RESEARCH_THEN_PUBLISH,
         CONTINUE_REACT
     }
 
@@ -303,21 +302,18 @@ final class RecommendationAgentState {
     record PublicationSeed(
             List<Integer> candidateBggIds,
             List<Integer> referenceBggIds,
-            CandidateUse candidateUse,
             int requestedCount,
             String playerLead) {
         PublicationSeed(
                 List<Integer> candidateBggIds,
                 List<Integer> referenceBggIds,
-                CandidateUse candidateUse,
                 int requestedCount) {
-            this(candidateBggIds, referenceBggIds, candidateUse, requestedCount, "");
+            this(candidateBggIds, referenceBggIds, requestedCount, "");
         }
 
         PublicationSeed {
             candidateBggIds = candidateBggIds == null ? List.of() : List.copyOf(candidateBggIds);
             referenceBggIds = referenceBggIds == null ? List.of() : List.copyOf(referenceBggIds);
-            Objects.requireNonNull(candidateUse, "candidateUse is required");
             playerLead = boundedPlayerLead(playerLead);
             if (candidateBggIds.isEmpty()
                     || candidateBggIds.stream().anyMatch(id -> id == null || id <= 0)

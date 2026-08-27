@@ -53,7 +53,6 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ResearchSource;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
-import com.rulepilot.recommendation.application.RecommendationAgentState.CandidateUse;
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import com.rulepilot.recommendation.application.RecommendationPublication.Permit;
 import com.rulepilot.recommendation.application.RecommendationPublication.PublicationNarrative;
@@ -95,7 +94,7 @@ final class RecommendationReActLoop {
     private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 2_048;
     private static final int MAX_CONCURRENT_OPTIONAL_CALLS = 4;
     private static final long OPTIONAL_PUBLICATION_TAIL_MILLIS = 100;
-    private static final String CANDIDATE_USE_SCHEMA = "{\"type\":\"string\",\"description\":\"Publish a useful verified slate now, optionally research it once first, or continue only when it is still context.\",\"enum\":[\"PUBLISH_CARDS\",\"RESEARCH_THEN_PUBLISH\",\"CONTINUE_REACT\"]}";
+    private static final String CANDIDATE_USE_SCHEMA = "{\"type\":\"string\",\"description\":\"Publish a useful verified slate now, or continue only when it is still context.\",\"enum\":[\"PUBLISH_CARDS\",\"CONTINUE_REACT\"]}";
     static final int MAX_REFERENCE_RESOLUTION_ATTEMPTS = 2;
     private static final Set<String> READ_ACTIONS = Set.of(
             RESOLVE_TOOL,
@@ -311,7 +310,6 @@ final class RecommendationReActLoop {
         List<Message> messages = new ArrayList<>(actionFoundation);
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
         int stateEpoch = 0;
-        PublicationSeed pendingPublication = null;
 
         while (state.modelCalls < MAX_DECISION_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             state.modelCalls++;
@@ -322,11 +320,6 @@ final class RecommendationReActLoop {
                     actions,
                     preferenceEvidenceIds,
                     currentTurnEvidenceIds);
-            if (pendingPublication != null) {
-                currentActions = currentActions.stream()
-                        .filter(action -> RESEARCH_TOOL.equals(action.name()))
-                        .toList();
-            }
             OperationObservation decisionObservation = startOperation(
                     "decision_model", "choose_next_action");
             try {
@@ -345,22 +338,12 @@ final class RecommendationReActLoop {
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RunDeadlineExceeded exception) {
-                decisionObservation.stop("deadline", pendingPublication != null, exception);
-                if (pendingPublication != null) {
-                    return publishWithoutOptionalResearch(
-                            state,
-                            request,
-                            locale,
-                            pendingPublication,
-                            progress,
-                            answerPartListener,
-                            "TIME_BUDGET");
-                }
+                decisionObservation.stop("deadline", false, exception);
                 progress.fail();
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RuntimeException exception) {
-                decisionObservation.stop("error", pendingPublication != null, exception);
+                decisionObservation.stop("error", false, exception);
                 String failureCode = exception instanceof BoardGameRecommendationModel.ProtocolFailure protocol
                         ? "MODEL_PROTOCOL_FAILED:" + protocol.code()
                         : "MODEL_CALL_FAILED";
@@ -368,51 +351,19 @@ final class RecommendationReActLoop {
                         "Recommendation ReAct turn failed (type={}, code={})",
                         exception.getClass().getSimpleName(),
                         failureCode);
-                if (pendingPublication != null) {
-                    return publishWithoutOptionalResearch(
-                            state,
-                            request,
-                            locale,
-                            pendingPublication,
-                            progress,
-                            answerPartListener,
-                            exception instanceof BoardGameRecommendationModel.ProtocolFailure
-                                    ? "MODEL_PROTOCOL_FAILED"
-                                    : "MODEL_CALL_FAILED");
-                }
                 progress.fail();
                 state.actions.add(failureCode);
                 return unavailable(state, locale, failureCode);
             }
             if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
-                decisionObservation.stop("output_limit", pendingPublication != null, null);
-                if (pendingPublication != null) {
-                    return publishWithoutOptionalResearch(
-                            state,
-                            request,
-                            locale,
-                            pendingPublication,
-                            progress,
-                            answerPartListener,
-                            "MODEL_OUTPUT_LIMIT");
-                }
+                decisionObservation.stop("output_limit", false, null);
                 progress.fail();
                 state.actions.add("MODEL_OUTPUT_TRUNCATED");
                 return unavailable(state, locale, "MODEL_OUTPUT_TRUNCATED");
             }
             if (turn.toolCalls().isEmpty()) {
-                decisionObservation.stop("missing_action", pendingPublication != null, null);
+                decisionObservation.stop("missing_action", false, null);
                 LOGGER.warn("Recommendation Agent turn returned no required typed action");
-                if (pendingPublication != null) {
-                    return publishWithoutOptionalResearch(
-                            state,
-                            request,
-                            locale,
-                            pendingPublication,
-                            progress,
-                            answerPartListener,
-                            "ACTION_MISSING");
-                }
                 progress.fail();
                 state.actions.add("UNSTRUCTURED_EVIDENCE_REPLY");
                 return unavailable(state, locale, "UNSTRUCTURED_EVIDENCE_REPLY");
@@ -425,21 +376,11 @@ final class RecommendationReActLoop {
                 boolean sameReadAction = READ_ACTIONS.contains(actionName)
                         && turn.toolCalls().stream().allMatch(candidate -> actionName.equals(candidate.name()));
                 if (!sameReadAction) {
-                    decisionObservation.stop("invalid_action_count", pendingPublication != null, null);
+                    decisionObservation.stop("invalid_action_count", false, null);
                     LOGGER.warn(
                             "Recommendation ReAct turn returned {} incompatible actions (textCharacters={})",
                             turn.toolCalls().size(),
                             turn.text().length());
-                    if (pendingPublication != null) {
-                        return publishWithoutOptionalResearch(
-                                state,
-                                request,
-                                locale,
-                                pendingPublication,
-                                progress,
-                                answerPartListener,
-                                "INVALID_ACTION_COUNT");
-                    }
                     progress.fail();
                     state.actions.add("INVALID_ACTION_COUNT");
                     return unavailable(state, locale, "INVALID_ACTION_COUNT");
@@ -483,7 +424,7 @@ final class RecommendationReActLoop {
                                 "ACTION_NOT_AVAILABLE",
                                 "That capability is not available in this turn. Choose one action from the supplied list."),
                         "ACTION_NOT_AVAILABLE");
-                actionObservation.stop("rejected", pendingPublication != null, null);
+                actionObservation.stop("rejected", false, null);
             } else {
                 try {
                     outcome = actionExecutor.execute(
@@ -494,7 +435,7 @@ final class RecommendationReActLoop {
                             (stage, focus) -> progress.start(stage, progressAction(call.name()), focus));
                     actionObservation.stop(
                             outcome.rejected() ? "rejected" : "completed",
-                            pendingPublication != null && outcome.rejected(),
+                            false,
                             null);
                 } catch (RunInterrupted exception) {
                     actionObservation.stop("interrupted", false, exception);
@@ -502,17 +443,7 @@ final class RecommendationReActLoop {
                     state.actions.add("RUN_DEADLINE_EXCEEDED");
                     return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
                 } catch (RunDeadlineExceeded exception) {
-                    actionObservation.stop("deadline", pendingPublication != null, exception);
-                    if (pendingPublication != null) {
-                        return publishWithoutOptionalResearch(
-                                state,
-                                request,
-                                locale,
-                                pendingPublication,
-                                progress,
-                                answerPartListener,
-                                "TIME_BUDGET");
-                    }
+                    actionObservation.stop("deadline", false, exception);
                     progress.fail();
                     state.actions.add("RUN_DEADLINE_EXCEEDED");
                     return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
@@ -520,16 +451,6 @@ final class RecommendationReActLoop {
                     actionObservation.stop("error", false, exception);
                     throw exception;
                 }
-            }
-            if (pendingPublication != null && outcome.rejected()) {
-                return publishWithoutOptionalResearch(
-                        state,
-                        request,
-                        locale,
-                        pendingPublication,
-                        progress,
-                        answerPartListener,
-                        "ACTION_REJECTED");
             }
             if (!reused && !outcome.rejected()) {
                 stateEpoch++;
@@ -551,45 +472,15 @@ final class RecommendationReActLoop {
                         answerPartListener);
             }
             PublicationSeed publicationSeed = outcome.publicationSeed();
-            if (!outcome.rejected()
-                    && RESEARCH_TOOL.equals(call.name())
-                    && pendingPublication != null) {
-                publicationSeed = new PublicationSeed(
-                        pendingPublication.candidateBggIds(),
-                        pendingPublication.referenceBggIds(),
-                        CandidateUse.PUBLISH_CARDS,
-                        pendingPublication.requestedCount(),
-                        pendingPublication.playerLead());
-                pendingPublication = null;
-            }
             if (publicationSeed != null) {
-                if (publicationSeed.candidateUse() == CandidateUse.RESEARCH_THEN_PUBLISH
-                        && state.webResearchAvailable
-                        && !state.researchAttempted
-                        && state.modelCalls < MAX_DECISION_MODEL_CALLS) {
-                    pendingPublication = publicationSeed;
-                } else {
-                    if (publicationSeed.candidateUse() == CandidateUse.RESEARCH_THEN_PUBLISH) {
-                        String reason = state.researchAttempted
-                                ? "ALREADY_ATTEMPTED"
-                                : state.webResearchAvailable ? "BUDGET" : "UNAVAILABLE";
-                        state.actions.add("RESEARCH_SKIPPED_FOR_PUBLICATION_" + reason);
-                        publicationSeed = new PublicationSeed(
-                                publicationSeed.candidateBggIds(),
-                                publicationSeed.referenceBggIds(),
-                                CandidateUse.PUBLISH_CARDS,
-                                publicationSeed.requestedCount(),
-                                publicationSeed.playerLead());
-                    }
-                    progress.complete();
-                    return publishRecommendationWithinBoundary(
-                            state,
-                            request,
-                            locale,
-                            publicationSeed,
-                            progress,
-                            answerPartListener);
-                }
+                progress.complete();
+                return publishRecommendationWithinBoundary(
+                        state,
+                        request,
+                        locale,
+                        publicationSeed,
+                        progress,
+                        answerPartListener);
             }
             if (outcome.rejected()) {
                 progress.retry();
@@ -600,16 +491,6 @@ final class RecommendationReActLoop {
             compactPriorToolState(messages);
             messages.add(Message.assistant("", call));
             messages.add(Message.tool(call, observation));
-        }
-        if (pendingPublication != null) {
-            return publishWithoutOptionalResearch(
-                    state,
-                    request,
-                    locale,
-                    pendingPublication,
-                    progress,
-                    answerPartListener,
-                    "BUDGET");
         }
         progress.fail();
         state.actions.add("REACT_BUDGET_EXHAUSTED");
@@ -663,31 +544,6 @@ final class RecommendationReActLoop {
         progress.complete();
         logRun(decision);
         return decision;
-    }
-
-    private ConversationResponse publishWithoutOptionalResearch(
-            RecommendationAgentState state,
-            ConversationRequest request,
-            String locale,
-            PublicationSeed pendingPublication,
-            ProgressTracker progress,
-            Consumer<String> answerPartListener,
-            String reason) {
-        progress.retry();
-        state.actions.add("RESEARCH_SKIPPED_FOR_PUBLICATION_" + reason);
-        PublicationSeed verifiedFallback = new PublicationSeed(
-                pendingPublication.candidateBggIds(),
-                pendingPublication.referenceBggIds(),
-                CandidateUse.PUBLISH_CARDS,
-                pendingPublication.requestedCount(),
-                pendingPublication.playerLead());
-        return publishRecommendationWithinBoundary(
-                state,
-                request,
-                locale,
-                verifiedFallback,
-                progress,
-                answerPartListener);
     }
 
     private ConversationResponse publishRecommendationWithinBoundary(
@@ -1319,7 +1175,7 @@ final class RecommendationReActLoop {
                                 defaultRecommendationCount)),
                 new ToolSpec(
                         DISCOVER_TOOL,
-                        "Verify one uncertain/current relationship involving a person, event, organization, alias, award, or list. subject is the exact cited identity phrase, not a guessed answer. afterIdentity says whether sourced context answers the turn or selectable cards remain. Supply requestedCount/basis. candidateUse says publish, research once, or continue. Always set continuationGoal: GUIDE_AND_RULE_QA plus supporting user evidence when directly published cards must prioritize ready guides; otherwise NONE. Identity-only must CONTINUE_REACT and NONE.",
+                        "Verify one uncertain/current relationship involving a person, event, organization, alias, award, or list. subject is the exact cited identity phrase, not a guessed answer. afterIdentity says whether sourced context answers the turn or selectable cards remain. Supply requestedCount/basis. Publish useful selectable cards immediately; use CONTINUE_REACT only when the games remain identity context. Always set continuationGoal: GUIDE_AND_RULE_QA plus supporting user evidence when directly published cards must prioritize ready guides; otherwise NONE. Identity-only must CONTINUE_REACT and NONE.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
                                 + "},\"subject\":{\"type\":\"string\",\"description\":\"Exact identity-bearing nickname, initials, award, or relationship phrase; not the full question and not a guessed answer.\",\"minLength\":1,\"maxLength\":80},\"afterIdentity\":{\"type\":\"string\",\"enum\":[\"REPLY_WITH_IDENTITY\",\"RECOMMEND_WITH_CARDS\"]},\"candidateUse\":"
@@ -1359,16 +1215,14 @@ final class RecommendationReActLoop {
     }
 
     private static String catalogActionDescription() {
-        return "Search the local BGG catalog for selectable cards. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. requestedCount/requestedCountBasis use defaultRecommendationCount+PRODUCT_DEFAULT when unstated, else explicit count+current-turn U id. Numeric/type constraints use preferenceUpdates. Always set continuationGoal: requested guide/Q&A uses GUIDE_AND_RULE_QA plus supporting user continuationEvidence, else NONE; learningGoal optional.";
+        return "Search the local BGG catalog. SELECTABLE_CARDS publishes the first useful verified slate immediately; IDENTITY_ONLY reads creator identity context without publishing and requires continuationGoal NONE. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. requestedCount/requestedCountBasis use defaultRecommendationCount+PRODUCT_DEFAULT when unstated, else explicit count+current-turn U id. Numeric/type constraints use preferenceUpdates. For SELECTABLE_CARDS, requested guide/Q&A uses GUIDE_AND_RULE_QA plus supporting user continuationEvidence, else NONE; learningGoal optional.";
     }
 
     private static String catalogActionSchema(
             List<String> preferenceEvidenceIds,
             List<String> currentTurnEvidenceIds,
             int defaultRecommendationCount) {
-        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"candidateUse\":"
-                + CANDIDATE_USE_SCHEMA
-                + ",\"types\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
+        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"types\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
                 + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"titleConstraint\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"operator\":{\"type\":\"string\",\"enum\":[\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"required\":[\"operator\",\"value\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
                 + jsonArray(currentTurnEvidenceIds)
                 + "},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
