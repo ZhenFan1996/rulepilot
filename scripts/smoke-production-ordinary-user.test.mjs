@@ -22,6 +22,7 @@ test('writes a controlled public failure status even when input validation stops
       exitCode: 2,
       lastCompletedStage: 'not-started',
       failureCode: 'INPUT_INVALID',
+      failureCauseCode: null,
       cleanupOutcome: 'NOT_REQUIRED',
     })
     assert.doesNotMatch(await readFile(publicStatus, 'utf8'), /unsupported-input/)
@@ -39,10 +40,17 @@ test('public status validator rejects contradictory or expanded workflow artifac
     exitCode: 1,
     lastCompletedStage: 'answer-verified',
     failureCode: 'NAVIGATION_FAILED',
+    failureCauseCode: null,
     cleanupOutcome: 'FAILED',
   }
   try {
     await writeFile(publicStatus, JSON.stringify(validDoubleFailure))
+    assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
+    await writeFile(publicStatus, JSON.stringify({
+      ...validDoubleFailure,
+      failureCode: 'LESSON_GENERATION_FAILED',
+      failureCauseCode: 'AGENT_TIMEOUT',
+    }))
     assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
 
     const counterexamples = [
@@ -50,13 +58,14 @@ test('public status validator rejects contradictory or expanded workflow artifac
       { ...validDoubleFailure, exitCode: 0, failureCode: null, cleanupOutcome: 'SUCCEEDED' },
       { ...validDoubleFailure, failureCode: null },
       { ...validDoubleFailure, failureCode: 'UNBOUNDED_FAILURE_CODE' },
+      { ...validDoubleFailure, failureCauseCode: 'model timed out' },
       {
         outcome: 'SUCCEEDED', exitCode: 0, lastCompletedStage: 'journey-completed',
-        failureCode: 'NAVIGATION_FAILED', cleanupOutcome: 'SUCCEEDED',
+        failureCode: 'NAVIGATION_FAILED', failureCauseCode: null, cleanupOutcome: 'SUCCEEDED',
       },
       {
         outcome: 'FAILED', exitCode: 1, lastCompletedStage: 'journey-completed',
-        failureCode: 'CLEANUP_FAILED', cleanupOutcome: 'SUCCEEDED',
+        failureCode: 'CLEANUP_FAILED', failureCauseCode: null, cleanupOutcome: 'SUCCEEDED',
       },
       { ...validDoubleFailure, rawModelOutput: 'must never become public' },
     ]
@@ -90,6 +99,8 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let lessonReads = 0
   let visualRunEnabled = false
   let visualRunReads = 0
+  let preparationFailureCode = null
+  let lessonFailureCode = null
   let answerHasCitations = true
   let answerReferencesAlign = true
   let navigationFails = false
@@ -150,10 +161,12 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       })
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/33333333-3333-3333-3333-333333333333') {
+      const preparationState = preparationFailureCode ? 'FAILED' : 'COMPLETED'
       return json(response, 200, {
         run: {
-          id: '33333333-3333-3333-3333-333333333333', state: 'COMPLETED',
+          id: '33333333-3333-3333-3333-333333333333', state: preparationState,
           createdAt: '2026-08-02T00:00:00Z', completedAt: '2026-08-02T00:00:12Z',
+          lastErrorCode: preparationFailureCode,
         },
         steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'LESSON_PLANNING', occurredAt: '2026-08-02T00:00:01Z' }],
         activities: [
@@ -200,7 +213,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/55555555-5555-5555-5555-555555555555') {
       lessonRunReads += 1
-      const state = completeLessonImmediately ? 'COMPLETED' : lessonRunReads === 1
+      const state = lessonFailureCode
+        ? lessonRunReads === 1 ? 'RECEIVED' : 'FAILED'
+        : completeLessonImmediately ? 'COMPLETED' : lessonRunReads === 1
         ? 'RECEIVED'
         : lessonRunReads === 2
           ? 'RETRIEVING'
@@ -209,8 +224,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         run: {
           id: '55555555-5555-5555-5555-555555555555',
           state,
+          lastErrorCode: state === 'FAILED' ? lessonFailureCode : null,
           createdAt: '2026-08-02T00:00:13Z',
-          completedAt: ['COMPLETED', 'INSUFFICIENT_EVIDENCE'].includes(state)
+          completedAt: ['COMPLETED', 'FAILED', 'INSUFFICIENT_EVIDENCE'].includes(state)
             ? slowFirstLessonSection ? '2026-08-02T00:00:36Z' : '2026-08-02T00:00:20Z'
             : null,
         },
@@ -369,6 +385,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       exitCode: 0,
       lastCompletedStage: 'journey-completed',
       failureCode: null,
+      failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
     })
     const retained = JSON.parse(await readFile(retainedResult, 'utf8'))
@@ -400,6 +417,62 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=20 backgroundPrefetchCalls=0 backgroundPrefetchLatencyMs=0/)
 
+    preparationFailureCode = 'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED'
+    deleted = false
+    planStarted = false
+    const preparationFailureStatus = join(directory, 'preparation-failure-status.json')
+    const preparationFailure = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: preparationFailureStatus,
+      },
+    )
+    assert.equal(preparationFailure.code, 1, preparationFailure.stderr)
+    assert.deepEqual(JSON.parse(await readFile(preparationFailureStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'document-ready',
+      failureCode: 'TEACHING_PREPARATION_FAILED',
+      failureCauseCode: 'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED',
+      cleanupOutcome: 'SUCCEEDED',
+    })
+    assert.equal(deleted, true)
+    preparationFailureCode = null
+
+    lessonFailureCode = 'TEACHING_WORKFLOW_FAILED'
+    deleted = false
+    planStarted = false
+    const lessonFailureStatus = join(directory, 'lesson-failure-status.json')
+    const lessonFailure = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: lessonFailureStatus,
+      },
+    )
+    assert.equal(lessonFailure.code, 1, lessonFailure.stderr)
+    assert.deepEqual(JSON.parse(await readFile(lessonFailureStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'lesson-launch-visible',
+      failureCode: 'LESSON_GENERATION_FAILED',
+      failureCauseCode: 'TEACHING_WORKFLOW_FAILED',
+      cleanupOutcome: 'SUCCEEDED',
+    })
+    assert.equal(deleted, true)
+    lessonFailureCode = null
+
     answerHasCitations = false
     deleted = false
     planStarted = false
@@ -422,6 +495,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       exitCode: 1,
       lastCompletedStage: 'lesson-verified',
       failureCode: 'ANSWER_EVIDENCE_INVALID',
+      failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
     })
     assert.equal(deleted, true)
@@ -618,6 +692,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       exitCode: 1,
       lastCompletedStage: 'answer-verified',
       failureCode: 'NAVIGATION_FAILED',
+      failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
     })
     assert.equal(deleted, true)
@@ -647,6 +722,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       exitCode: 1,
       lastCompletedStage: 'answer-verified',
       failureCode: 'NAVIGATION_FAILED',
+      failureCauseCode: null,
       cleanupOutcome: 'FAILED',
     })
     assert.equal(deleted, false)
@@ -675,6 +751,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       exitCode: 1,
       lastCompletedStage: 'journey-completed',
       failureCode: 'CLEANUP_FAILED',
+      failureCauseCode: null,
       cleanupOutcome: 'FAILED',
     })
     assert.equal(deleted, false)
@@ -1108,6 +1185,7 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
       exitCode: 1,
       lastCompletedStage: 'official-import-accepted',
       failureCode: 'OFFICIAL_IMPORT_FAILED',
+      failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
     })
     assert.deepEqual(deleted, [`/api/v1/documents/${documentId}`])

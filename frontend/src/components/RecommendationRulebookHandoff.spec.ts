@@ -1693,7 +1693,7 @@ describe('RecommendationRulebookHandoff', () => {
         const snapshot = runSnapshot('preparation-failed', 'FAILED', 'version-1')
         const failed = {
           ...snapshot,
-          run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_FAILED' },
+          run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED' },
           activities: [
             { sequence: 1, operation: 'inspectTeachingVisualPage|1|8', summary: 'page one grouped', outcome: 'SUCCEEDED' },
             { sequence: 2, operation: 'persistTeachingVisualPage|1|8', summary: 'page one stored', outcome: 'SUCCEEDED' },
@@ -1722,7 +1722,7 @@ describe('RecommendationRulebookHandoff', () => {
     await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('需要处理'))
-    expect(wrapper.text()).not.toContain('TEACHING_PREPARATION_FAILED')
+    expect(wrapper.text()).not.toContain('TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED')
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
     expect(wrapper.findAll('[data-testid="recommendation-journey-terminal-alert"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid="recommendation-teaching-generation-steps"]')).toHaveLength(1)
@@ -1740,6 +1740,8 @@ describe('RecommendationRulebookHandoff', () => {
       .toContain('至少一个必讲主题在有限检索与定向重试后仍找不到足够的可引用规则')
     expect(wrapper.get('[data-testid="recommendation-current-failure-classification"]').text())
       .toContain('本次属于：保留已完成内容后停止')
+    expect(wrapper.get('[data-testid="recommendation-current-failure-cause"]').text())
+      .toContain('失败发生在整理讲解结构时；规则书页面已经保留，第一段讲解尚未开始')
     expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').attributes('data-current-failure'))
       .toBe('true')
 
@@ -1761,6 +1763,8 @@ describe('RecommendationRulebookHandoff', () => {
       .toContain('at least one required topic still lacks enough citable rules after bounded retrieval and its targeted retry')
     expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
       .toContain('a chapter-plan structure that violates its contract')
+    expect(wrapper.get('[data-testid="recommendation-current-failure-cause"]').text())
+      .toContain('The failure occurred while organizing the guide structure')
     setLocale('zh-CN')
     await wrapper.vm.$nextTick()
 

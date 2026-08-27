@@ -217,7 +217,9 @@ test('production recommendation journey tests one exact deployed main-ancestry r
   assert.match(productionRecommendationSpec,
     /observations: Array<\{ bggIds: number\[\]; observedMs: number \}>/)
   assert.match(productionRecommendationSpec,
-    /sameTypedBggSlate\(observation\.bggIds, expectedBggIds!\)/)
+    /persistedTarget !== undefined[\s\S]*?sameTypedBggSlate\(observation\.bggIds, persistedTarget\)/)
+  assert.doesNotMatch(productionRecommendationSpec,
+    /expectedBggIds === null \|\| expectedBggIds\.length/)
   assert.match(productionRecommendationSpec,
     /id === persistedBggIds\[index\]/)
   assert.match(productionRecommendationSpec,
@@ -637,7 +639,9 @@ test('public ordinary-user smoke artifacts exclude production service logs', () 
   assert.match(productionOrdinaryUserSmokeScript, /pending_failure_code=INPUT_INVALID/)
   assert.match(productionOrdinaryUserSmokeScript, /cleanup_outcome=NOT_REQUIRED/)
   assert.match(productionOrdinaryUserSmokeScript,
-    /cleanupOutcome", "exitCode", "failureCode", "lastCompletedStage", "outcome"/)
+    /cleanupOutcome", "exitCode", "failureCauseCode", "failureCode", "lastCompletedStage", "outcome"/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /\.run\.lastErrorCode \/\/ \.run\.state \/\/ empty/)
   assert.match(productionOrdinaryUserSmokeScript,
     /SUCCEEDED\|FAILED\|NOT_REQUIRED/)
   assert.match(productionOrdinaryUserSmokeScript, /pending_failure_code=TEACHING_PREPARATION_FAILED/)

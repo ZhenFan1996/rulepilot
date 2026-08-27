@@ -645,12 +645,13 @@ async function observeRecommendationSlate(
     const count = bggIds.length
     const observedMs = elapsed(startedAt)
     observations.push({ bggIds, observedMs })
-    if (expectedBggIds === null || expectedBggIds.length === 0) {
-      return { visible: false, observedMs, count, bggIds }
-    }
-    if (expectedBggIds !== undefined) {
+    const persistedTarget = expectedBggIds
+    if (persistedTarget !== undefined) {
+      if (persistedTarget === null || persistedTarget.length === 0) {
+        return { visible: false, observedMs, count, bggIds }
+      }
       const completeSlate = observations.find(observation =>
-        sameTypedBggSlate(observation.bggIds, expectedBggIds!))
+        sameTypedBggSlate(observation.bggIds, persistedTarget))
       if (completeSlate) {
         return { visible: true, observedMs: completeSlate.observedMs, count, bggIds }
       }
@@ -1652,6 +1653,82 @@ test('recommendation-only acceptance distinguishes semantic terminals from an un
   expect(sameTypedBggSlate([11, 22], [22, 11])).toBe(false)
   expect(sameTypedBggSlate([11, 22, 33], [11, 22])).toBe(false)
   expect(sameTypedBggSlate([11, Number.NaN], [11, 22])).toBe(false)
+})
+
+test('recommendation slate waits for its delayed persisted typed target before accepting cards', async () => {
+  let resolvePersistedTarget!: (bggIds: number[]) => void
+  const persistedTarget = new Promise<number[]>(resolve => {
+    resolvePersistedTarget = resolve
+  })
+  let cardReads = 0
+  const cards = {
+    evaluateAll: async () => {
+      cardReads += 1
+      return [11, 22]
+    },
+  } as unknown as Locator
+  setTimeout(() => resolvePersistedTarget([11, 22]), 0)
+
+  const observation = await observeRecommendationSlate(
+    cards,
+    persistedTarget,
+    performance.now(),
+    Date.now() + 1_000,
+  )
+
+  expect(cardReads).toBeGreaterThan(1)
+  expect(observation).toMatchObject({
+    visible: true,
+    count: 2,
+    bggIds: [11, 22],
+  })
+})
+
+test('recommendation slate waits for a delayed typed no-slate terminal', async () => {
+  let resolvePersistedTarget!: (bggIds: null) => void
+  const persistedTarget = new Promise<null>(resolve => {
+    resolvePersistedTarget = resolve
+  })
+  let cardReads = 0
+  const cards = {
+    evaluateAll: async () => {
+      cardReads += 1
+      return []
+    },
+  } as unknown as Locator
+  setTimeout(() => resolvePersistedTarget(null), 0)
+
+  const observation = await observeRecommendationSlate(
+    cards,
+    persistedTarget,
+    performance.now(),
+    Date.now() + 1_000,
+  )
+
+  expect(cardReads).toBeGreaterThan(1)
+  expect(observation).toMatchObject({
+    visible: false,
+    count: 0,
+    bggIds: [],
+  })
+})
+
+test('recommendation slate times out an unsettled persisted target without throwing', async () => {
+  const cards = {
+    evaluateAll: async () => [],
+  } as unknown as Locator
+  const persistedTarget = new Promise<number[] | null>(() => undefined)
+
+  await expect(observeRecommendationSlate(
+    cards,
+    persistedTarget,
+    performance.now(),
+    Date.now() - 1,
+  )).resolves.toMatchObject({
+    visible: false,
+    count: 0,
+    bggIds: [],
+  })
 })
 
 test('lesson terminal classification preserves readable cited drafts without claiming full support', () => {

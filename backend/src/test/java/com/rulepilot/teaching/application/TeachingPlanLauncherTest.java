@@ -94,7 +94,7 @@ class TeachingPlanLauncherTest {
     }
 
     @Test
-    void recordsARecoverableFailureWhenPlanningFailsInTheBackground() {
+    void identifiesPlanResolutionAsTheEarliestOrdinaryRuntimeFailure() {
         RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
         RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
         RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
@@ -116,7 +116,10 @@ class TeachingPlanLauncherTest {
         launcher.launch(documentVersionId, "alice");
 
         verify(runs).fail(
-                received.id(), 3, "TEACHING_PREPARATION_FAILED", "Teaching preparation failed safely");
+                received.id(),
+                3,
+                "TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED",
+                "Teaching preparation failed safely");
         verify(lessons, never()).launch(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
@@ -149,7 +152,7 @@ class TeachingPlanLauncherTest {
     }
 
     @Test
-    void doesNotCompletePreparationWhenLessonGenerationCannotBeScheduled() {
+    void identifiesFirstSectionStartupWithoutCompletingPreparation() {
         RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
         RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
         RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
@@ -177,7 +180,41 @@ class TeachingPlanLauncherTest {
         verify(runs, never()).advance(
                 eq(received.id()), eq(3L), eq(AssistantRunState.COMPLETED), anyString());
         verify(runs).fail(
-                received.id(), 3, "TEACHING_PREPARATION_FAILED", "Teaching preparation failed safely");
+                received.id(),
+                3,
+                "TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED",
+                "Teaching preparation failed safely");
+    }
+
+    @Test
+    void keepsAFirstSectionStorageFailureAtTheExistingHardBoundary() {
+        RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
+        RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
+        TeachingPlan plan = mock(TeachingPlan.class);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(Optional.empty());
+        when(runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(received);
+        when(runs.advance(received.id(), 1, AssistantRunState.DOCUMENT_READINESS,
+                        "Rulebook pages are ready for teaching"))
+                .thenReturn(ready);
+        when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
+                        "Reading rulebook pages and organizing the lesson"))
+                .thenReturn(planning);
+        when(plans.create(documentVersionId, null, "alice", received.id())).thenReturn(plan);
+        when(lessons.launchImmediately(plan, "alice"))
+                .thenThrow(new IllegalStateException(
+                        "first section stopped after persistence",
+                        new TeachingPreparationStorageException(new IllegalStateException("storage unavailable"))));
+        when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
+
+        launcher().launch(documentVersionId, "alice");
+
+        verify(runs).fail(
+                received.id(), 3, "TEACHING_PREPARATION_STORAGE_FAILED", "Teaching preparation failed safely");
+        verify(runs, never()).advance(
+                eq(received.id()), eq(3L), eq(AssistantRunState.COMPLETED), anyString());
     }
 
     @Test

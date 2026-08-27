@@ -11,7 +11,7 @@ validate_public_status() {
 	fi
 	jq -e --argjson expectedExit "$expected_exit" '
 		type == "object"
-		and (keys | sort == ["cleanupOutcome", "exitCode", "failureCode", "lastCompletedStage", "outcome"])
+		and (keys | sort == ["cleanupOutcome", "exitCode", "failureCauseCode", "failureCode", "lastCompletedStage", "outcome"])
 		and (.exitCode == $expectedExit)
 		and (.lastCompletedStage | type == "string" and test("^[a-z0-9-]+$"))
 		and (.cleanupOutcome == "SUCCEEDED" or .cleanupOutcome == "FAILED" or .cleanupOutcome == "NOT_REQUIRED")
@@ -19,10 +19,13 @@ validate_public_status() {
 			if $expectedExit == 0 then
 				.outcome == "SUCCEEDED"
 				and .failureCode == null
+				and .failureCauseCode == null
 				and .lastCompletedStage == "journey-completed"
 				and .cleanupOutcome != "FAILED"
 			else
 				.outcome == "FAILED"
+				and (.failureCauseCode == null
+					or (.failureCauseCode | type == "string" and test("^[A-Z][A-Z0-9_]{0,79}$")))
 				and (.failureCode == "INPUT_INVALID"
 					or .failureCode == "AUTHENTICATION_FAILED"
 					or .failureCode == "SOURCE_DISCOVERY_FAILED"
@@ -58,11 +61,12 @@ last_completed_stage=not-started
 pending_failure_code=INPUT_INVALID
 cleanup_outcome=NOT_REQUIRED
 cleanup_required=false
+run_failure_code_file=
 
 write_public_status() {
 	local exit_status=$1
 	[ -n "$public_status_file" ] || return 0
-	local outcome failure_json safe_stage safe_code safe_cleanup status_dir status_tmp
+	local outcome failure_json failure_cause_json safe_stage safe_code safe_cleanup status_dir status_tmp
 	safe_stage=$last_completed_stage
 	if ! [[ "$safe_stage" =~ ^[a-z0-9-]+$ ]]; then safe_stage=unknown; fi
 	safe_code=$pending_failure_code
@@ -78,16 +82,25 @@ write_public_status() {
 	if [ "$exit_status" -eq 0 ]; then
 		outcome=SUCCEEDED
 		failure_json=null
+		failure_cause_json=null
 	else
 		outcome=FAILED
 		failure_json="\"$safe_code\""
+		failure_cause_json=null
+		if [ -n "$run_failure_code_file" ] && [ -f "$run_failure_code_file" ]; then
+			local candidate_failure_cause
+			candidate_failure_cause=$(<"$run_failure_code_file")
+			if [[ "$candidate_failure_cause" =~ ^[A-Z][A-Z0-9_]{0,79}$ ]]; then
+				failure_cause_json="\"$candidate_failure_cause\""
+			fi
+		fi
 	fi
 	status_dir=$(dirname "$public_status_file")
 	mkdir -p "$status_dir"
 	status_tmp="${public_status_file}.tmp.$$"
 	umask 077
-	printf '{"outcome":"%s","exitCode":%d,"lastCompletedStage":"%s","failureCode":%s,"cleanupOutcome":"%s"}\n' \
-		"$outcome" "$exit_status" "$safe_stage" "$failure_json" "$safe_cleanup" > "$status_tmp"
+	printf '{"outcome":"%s","exitCode":%d,"lastCompletedStage":"%s","failureCode":%s,"failureCauseCode":%s,"cleanupOutcome":"%s"}\n' \
+		"$outcome" "$exit_status" "$safe_stage" "$failure_json" "$failure_cause_json" "$safe_cleanup" > "$status_tmp"
 	chmod 600 "$status_tmp"
 	mv "$status_tmp" "$public_status_file"
 }
@@ -321,6 +334,7 @@ done
 base_url=${base_url%/}
 work_dir=$(mktemp -d)
 cookie_jar="$work_dir/cookies.txt"
+run_failure_code_file="$work_dir/run-failure-code"
 document_id=
 cleanup_document=false
 official_import_job_id=
@@ -881,6 +895,12 @@ wait_for_run() {
 				return 0
 				;;
 			FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED)
+				local typed_failure_code
+				typed_failure_code=$(jq -r '.run.lastErrorCode // .run.state // empty' <<<"$response")
+				if [[ "$typed_failure_code" =~ ^[A-Z][A-Z0-9_]{0,79}$ ]]; then
+					printf '%s' "$typed_failure_code" > "$run_failure_code_file"
+					chmod 600 "$run_failure_code_file"
+				fi
 				log_run_timing "${label// /-}-failure" "$response"
 				echo "$label ended in $state" >&2
 				return 1

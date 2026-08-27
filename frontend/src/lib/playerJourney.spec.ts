@@ -128,6 +128,28 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it.each([
+    'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED',
+    'TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED',
+  ])('preserves the ready rulebook and retries only the failed preparation phase for %s', (errorCode) => {
+    const preparation = run('FAILED')
+    preparation.run.lastErrorCode = errorCode
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
+      preparationRun: preparation,
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
+      errorCode, canReadRulebook: true, canReadLesson: false,
+      failureClassification: 'preserved-stop', failureRecovery: 'retry-step',
+    })
+  })
+
   it('rejects a server-suggested blind retry for a typed invalid teaching plan', () => {
     expect(derivePlayerJourney(input({
       gameBound: true,
