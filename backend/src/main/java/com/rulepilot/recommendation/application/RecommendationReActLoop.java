@@ -74,11 +74,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.FutureTask;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -92,8 +89,6 @@ final class RecommendationReActLoop {
     private static final int MAX_ACTION_CALLS = 6;
     private static final int ACTION_SELECTION_OUTPUT_TOKENS = 512;
     private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 2_048;
-    private static final int MAX_CONCURRENT_OPTIONAL_CALLS = 4;
-    private static final long OPTIONAL_PUBLICATION_TAIL_MILLIS = 100;
     private static final String CANDIDATE_USE_SCHEMA = "{\"type\":\"string\",\"description\":\"Publish a useful verified slate now, or continue only when it is still context.\",\"enum\":[\"PUBLISH_CARDS\",\"CONTINUE_REACT\"]}";
     static final int MAX_REFERENCE_RESOLUTION_ATTEMPTS = 2;
     private static final Set<String> READ_ACTIONS = Set.of(
@@ -123,7 +118,6 @@ final class RecommendationReActLoop {
     private final ObjectMapper json;
     private final ObjectMapper actionFingerprintJson;
     private final ExecutorService boundedCalls;
-    private final Semaphore optionalCallPermits = new Semaphore(MAX_CONCURRENT_OPTIONAL_CALLS);
     private final long maximumRunMillis;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions actionExecutor;
@@ -500,12 +494,6 @@ final class RecommendationReActLoop {
     String actionFingerprint(ToolCall call) {
         try {
             JsonNode arguments = actionFingerprintJson.readTree(call.argumentsJson());
-            if (arguments instanceof ObjectNode object
-                    && Set.of(BROWSE_TOOL, DISCOVER_TOOL).contains(call.name())) {
-                // playerLead is presentation-only. Its wording cannot change read idempotency, retry routing, or
-                // any other business decision made from this typed action.
-                object.remove("playerLead");
-            }
             return call.name() + "\n" + actionFingerprintJson.writeValueAsString(canonicalJson(arguments));
         } catch (JsonProcessingException exception) {
             // Invalid JSON still needs an exact retry identity so the same rejected payload can be reused;
@@ -778,19 +766,6 @@ final class RecommendationReActLoop {
         return state.catalogCalls == 0 && state.webResearchCalls == 0
                 ? ACTION_SELECTION_OUTPUT_TOKENS
                 : EVIDENCE_RESPONSE_OUTPUT_TOKENS;
-    }
-
-    private ProgressStage progressStage(String action) {
-        return switch (action) {
-            case RESOLVE_TOOL -> ProgressStage.READING_GAME_DETAILS;
-            case BROWSE_TOOL -> ProgressStage.SEARCHING_BGG_CATALOG;
-            case DISCOVER_TOOL -> ProgressStage.DISCOVERING_CANDIDATES;
-            case LOOKUP_TOOL -> ProgressStage.VERIFYING_BGG_CANDIDATES;
-            case RESEARCH_TOOL -> ProgressStage.RESEARCHING_GAME_FIT;
-            case REPLY_TOOL, IDENTITY_REPLY_TOOL, ASK_TOOL, COMPARE_TOOL, NO_MATCH_TOOL ->
-                ProgressStage.COMPOSING_RESPONSE;
-            default -> ProgressStage.SELECTING_TOOLS;
-        };
     }
 
     private ProgressAction progressAction(String action) {
@@ -1160,12 +1135,10 @@ final class RecommendationReActLoop {
                                 + "},\"required\":[\"question\"]}"),
                 new ToolSpec(
                         RESOLVE_TOOL,
-                        "Resolve one formal/localized/original title copied from cited user evidence; never a sentence, nickname, person, list, or guessed alias. TARGET_GAME requires playerReply and the same action immediately returns its selectable card. Always set continuationGoal: requested guide/Q&A uses GUIDE_AND_RULE_QA plus supporting user continuationEvidence, else NONE. learningGoal is optional; unavailable guides never remove the card. Other purposes set a comparison reference, discussion subject, or identity.",
+                        "Resolve one formal/localized/original title copied from cited user evidence; never a sentence, nickname, person, list, or guessed alias. TARGET_GAME requires playerReply and the same action immediately returns its selectable card. Other purposes set a comparison reference, discussion subject, or identity.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160},\"alternateTitles\":{\"type\":\"array\",\"maxItems\":2,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
-                                + "},\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200},\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
-                                + jsonArray(preferenceEvidenceIds)
-                                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400}},\"required\":[\"title\",\"purpose\",\"evidence\",\"continuationGoal\"]}"),
+                                + "},\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200}},\"required\":[\"title\",\"purpose\",\"evidence\"]}"),
                 new ToolSpec(
                         BROWSE_TOOL,
                         catalogActionDescription(),
@@ -1175,16 +1148,14 @@ final class RecommendationReActLoop {
                                 defaultRecommendationCount)),
                 new ToolSpec(
                         DISCOVER_TOOL,
-                        "Verify one uncertain/current relationship involving a person, event, organization, alias, award, or list. subject is the exact cited identity phrase, not a guessed answer. afterIdentity says whether sourced context answers the turn or selectable cards remain. Supply requestedCount/basis. Publish useful selectable cards immediately; use CONTINUE_REACT only when the games remain identity context. Always set continuationGoal: GUIDE_AND_RULE_QA plus supporting user evidence when directly published cards must prioritize ready guides; otherwise NONE. Identity-only must CONTINUE_REACT and NONE.",
+                        "Verify one uncertain/current relationship involving a person, event, organization, alias, award, or list. subject is the exact cited identity phrase, not a guessed answer. afterIdentity says whether sourced context answers the turn or selectable cards remain. Supply requestedCount/basis. Publish useful selectable cards immediately; use CONTINUE_REACT only when the games remain identity context.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
                                 + "},\"subject\":{\"type\":\"string\",\"description\":\"Exact identity-bearing nickname, initials, award, or relationship phrase; not the full question and not a guessed answer.\",\"minLength\":1,\"maxLength\":80},\"afterIdentity\":{\"type\":\"string\",\"enum\":[\"REPLY_WITH_IDENTITY\",\"RECOMMEND_WITH_CARDS\"]},\"candidateUse\":"
                                 + CANDIDATE_USE_SCHEMA
                                 + ",\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
                                 + requestedCountBasisSchema(currentTurnEvidenceIds)
-                                + ",\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
-                                + jsonArray(preferenceEvidenceIds)
-                                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400},\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"afterIdentity\",\"requestedCount\",\"requestedCountBasis\",\"continuationGoal\"]}"),
+                                + ",\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"afterIdentity\",\"requestedCount\",\"requestedCountBasis\"]}"),
                 new ToolSpec(
                         LOOKUP_TOOL,
                         "Load BGG facts only for observed conversation-context IDs that do not yet have verified details.",
@@ -1215,7 +1186,7 @@ final class RecommendationReActLoop {
     }
 
     private static String catalogActionDescription() {
-        return "Search the local BGG catalog. SELECTABLE_CARDS publishes the first useful verified slate immediately; IDENTITY_ONLY reads creator identity context without publishing and requires continuationGoal NONE. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. requestedCount/requestedCountBasis use defaultRecommendationCount+PRODUCT_DEFAULT when unstated, else explicit count+current-turn U id. Numeric/type constraints use preferenceUpdates. For SELECTABLE_CARDS, requested guide/Q&A uses GUIDE_AND_RULE_QA plus supporting user continuationEvidence, else NONE; learningGoal optional.";
+        return "Search the local BGG catalog. SELECTABLE_CARDS publishes the first useful verified slate immediately; IDENTITY_ONLY reads creator identity context without publishing. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. requestedCount/requestedCountBasis use defaultRecommendationCount+PRODUCT_DEFAULT when unstated, else explicit count+current-turn U id. Numeric/type constraints use preferenceUpdates.";
     }
 
     private static String catalogActionSchema(
@@ -1227,12 +1198,9 @@ final class RecommendationReActLoop {
                 + jsonArray(currentTurnEvidenceIds)
                 + "},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
                 + requestedCountBasisSchema(currentTurnEvidenceIds)
-                + ",\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
-                + jsonArray(preferenceEvidenceIds)
-                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400}"
                 + ",\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
                 + preferenceSchema(preferenceEvidenceIds)
-                + "},\"required\":[\"requestedCount\",\"requestedCountBasis\",\"continuationGoal\"]}";
+                + "},\"required\":[\"requestedCount\",\"requestedCountBasis\"]}";
     }
 
     private static ToolSpec comparisonAction(
@@ -1303,7 +1271,7 @@ final class RecommendationReActLoop {
             int identityCount = state.discoveredRelationshipNames.size();
             return new ToolSpec(
                     IDENTITY_REPLY_TOOL,
-                    "Finish when this verified identity answers the complete current request. If the player also asked for games, a guide, or questions, continue the ReAct loop. The application validates the typed identity and publishes your complete playerReply unchanged; wording, tone, background, detail, and conversational follow-up are yours.",
+                    "Finish when this verified identity answers the complete current request. If the player also asked for games, continue the ReAct loop. The application validates the typed identity and publishes your complete playerReply unchanged; wording, tone, background, detail, and conversational follow-up are yours.",
                     "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"VERIFIED\"]},\"entityKind\":{\"type\":\"string\",\"enum\":[\""
                             + state.discoveredRelationshipKind.name()
                             + "\"]},\"entityNames\":{\"type\":\"array\",\"minItems\":"
@@ -1708,59 +1676,6 @@ final class RecommendationReActLoop {
         }
     }
 
-    <T> T withinOptionalDeadline(
-            RecommendationAgentState state,
-            long maximumMillis,
-            Supplier<T> operation) {
-        if (maximumMillis < 1) throw new IllegalArgumentException("optional capability timeout is invalid");
-        long remainingMillis = maximumRunMillis - state.elapsedMs();
-        long optionalWindowMillis = remainingMillis - OPTIONAL_PUBLICATION_TAIL_MILLIS;
-        if (optionalWindowMillis <= 0 || !optionalCallPermits.tryAcquire()) {
-            throw new OptionalCapabilityTimeout();
-        }
-        long allowedMillis = Math.min(optionalWindowMillis, maximumMillis);
-        AtomicBoolean operationEntered = new AtomicBoolean();
-        AtomicBoolean permitReleased = new AtomicBoolean();
-        Runnable releasePermit = () -> {
-            if (permitReleased.compareAndSet(false, true)) optionalCallPermits.release();
-        };
-        FutureTask<T> pending = new FutureTask<>(() -> {
-            operationEntered.set(true);
-            try {
-                return operation.get();
-            } finally {
-                releasePermit.run();
-            }
-        }) {
-            @Override
-            public void run() {
-                super.run();
-                if (!operationEntered.get()) releasePermit.run();
-            }
-        };
-        try {
-            boundedCalls.execute(pending);
-        } catch (RuntimeException | Error failure) {
-            releasePermit.run();
-            throw failure;
-        }
-        try {
-            return pending.get(allowedMillis, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException exception) {
-            pending.cancel(true);
-            throw new OptionalCapabilityTimeout();
-        } catch (InterruptedException exception) {
-            pending.cancel(true);
-            Thread.currentThread().interrupt();
-            throw new RunInterrupted();
-        } catch (ExecutionException exception) {
-            Throwable cause = exception.getCause();
-            if (cause instanceof RuntimeException runtime) throw runtime;
-            if (cause instanceof Error error) throw error;
-            throw new IllegalStateException("bounded recommendation operation failed", cause);
-        }
-    }
-
     private void emitProgress(
             Consumer<ProgressUpdate> listener,
             ProgressStage stage,
@@ -1928,8 +1843,6 @@ final class RecommendationReActLoop {
     }
 
     static class RunDeadlineExceeded extends RuntimeException {}
-
-    static final class OptionalCapabilityTimeout extends RuntimeException {}
 
     static final class RunInterrupted extends RunDeadlineExceeded {}
 }

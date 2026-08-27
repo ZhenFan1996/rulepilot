@@ -50,10 +50,6 @@ const copy = {
     researchSources: '资料来源',
     recommendationJudgment: '我的选择与取舍',
     shortfall: '本轮已核对 · {available} / {requested} 款',
-    continuationAll: '这些候选都有可直接阅读的讲解。打开后可以发起引用答疑；实时答疑是否完成仍取决于当时服务和可引用证据。',
-    continuationSome: '标有“现成讲解可读”的候选可直接打开；其余候选仍要先找到并核验规则书。自动查找停下时，可以提供公开链接或自己的规则书。',
-    continuationNone: '这些推荐目前没有现成讲解。选择后会先查找并核验规则书；自动查找停下时，可以提供公开链接或自己的规则书。',
-    continuationUnavailable: '当前暂时无法核实现成讲解是否可用。仍可选择候选继续查找规则书；如果自动查找停下，可以提供公开链接或自己的规则书。',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
     toolTrail: '本轮查找与核对', toolUnderstand: '理解你的条件', toolCatalog: '浏览 BGG 目录候选',
     toolReference: '在 BGG 核对参考游戏',
@@ -79,10 +75,6 @@ const copy = {
     researchSources: 'Sources',
     recommendationJudgment: 'My choice and tradeoffs',
     shortfall: 'Verified this turn · {available} / {requested}',
-    continuationAll: 'Every candidate has a directly readable guide. You can start cited Q&A from it, but a live answer still depends on the service and citable evidence available at that time.',
-    continuationSome: 'Candidates marked “Ready guide available” open directly. The others still need a verified rulebook. If automatic discovery stops, you can provide a public link or your own rulebook.',
-    continuationNone: 'These recommendations do not currently have a ready guide. After selection, RulePilot first finds and verifies a rulebook. If automatic discovery stops, you can provide a public link or your own rulebook.',
-    continuationUnavailable: 'Ready-guide availability could not be verified right now. You can still choose a candidate and search for a rulebook; if automatic discovery stops, you can provide a public link or your own rulebook.',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
     toolTrail: 'Search and checks this turn', toolUnderstand: 'Understand your preferences', toolCatalog: 'Browse BGG catalog candidates',
     toolReference: 'Resolve the reference game in BGG',
@@ -176,15 +168,6 @@ function visibleAssistantMessage(message: RecommendationMessage) {
   return message.text
 }
 
-function continuationNotice(turnResponse: RecommendationAgentResponse) {
-  const availability = turnResponse.continuation?.availability
-  if (!availability) return ''
-  if (availability === 'available_for_all') return responseT(turnResponse, 'continuationAll')
-  if (availability === 'available_for_some') return responseT(turnResponse, 'continuationSome')
-  if (availability === 'no_ready_candidate') return responseT(turnResponse, 'continuationNone')
-  return responseT(turnResponse, 'continuationUnavailable')
-}
-
 function emptyProfile(): RecommendationProfile {
   return emptyRecommendationProfile()
 }
@@ -276,12 +259,9 @@ const knownGames = ref<RecommendationGame[]>([])
 const rememberedKnownGames = ref<RecommendationConversationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
 const selectedGame = ref<RecommendationGame | null>(null)
-const selectedLearningGoal = ref<string | null>(null)
 const journeyGames = ref<RecommendationGame[]>([])
-const journeyLearningGoals = ref<Record<number, string | null>>({})
 const journeyStatuses = ref<Record<number, RecommendationJourneyStatus>>({})
 const detailsGame = ref<RecommendationGame | null>(null)
-const detailsLearningGoal = ref<string | null>(null)
 const openSurface = ref<'none' | 'game-details' | 'journey' | 'rulebook' | 'lesson'>('none')
 const journeyStatus = ref<RecommendationJourneyStatus | null>(null)
 const conversationRole = ref<'recommendation' | 'rule-qa'>('recommendation')
@@ -312,21 +292,7 @@ let turnCancellationGeneration = 0
 let disposed = false
 let selectedBggIdToRestore: number | null = null
 
-interface StoredJourneyEntry {
-  game: RecommendationGame
-  learningGoal: string | null
-}
-
-interface StoredJourneyPayload {
-  version: 2
-  entries: StoredJourneyEntry[]
-}
-
 function journeyStorageKey(owner = restoredConversationOwner) {
-  return owner ? `rulepilot:recommendation-journeys:v2:${encodeURIComponent(owner)}` : null
-}
-
-function legacyJourneyStorageKey(owner = restoredConversationOwner) {
   return owner ? `rulepilot:recommendation-journeys:v1:${encodeURIComponent(owner)}` : null
 }
 
@@ -341,67 +307,22 @@ function isStoredJourneyGame(value: unknown): value is RecommendationGame {
     && Array.isArray(game.mechanics)
 }
 
-function normalizedLearningGoal(value: unknown) {
-  return typeof value === 'string' ? value.trim() || null : null
-}
-
-function isStoredJourneyEntry(value: unknown): value is StoredJourneyEntry {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const entry = value as Partial<StoredJourneyEntry>
-  return isStoredJourneyGame(entry.game)
-    && (entry.learningGoal === null || typeof entry.learningGoal === 'string')
-}
-
-function restoredJourneyEntries(value: unknown, legacy: boolean): StoredJourneyEntry[] | null {
-  if (legacy) {
-    if (!Array.isArray(value)) return null
-    return value.filter(isStoredJourneyGame).map(game => ({ game, learningGoal: null }))
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const payload = value as Partial<StoredJourneyPayload>
-  if (payload.version !== 2 || !Array.isArray(payload.entries)) return null
-  return payload.entries.filter(isStoredJourneyEntry).map(entry => ({
-    game: entry.game,
-    learningGoal: normalizedLearningGoal(entry.learningGoal),
-  }))
-}
-
-function learningGoalForJourney(bggId: number) {
-  return journeyLearningGoals.value[bggId] ?? null
-}
-
 function restoreJourneyGames(owner: string | null) {
   journeyGames.value = []
-  journeyLearningGoals.value = {}
   journeyStatuses.value = {}
   const key = journeyStorageKey(owner)
-  const legacyKey = legacyJourneyStorageKey(owner)
-  if (!key || !legacyKey) return
+  if (!key) return
   try {
-    const current = sessionStorage.getItem(key)
-    const legacy = current === null
-    const sourceKey = legacy ? legacyKey : key
-    const raw = sessionStorage.getItem(sourceKey)
+    const raw = sessionStorage.getItem(key)
     if (raw === null) return
-    const entries = restoredJourneyEntries(JSON.parse(raw) as unknown, legacy)
-    if (!entries) {
-      sessionStorage.removeItem(sourceKey)
+    const stored = JSON.parse(raw) as unknown
+    if (!Array.isArray(stored)) {
+      sessionStorage.removeItem(key)
       return
     }
-    journeyGames.value = entries.map(entry => entry.game)
-    journeyLearningGoals.value = Object.fromEntries(
-      entries.map(entry => [entry.game.bggId, entry.learningGoal]),
-    )
-    if (legacy && persistJourneyGames(owner)) {
-      try {
-        sessionStorage.removeItem(legacyKey)
-      } catch {
-        // The v2 copy is authoritative even if this browser cannot remove the legacy shortcut.
-      }
-    }
+    journeyGames.value = stored.filter(isStoredJourneyGame)
   } catch {
     sessionStorage.removeItem(key)
-    sessionStorage.removeItem(legacyKey)
   }
 }
 
@@ -409,14 +330,7 @@ function persistJourneyGames(owner = restoredConversationOwner) {
   const key = journeyStorageKey(owner)
   if (!key) return false
   try {
-    const payload: StoredJourneyPayload = {
-      version: 2,
-      entries: journeyGames.value.map(game => ({
-        game,
-        learningGoal: learningGoalForJourney(game.bggId),
-      })),
-    }
-    sessionStorage.setItem(key, JSON.stringify(payload))
+    sessionStorage.setItem(key, JSON.stringify(journeyGames.value))
     return true
   } catch {
     // Server-side jobs continue even when this browser cannot persist navigation shortcuts.
@@ -965,17 +879,12 @@ function introduce(bggId: number, name: string, responseLocale: AppLocale) {
   void sendTurn(message, profile.value, message, [], bggId, responseLocale)
 }
 
-function selectGame(game: RecommendationGame, learningGoal: string | null = null) {
+function selectGame(game: RecommendationGame) {
   if (selectedGame.value?.bggId !== game.bggId) {
     journeyStatus.value = null
     conversationRole.value = 'recommendation'
   }
   selectedGame.value = game
-  selectedLearningGoal.value = normalizedLearningGoal(learningGoal)
-  journeyLearningGoals.value = {
-    ...journeyLearningGoals.value,
-    [game.bggId]: selectedLearningGoal.value,
-  }
   journeyGames.value = [
     ...journeyGames.value.filter(candidate => candidate.bggId !== game.bggId),
     game,
@@ -986,16 +895,14 @@ function selectGame(game: RecommendationGame, learningGoal: string | null = null
   openSurface.value = 'journey'
 }
 
-function openDetails(game: RecommendationGame, learningGoal: string | null = null) {
+function openDetails(game: RecommendationGame) {
   detailsGame.value = game
-  detailsLearningGoal.value = learningGoal?.trim() || null
   openSurface.value = 'game-details'
 }
 
 function selectFromDetails(game: RecommendationGame) {
   detailsGame.value = null
-  selectGame(game, detailsLearningGoal.value)
-  detailsLearningGoal.value = null
+  selectGame(game)
 }
 
 function updateJourneyStatus(value: RecommendationJourneyStatus) {
@@ -1007,14 +914,10 @@ function removeCurrentJourney() {
   const game = selectedGame.value
   if (!game) return
   journeyGames.value = journeyGames.value.filter(candidate => candidate.bggId !== game.bggId)
-  const nextLearningGoals = { ...journeyLearningGoals.value }
-  delete nextLearningGoals[game.bggId]
-  journeyLearningGoals.value = nextLearningGoals
   const nextStatuses = { ...journeyStatuses.value }
   delete nextStatuses[game.bggId]
   journeyStatuses.value = nextStatuses
   journeyStatus.value = null
-  selectedLearningGoal.value = null
   openSurface.value = 'none'
   persistJourneyGames()
 }
@@ -1040,7 +943,6 @@ function openJourneyDock() {
 
 function activateJourneyCard(game: RecommendationGame, target?: EventTarget | null) {
   selectedGame.value = game
-  selectedLearningGoal.value = learningGoalForJourney(game.bggId)
   selectedBggIdToRestore = game.bggId
   activeFocusedBggId.value = game.bggId
   journeyStatus.value = statusForJourney(game) ?? null
@@ -1099,7 +1001,6 @@ function switchToRecommendations() {
 
 function changeJourneyGame() {
   selectedGame.value = null
-  selectedLearningGoal.value = null
   journeyStatus.value = null
   conversationRole.value = 'recommendation'
   openSurface.value = 'none'
@@ -1186,7 +1087,6 @@ function clearVisibleRecommendationConversation(preserveSelectedIdentity = false
   rememberedKnownGames.value = []
   activeFocusedBggId.value = null
   selectedGame.value = null
-  selectedLearningGoal.value = null
   if (!preserveSelectedIdentity) selectedBggIdToRestore = null
   detailsGame.value = null
   journeyStatus.value = null
@@ -1295,7 +1195,6 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
     const restoredSelection = responseGames.find(game => game.bggId === selectedBggId)
     if (restoredSelection) {
       selectedGame.value = restoredSelection
-      selectedLearningGoal.value = learningGoalForJourney(restoredSelection.bggId)
       activeFocusedBggId.value = restoredSelection.bggId
       selectedBggIdToRestore = restoredSelection.bggId
     }
@@ -1480,7 +1379,6 @@ function reset(preserveJourney = false) {
   }
   if (!preserveJourney) {
     selectedGame.value = null
-    selectedLearningGoal.value = null
     selectedBggIdToRestore = null
     detailsGame.value = null
     journeyStatus.value = null
@@ -1596,7 +1494,7 @@ watch(
   () => { persistRecommendationConversation() },
   { deep: true, flush: 'post' },
 )
-watch([journeyGames, journeyLearningGoals], () => { persistJourneyGames() }, { deep: true, flush: 'post' })
+watch(journeyGames, () => { persistJourneyGames() }, { deep: true, flush: 'post' })
 watch(
   () => [messages.value.length, loading.value, loadingStage.value],
   () => { void scrollConversationToLatest() },
@@ -1667,13 +1565,12 @@ onBeforeUnmount(() => {
 
                   <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
                     <p v-if="message.response.shortfall" class="mb-2 inline-flex rounded-full border border-copper/25 bg-copper/5 px-2.5 py-1 text-[0.6875rem] font-semibold text-copper">{{ responseT(message.response, 'shortfall', { available: message.response.shortfall.availableCount, requested: message.response.shortfall.requestedCount }) }}</p>
-                    <p v-if="message.response.continuation" data-testid="recommendation-continuation-notice" class="mb-3 rounded-xl border border-indigo/20 bg-indigo/5 px-3 py-2 text-xs leading-5 text-ink/70">{{ continuationNotice(message.response) }}</p>
                     <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <p class="recommendation-source-summary text-xs leading-5">{{ responseT(message.response, 'source', { source: message.response.sourceCount.toLocaleString(), count: message.response.candidatesEvaluated }) }}</p>
                       <button v-if="message.response === response" type="button" :disabled="loading" class="min-h-11 self-start text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40 sm:self-auto" @click="moreGames(message.response)">{{ responseT(message.response, 'more') }}</button>
                     </div>
                     <TransitionGroup tag="div" name="tile" class="mt-3 grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                      <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame($event, message.response?.continuation?.learningGoal ?? null)" @details="openDetails($event, message.response?.continuation?.learningGoal ?? null)" />
+                      <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame" @details="openDetails" />
                     </TransitionGroup>
                   </div>
                 </article>
@@ -1758,7 +1655,6 @@ onBeforeUnmount(() => {
             :key="selectedGame.bggId"
             :game="selectedGame"
             :profile="profile"
-            :learning-goal="selectedLearningGoal"
             @close="openSurface = 'none'"
             @change="changeJourneyGame"
             @status="updateJourneyStatus"

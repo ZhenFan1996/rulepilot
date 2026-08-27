@@ -13,7 +13,7 @@ import java.util.UUID;
  * Enriches one cited lesson section with distinct, exact-step visual references.
  *
  * <p>It owns only bounded section-local image work. Section selection, outcome presentation,
- * and progressive lesson publication remain in {@link VisualLessonEnricher}.</p>
+ * and incremental lesson publication remain in {@link VisualLessonEnricher}.</p>
  */
 final class VisualLessonSectionEnricher {
 

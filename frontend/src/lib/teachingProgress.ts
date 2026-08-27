@@ -128,14 +128,8 @@ export function teachingActivityText(
       : chapter.title ? `第 ${chapter.position} 章“${chapter.title}”` : `第 ${chapter.position} 章`
     : locale === 'en' ? 'this part of the guide' : '当前内容'
   if (locale === 'en') {
-    if (activity.operation.startsWith('retryIncompleteTeachingSections')) {
-      return 'A chapter draft did not pass its checks; retrying only the unfinished chapters once'
-    }
     if (activity.operation.startsWith('readTeachingSourcePages')
       || activity.operation.startsWith('readRuleEvidencePages')) return `Reading the cited rulebook pages for ${target}`
-    if (activity.operation.startsWith('readProgressiveVisualPages')) return `Starter guide ready; opening the remaining cited pages from the PDF`
-    if (activity.operation.startsWith('prefetchProgressiveVisualPages')) return `Starter guide ready; reading the remaining page facts in one background pass`
-    if (activity.operation.startsWith('inspectRequiredVisualPage')) return `Reading the exact cited page needed for ${target}`
     if (activity.operation.startsWith('searchRuleEvidence')) return `Finding rulebook support for ${target}`
     if (activity.operation.startsWith('composeTeachingSection')) return `Writing ${target} from the rulebook`
     if (activity.operation.startsWith('correctTeachingSection')
@@ -144,7 +138,6 @@ export function teachingActivityText(
     if (isTeachingContractRepair(activity.operation)) return `Repairing the chapter structure for ${target}`
     if (activity.operation.startsWith('confirmGeneratedClaims')) return `Checking each rule claim in ${target}`
     if (activity.operation.startsWith('reviewGeneratedContent')) return `Reviewing rules and sources for ${target}`
-    if (activity.operation.startsWith('reviewPublishedTeachingSection')) return `Starter guide ready; reviewing details for ${target}`
     if (activity.operation.startsWith('reviewObjectiveCoverage')) return `Checking ${target} for missing key steps`
     if (activity.operation.startsWith('validateTeachingSection')) {
       return activity.outcome === 'SUCCEEDED'
@@ -158,14 +151,8 @@ export function teachingActivityText(
     }
     return 'Organising and reviewing the guide'
   }
-  if (activity.operation.startsWith('retryIncompleteTeachingSections')) {
-    return '有章节草稿没有通过校验，正在只重试未完成章节一次；已发布内容不会重做'
-  }
   if (activity.operation.startsWith('readTeachingSourcePages')
     || activity.operation.startsWith('readRuleEvidencePages')) return `正在读取${target}引用的规则书页面`
-  if (activity.operation.startsWith('readProgressiveVisualPages')) return '基础讲解已可读，正在打开 PDF 中其余引用页'
-  if (activity.operation.startsWith('prefetchProgressiveVisualPages')) return '基础讲解已可读，正在一次性读取后续页面要点'
-  if (activity.operation.startsWith('inspectRequiredVisualPage')) return `正在读取${target}所需的引用原页`
   if (activity.operation.startsWith('searchRuleEvidence')) return `正在为${target}查找规则依据`
   if (activity.operation.startsWith('composeTeachingSection')) {
     return `正在依据规则书编写${target}`
@@ -176,7 +163,6 @@ export function teachingActivityText(
   if (isTeachingContractRepair(activity.operation)) return `正在整理${target}的章节结构`
   if (activity.operation.startsWith('confirmGeneratedClaims')) return `正在逐条复核${target}的规则陈述`
   if (activity.operation.startsWith('reviewGeneratedContent')) return `正在核对${target}的规则和出处`
-  if (activity.operation.startsWith('reviewPublishedTeachingSection')) return `基础讲解已可用，正在核对${target}的细节`
   if (activity.operation.startsWith('reviewObjectiveCoverage')) return `正在检查${target}有没有漏讲关键步骤`
   if (activity.operation.startsWith('validateTeachingSection')) {
     return activity.outcome === 'SUCCEEDED'
@@ -380,11 +366,9 @@ function isTeachingContractRepair(operation: string) {
 }
 
 function isPlayerFacingTeachingOperation(operation: string) {
-  return operation.startsWith('retryIncompleteTeachingSections')
-    || operation.startsWith('readTeachingSourcePages')
+  return operation.startsWith('readTeachingSourcePages')
     || operation.startsWith('readRuleEvidencePages')
     || operation.startsWith('searchRuleEvidence')
-    || operation.startsWith('inspectRequiredVisualPage')
     || operation.startsWith('composeTeachingSection')
     || operation.startsWith('correctTeachingSection')
     || operation.startsWith('reviseTeachingSection')
@@ -396,12 +380,9 @@ function isPlayerFacingTeachingOperation(operation: string) {
 
 function isPlayerFacingTeachingPreparationOperation(operation: string) {
   return visualPreparationPageProgress(operation) !== null
-    || operation.startsWith('inspectTeachingVisualBatch')
-    || operation.startsWith('selectProgressiveTeachingStart')
     || operation.startsWith('organizeTeachingOutline')
     || operation.startsWith('refineTeachingOutlineCoverage')
     || operation.startsWith('refineTeachingOutlineOwnership')
-    || operation.startsWith('publishProgressiveVisualTeachingPlan')
 }
 
 function teachingPreparationActivityText(
@@ -425,9 +406,6 @@ function teachingPreparationActivityText(
   }
   const unsuccessful = activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
   if (locale === 'en') {
-    if (activity.operation.startsWith('selectProgressiveTeachingStart')) {
-      return unsuccessful ? 'The first-page selection did not complete; continuing with the complete rulebook plan' : 'Choosing the first rule pages that can be taught clearly'
-    }
     if (activity.operation.startsWith('organizeTeachingOutline')) {
       if (activity.outcome === 'FAILED') return 'The chapter plan did not complete this time'
       if (activity.outcome === 'REJECTED') return 'The chapter plan did not pass validation this time'
@@ -442,9 +420,6 @@ function teachingPreparationActivityText(
       return unsuccessful ? 'Keeping the usable chapter boundaries' : 'Giving each rule one clear chapter home'
     }
     return 'The chapter plan is ready for writing'
-  }
-  if (activity.operation.startsWith('selectProgressiveTeachingStart')) {
-    return unsuccessful ? '首批规则页选择本次未完成，继续使用完整规则书规划讲解' : '正在选择最先能够讲清楚的规则页'
   }
   if (activity.operation.startsWith('organizeTeachingOutline')) {
     if (activity.outcome === 'FAILED') return '讲解章节规划本次未完成'
@@ -552,9 +527,7 @@ function visualPreparationPageProgress(operation: string) {
   const grouping = kind === 'inspectTeachingVisualPage'
     || kind === 'inspectTeachingVisualRetry'
     || kind === 'inspectTeachingVisualRepair'
-  const transcription = kind === 'transcribeTeachingVisualPage'
-    || kind === 'transcribeTeachingVisualRetry'
-    || kind === 'transcribeTeachingVisualRepairPage'
+  const transcription = kind === 'transcribeTeachingVisualRepairPage'
   const persistence = kind === 'persistTeachingVisualPage'
   if (!grouping && !transcription && !persistence) return null
   const groupingRepair = kind === 'inspectTeachingVisualRepair'
@@ -565,7 +538,7 @@ function visualPreparationPageProgress(operation: string) {
   const repair = groupingRepair || kind === 'transcribeTeachingVisualRepairPage'
   const attempt: TeachingVisualPageRuleGroupAttempt = repair
     ? 'repair'
-    : kind === 'inspectTeachingVisualRetry' || kind === 'transcribeTeachingVisualRetry'
+    : kind === 'inspectTeachingVisualRetry'
       ? 'temporary-retry'
       : 'direct'
   if (groupingRepair && !repairCode) return null

@@ -130,13 +130,11 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('规则答疑')
     expect(wrapper.text()).not.toContain('答疑独立打开，不打断当前讲解')
     expect(wrapper.get('[data-testid="private-lesson-surface"]').classes()).not.toContain('overflow-x-hidden')
-    expect(wrapper.text()).not.toContain('图标速查表')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('规则答疑')
     expect(wrapper.get('[data-testid="lesson-questions-entry"]').classes()).not.toContain('fixed')
     expect(wrapper.find('a[href^="/lesson/plan-1/questions?section="]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('问这一章')
-    expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
     expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
       .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
@@ -173,11 +171,6 @@ describe('LessonView progressive reading', () => {
       .map(([input]) => String(input))
       .filter((path) => path.includes('mode=TEACHING'))
     expect(progressPaths[2]).toContain('activityRunId=run-1&afterActivitySequence=1')
-    const supportingPaths = fetchMock.mock.calls.map(([input]) => String(input))
-    expect(supportingPaths.some((path) => path.includes('icon-glossary'))).toBe(false)
-    expect(supportingPaths.some((path) => path.includes('/narration'))).toBe(false)
-    expect(supportingPaths.some((path) => path.endsWith('/video'))).toBe(false)
-    expect(supportingPaths.some((path) => path.includes('media-consistency'))).toBe(false)
     wrapper.unmount()
   })
 
@@ -273,7 +266,7 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
-  it('lets the player use a complete cited draft while factual review remains active', async () => {
+  it('lets the player use a complete cited draft while its generation run remains active', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
@@ -291,7 +284,7 @@ describe('LessonView progressive reading', () => {
           },
           budget: { usedModelCalls: 2, maxModelCalls: 48 },
           activities: [{
-            sequence: 2, type: 'CRITIC', operation: 'reviewPublishedTeachingSection', summary: 'Work started',
+            sequence: 2, type: 'MODEL', operation: 'reviseTeachingSection|1', summary: 'Work started',
             outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-21T00:01:00Z',
           }],
         })
@@ -324,7 +317,6 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('后台只是在核对和修正细节')
     expect(wrapper.text()).toContain('我的图文讲解')
     expect(wrapper.text()).not.toContain('问这一章')
-    expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
     wrapper.unmount()
   })
@@ -1499,7 +1491,6 @@ function createMemoryRouter() {
       { path: '/lesson/:planId', name: 'lesson', component: LessonView },
       { path: '/lesson/:planId/questions', name: 'lesson-questions', component: Empty },
       { path: '/read/:planId', name: 'public-lesson', component: Empty },
-      { path: '/table/:planId', name: 'table-mode', component: Empty },
       { path: '/account', name: 'account', component: Empty },
       { path: '/settings/models', name: 'model-settings', component: Empty },
       { path: '/login', name: 'login', component: Empty },

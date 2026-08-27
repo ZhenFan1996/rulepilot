@@ -7,7 +7,6 @@ import com.rulepilot.teaching.application.PublicLessonReader;
 import com.rulepilot.teaching.application.PublicLessonQuestionService;
 import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.application.PublicCoverThumbnailService;
-import com.rulepilot.teaching.application.RulebookIconGlossaryService;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.catalog.PublicGameIdentityLookup;
 import java.net.URI;
@@ -47,7 +46,6 @@ public class PublicLessonController {
     private final PublicCoverThumbnailService coverThumbnails;
     private final DocumentPageImages pageImages;
     private final DocumentPageImageCropper crops;
-    private final RulebookIconGlossaryService iconGlossary;
 
     public PublicLessonController(
             PublicLessonReader lessons,
@@ -56,8 +54,7 @@ public class PublicLessonController {
             LessonLocalizationService localizations,
             PublicCoverThumbnailService coverThumbnails,
             DocumentPageImages pageImages,
-            DocumentPageImageCropper crops,
-            RulebookIconGlossaryService iconGlossary) {
+            DocumentPageImageCropper crops) {
         this.lessons = lessons;
         this.catalog = catalog;
         this.questions = questions;
@@ -65,7 +62,6 @@ public class PublicLessonController {
         this.coverThumbnails = coverThumbnails;
         this.pageImages = pageImages;
         this.crops = crops;
-        this.iconGlossary = iconGlossary;
     }
 
     @GetMapping
@@ -85,22 +81,6 @@ public class PublicLessonController {
             @PathVariable UUID planId,
             @org.springframework.web.bind.annotation.RequestBody PublicLessonQuestionService.QuestionRequest request) {
         return questions.answer(planId, request).orElseThrow(this::notFound);
-    }
-
-    @GetMapping("/{planId}/icon-glossary")
-    RulebookIconGlossaryService.GlossaryView iconGlossary(@PathVariable UUID planId) {
-        require(planId);
-        return iconGlossary.viewPublic(planId);
-    }
-
-    @GetMapping("/{planId}/icon-glossary/icons/{occurrenceId}/image")
-    ResponseEntity<byte[]> iconImage(@PathVariable UUID planId, @PathVariable UUID occurrenceId) {
-        require(planId);
-        var crop = iconGlossary.cropPublic(planId, occurrenceId);
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(crop.mediaType()))
-                .cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic())
-                .body(crop.content());
     }
 
     @GetMapping("/{planId}/rulebook")

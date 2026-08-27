@@ -30,17 +30,17 @@ class OpenCvVisualRegionProposerTest {
                         + "\"regions\":[{\"x\":200,\"y\":100,\"width\":400,\"height\":300}]}'\n");
         assertThat(executable.toFile().setExecutable(true)).isTrue();
         var proposer = new OpenCvVisualRegionProposer(
-                ObservationRegistry.create(), true, executable.toString(), Duration.ofSeconds(1), 32);
+                ObservationRegistry.create(), true, executable.toString(), Duration.ofSeconds(5), 32);
 
         var result = proposer.propose(
                 new DocumentPageImages.PageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 2000, 1000),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(5));
 
         assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
         assertThat(result.proposals()).singleElement().satisfies(proposal ->
                 assertThat(proposal.rectangle()).isEqualTo(new Rectangle(100, 100, 200, 300)));
         assertThat(Files.readString(executable.resolveSibling("typed-region-tool.invocation")))
-                .contains("memory=402653184", "cpu=2", "--page-width 2000", "--page-height 1000");
+                .contains("memory=402653184", "cpu=6", "--page-width 2000", "--page-height 1000");
     }
 
     @Test
@@ -70,11 +70,11 @@ class OpenCvVisualRegionProposerTest {
                         + "\"regions\":[],\"unexpected\":true}'\n");
         assertThat(executable.toFile().setExecutable(true)).isTrue();
         var proposer = new OpenCvVisualRegionProposer(
-                ObservationRegistry.create(), true, executable.toString(), Duration.ofSeconds(1), 32);
+                ObservationRegistry.create(), true, executable.toString(), Duration.ofSeconds(5), 32);
 
         var result = proposer.propose(
                 new DocumentPageImages.PageImage(1, "image/jpeg", new byte[] {1}, 1000, 1000),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(5));
 
         assertThat(result.diagnostic()).isEqualTo(Diagnostic.UNAVAILABLE);
     }

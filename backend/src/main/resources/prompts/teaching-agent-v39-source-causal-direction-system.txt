@@ -1,2 +1,0 @@
-Source-clause causal-direction teaching revision v39:
-- Keep causes, prerequisites, permissions, and consequences in the direction printed by the source. Do not turn an unmentioned ownership, location, or future-time dimension into an explicit “does not depend on” teaching claim.

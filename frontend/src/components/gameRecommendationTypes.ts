@@ -73,23 +73,6 @@ export type RecommendedGame = {
   reasons?: RecommendationReason[]
   fitClaims?: CandidateFitClaim[]
   replyParts?: RecommendationReplyPart[]
-  teachingContinuation?: {
-    teachingPlanId: string
-    sectionCount: number
-    stepCount: number
-  } | null
-}
-
-export type RecommendationContinuation = {
-  kind: 'guide_and_rule_qa'
-  learningGoal: string
-  availability:
-    | 'available_for_all'
-    | 'available_for_some'
-    | 'no_ready_candidate'
-    | 'availability_unavailable'
-  readyCount: number
-  candidateCount: number
 }
 
 export type RecommendationReplyPart = {
@@ -167,7 +150,6 @@ export type RecommendationAgentResponse = {
   }
   researchSources?: ResearchSource[]
   comparison?: CandidateComparison | null
-  continuation?: RecommendationContinuation | null
   completedWork?: RecommendationProgressAction[]
   games: RecommendedGame[]
 }

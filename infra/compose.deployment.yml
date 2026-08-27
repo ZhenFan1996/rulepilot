@@ -97,8 +97,6 @@ services:
       COMPATIBLE_MODEL_BASE_URL: ${COMPATIBLE_MODEL_BASE_URL:-http://host.docker.internal:11434/v1}
       COMPATIBLE_MODEL_NAME: ${COMPATIBLE_MODEL_NAME:-local-model}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fake}
-      SPEECH_PROVIDER: ${SPEECH_PROVIDER:-fake}
-      VIDEO_PROVIDER: ${VIDEO_PROVIDER:-manifest}
       # A small production host must keep reader requests independent from
       # optional telemetry exporters and oversized idle JDBC pools.
       # W3C propagation must remain active even when this small deployment does not run an OTLP collector.

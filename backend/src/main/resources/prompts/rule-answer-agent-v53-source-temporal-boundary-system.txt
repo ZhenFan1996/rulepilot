@@ -1,3 +1,0 @@
-Source-clause temporal-boundary revision v53:
-- In a SOURCE answer, preserve the exact timing boundary stated by the cited clause. “During” a turn or phase does not by itself mean “at the end of” or “on completion of” that turn or phase.
-- Do not infer an instant, deadline, duration, earlier/later window, or absence of other timing rules from silence. Explain only the temporal relationship affirmatively stated by the direct clause.

@@ -131,8 +131,6 @@ class IllustratedLessonLauncherTest {
         verify(lessons).finish(outcome);
         verify(visuals).launch(planId, "alice");
         verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
-        verify(visuals, never()).extractIconGlossaryOnly(
-                org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
     }
 
     @Test
@@ -182,24 +180,6 @@ class IllustratedLessonLauncherTest {
 
         verify(lessons).finish(outcome);
         verify(visuals, never()).launch(planId, "alice");
-        verify(visuals, never()).enrichLatest(
-                org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
-    }
-
-    @Test
-    void preparesIconGlossaryWithoutRerunningLessonVisualLocalization() {
-        var visuals = mock(VisualLessonEnrichmentService.class);
-        var launch = new VisualLessonEnrichmentService.VisualEnrichmentLaunch(
-                UUID.randomUUID(), AssistantRunState.RECEIVED, 1, false);
-        when(visuals.launch(planId, "alice")).thenReturn(launch);
-        var launcher = new IllustratedLessonLauncher(
-                lessons, runs, new SyncTaskExecutor(), new SyncTaskExecutor(), visuals);
-
-        var accepted = launcher.prepareIconGlossary(planId, "alice");
-
-        assertThat(accepted).isEqualTo(launch);
-        verify(visuals).extractIconGlossaryOnly(
-                org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
         verify(visuals, never()).enrichLatest(
                 org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
     }

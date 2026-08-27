@@ -10,11 +10,9 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.ingestion.RulebookUnderstandingRebuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import java.util.UUID;
-import java.util.function.Consumer;
 
 /** Best-effort post-publication visual work. A failure never changes the base lesson. */
 @Service
@@ -29,9 +27,7 @@ public class VisualLessonEnrichmentService {
     private final RulebookUnderstandingRebuilder understandingRebuilder;
     private final AssistantRuns runs;
     private final AuditedAgentInvocations activities;
-    private final RulebookIconGlossaryService iconGlossary;
 
-    @Autowired
     public VisualLessonEnrichmentService(
             TeachingPlanRepository plans,
             IllustratedLessonRepository lessons,
@@ -39,8 +35,7 @@ public class VisualLessonEnrichmentService {
             IllustratedLessonProgressPublisher publisher,
             RulebookUnderstandingRebuilder understandingRebuilder,
             AssistantRuns runs,
-            AuditedAgentInvocations activities,
-            RulebookIconGlossaryService iconGlossary) {
+            AuditedAgentInvocations activities) {
         this.plans = plans;
         this.lessons = lessons;
         this.enricher = enricher;
@@ -48,32 +43,9 @@ public class VisualLessonEnrichmentService {
         this.understandingRebuilder = understandingRebuilder;
         this.runs = runs;
         this.activities = activities;
-        this.iconGlossary = iconGlossary;
-    }
-
-    /** Compatibility constructor for focused unit tests that do not need persisted progress. */
-    VisualLessonEnrichmentService(
-            TeachingPlanRepository plans,
-            IllustratedLessonRepository lessons,
-            VisualLessonEnricher enricher,
-            IllustratedLessonProgressPublisher publisher,
-            RulebookUnderstandingRebuilder understandingRebuilder) {
-        this(plans, lessons, enricher, publisher, understandingRebuilder, null, null, null);
-    }
-
-    VisualLessonEnrichmentService(
-            TeachingPlanRepository plans,
-            IllustratedLessonRepository lessons,
-            VisualLessonEnricher enricher,
-            IllustratedLessonProgressPublisher publisher,
-            RulebookUnderstandingRebuilder understandingRebuilder,
-            AssistantRuns runs,
-            AuditedAgentInvocations activities) {
-        this(plans, lessons, enricher, publisher, understandingRebuilder, runs, activities, null);
     }
 
     public synchronized VisualEnrichmentLaunch launch(UUID teachingPlanId, String ownerUsername) {
-        if (runs == null) throw new IllegalStateException("visual enrichment runs are unavailable");
         var existing = runs.findLatestOwned(AssistantRunMode.VISUAL_ENRICHMENT, teachingPlanId, ownerUsername)
                 .map(AssistantRuns.RunDetails::run)
                 .filter(run -> !run.state().terminal());
@@ -89,32 +61,7 @@ public class VisualLessonEnrichmentService {
         return enricher.supportsVisualEvidence(ownerUsername);
     }
 
-    public void enrichLatest(UUID teachingPlanId) {
-        log.info("Starting visual enrichment for teaching plan {}", teachingPlanId);
-        try {
-            var plan = plans.findById(teachingPlanId)
-                    .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
-            if (!hasVisualTargets(plan)) {
-                log.info("Skipped visual enrichment for plan {} because its outline requested no visual evidence", teachingPlanId);
-                return;
-            }
-            var lesson = lessons.findLatestByPlan(teachingPlanId).orElse(null);
-            if (lesson == null) return;
-            publisher.publish(enrich(plan.documentVersionId(), lesson, plan.createdBy()));
-        } catch (RuntimeException failure) {
-            log.warn(
-                    "Visual lesson enrichment failed for plan {} ({}): {}",
-                    teachingPlanId,
-                    failure.getClass().getSimpleName(),
-                    failure.getMessage());
-        }
-    }
-
     public void enrichLatest(UUID teachingPlanId, RunSnapshot run) {
-        if (runs == null || activities == null) {
-            enrichLatest(teachingPlanId);
-            return;
-        }
         RunSnapshot current = run;
         log.info("Starting observable visual enrichment run {} for teaching plan {}", current.id(), teachingPlanId);
         try {
@@ -180,99 +127,11 @@ public class VisualLessonEnrichmentService {
         }
     }
 
-    /**
-     * Runs whole-rulebook icon inventory as its own visual job. It intentionally does not share a call stack with
-     * section crop localization: canceled provider tasks and their database activity must be fully quiescent before
-     * page facts are read and replaced.
-     */
-    public void extractIconGlossaryOnly(UUID teachingPlanId, RunSnapshot run) {
-        if (runs == null || iconGlossary == null) {
-            throw new IllegalStateException("rulebook icon glossary runs are unavailable");
-        }
-        RunSnapshot current = run;
-        try {
-            current = runs.advance(
-                    current.id(), current.revision(), AssistantRunState.DOCUMENT_READINESS,
-                    "Loading every rendered rulebook page for icon review");
-            current = runs.advance(
-                    current.id(), current.revision(), AssistantRunState.RETRIEVING,
-                    "Identifying rule icons and their directly printed explanations");
-            iconGlossary.extract(teachingPlanId, current.ownerUsername(), current.id());
-            current = runs.advance(
-                    current.id(), current.revision(), AssistantRunState.VERIFYING_EVIDENCE,
-                    "Checking icon meanings against visible rulebook labels");
-            current = runs.advance(
-                    current.id(), current.revision(), AssistantRunState.MEDIA_PACKAGING,
-                    "Preparing exact icon crops for the quick reference");
-            runs.advance(
-                    current.id(), current.revision(), AssistantRunState.COMPLETED,
-                    "Rulebook icon quick reference finished");
-        } catch (RuntimeException failure) {
-            log.warn(
-                    "Rulebook icon glossary remained partial for plan {} ({}): {}",
-                    teachingPlanId,
-                    failure.getClass().getSimpleName(),
-                    failure.getMessage(),
-                    failure);
-            if (current != null && !current.state().terminal()) {
-                try {
-                    runs.fail(
-                            current.id(),
-                            current.revision(),
-                            "ICON_GLOSSARY_FAILED",
-                            "Rulebook icon review stopped safely and can resume completed pages");
-                } catch (RuntimeException runFailure) {
-                    failure.addSuppressed(runFailure);
-                }
-            }
-        }
-    }
-
     public void failScheduling(VisualEnrichmentLaunch launch) {
-        if (runs == null || launch == null || launch.reused()) return;
+        if (launch == null || launch.reused()) return;
         runs.fail(
                 launch.assistantRunId(), launch.revision(), "VISUAL_ENRICHMENT_FAILED",
                 "Visual enrichment could not be scheduled");
-    }
-
-    private com.rulepilot.teaching.domain.IllustratedLesson enrich(
-            UUID documentVersionId, com.rulepilot.teaching.domain.IllustratedLesson lesson, String modelConfigurationOwner) {
-        try {
-            return enricher.enrich(documentVersionId, lesson, modelConfigurationOwner);
-        } catch (IllegalArgumentException missingUnderstanding) {
-            if (!"rulebook understanding does not exist".equals(missingUnderstanding.getMessage())) {
-                throw missingUnderstanding;
-            }
-            log.info("Rebuilding layout evidence for legacy document {} before visual enrichment", documentVersionId);
-            understandingRebuilder.rebuild(documentVersionId);
-            return enricher.enrich(documentVersionId, lesson, modelConfigurationOwner);
-        }
-    }
-
-    private VisualLessonEnricher.EnrichmentResult enrichWithReport(
-            UUID documentVersionId, com.rulepilot.teaching.domain.IllustratedLesson lesson, String modelConfigurationOwner) {
-        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner, ignored -> {});
-    }
-
-    private VisualLessonEnricher.EnrichmentResult enrichWithReport(
-            UUID documentVersionId,
-            com.rulepilot.teaching.domain.IllustratedLesson lesson,
-            String modelConfigurationOwner,
-            Consumer<VisualLessonEnricher.SectionProgress> progress) {
-        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner, new VisualLessonEnricher.VisualProgressListener() {
-            @Override
-            public void sectionFinished(VisualLessonEnricher.SectionProgress section) {
-                progress.accept(section);
-            }
-        });
-    }
-
-    private VisualLessonEnricher.EnrichmentResult enrichWithReport(
-            UUID documentVersionId,
-            com.rulepilot.teaching.domain.IllustratedLesson lesson,
-            String modelConfigurationOwner,
-            VisualLessonEnricher.VisualProgressListener progress) {
-        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner, null, progress);
     }
 
     private VisualLessonEnricher.EnrichmentResult enrichWithReport(

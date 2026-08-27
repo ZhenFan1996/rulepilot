@@ -56,7 +56,6 @@ services:
       VISUAL_OCR_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_OCR_REQUEST_PARALLELISM:-10}
       VISUAL_SEMANTIC_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_SEMANTIC_REQUEST_PARALLELISM:-4}
       VISUAL_CATALOG_TIMEOUT: PT120S
-      VISUAL_PROGRESSIVE_START_TIMEOUT: PT35S
       VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT: ${VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT:-PT10M}
       # Publish the cited text lesson first. The single enrichment worker and per-call candidate attachment batch
       # protect reading, upload, and answer traffic without truncating the lesson's eligible visual chapters.

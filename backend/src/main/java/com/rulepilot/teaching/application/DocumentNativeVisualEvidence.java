@@ -77,11 +77,6 @@ public class DocumentNativeVisualEvidence implements NativeVisualEvidence {
                                 .map(anchor -> new VisualAnchor(
                                         anchor.kind(), anchor.label(), anchor.visibleDescription(),
                                         anchor.x(), anchor.y(), anchor.width(), anchor.height()))
-                                .toList(),
-                        fact.iconOccurrences().stream()
-                                .map(icon -> new VisualIcon(
-                                        icon.name(), icon.visualDescription(), icon.meaningStatus().name(),
-                                        icon.evidenceText(), icon.x(), icon.y(), icon.width(), icon.height()))
                                 .toList()))
                 .toList();
     }

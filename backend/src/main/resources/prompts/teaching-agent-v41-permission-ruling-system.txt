@@ -1,3 +1,0 @@
-Permission-ruling teaching revision v41:
-- When teaching whether a move is allowed, state the permission or prohibition before explaining it, using the same modal direction as the cited rule.
-- Preserve every prerequisite and exception. Do not teach a conditional `may` as unconditional or an excepted `cannot` as absolute.

@@ -150,33 +150,4 @@ describe('RecommendationGameCard', () => {
     expect(wrapper.text()).not.toContain('为什么选它')
   })
 
-  it('opens an already published guide directly instead of starting another rulebook search', () => {
-    const wrapper = mount(RecommendationGameCard, {
-      props: {
-        entry: {
-          game,
-          matches: [],
-          tradeoffs: [],
-          teachingContinuation: {
-            teachingPlanId: 'plan / ready',
-            sectionCount: 6,
-            stepCount: 18,
-          },
-        },
-        sources: [],
-        loading: false,
-        responseLocale: 'zh-CN',
-      },
-    })
-
-    expect(wrapper.get('[data-testid="ready-teaching-continuation"]').text())
-      .toContain('现成讲解可读 · 6 章 · 18 步')
-    expect(wrapper.get('[data-testid="ready-teaching-continuation"]').text())
-      .toContain('实时答疑仍取决于当时服务和可引用证据')
-    const readyLink = wrapper.get('[data-testid="open-ready-teaching"]')
-    expect(readyLink.attributes('href')).toBe('/read/plan%20%2F%20ready')
-    expect(readyLink.attributes('aria-label')).toBe('直接进入讲解：Opaque Candidate')
-    expect(wrapper.text()).not.toContain('选这款，找规则书')
-    expect(wrapper.emitted('select')).toBeUndefined()
-  })
 })

@@ -492,13 +492,11 @@ page_attempt_report() {
 	            | select(($parts | length) == 4)
 	            | {page: ($parts[1] | tonumber), total: ($parts[2] | tonumber),
 	               repairCode: $parts[3], outcome}];
-	        [.activities[]? | select(.operation | startswith("transcribeTeachingVisualPage|"))] as $rawOcr
-	        | [.activities[]? | select(.operation | startswith("transcribeTeachingVisualRetry|"))] as $rawOcrRetries
+	        [.activities[]? | select(.operation | startswith("transcribeTeachingVisualRepairPage|"))] as $rawRepairTranscriptions
 	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualPage|"))] as $rawInitial
 	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualRetry|"))] as $rawRetries
 	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualRepair|"))] as $rawRepairs
-	        | three_part_attempts("transcribeTeachingVisualPage") as $ocr
-	        | three_part_attempts("transcribeTeachingVisualRetry") as $ocrRetries
+	        | three_part_attempts("transcribeTeachingVisualRepairPage") as $repairTranscriptions
 	        | three_part_attempts("inspectTeachingVisualPage") as $initial
 	        | three_part_attempts("inspectTeachingVisualRetry") as $retries
 	        | repair_attempts as $repairs
@@ -514,12 +512,12 @@ page_attempt_report() {
 	            | (($initial | map(select(.page == $page)) | length)
 	              + ($recoveries | map(select(.page == $page)) | length))] as $semanticAttemptCounts
 	        | [$pages[] as $page
-	            | ($ocr | map(select(.page == $page)) | last) as $ocrAttempt
+	            | ($repairTranscriptions | map(select(.page == $page)) | last) as $repairTranscription
 	            | ($initial | map(select(.page == $page)) | last) as $first
 	            | ($recoveries | map(select(.page == $page)) | last) as $recovery
 	            | {
 	                page: $page,
-	                ocrOutcome: ($ocrAttempt.outcome // null),
+	                repairTranscriptionOutcome: ($repairTranscription.outcome // null),
 	                initialOutcome: ($first.outcome // null),
 	                recoveryKind: ($recovery.recoveryKind // null),
 	                repairCode: ($recovery.repairCode // null),
@@ -530,10 +528,10 @@ page_attempt_report() {
 	              }] as $pageStats
 	        | {
 	            pages: $pageStats,
-	            ocrSucceeded: ($ocr | map(select(.outcome == "SUCCEEDED")) | length),
-	            ocrFailed: ($ocr | map(select(.outcome == "FAILED")) | length),
-	            ocrRejected: ($ocr | map(select(.outcome == "REJECTED")) | length),
-	            ocrRetryAttempted: ($ocrRetries | length),
+	            repairTranscriptionAttempted: ($repairTranscriptions | length),
+	            repairTranscriptionSucceeded: ($repairTranscriptions | map(select(.outcome == "SUCCEEDED")) | length),
+	            repairTranscriptionFailed: ($repairTranscriptions | map(select(.outcome == "FAILED")) | length),
+	            repairTranscriptionRejected: ($repairTranscriptions | map(select(.outcome == "REJECTED")) | length),
 	            initialSucceeded: ($initial | map(select(.outcome == "SUCCEEDED")) | length),
 	            initialFailed: ($initial | map(select(.outcome == "FAILED")) | length),
 	            initialRejected: ($initial | map(select(.outcome == "REJECTED")) | length),
@@ -546,19 +544,18 @@ page_attempt_report() {
 	            finalUnavailablePages: $unavailable,
 	            maximumSemanticAttemptsForAnyPage: ($semanticAttemptCounts | max // 0),
 	            valid: (
-	              ($rawOcr | length) == ($ocr | length)
-	              and ($rawOcrRetries | length) == ($ocrRetries | length)
-	              and ($ocrRetries | length) == 0
+	              ($rawRepairTranscriptions | length) == ($repairTranscriptions | length)
 	              and ($rawInitial | length) == ($initial | length)
 	              and ($rawRetries | length) == ($retries | length)
 	              and ($rawRepairs | length) == ($repairs | length)
-	              and ($ocr | length) == $expected
-	              and ($ocr | map(.page) | unique) == $pages
-	              and all($ocr[]; .total == $expected and .outcome == "SUCCEEDED")
 	              and ($initial | length) == $expected
 	              and ($initial | map(.page) | unique) == $pages
 	              and all($initial[]; .total == $expected)
 	              and all($retries[]; .total == $expected)
+	              and all($repairTranscriptions[]; . as $transcription
+	                | .total == $expected
+	                and any($repairs[]; .page == $transcription.page))
+	              and ($repairTranscriptions | map(.page) | unique | length) == ($repairTranscriptions | length)
 	              and all($repairs[];
 	                .total == $expected
 	                and (.repairCode == "MALFORMED_JSON"
@@ -594,33 +591,6 @@ log_run_timing() {
         (.activities[]? | "SMOKE_TIMING phase=\($phase) kind=activity sequence=\(.sequence) type=\(.type) operation=\(.operation) outcome=\(.outcome) latencyMs=\(.latencyMs // 0) inputTokens=\(.estimatedInputTokens // 0) outputTokens=\(.estimatedOutputTokens // 0) occurredAt=\(.occurredAt // "unknown")"),
         (if .budget then "SMOKE_TIMING phase=\($phase) kind=budget usedModelCalls=\(.budget.usedModelCalls // 0) usedToolCalls=\(.budget.usedToolCalls // 0) usedTokens=\(.budget.usedTokens // 0)" else empty end)
     ' <<<"$response" >&2
-}
-
-verify_preparation_critical_path() {
-	local response=$1
-	if [ "$preparation_mode" = visual ]; then
-		if ! jq -e '.activities[]? | select(.operation == "selectProgressiveTeachingStart" and .outcome == "SUCCEEDED")' \
-			>/dev/null <<<"$response"; then
-			echo "SMOKE_WARNING Visual-only rulebook preparation did not report progressive cited-page selection" >&2
-		fi
-		jq -r '
-            [.activities[]? | select(.operation == "selectProgressiveTeachingStart")] as $starts
-            | [.activities[]? | select((.operation | startswith("inspectTeachingVisualBatch"))
-                or (.operation | startswith("inspectTeachingVisualRetry")))] as $legacy
-            | "SMOKE_PERFORMANCE phase=preparation progressiveStartCalls=\($starts | length) progressiveStartLatencyMs=\([$starts[].latencyMs // 0] | add // 0) legacyFullFactCalls=\($legacy | length)"
-        ' <<<"$response" >&2
-		return
-	fi
-	if jq -e '.activities[]? | select((.operation == "selectProgressiveTeachingStart")
-            or (.operation | startswith("inspectTeachingVisualBatch"))
-            or (.operation | startswith("inspectRulebookVisualBatch")))' \
-		>/dev/null <<<"$response"; then
-		echo "SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan" >&2
-	fi
-	if ! jq -e '.activities[]? | select(.operation == "deferSelectedVisualPageCatalog" and .outcome == "SUCCEEDED")' \
-		>/dev/null <<<"$response"; then
-		echo "SMOKE_WARNING Text-rulebook preparation did not report the deferred visual-catalog boundary" >&2
-	fi
 }
 
 verify_lesson_critical_path() {
@@ -677,9 +647,7 @@ report_preparation_start_to_first_section() {
             | select(.operation | startswith("publishTeachingSection|"))
             | select(.outcome == "SUCCEEDED")
             | .occurredAt | epoch] | min) as $firstPublished
-        | [$lesson.activities[]?
-            | select(.operation | startswith("prefetchProgressiveVisualPages"))] as $prefetch
-        | "SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=\($firstPublished - $preparationStarted) backgroundPrefetchCalls=\($prefetch | length) backgroundPrefetchLatencyMs=\([$prefetch[].latencyMs // 0] | add // 0)"
+        | "SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=\($firstPublished - $preparationStarted)"
     ' >&2
 }
 
@@ -1124,11 +1092,11 @@ run_official_image_gallery() {
 	page_attempts=$(page_attempt_report "$preparation_result" "$expected_page_count")
 	if ! jq -e --argjson expected "$expected_page_count" '
 	        .valid == true
-	        and .ocrSucceeded == $expected
+	        and .initialSucceeded + .initialFailed + .initialRejected == $expected
 	        and .maximumSemanticAttemptsForAnyPage <= 2
 	        and (.finalUnavailablePages | length) == 0
 	    ' >/dev/null <<<"$page_attempts"; then
-		echo "Image-gallery OCR or semantic inspection did not complete every page within the bounded recovery contract" >&2
+		echo "Image-gallery semantic inspection did not complete every page within the bounded recovery contract" >&2
 		return 1
 	fi
 	printf 'SMOKE_PAGE_ATTEMPTS %s\n' "$page_attempts" >&2
@@ -1312,7 +1280,6 @@ preparation_run_id=$(jq -er '.assistantRunId' <<<"$preparation_launch")
 preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")
 preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
 log_run_timing "preparation" "$preparation_result"
-verify_preparation_critical_path "$preparation_result"
 log_stage "teaching-preparation-completed"
 pending_failure_code=TEACHING_PLAN_INVALID
 

@@ -73,30 +73,19 @@ public interface NativeVisualEvidence {
             int pageNumber,
             String printedTerms,
             String literalSummary,
-            List<VisualAnchor> anchors,
-            List<VisualIcon> icons) {
+            List<VisualAnchor> anchors) {
         public VisualPageFact {
-            if (pageNumber < 1 || printedTerms == null || literalSummary == null || anchors == null || icons == null
+            if (pageNumber < 1 || printedTerms == null || literalSummary == null || anchors == null
                     || printedTerms.length() > 2_000 || literalSummary.length() > 4_000
-                    || anchors.size() > 8 || icons.size() > 32) {
+                    || anchors.size() > 8) {
                 throw new IllegalArgumentException("native visual page fact is invalid");
             }
             printedTerms = printedTerms.strip();
             literalSummary = literalSummary.strip();
             anchors = List.copyOf(anchors);
-            icons = List.copyOf(icons);
         }
     }
 
     record VisualAnchor(String kind, String label, String visibleDescription, int x, int y, int width, int height) {}
 
-    record VisualIcon(
-            String name,
-            String visualDescription,
-            String meaningStatus,
-            String visibleEvidence,
-            int x,
-            int y,
-            int width,
-            int height) {}
 }

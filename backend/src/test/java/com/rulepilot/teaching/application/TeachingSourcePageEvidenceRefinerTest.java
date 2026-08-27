@@ -17,7 +17,6 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
@@ -106,7 +105,7 @@ class TeachingSourcePageEvidenceRefinerTest {
     }
 
     @Test
-    void reusesTheActualNonProgressiveVisualReadAcrossRetrievalAndRefinement() {
+    void reusesTheActualVisualReadAcrossRetrievalAndRefinement() {
         UUID sourceId = UUID.randomUUID();
         String transcript = "[rule-group:prepare-board] Put the board in the middle.";
         RuleEvidence searchPlaceholder = new RuleEvidence(
@@ -142,8 +141,6 @@ class TeachingSourcePageEvidenceRefinerTest {
                 transcript,
                 List.of("setup"),
                 List.of(),
-                List.of(),
-                true,
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("prepare-board"),
@@ -154,7 +151,7 @@ class TeachingSourcePageEvidenceRefinerTest {
                 tools,
                 invocations,
                 visualFacts,
-                VisualRulebookPageCatalogModel.unavailable());
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
         var retriever = new TeachingSectionEvidenceRetriever(
                 tools, new PolicyEvidenceVerifier(), invocations, resolver);
         TeachingPlan plan = plan(List.of(2));
@@ -396,39 +393,6 @@ class TeachingSourcePageEvidenceRefinerTest {
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anySet(),
                 org.mockito.ArgumentMatchers.anyBoolean());
-    }
-
-    @Test
-    void keepsProgressivePageEvidenceOutOfTheRefinementPath() {
-        NativeToolScopes scopes = mock(NativeToolScopes.class);
-        AssistantReadTools tools = mock(AssistantReadTools.class);
-        var progressive = new TeachingPlan(
-                UUID.randomUUID(),
-                versionId,
-                "Test game",
-                "Teach one exact page.",
-                List.of(new PlannedSection(
-                        1,
-                        "progressive-visual-page-rules-2",
-                        "Turn",
-                        "Explain only the rule visibly supported on page 2.",
-                        true,
-                        true,
-                        List.of("turn"),
-                        List.of("setup", "core_loop", "end", "scoring"),
-                        List.of(2))),
-                "player",
-                Instant.now());
-        var deterministic = verified(1, evidence(UUID.randomUUID(), 2, "Exact page transcription."));
-
-        var result = refiner(scopes, tools, new RecordingInvocations())
-                .refine(progressive, progressive.sections().getFirst(), runId, deterministic);
-
-        assertThat(result).isSameAs(deterministic);
-        verify(scopes, never()).create(
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any());
     }
 
     @Test

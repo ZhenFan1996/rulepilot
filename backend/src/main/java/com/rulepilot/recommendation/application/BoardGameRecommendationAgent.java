@@ -32,7 +32,7 @@ public class BoardGameRecommendationAgent {
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
-    static final String PROMPT_VERSION = "recommendation-agent-v81-direct-publication";
+    static final String PROMPT_VERSION = "recommendation-agent-v82-recommendation-only";
 
     private final RecommendationReActLoop loop;
 
@@ -432,40 +432,7 @@ public class BoardGameRecommendationAgent {
             List<RecommendedGame> games,
             CandidateComparison comparison,
             RecommendationShortfall shortfall,
-            String recommendationLead,
-            RecommendationContinuation continuation) {
-        public ConversationResponse(
-                Outcome outcome,
-                DecisionMode mode,
-                String assistantMessage,
-                RecommendationProfile profile,
-                Clarification clarification,
-                int sourceCount,
-                int candidatesEvaluated,
-                UserModelView userModel,
-                List<ResearchSource> researchSources,
-                HarnessTrace harness,
-                List<RecommendedGame> games,
-                CandidateComparison comparison,
-                RecommendationShortfall shortfall,
-                String recommendationLead) {
-            this(
-                    outcome,
-                    mode,
-                    assistantMessage,
-                    profile,
-                    clarification,
-                    sourceCount,
-                    candidatesEvaluated,
-                    userModel,
-                    researchSources,
-                    harness,
-                    games,
-                    comparison,
-                    shortfall,
-                    recommendationLead,
-                    null);
-        }
+            String recommendationLead) {
 
         public ConversationResponse(
                 Outcome outcome,
@@ -642,67 +609,16 @@ public class BoardGameRecommendationAgent {
         }
     }
 
-    public record RecommendationContinuation(
-            ContinuationKind kind,
-            String learningGoal,
-            ContinuationAvailability availability,
-            int readyCount,
-            int candidateCount) {
-        public RecommendationContinuation {
-            Objects.requireNonNull(kind, "recommendation continuation kind is required");
-            Objects.requireNonNull(availability, "recommendation continuation availability is required");
-            learningGoal = learningGoal == null ? "" : learningGoal.strip();
-            if (learningGoal.codePointCount(0, learningGoal.length()) > 400
-                    || readyCount < 0
-                    || candidateCount < 1
-                    || readyCount > candidateCount) {
-                throw new IllegalArgumentException("recommendation continuation is invalid");
-            }
-        }
-    }
-
-    public enum ContinuationKind {
-        GUIDE_AND_RULE_QA
-    }
-
-    public enum ContinuationAvailability {
-        AVAILABLE_FOR_ALL,
-        AVAILABLE_FOR_SOME,
-        NO_READY_CANDIDATE,
-        AVAILABILITY_UNAVAILABLE
-    }
-
-    public record TeachingContinuation(
-            java.util.UUID teachingPlanId,
-            int sectionCount,
-            int stepCount) {
-        public TeachingContinuation {
-            if (teachingPlanId == null || sectionCount < 1 || stepCount < 1) {
-                throw new IllegalArgumentException("teaching continuation is invalid");
-            }
-        }
-    }
-
     public record RecommendedGame(
             Game game,
             List<String> matches,
             List<String> tradeoffs,
             List<RecommendationReason> reasons,
             List<CandidateClaim> claims,
-            List<RecommendationReplyPart> replyParts,
-            TeachingContinuation teachingContinuation) {
-        public RecommendedGame(
-                Game game,
-                List<String> matches,
-                List<String> tradeoffs,
-                List<RecommendationReason> reasons,
-                List<CandidateClaim> claims,
-                List<RecommendationReplyPart> replyParts) {
-            this(game, matches, tradeoffs, reasons, claims, replyParts, null);
-        }
+            List<RecommendationReplyPart> replyParts) {
 
         public RecommendedGame(Game game, List<String> matches, List<String> tradeoffs) {
-            this(game, matches, tradeoffs, List.of(), List.of(), List.of(), null);
+            this(game, matches, tradeoffs, List.of(), List.of(), List.of());
         }
 
         public RecommendedGame(
@@ -710,7 +626,7 @@ public class BoardGameRecommendationAgent {
                 List<String> matches,
                 List<String> tradeoffs,
                 List<RecommendationReason> reasons) {
-            this(game, matches, tradeoffs, reasons, List.of(), List.of(), null);
+            this(game, matches, tradeoffs, reasons, List.of(), List.of());
         }
 
         public RecommendedGame(
@@ -719,7 +635,7 @@ public class BoardGameRecommendationAgent {
                 List<String> tradeoffs,
                 List<RecommendationReason> reasons,
                 List<CandidateClaim> claims) {
-            this(game, matches, tradeoffs, reasons, claims, List.of(), null);
+            this(game, matches, tradeoffs, reasons, claims, List.of());
         }
 
         public RecommendedGame {

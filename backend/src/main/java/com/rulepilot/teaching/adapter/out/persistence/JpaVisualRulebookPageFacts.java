@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
@@ -291,7 +290,6 @@ class VisualRulebookPageFactEntity {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<List<VisualAnchor>> VISUAL_ANCHORS = new TypeReference<>() {};
-    private static final TypeReference<List<IconOccurrence>> ICON_OCCURRENCES = new TypeReference<>() {};
     private static final TypeReference<List<SourceDependency>> SOURCE_DEPENDENCIES = new TypeReference<>() {};
     private static final TypeReference<List<String>> RULE_GROUP_IDENTIFIERS = new TypeReference<>() {};
     private static final TypeReference<List<RuleGroupFact>> RULE_GROUP_FACTS = new TypeReference<>() {};
@@ -316,12 +314,6 @@ class VisualRulebookPageFactEntity {
 
     @Column(name = "visual_anchors", nullable = false, columnDefinition = "text")
     String visualAnchors;
-
-    @Column(name = "icon_occurrences", nullable = false, columnDefinition = "text")
-    String iconOccurrences;
-
-    @Column(name = "icon_inventory_complete", nullable = false)
-    boolean iconInventoryComplete;
 
     @Column(name = "schema_version", nullable = false)
     int schemaVersion;
@@ -348,8 +340,6 @@ class VisualRulebookPageFactEntity {
         this.factualSummary = page.factualSummary();
         this.keywords = String.join("\n", page.keywords());
         this.visualAnchors = serialize(page.visualAnchors());
-        this.iconOccurrences = serialize(page.iconOccurrences());
-        this.iconInventoryComplete = page.iconInventoryComplete();
         this.schemaVersion = page.schemaVersion();
         this.sourceDependencies = serialize(page.sourceDependencies());
         this.ruleGroupIdentifiers = serialize(page.ruleGroupIdentifiers());
@@ -364,8 +354,6 @@ class VisualRulebookPageFactEntity {
                 factualSummary,
                 keywords.lines().filter(value -> !value.isBlank()).toList(),
                 deserialize(visualAnchors),
-                deserializeIcons(iconOccurrences),
-                iconInventoryComplete,
                 schemaVersion,
                 deserializeSourceDependencies(sourceDependencies),
                 deserializeRuleGroupIdentifiers(ruleGroupIdentifiers),
@@ -387,15 +375,6 @@ class VisualRulebookPageFactEntity {
             return JSON.readValue(serialized, VISUAL_ANCHORS);
         } catch (JsonProcessingException invalidStoredData) {
             throw new IllegalStateException("stored visual anchors are invalid", invalidStoredData);
-        }
-    }
-
-    private static List<IconOccurrence> deserializeIcons(String serialized) {
-        if (serialized == null || serialized.isBlank()) return List.of();
-        try {
-            return JSON.readValue(serialized, ICON_OCCURRENCES);
-        } catch (JsonProcessingException invalidStoredData) {
-            throw new IllegalStateException("stored visual icon occurrences are invalid", invalidStoredData);
         }
     }
 

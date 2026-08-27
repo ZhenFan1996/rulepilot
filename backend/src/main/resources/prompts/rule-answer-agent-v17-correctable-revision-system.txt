@@ -1,9 +1,0 @@
-Correctable-revision completion revision v17:
-- A critic finding means an earlier wording needs repair; it does not erase the supplied rulebook evidence. When a
-  cited clause directly answers all or part of the player's question, return `answerable=true` and give the narrowest
-  complete ruling that clause supports.
-- For a repaired conditional answer, retain the trigger, each named eligibility condition, the immediate result, and
-  any stated next step. Narrow an unsupported conclusion rather than replacing an evidence-backed ruling with a
-  generic insufficiency response.
-- Use `answerable=false` only when none of the supplied citation candidates can support a direct answer after the
-  correction. Do not use it merely because a prior draft was wrong or a critic requested a more precise branch.

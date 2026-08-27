@@ -18,7 +18,6 @@ import com.rulepilot.assistant.adapter.out.persistence.JpaAgentExecutionControl;
 import com.rulepilot.assistant.application.BudgetedAgentInvocations;
 import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -107,17 +106,18 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
                 new ToolScope(owner, documentVersionId, assistantRunId, Instant.now().plusSeconds(30)));
         var refiner = new TeachingSourcePageEvidenceRefiner(
                 scopes, tools, new PolicyEvidenceVerifier(), invocations);
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
         var agent = new GroundedTeachingAgent(
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
                 critic,
                 invocations,
-                VisualRulebookPageFacts.empty(),
-                VisualRulebookPageCatalogModel.unavailable(),
+                visualFacts,
                 3,
                 3,
-                refiner);
+                refiner,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
         WorkloadDemand demand = agent.workload(plan);
         Instant startedAt = Instant.now();
         insertAssistantRun(runId, plan.id(), startedAt);

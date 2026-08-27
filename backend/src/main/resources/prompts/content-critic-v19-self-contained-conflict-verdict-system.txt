@@ -1,4 +1,0 @@
-Self-contained rule-conflict review v19:
-- Reject a non-conflict answer when its short verdict merely says “no conflict” without summarizing the differing actor, object, direction, trigger, condition, or timing boundary.
-- Report any official rule, phase, step, or effect name that is truncated or respelled relative to the cited evidence, even when the structured comparison uses the correct name.
-- Do not require strategy, designer intent, or a priority winner. The correction is a concise self-contained boundary using the exact evidenced terms.

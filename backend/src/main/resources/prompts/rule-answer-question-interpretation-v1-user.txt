@@ -1,6 +1,0 @@
-<untrusted_current_question>{question}</untrusted_current_question>
-<untrusted_previous_question>{previousQuestion}</untrusted_previous_question>
-<untrusted_prior_grounded_question>{priorGroundedQuestion}</untrusted_prior_grounded_question>
-<untrusted_prior_grounded_verdict>{priorGroundedVerdict}</untrusted_prior_grounded_verdict>
-<deterministic_fallback type="{deterministicType}" missing="{deterministicMissingContext}" />
-<output_language>{outputLanguage}</output_language>

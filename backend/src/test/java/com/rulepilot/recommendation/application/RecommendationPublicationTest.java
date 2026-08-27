@@ -45,11 +45,7 @@ class RecommendationPublicationTest {
                 new RecommendationProfile(3, 60, null, BggGameType.ALL, InteractionPreference.ANY),
                 "三个人，六十分钟以内");
         String lead = "我按你给出的三人桌和一小时边界整理了两款，先看各自真正不同的抓手。";
-        PublicationSeed seed = new PublicationSeed(
-                List.of(102, 101),
-                List.of(),
-                2,
-                "旧的决策阶段引导不应覆盖检索后的自然写作。");
+        PublicationSeed seed = new PublicationSeed(List.of(102, 101), List.of(), 2);
         RecommendationPublication.Permit permit = fixture.publication.permit(
                 fixture.state,
                 seed,
@@ -123,11 +119,7 @@ class RecommendationPublicationTest {
                 List.of(101, 102),
                 new RecommendationProfile(3, 60, null, BggGameType.ALL, InteractionPreference.ANY),
                 "三个人，六十分钟以内");
-        PublicationSeed seed = new PublicationSeed(
-                List.of(101, 102),
-                List.of(),
-                2,
-                "旧引导");
+        PublicationSeed seed = new PublicationSeed(List.of(101, 102), List.of(), 2);
         RecommendationPublication.Permit permit = fixture.publication.permit(
                 fixture.state,
                 seed,
@@ -158,8 +150,7 @@ class RecommendationPublicationTest {
     @Test
     void acceptsMoreThanFourOwnedCandidateObservationsWithoutDroppingTheCard() throws Exception {
         Fixture fixture = fixture(List.of(101));
-        PublicationSeed seed =
-                new PublicationSeed(List.of(101), List.of(), 1, "旧引导");
+        PublicationSeed seed = new PublicationSeed(List.of(101), List.of(), 1);
         RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
         List<String> ownedEvidence = permit.allowedEvidenceByGame().get(101).keySet().stream()
                 .limit(6)
@@ -191,8 +182,7 @@ class RecommendationPublicationTest {
     @Test
     void duplicateOwnedEvidenceStillRejectsOnlyTheAffectedCardNarrative() throws Exception {
         Fixture fixture = fixture(List.of(101));
-        PublicationSeed seed =
-                new PublicationSeed(List.of(101), List.of(), 1, "旧引导");
+        PublicationSeed seed = new PublicationSeed(List.of(101), List.of(), 1);
         RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
         String evidence101 = evidenceId(permit, 101, "mechanics");
         Map<String, Object> card = new LinkedHashMap<>();
@@ -221,18 +211,10 @@ class RecommendationPublicationTest {
 
         RecommendationPublication.Permit permit = fixture.publication.permit(
                 fixture.state,
-                new PublicationSeed(
-                        List.of(102, 101),
-                        List.of(),
-                        3,
-                        "先给你目前通过边界的候选。"));
+                new PublicationSeed(List.of(102, 101), List.of(), 3));
         var response = fixture.publication.publish(
                 fixture.state,
-                new PublicationSeed(
-                        List.of(102, 101),
-                        List.of(),
-                        3,
-                        "先给你目前通过边界的候选。"),
+                new PublicationSeed(List.of(102, 101), List.of(), 3),
                 "zh-CN");
 
         assertThat(permit.selectedGames())
@@ -249,47 +231,21 @@ class RecommendationPublicationTest {
     }
 
     @Test
-    void missingOrLegacySeedLeadExplainsNarrativeFailureWithoutDiscardingCards() {
+    void missingNarrativeExplainsFailureWithoutDiscardingCards() {
         Fixture fixture = fixture(List.of(101));
-        String overlong = "很".repeat(RecommendationAgentState.MAX_PLAYER_LEAD_CODE_POINTS + 1);
-        String unvalidatedLegacyLead = "未经证据绑定的旧决策引导绝不能直接发布。";
 
         var missing = fixture.publication.publish(
                 fixture.state,
                 new PublicationSeed(List.of(101), List.of(), 1),
                 "zh-CN");
-        Fixture secondFixture = fixture(List.of(101));
-        var invalid = secondFixture.publication.publish(
-                secondFixture.state,
-                new PublicationSeed(List.of(101), List.of(), 1, overlong),
-                "en");
-        Fixture thirdFixture = fixture(List.of(101));
-        var legacy = thirdFixture.publication.publish(
-                thirdFixture.state,
-                new PublicationSeed(
-                        List.of(101),
-                        List.of(),
-                        1,
-                        unvalidatedLegacyLead),
-                "zh-CN");
 
         assertThat(missing.assistantMessage())
                 .contains("硬条件核对", "自然讲解没有生成完成")
                 .doesNotContain("失败", "fallback");
-        assertThat(invalid.assistantMessage())
-                .contains("passed source and hard-constraint checks", "notes did not finish")
-                .doesNotContain(overlong, "fallback");
-        assertThat(legacy.assistantMessage())
-                .contains("自然讲解没有生成完成")
-                .doesNotContain(unvalidatedLegacyLead);
         assertThat(missing.games()).singleElement().satisfies(game ->
                 assertThat(game.replyParts()).isEmpty());
-        assertThat(invalid.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).isEmpty());
         assertThat(missing.harness().actions()).contains("RECOMMENDATION_NARRATIVE_UNAVAILABLE");
-        assertThat(invalid.harness().actions()).contains("RECOMMENDATION_NARRATIVE_UNAVAILABLE");
         assertThat(missing.harness().fallbackUsed()).isFalse();
-        assertThat(invalid.harness().fallbackUsed()).isFalse();
     }
 
     @Test
@@ -307,11 +263,7 @@ class RecommendationPublicationTest {
                 InteractionPreference.ANY);
         Fixture fixture = fixture(List.of(101), profile, "三个人，一小时内，最好别太重");
 
-        PublicationSeed seed = new PublicationSeed(
-                List.of(101),
-                List.of(),
-                1,
-                "旧引导");
+        PublicationSeed seed = new PublicationSeed(List.of(101), List.of(), 1);
         RecommendationPublication.Permit permit = fixture.publication.permit(
                 fixture.state,
                 seed,
@@ -365,11 +317,7 @@ class RecommendationPublicationTest {
                 List.of(new Source(1, "体验报告", "https://example.test/report", "example.test")));
         when(fixture.runtime.recommendableIds(fixture.state)).thenReturn(List.of(101));
 
-        PublicationSeed seed = new PublicationSeed(
-                List.of(101),
-                List.of(),
-                1,
-                "旧引导");
+        PublicationSeed seed = new PublicationSeed(List.of(101), List.of(), 1);
         RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
         String reportEvidence = permit.allowedEvidenceByGame().get(101).values().stream()
                 .filter(value -> value.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT)
@@ -405,8 +353,7 @@ class RecommendationPublicationTest {
     @Test
     void dropsOnlyTheCardNarrativeWhoseEvidenceBelongsToAnotherCandidate() throws Exception {
         Fixture fixture = fixture(List.of(101, 102));
-        PublicationSeed seed =
-                new PublicationSeed(List.of(101, 102), List.of(), 2, "");
+        PublicationSeed seed = new PublicationSeed(List.of(101, 102), List.of(), 2);
         RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
         String evidence101 = evidenceId(permit, 101, "mechanics");
         String evidence102 = evidenceId(permit, 102, "mechanics");
@@ -436,8 +383,7 @@ class RecommendationPublicationTest {
     @Test
     void dropsAnUnownedOptionalTradeoffWithoutDiscardingTheOwnedWhyPart() throws Exception {
         Fixture fixture = fixture(List.of(101, 102));
-        PublicationSeed seed =
-                new PublicationSeed(List.of(101, 102), List.of(), 2, "");
+        PublicationSeed seed = new PublicationSeed(List.of(101, 102), List.of(), 2);
         RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
         String evidence101 = evidenceId(permit, 101, "mechanics");
         String evidence102 = evidenceId(permit, 102, "mechanics");
@@ -475,8 +421,7 @@ class RecommendationPublicationTest {
     @Test
     void dropsOnlyTheLeadWhoseEvidenceIsOutsideTheCurrentRequestAndCandidatePermit() throws Exception {
         Fixture fixture = fixture(List.of(101));
-        PublicationSeed seed =
-                new PublicationSeed(List.of(101), List.of(), 1, "");
+        PublicationSeed seed = new PublicationSeed(List.of(101), List.of(), 1);
         RecommendationPublication.Permit permit = fixture.publication.permit(
                 fixture.state,
                 seed,

@@ -26,13 +26,32 @@ class VisualLessonEnrichmentServiceTest {
         VisualLessonEnricher enricher = Mockito.mock(VisualLessonEnricher.class);
         IllustratedLessonProgressPublisher publisher = Mockito.mock(IllustratedLessonProgressPublisher.class);
         RulebookUnderstandingRebuilder rebuilder = Mockito.mock(RulebookUnderstandingRebuilder.class);
+        AssistantRuns runs = Mockito.mock(AssistantRuns.class);
+        AuditedAgentInvocations activities = Mockito.mock(AuditedAgentInvocations.class);
         UUID planId = UUID.randomUUID();
         UUID documentVersionId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        var received = run(runId, planId, AssistantRunState.RECEIVED, 1, null, null);
+        var ready = run(runId, planId, AssistantRunState.DOCUMENT_READINESS, 2, null, null);
+        var retrieving = run(runId, planId, AssistantRunState.RETRIEVING, 3, null, null);
+        var verifying = run(runId, planId, AssistantRunState.VERIFYING_EVIDENCE, 4, null, null);
+        var packaging = run(runId, planId, AssistantRunState.MEDIA_PACKAGING, 5, null, null);
         when(plans.findById(planId)).thenReturn(Optional.of(plan(planId, documentVersionId, false)));
+        when(runs.advance(runId, 1, AssistantRunState.DOCUMENT_READINESS, "Loading cited pages and visual candidates"))
+                .thenReturn(ready);
+        when(runs.advance(runId, 2, AssistantRunState.RETRIEVING, "Looking for compact, player-useful rulebook regions"))
+                .thenReturn(retrieving);
+        when(runs.advance(runId, 3, AssistantRunState.VERIFYING_EVIDENCE,
+                "讲解大纲没有需要图片才能说明的章节，跳过额外视觉模型调用")).thenReturn(verifying);
+        when(runs.advance(runId, 4, AssistantRunState.MEDIA_PACKAGING, "保留已经发布的文字讲解"))
+                .thenReturn(packaging);
 
-        new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder).enrichLatest(planId);
+        new VisualLessonEnrichmentService(
+                plans, lessons, enricher, publisher, rebuilder, runs, activities)
+                .enrichLatest(planId, received);
 
-        Mockito.verifyNoInteractions(lessons, enricher, publisher, rebuilder);
+        Mockito.verifyNoInteractions(lessons, enricher, publisher, rebuilder, activities);
+        verify(runs).advance(runId, 5, AssistantRunState.COMPLETED, "视觉检查无需执行");
     }
 
     @Test
@@ -42,19 +61,45 @@ class VisualLessonEnrichmentServiceTest {
         VisualLessonEnricher enricher = Mockito.mock(VisualLessonEnricher.class);
         IllustratedLessonProgressPublisher publisher = Mockito.mock(IllustratedLessonProgressPublisher.class);
         RulebookUnderstandingRebuilder rebuilder = Mockito.mock(RulebookUnderstandingRebuilder.class);
+        AssistantRuns runs = Mockito.mock(AssistantRuns.class);
+        AuditedAgentInvocations activities = Mockito.mock(AuditedAgentInvocations.class);
         UUID planId = UUID.randomUUID();
         UUID documentVersionId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
         IllustratedLesson lesson = lesson(planId);
+        var received = run(runId, planId, AssistantRunState.RECEIVED, 1, null, null);
+        var ready = run(runId, planId, AssistantRunState.DOCUMENT_READINESS, 2, null, null);
+        var retrieving = run(runId, planId, AssistantRunState.RETRIEVING, 3, null, null);
+        var verifying = run(runId, planId, AssistantRunState.VERIFYING_EVIDENCE, 4, null, null);
+        var packaging = run(runId, planId, AssistantRunState.MEDIA_PACKAGING, 5, null, null);
         when(plans.findById(planId)).thenReturn(Optional.of(plan(planId, documentVersionId)));
         when(lessons.findLatestByPlan(planId)).thenReturn(Optional.of(lesson));
-        when(enricher.enrich(documentVersionId, lesson, "owner"))
+        when(runs.advance(runId, 1, AssistantRunState.DOCUMENT_READINESS, "Loading cited pages and visual candidates"))
+                .thenReturn(ready);
+        when(runs.advance(runId, 2, AssistantRunState.RETRIEVING, "Looking for compact, player-useful rulebook regions"))
+                .thenReturn(retrieving);
+        when(runs.findOwned(runId, "owner")).thenReturn(Optional.of(new AssistantRuns.RunDetails(
+                retrieving, List.of(), null, List.of())));
+        when(runs.advance(runId, 3, AssistantRunState.VERIFYING_EVIDENCE,
+                "Checking that every selected crop has cited rule evidence")).thenReturn(verifying);
+        when(runs.advance(runId, 4, AssistantRunState.MEDIA_PACKAGING,
+                "Publishing accepted local rulebook crops")).thenReturn(packaging);
+        when(enricher.enrichWithProgress(
+                        Mockito.eq(documentVersionId),
+                        Mockito.eq(lesson),
+                        Mockito.eq("owner"),
+                        Mockito.eq(runId),
+                        Mockito.any()))
                 .thenThrow(new IllegalArgumentException("rulebook understanding does not exist"))
-                .thenReturn(lesson);
+                .thenReturn(new VisualLessonEnricher.EnrichmentResult(lesson, List.of()));
 
-        new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder).enrichLatest(planId);
+        new VisualLessonEnrichmentService(
+                plans, lessons, enricher, publisher, rebuilder, runs, activities)
+                .enrichLatest(planId, received);
 
         verify(rebuilder).rebuild(documentVersionId);
         verify(publisher).publish(lesson);
+        verify(runs).advance(runId, 5, AssistantRunState.COMPLETED, "Visual enrichment finished");
     }
 
     @Test
@@ -250,45 +295,6 @@ class VisualLessonEnrichmentServiceTest {
                 .advance(Mockito.eq(runId), Mockito.anyLong(), Mockito.eq(AssistantRunState.VERIFYING_EVIDENCE), Mockito.anyString());
         Mockito.verify(runs, Mockito.never())
                 .fail(Mockito.eq(runId), Mockito.anyLong(), Mockito.anyString(), Mockito.anyString());
-    }
-
-    @Test
-    void runsWholeRulebookIconInventoryAsAnIndependentObservableJob() {
-        TeachingPlanRepository plans = Mockito.mock(TeachingPlanRepository.class);
-        IllustratedLessonRepository lessons = Mockito.mock(IllustratedLessonRepository.class);
-        VisualLessonEnricher enricher = Mockito.mock(VisualLessonEnricher.class);
-        IllustratedLessonProgressPublisher publisher = Mockito.mock(IllustratedLessonProgressPublisher.class);
-        RulebookUnderstandingRebuilder rebuilder = Mockito.mock(RulebookUnderstandingRebuilder.class);
-        AssistantRuns runs = Mockito.mock(AssistantRuns.class);
-        AuditedAgentInvocations activities = Mockito.mock(AuditedAgentInvocations.class);
-        RulebookIconGlossaryService icons = Mockito.mock(RulebookIconGlossaryService.class);
-        UUID planId = UUID.randomUUID();
-        UUID runId = UUID.randomUUID();
-        var received = run(runId, planId, AssistantRunState.RECEIVED, 1, null, null);
-        var ready = run(runId, planId, AssistantRunState.DOCUMENT_READINESS, 2, null, null);
-        var retrieving = run(runId, planId, AssistantRunState.RETRIEVING, 3, null, null);
-        var verifying = run(runId, planId, AssistantRunState.VERIFYING_EVIDENCE, 4, null, null);
-        var packaging = run(runId, planId, AssistantRunState.MEDIA_PACKAGING, 5, null, null);
-        var completed = run(runId, planId, AssistantRunState.COMPLETED, 6, Instant.now(), null);
-        when(runs.advance(runId, 1, AssistantRunState.DOCUMENT_READINESS,
-                "Loading every rendered rulebook page for icon review")).thenReturn(ready);
-        when(runs.advance(runId, 2, AssistantRunState.RETRIEVING,
-                "Identifying rule icons and their directly printed explanations")).thenReturn(retrieving);
-        when(runs.advance(runId, 3, AssistantRunState.VERIFYING_EVIDENCE,
-                "Checking icon meanings against visible rulebook labels")).thenReturn(verifying);
-        when(runs.advance(runId, 4, AssistantRunState.MEDIA_PACKAGING,
-                "Preparing exact icon crops for the quick reference")).thenReturn(packaging);
-        when(runs.advance(runId, 5, AssistantRunState.COMPLETED,
-                "Rulebook icon quick reference finished")).thenReturn(completed);
-
-        new VisualLessonEnrichmentService(
-                        plans, lessons, enricher, publisher, rebuilder, runs, activities, icons)
-                .extractIconGlossaryOnly(planId, received);
-
-        verify(icons).extract(planId, "owner", runId);
-        verify(runs).advance(
-                runId, 5, AssistantRunState.COMPLETED, "Rulebook icon quick reference finished");
-        Mockito.verifyNoInteractions(enricher, publisher);
     }
 
     private TeachingPlan plan(UUID planId, UUID documentVersionId) {

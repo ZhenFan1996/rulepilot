@@ -19,7 +19,7 @@ public interface VisualRulebookPageFacts {
     /**
      * Adds or refreshes only the supplied rendered pages without discarding observations for the rest of a rulebook.
      *
-     * <p>Catalog work is deliberately incremental: later lesson topics can reveal a relevant icon or worked example
+     * <p>Catalog work is deliberately incremental: later lesson topics can reveal a relevant diagram or worked example
      * that was not selected during the first outline pass. Implementations that do not retain facts may treat this as
      * a replacement, but the durable adapter must preserve unaffected pages.</p>
      */
@@ -47,20 +47,12 @@ public interface VisualRulebookPageFacts {
             String factualSummary,
             List<String> keywords,
             List<VisualAnchor> visualAnchors,
-            List<IconOccurrence> iconOccurrences,
-            boolean iconInventoryComplete,
             int schemaVersion,
             List<SourceDependency> sourceDependencies,
             List<String> ruleGroupIdentifiers,
             boolean ruleGroupInventoryComplete,
             List<RuleGroupFact> ruleGroupFacts) {
 
-        // Schema 23 records the crop-review rectangle after it has been projected back to source-page coordinates.
-        // Schema 22 facts were cataloged before the application published that refined rectangle and must be rebuilt.
-        // Schema 24 removes generic card/container language from crop-review hints so the model locates the internal
-        // pictogram instead of publishing the surrounding card as the icon.
-        // Schema 25 adds a second, independent crop-review pass and removes same-page overlapping duplicate reports
-        // before the public glossary projection.
         // Schema 26 preserves dense-page tile facts and binds each visible list/grid identifier to its own rule.
         // Schema 27 verifies ambiguous cell pictograms against labeled reference artwork from the active document.
         // Schema 28 retains shared rules alongside independently bound cells on dense catalog pages.
@@ -84,8 +76,6 @@ public interface VisualRulebookPageFacts {
                     factualSummary,
                     keywords,
                     List.of(),
-                    List.of(),
-                    false,
                     CURRENT_SCHEMA_VERSION,
                     List.of(),
                     List.of(),
@@ -105,8 +95,6 @@ public interface VisualRulebookPageFacts {
                     factualSummary,
                     keywords,
                     visualAnchors,
-                    List.of(),
-                    false,
                     CURRENT_SCHEMA_VERSION,
                     List.of(),
                     List.of(),
@@ -127,100 +115,21 @@ public interface VisualRulebookPageFacts {
                     factualSummary,
                     keywords,
                     visualAnchors,
-                    List.of(),
-                    false,
                     schemaVersion,
                     List.of(),
                     List.of(),
                     false,
-                    List.of());
-        }
-
-        public PageFact(
-                int pageNumber,
-                String printedTerms,
-                String factualSummary,
-                List<String> keywords,
-                List<VisualAnchor> visualAnchors,
-                List<IconOccurrence> iconOccurrences,
-                boolean iconInventoryComplete,
-                int schemaVersion) {
-            this(
-                    pageNumber,
-                    printedTerms,
-                    factualSummary,
-                    keywords,
-                    visualAnchors,
-                    iconOccurrences,
-                    iconInventoryComplete,
-                    schemaVersion,
-                    List.of(),
-                    List.of(),
-                    false,
-                    List.of());
-        }
-
-        public PageFact(
-                int pageNumber,
-                String printedTerms,
-                String factualSummary,
-                List<String> keywords,
-                List<VisualAnchor> visualAnchors,
-                List<IconOccurrence> iconOccurrences,
-                boolean iconInventoryComplete,
-                int schemaVersion,
-                List<SourceDependency> sourceDependencies) {
-            this(
-                    pageNumber,
-                    printedTerms,
-                    factualSummary,
-                    keywords,
-                    visualAnchors,
-                    iconOccurrences,
-                    iconInventoryComplete,
-                    schemaVersion,
-                    sourceDependencies,
-                    List.of(),
-                    false,
-                    List.of());
-        }
-
-        public PageFact(
-                int pageNumber,
-                String printedTerms,
-                String factualSummary,
-                List<String> keywords,
-                List<VisualAnchor> visualAnchors,
-                List<IconOccurrence> iconOccurrences,
-                boolean iconInventoryComplete,
-                int schemaVersion,
-                List<SourceDependency> sourceDependencies,
-                List<String> ruleGroupIdentifiers,
-                boolean ruleGroupInventoryComplete) {
-            this(
-                    pageNumber,
-                    printedTerms,
-                    factualSummary,
-                    keywords,
-                    visualAnchors,
-                    iconOccurrences,
-                    iconInventoryComplete,
-                    schemaVersion,
-                    sourceDependencies,
-                    ruleGroupIdentifiers,
-                    ruleGroupInventoryComplete,
                     List.of());
         }
 
         public PageFact {
             if (pageNumber < 1 || printedTerms == null || printedTerms.isBlank() || factualSummary == null
                     || factualSummary.isBlank() || keywords == null || keywords.isEmpty() || visualAnchors == null
-                    || iconOccurrences == null || sourceDependencies == null) {
+                    || sourceDependencies == null) {
                 throw new IllegalArgumentException("visual page fact is invalid");
             }
             if (keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank())
                     || visualAnchors.stream().anyMatch(java.util.Objects::isNull)
-                    || iconOccurrences.stream().anyMatch(java.util.Objects::isNull)
                     || sourceDependencies.stream().anyMatch(java.util.Objects::isNull)
                     || ruleGroupIdentifiers == null
                     || ruleGroupIdentifiers.stream()
@@ -236,7 +145,6 @@ public interface VisualRulebookPageFacts {
             factualSummary = factualSummary.strip();
             keywords = keywords.stream().map(String::strip).distinct().toList();
             visualAnchors = visualAnchors.stream().distinct().toList();
-            iconOccurrences = iconOccurrences.stream().distinct().toList();
             sourceDependencies = sourceDependencies.stream().distinct().toList();
             ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
             ruleGroupFacts = ruleGroupFacts.stream().distinct().toList();
@@ -320,88 +228,4 @@ public interface VisualRulebookPageFacts {
         }
     }
 
-    /**
-     * One representative appearance of a gameplay icon on a rendered source page.
-     *
-     * <p>The icon crop proves appearance only. {@link IconMeaningStatus#IDENTIFIED} records an exact printed label
-     * without pretending that the label explains a gameplay effect. A player-facing rule explanation is publishable
-     * only when {@code meaningStatus} is {@link IconMeaningStatus#EXPLICIT} and {@code evidenceText} records the
-     * visible rulebook wording that maps the symbol to that meaning. Unexplained icons remain useful visual vocabulary
-     * but cannot acquire a guessed rule effect.</p>
-     */
-    record IconOccurrence(
-            String groupKey,
-            String name,
-            String visualDescription,
-            String explanation,
-            String evidenceText,
-            String verifiedVisualLabel,
-            IconMeaningStatus meaningStatus,
-            int x,
-            int y,
-            int width,
-            int height) {
-
-        public IconOccurrence(
-                String groupKey,
-                String name,
-                String visualDescription,
-                String explanation,
-                String evidenceText,
-                IconMeaningStatus meaningStatus,
-                int x,
-                int y,
-                int width,
-                int height) {
-            this(
-                    groupKey,
-                    name,
-                    visualDescription,
-                    explanation,
-                    evidenceText,
-                    "",
-                    meaningStatus,
-                    x,
-                    y,
-                    width,
-                    height);
-        }
-
-        public IconOccurrence {
-            if (groupKey == null || groupKey.isBlank()
-                    || name == null || name.isBlank()
-                    || visualDescription == null || visualDescription.isBlank()
-                    || explanation == null
-                    || evidenceText == null
-                    || meaningStatus == null
-                    || x < 0 || y < 0 || width < 12 || height < 12
-                    || x + width > 1_000 || y + height > 1_000) {
-                throw new IllegalArgumentException("visual icon occurrence is invalid");
-            }
-            groupKey = groupKey.strip();
-            name = name.strip();
-            visualDescription = visualDescription.strip();
-            explanation = explanation.strip();
-            evidenceText = evidenceText.strip();
-            verifiedVisualLabel = verifiedVisualLabel == null ? "" : verifiedVisualLabel.strip();
-            if (meaningStatus == IconMeaningStatus.EXPLICIT
-                    && (explanation.isBlank() || evidenceText.isBlank())) {
-                throw new IllegalArgumentException("explained visual icon requires visible rulebook evidence");
-            }
-            if (meaningStatus == IconMeaningStatus.IDENTIFIED
-                    && (!explanation.isBlank() || evidenceText.isBlank())) {
-                throw new IllegalArgumentException("identified visual icon requires a label but no rule meaning");
-            }
-            if (meaningStatus == IconMeaningStatus.UNEXPLAINED
-                    && (!explanation.isBlank() || !evidenceText.isBlank())) {
-                throw new IllegalArgumentException("unexplained visual icon cannot carry a rule meaning");
-            }
-        }
-    }
-
-    enum IconMeaningStatus {
-        EXPLICIT,
-        IDENTIFIED,
-        UNEXPLAINED
-    }
 }

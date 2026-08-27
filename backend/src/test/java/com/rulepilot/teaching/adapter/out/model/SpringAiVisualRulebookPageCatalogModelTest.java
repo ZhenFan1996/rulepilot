@@ -16,13 +16,11 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
 import java.awt.image.BufferedImage;
@@ -164,107 +162,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("page must contain exactly");
-    }
-
-    @Test
-    void progressiveTeachingPromptKeepsFactsAndSourceDependenciesInsideTheirDurableContracts() throws IOException {
-        String prompt = new ClassPathResource(
-                        "prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt")
-                .getContentAsString(StandardCharsets.UTF_8)
-                .replaceAll("\\s+", " ");
-
-        assertThat(prompt).contains(
-                "title as one non-empty string",
-                "never return an array or a shortened title",
-                "must always be an explicit array with no duplicates",
-                "quantityObservations",
-                "originalSpan",
-                "REQUIRES_PAGE_INSPECTION",
-                "ruleGroupCoverage",
-                "LEGAL_ACTION",
-                "NECESSARY_EXCEPTION");
-    }
-
-    @Test
-    void progressiveV4ClassifiesEveryOpaqueRuleGroupForTheSourceCoverageContract() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
-                {"pageSketches":[
-                  {"pageNumber":12,"role":"GAMEPLAY_RULES","visibleHeading":"T-0",
-                   "visibleTerms":["T-0","A-1","A-2","E-0"],
-                   "coverageTags":["core_loop","source_coverage"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                   "ruleGroupCoverage":[
-                     {"identifier":"T-0","role":"CORE_LOOP"},
-                     {"identifier":"A-1","role":"LEGAL_ACTION"},
-                     {"identifier":"A-2","role":"LEGAL_ACTION"},
-                     {"identifier":"E-0","role":"NECESSARY_EXCEPTION"}]}],
-                 "selectedPageFacts":{"pageNumber":12,
-                  "printedTerms":["T-0","A-1","A-2","E-0"],
-                  "ruleGroups":[
-                    {"identifier":"T-0","fact":"The visible cycle advances."},
-                    {"identifier":"A-1","fact":"The current actor may take the first visible branch."},
-                    {"identifier":"A-2","fact":"The current actor may take the second visible branch."},
-                    {"identifier":"E-0","fact":"The visible condition changes the second branch."}],
-                  "keywords":["T-0","A-1"],"quantityObservations":[]}}
-                """);
-
-        assertThat(draft.pages().getFirst().ruleGroupCoverage())
-                .extracting(
-                        com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage::identifier,
-                        com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage::role)
-                .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple("T-0", SourceCoverageRole.CORE_LOOP),
-                        org.assertj.core.groups.Tuple.tuple("A-1", SourceCoverageRole.LEGAL_ACTION),
-                        org.assertj.core.groups.Tuple.tuple("A-2", SourceCoverageRole.LEGAL_ACTION),
-                        org.assertj.core.groups.Tuple.tuple("E-0", SourceCoverageRole.NECESSARY_EXCEPTION));
-    }
-
-    @Test
-    void progressiveV4RejectsPartialRoleClassificationInsteadOfPublishingAnUnownedRuleGroup() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
-                {"pageSketches":[
-                  {"pageNumber":12,"role":"GAMEPLAY_RULES","visibleHeading":"T-0",
-                   "visibleTerms":["T-0","A-1"],"coverageTags":["core_loop"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                   "ruleGroupCoverage":[{"identifier":"T-0","role":"CORE_LOOP"}]}],
-                 "selectedPageFacts":{"pageNumber":12,"printedTerms":["T-0","A-1"],
-                  "ruleGroups":[
-                    {"identifier":"T-0","fact":"The visible cycle advances."},
-                    {"identifier":"A-1","fact":"A visible branch is available."}],
-                  "keywords":["T-0","A-1"],"quantityObservations":[]}}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("classify every visibleTerms identifier");
-    }
-
-    @Test
-    void progressiveV4RequiresAnExplicitRuleGroupRoleInventoryOnEveryPage() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
-                {"pageSketches":[
-                  {"pageNumber":12,"role":"GAMEPLAY_RULES","visibleHeading":"T-0",
-                   "visibleTerms":["T-0"],"coverageTags":["core_loop"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[]}],
-                 "selectedPageFacts":{"pageNumber":12,"printedTerms":["T-0"],
-                  "ruleGroups":[{"identifier":"T-0","fact":"The visible cycle advances."}],
-                  "keywords":["T-0","cycle"],"quantityObservations":[]}}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("pageSketches item must contain exactly");
-    }
-
-    @Test
-    void cropPublicationGateKeepsCompleteCentralSymbolsWithoutTrustingNeighborFragments() throws IOException {
-        String prompt = new ClassPathResource("prompts/visual-icon-crop-review-v3-system.txt")
-                .getContentAsString(StandardCharsets.UTF_8)
-                .replaceAll("\\s+", " ");
-
-        assertThat(prompt)
-                .contains(
-                        "single compact graphic nearest the crop center",
-                        "separated from all four crop edges by visible background",
-                        "tiny clipped edge of a different neighboring symbol may be ignored",
-                        "isolated stylized resource cube is a valid pictogram",
-                        "grid or board with multiple cells");
     }
 
     @Test
@@ -445,7 +342,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void routesOnlyTheQwenTeachingStartupRequestToTheFastStructuredVisualModel() throws IOException {
+    void routesQwenPageFactsToTheFastStructuredVisualModel() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
@@ -504,13 +401,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(identity.model()).isEqualTo("qwen3-vl-flash");
         });
 
-        model.summarize(request);
-
-        ArgumentCaptor<Prompt> allPrompts = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel, times(2)).call(allPrompts.capture());
-        OpenAiChatOptions completeAuditOptions =
-                (OpenAiChatOptions) allPrompts.getAllValues().getLast().getOptions();
-        assertThat(completeAuditOptions.getModel()).isEqualTo("qwen3.7-plus");
     }
 
     @Test
@@ -637,199 +527,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 .isEqualTo("qwen3-vl-flash");
         assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("gemini", "gemini-2.5-flash"))
                 .isEqualTo("gemini-2.5-flash");
-    }
-
-    @Test
-    void progressiveTeachingStartUsesTheFastQwenOverrideAndKeepsExactPageRolesSeparateFromSelectedFacts() throws IOException {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = mock(ChatModel.class);
-        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
-        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
-        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
-        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
-        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
-        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
-        when(chatModel.getDefaultOptions()).thenReturn(defaults);
-        when(chatModel.getOptions()).thenReturn(defaults);
-        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
-                new AssistantMessage("""
-                        {"pageSketches":[
-                          {"pageNumber":1,"role":"NON_GAMEPLAY","visibleHeading":"Point Salad",
-                           "visibleTerms":[],"coverageTags":[],"ruleGroupInventoryComplete":false,
-                           "sourceDependencies":[],"ruleGroupCoverage":[]},
-                          {"pageNumber":2,"role":"GAMEPLAY_RULES","visibleHeading":"Setup",
-                           "visibleTerms":["market","veggie cards"],"coverageTags":["setup"],
-                           "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                           "ruleGroupCoverage":[
-                             {"identifier":"market","role":"SETUP"},
-                             {"identifier":"veggie cards","role":"SETUP"}]},
-                          {"pageNumber":3,"role":"GAMEPLAY_RULES","visibleHeading":"Turn",
-                           "visibleTerms":["take cards","refill","end marker","score line"],
-                           "coverageTags":["core_loop","end","scoring"],
-                           "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                           "ruleGroupCoverage":[
-                             {"identifier":"take cards","role":"LEGAL_ACTION"},
-                             {"identifier":"refill","role":"CORE_LOOP"},
-                             {"identifier":"end marker","role":"ENDING"},
-                             {"identifier":"score line","role":"SCORING"}]}],
-                         "selectedPageFacts":{"pageNumber":2,
-                           "printedTerms":["market","veggie cards"],
-                           "ruleGroups":[
-                             {"identifier":"market","fact":"按可见关系摆放市场。"},
-                             {"identifier":"veggie cards","fact":"按可见关系准备牌。"}],
-                           "keywords":["market","veggie cards"],"quantityObservations":[]}}
-                        """)))));
-        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
-        CatalogRequest request = new CatalogRequest(
-                List.of(
-                        new PageImageInput(1, "image/png", png()),
-                        new PageImageInput(2, "image/png", png()),
-                        new PageImageInput(3, "image/png", png())),
-                "owner",
-                "Point Salad");
-
-        var result = model.selectProgressiveTeachingStart(request).orElseThrow();
-
-        assertThat(result.pages()).extracting(page -> page.pageNumber()).containsExactly(1, 2, 3);
-        assertThat(result.pages()).extracting(page -> page.role())
-                .containsExactly(TeachingPageRole.NON_GAMEPLAY, TeachingPageRole.GAMEPLAY_RULES,
-                        TeachingPageRole.GAMEPLAY_RULES);
-        assertThat(result.pages()).extracting(page -> page.ruleGroupInventoryComplete())
-                .containsExactly(false, true, true);
-        assertThat(result.pages()).allSatisfy(page -> assertThat(page.sourceDependencies()).isEmpty());
-        assertThat(result.pages().get(0).ruleGroupCoverage()).isEmpty();
-        assertThat(result.pages().get(1).ruleGroupCoverage())
-                .extracting(coverage -> coverage.role())
-                .containsOnly(SourceCoverageRole.SETUP);
-        assertThat(result.pages().get(2).ruleGroupCoverage())
-                .extracting(coverage -> coverage.role())
-                .containsExactly(
-                        SourceCoverageRole.LEGAL_ACTION,
-                        SourceCoverageRole.CORE_LOOP,
-                        SourceCoverageRole.ENDING,
-                        SourceCoverageRole.SCORING);
-        assertThat(result.selectedPageFacts()).satisfies(facts -> {
-            assertThat(facts.pageNumber()).isEqualTo(2);
-            assertThat(facts.factualSummary()).contains("摆放市场", "准备牌");
-            assertThat(facts.visualAnchors()).isEmpty();
-        });
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).call(prompt.capture());
-        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3-vl-flash");
-        assertThat(options.getMaxTokens()).isEqualTo(1_600);
-        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
-        assertThat(prompt.getValue().getInstructions().stream()
-                        .map(message -> message.getText().replaceAll("\\s+", " "))
-                        .toList())
-                .anySatisfy(text -> assertThat(text).contains(
-                        "Select one page that contains a directly readable gameplay rule",
-                        "Do not use prior knowledge",
-                        "ruleGroupInventoryComplete",
-                        "every distinct readable gameplay rule group",
-                        "sourceDependencies",
-                        "missingCoverageTags",
-                        "quantityObservations",
-                        "REQUIRES_PAGE_INSPECTION",
-                        "ruleGroupCoverage",
-                        "LEGAL_ACTION",
-                        "NECESSARY_EXCEPTION",
-                        "Prefer an executable setup page, then a core turn or action page",
-                        "A direction to use another guide, sheet, booklet, or document",
-                        "Do not inventory icons"));
-    }
-
-    @Test
-    void progressiveTeachingStartRejectsMissingOrDuplicateBindingsWithoutRebindingAcrossImages() {
-        CatalogRequest request = new CatalogRequest(
-                List.of(
-                        new PageImageInput(2, "image/png", new byte[] {1}),
-                        new PageImageInput(5, "image/png", new byte[] {2})),
-                "owner");
-        var incomplete = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
-                {"pageSketches":[
-                  {"pageNumber":2,"role":"GAMEPLAY_RULES","visibleHeading":"A",
-                   "visibleTerms":["alpha"],"coverageTags":["setup","core_loop","end","scoring"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                   "ruleGroupCoverage":[{"identifier":"alpha","role":"LEGAL_ACTION"}]}],
-                 "selectedPageFacts":{"pageNumber":2,"printedTerms":["alpha"],
-                  "ruleGroups":[{"identifier":"alpha","fact":"当前玩家必须执行一个可见动作。"}],
-                  "keywords":["alpha","rule"],"quantityObservations":[]}}
-                """);
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        SpringAiVisualRulebookPageCatalogModel.normalizeProgressiveTeachingStartBindings(
-                                request, incomplete))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("every supplied page exactly");
-    }
-
-    @Test
-    void progressiveTeachingStartCannotClaimSelectedCompletenessWithoutEveryBoundFact() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
-                {"pageSketches":[
-                  {"pageNumber":4,"role":"GAMEPLAY_RULES","visibleHeading":"Available actions",
-                   "visibleTerms":["MOVE","BUILD"],"coverageTags":["core_loop","end","scoring"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                   "ruleGroupCoverage":[
-                     {"identifier":"MOVE","role":"LEGAL_ACTION"},
-                     {"identifier":"BUILD","role":"LEGAL_ACTION"}]}],
-                 "selectedPageFacts":{"pageNumber":4,"printedTerms":["MOVE","BUILD"],
-                  "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn."}],
-                  "keywords":["MOVE","BUILD"],"quantityObservations":[]}}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("must match visibleTerms exactly");
-    }
-
-    @Test
-    void progressiveTeachingStartRequiresAnExactSelectedFactIdentifierBoundary() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
-                {"pageSketches":[
-                  {"pageNumber":4,"role":"GAMEPLAY_RULES","visibleHeading":"Available action",
-                   "visibleTerms":["MOVE"],"coverageTags":["core_loop","end","scoring"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                   "ruleGroupCoverage":[{"identifier":"MOVE","role":"LEGAL_ACTION"}]}],
-                 "selectedPageFacts":{"pageNumber":4,"printedTerms":["MOVE"],
-                  "ruleGroups":[{"identifier":"MOVEMENT","fact":"Move one pawn."}],
-                  "keywords":["MOVE"],"quantityObservations":[]}}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("must match visibleTerms exactly");
-    }
-
-    @Test
-    void progressiveTeachingStartKeepsExternalSourceDependenciesOutOfExecutableRuleGroups() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
-                {"pageSketches":[
-                  {"pageNumber":1,"role":"GAMEPLAY_RULES","visibleHeading":"Playing the game",
-                   "visibleTerms":["play a card"],"coverageTags":["core_loop","source_coverage"],
-                   "ruleGroupInventoryComplete":true,
-                   "sourceDependencies":[{"title":"Quick Start Guide","missingCoverageTags":["setup"]}],
-                   "ruleGroupCoverage":[{"identifier":"play a card","role":"LEGAL_ACTION"}]},
-                  {"pageNumber":2,"role":"GAMEPLAY_RULES","visibleHeading":"End",
-                   "visibleTerms":["game end","final score"],"coverageTags":["end","scoring"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
-                   "ruleGroupCoverage":[
-                     {"identifier":"game end","role":"ENDING"},
-                     {"identifier":"final score","role":"SCORING"}]}],
-                 "selectedPageFacts":{"pageNumber":1,"printedTerms":["play a card"],
-                  "ruleGroups":[{"identifier":"play a card","fact":"当前玩家打出一张卡并执行行动。"}],
-                  "keywords":["play a card","action"],"quantityObservations":[]}}
-                """);
-
-        assertThat(draft.pages().getFirst()).satisfies(page -> {
-            assertThat(page.visibleTerms()).containsExactly("play a card");
-            assertThat(page.sourceDependencies()).singleElement().satisfies(dependency -> {
-                assertThat(dependency.title()).isEqualTo("Quick Start Guide");
-                assertThat(dependency.missingCoverageTags()).containsExactly("setup");
-            });
-        });
-        assertThat(draft.pages().get(1).sourceDependencies()).isEmpty();
-        assertThat(draft.selectedPageFacts().printedTerms()).contains("Quick Start Guide");
-        assertThat(draft.selectedPageFacts().factualSummary())
-                .contains("Quick Start Guide", "当前页本身不提供开局步骤")
-                .doesNotContain("如何完成开局");
     }
 
     @Test
@@ -1040,11 +737,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         return new SpringAiVisualRulebookPageCatalogModel(
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
-                new ClassPathResource("prompts/visual-page-catalog-v2-icon-inventory-system.txt"),
                 new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt"),
-                new ClassPathResource("prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt"),
-                new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
-                new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),
                 "qwen3.5-ocr",
                 4_800);
     }
@@ -1084,46 +777,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void parses_a_complete_icon_inventory_without_treating_unexplained_icons_as_rules() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["Resource icons"],"factualSummary":[],
-                "keywords":["resource"],
-                "iconOccurrences":[
-                  {"groupKey":"wood","name":"Wood","visualDescription":"棕色木块轮廓。",
-                   "meaningStatus":"EXPLICIT","explanation":"表示一份木材。","evidenceText":"Wood resource",
-                   "x":100,"y":240,"width":42,"height":42},
-                  {"groupKey":"blue circle wave","name":"蓝色波纹圆标","visualDescription":"蓝色圆形内有波纹。",
-                   "meaningStatus":"UNEXPLAINED","explanation":"","evidenceText":"",
-                   "x":300,"y":240,"width":42,"height":42}
-                ],"iconInventoryComplete":true}]}
-                """);
-
-        assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.iconInventoryComplete()).isTrue();
-            assertThat(page.iconOccurrences()).hasSize(2);
-            assertThat(page.iconOccurrences().getFirst().explanation()).isEqualTo("表示一份木材。");
-            assertThat(page.iconOccurrences().getLast().explanation()).isEmpty();
-        });
-    }
-
-    @Test
-    void drops_only_a_malformed_icon_and_keeps_the_page_inventory_incomplete() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
-                {"pages":[{"pageNumber":8,"printedTerms":"icons","factualSummary":"图标页。",
-                "keywords":["icons"],"iconOccurrences":[
-                  {"groupKey":"bad","name":"Bad","visualDescription":"越界图标。",
-                   "meaningStatus":"UNEXPLAINED","explanation":"","evidenceText":"",
-                   "x":990,"y":990,"width":80,"height":80}
-                ],"iconInventoryComplete":true}]}
-                """);
-
-        assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.iconOccurrences()).isEmpty();
-            assertThat(page.iconInventoryComplete()).isFalse();
-        });
-    }
-
-    @Test
     void keeps_the_page_catalog_when_an_optional_anchor_has_invalid_geometry() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
                 {"pages":[{"pageNumber":7,"printedTerms":"power tokens",
@@ -1136,155 +789,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(page.printedTerms()).isEqualTo("power tokens");
             assertThat(page.visualAnchors()).isEmpty();
         });
-    }
-
-    @Test
-    void preservesLongOptionalTextInsteadOfSilentlyTruncatingTheIconPage() {
-        String longSummary = "visible rule ".repeat(300);
-        String json = "{\"pages\":[{\"pageNumber\":6,\"printedTerms\":\"ICONS\","
-                + "\"factualSummary\":" + jsonString(longSummary) + ","
-                + "\"keywords\":[\""
-                + "x".repeat(180) + "\"],\"iconOccurrences\":[],\"iconInventoryComplete\":true}]}";
-
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog(json);
-
-        assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).isEqualTo(longSummary.strip());
-            assertThat(page.keywords().getFirst()).isEqualTo("x".repeat(180));
-        });
-    }
-
-    @Test
-    void parsesDedicatedIconLocationsFromTheDeclaredObjectShapeOnly() {
-        var object = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
-                {"items":[
-                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20,"observedLabel":"WOOD"},
-                  {"candidateIndex":1,"present":false,"observedLabel":""}
-                ]}
-                """, 2);
-
-        assertThat(object.locations()).hasSize(2);
-        assertThat(object.locations().getFirst().present()).isTrue();
-        assertThat(object.locations().getFirst().observedLabel()).isEqualTo("WOOD");
-        assertThat(object.locations().getLast().present()).isFalse();
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
-                [{"candidateIndex":0,"present":false,"observedLabel":""}]
-                """, 1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("root must be an object");
-    }
-
-    @Test
-    void rejectsAMalformedRectangleInsteadOfRewritingTheCandidateAsAbsent() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
-                {"items":[
-                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20,"observedLabel":"WOOD"},
-                  {"candidateIndex":1,"present":true,"x":995,"y":995,"width":30,"height":30,"observedLabel":"STONE"}
-                ]}
-                """, 2))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("rectangle is invalid");
-    }
-
-    @Test
-    void parsesCloseUpCropReviewForTheExactCandidateIndexes() {
-        var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
-                {"items":[
-                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
-                   "x":120,"y":160,"width":300,"height":280},
-                  {"candidateIndex":7,"matchesAppearance":false,"fullyContained":false,"standalonePictogram":false}
-                ]}
-                """, List.of(3, 7));
-
-        assertThat(result.decisions()).hasSize(2);
-        assertThat(result.decisions().getFirst().matchesAppearance()).isTrue();
-        assertThat(result.decisions().getFirst().x()).isEqualTo(120);
-        assertThat(result.decisions().getFirst().height()).isEqualTo(280);
-        assertThat(result.decisions().getLast().matchesAppearance()).isFalse();
-    }
-
-    @Test
-    void rejectsClippedAndMultiSymbolCropsFromThePublicationGate() {
-        var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
-                {"items":[
-                  {"candidateIndex":2,"matchesAppearance":false,"fullyContained":false,"standalonePictogram":false,
-                   "x":0,"y":0,"width":0,"height":0},
-                  {"candidateIndex":5,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":false}
-                ]}
-                """, List.of(2, 5));
-
-        assertThat(result.decisions()).containsExactly(
-                IconCropDecision.rejected(2),
-                IconCropDecision.rejected(5));
-    }
-
-    @Test
-    void rejectsTheResponseWhenAnAcceptedCropOmitsItsTypedRectangle() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
-                {"items":[
-                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
-                   "x":100,"y":100,"width":200,"height":200},
-                  {"candidateIndex":7,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true}
-                ]}
-                """, List.of(3, 7)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("fields do not match its verdict");
-    }
-
-    @Test
-    void localizesFromAppearanceWithoutSemanticNamesThatCanMatchNearbyProse() {
-        String candidates = SpringAiVisualRulebookPageCatalogModel.iconLocalizationCandidates(List.of(
-                        new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
-                        "collect-no-buttons",
-                        "收集零个纽扣",
-                        "红色叉号叠加在白色纽扣图标上。",
-                        "",
-                        "",
-                        com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED,
-                        100,
-                        100,
-                        20,
-                        20)));
-
-        assertThat(candidates).contains("visible appearance=红色叉号叠加在白色纽扣图标上。");
-        assertThat(candidates).doesNotContain("collect-no-buttons", "收集零个纽扣");
-    }
-
-    @Test
-    void preservesTheStructuredAppearanceInsteadOfRewritingItsSemanticVocabulary() {
-        var icon = new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
-                "vegetable",
-                "蔬菜",
-                "Purple rectangular card with a white circle containing a purple vegetable illustration.",
-                "",
-                "",
-                com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED,
-                100,
-                100,
-                30,
-                30);
-
-        String hint = SpringAiVisualRulebookPageCatalogModel.cropReviewAppearance(icon);
-        assertThat(hint).isEqualTo(icon.visualDescription());
-    }
-
-    @Test
-    void redactsFirstPassLabelsBeforeIndependentImageLabelVerification() {
-        String candidates = SpringAiVisualRulebookPageCatalogModel.iconLocalizationCandidates(List.of(
-                new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
-                        "CARROT",
-                        "胡萝卜",
-                        "Orange card with CARROT printed above a carrot silhouette.",
-                        "代表胡萝卜类型。",
-                        "CARROT",
-                        com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.EXPLICIT,
-                        100,
-                        100,
-                        20,
-                        20)));
-
-        assertThat(candidates).contains("redacted-label");
-        assertThat(candidates).doesNotContain("CARROT", "胡萝卜");
     }
 
     @Test

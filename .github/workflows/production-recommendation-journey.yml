@@ -7,51 +7,18 @@ on:
         description: Exact 40-character main commit SHA already active in production
         required: true
         type: string
-      opening_prompt:
-        description: Natural opening from a player who does not know what to play yet
-        required: true
-        type: string
-        default: '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
       selection_prompt:
-        description: Natural refinement that asks the Agent to select a ranked recommendation slate
+        description: Natural player request for one ranked recommendation slate
         required: true
         type: string
-        default: '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后想优先直接进入已有讲解，先学设置和首轮行动，再按同一份规则书继续答疑。'
+        default: '今晚五个人，想玩能谈判、互相骗一骗的；有两个新手，90 分钟内。请直接挑三款，并把你最推荐的一款放第一。'
       requested_card_count:
-        description: Typed card count explicitly requested by selection_prompt; used only for shortfall evidence
+        description: Card count requested by the player; recorded as shortfall evidence
         required: true
         type: number
         default: 3
-      rule_question:
-        description: Question asked after the cited lesson becomes readable
-        required: true
-        type: string
-        default: '我们现在要开第一局：所有组件分别怎么摆、每个人先拿什么？请按顺序说，并标出规则书页码。'
-      rule_follow_up:
-        description: Natural follow-up that must reuse the same document-bound answer session
-        required: true
-        type: string
-        default: '你刚才列出的第二个准备步骤具体需要哪些组件？仍然只根据同一本规则书回答并标页码。'
-      journey_mode:
-        description: Use a ready public guide, or verify a rulebook journey that may import or reuse
-        required: true
-        type: choice
-        default: ready_public
-        options:
-          - ready_public
-          - verified_import
-      require_fresh_import:
-        description: Fail if production reuses an existing imported rulebook
-        required: true
-        type: boolean
-        default: false
-      recommendation_only:
-        description: Stop after validating the persisted recommendation result; do not select a game or start rulebook work
-        required: true
-        type: boolean
-        default: false
       expected_title_term:
-        description: Optional case-insensitive title term that every recommendation-only card must match
+        description: Optional case-insensitive title term that every card must match
         required: true
         type: string
         default: ''
@@ -65,9 +32,9 @@ concurrency:
 
 jobs:
   journey:
-    name: Unknown-target recommendation, rulebook, teaching, and cited Q&A
+    name: Production recommendation canary
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 20
     environment:
       name: production
     env:
@@ -79,14 +46,8 @@ jobs:
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       RULEPILOT_PUBLIC_URL: https://rulepilot.cn
       RULEPILOT_RECOMMENDATION_TESTED_SHA: ${{ inputs.tested_sha }}
-      RULEPILOT_RECOMMENDATION_OPENING_PROMPT: ${{ inputs.opening_prompt }}
       RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: ${{ inputs.selection_prompt }}
       RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: ${{ inputs.requested_card_count }}
-      RULEPILOT_RECOMMENDATION_RULE_QUESTION: ${{ inputs.rule_question }}
-      RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: ${{ inputs.rule_follow_up }}
-      RULEPILOT_RECOMMENDATION_JOURNEY_MODE: ${{ inputs.journey_mode }}
-      RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT: ${{ inputs.require_fresh_import }}
-      RULEPILOT_RECOMMENDATION_ONLY: ${{ inputs.recommendation_only }}
       RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: ${{ inputs.expected_title_term }}
     steps:
       - uses: actions/checkout@v6
@@ -120,24 +81,20 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           chmod 644 "$HOME/.ssh/known_hosts"
 
-      - name: Exercise the complete public recommendation journey
-        id: production_journey
+      - name: Exercise one production recommendation
         shell: bash
         run: |
           set -Eeuo pipefail
           umask 077
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
+          report="$artifact_dir/journey.json"
           mkdir -p "$artifact_dir"
           chmod 700 "$artifact_dir"
           jq -n \
             --arg testedSha "$RULEPILOT_RECOMMENDATION_TESTED_SHA" \
-            --arg journeyMode "$RULEPILOT_RECOMMENDATION_JOURNEY_MODE" \
-            --argjson recommendationOnly "$RULEPILOT_RECOMMENDATION_ONLY" \
-            --argjson requireFreshImport "$RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT" \
-            '{completed:false,stage:"preflight",testedSha:$testedSha,activeReleaseSha:null,
-              journeyMode:$journeyMode,recommendationOnly:$recommendationOnly,
-              requireFreshImport:$requireFreshImport,importReused:null}' \
-            > "$artifact_dir/journey.json"
+            '{generatedAt:(now | todate),completed:false,stage:"preflight",testedSha:$testedSha,activeReleaseSha:null}' \
+            > "$report"
+
           if [[ ! "$RULEPILOT_RECOMMENDATION_TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "tested_sha must be one exact lowercase 40-character commit SHA" >&2
             exit 1
@@ -152,24 +109,7 @@ jobs:
             echo "tested_sha is not an ancestor of current origin/main" >&2
             exit 1
           fi
-          if [[ "$RULEPILOT_RECOMMENDATION_ONLY" == true
-            && -z "${RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM//[[:space:]]/}" ]]; then
-            echo "recommendation_only requires a non-empty expected_title_term" >&2
-            exit 1
-          fi
-          case "$RULEPILOT_RECOMMENDATION_JOURNEY_MODE" in
-            ready_public|verified_import) ;;
-            *)
-              echo "journey_mode must be ready_public or verified_import" >&2
-              exit 1
-              ;;
-          esac
-          if [[ "$RULEPILOT_RECOMMENDATION_ONLY" != true
-            && "$RULEPILOT_RECOMMENDATION_JOURNEY_MODE" == ready_public
-            && "$RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT" == true ]]; then
-            echo "require_fresh_import is incompatible with journey_mode=ready_public" >&2
-            exit 1
-          fi
+
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
@@ -179,7 +119,6 @@ jobs:
             -o StrictHostKeyChecking=yes
             -p "$DEPLOY_SSH_PORT"
           )
-
           active_release_coordinates=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
           set -Eeuo pipefail
@@ -203,13 +142,11 @@ jobs:
             echo "Production active release SHA does not equal tested_sha" >&2
             exit 1
           fi
+
           report_update="$artifact_dir/journey.active-release.json"
           jq --arg activeReleaseSha "$active_release_sha" \
-            '.activeReleaseSha = $activeReleaseSha' "$artifact_dir/journey.json" > "$report_update"
-          mv "$report_update" "$artifact_dir/journey.json"
-          export RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA="$active_release_sha"
-          printf 'RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA=%s\n' "$active_release_sha" >> "$GITHUB_ENV"
-          printf 'RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID=%s\n' "$active_release_id" >> "$GITHUB_ENV"
+            '.activeReleaseSha = $activeReleaseSha' "$report" > "$report_update"
+          mv "$report_update" "$report"
 
           credentials=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
@@ -221,525 +158,38 @@ jobs:
             value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
             printf '%s' "$value"
           }
-          generation_thinking=$(read_value DEEPSEEK_GENERATION_THINKING)
-          if [[ "$generation_thinking" != false ]]; then
-            echo "Production recommendation generation must use non-thinking mode" >&2
-            exit 1
-          fi
-          for service in api worker; do
-            mapfile -t service_containers < <(
-              docker ps \
-                --filter label=com.docker.compose.project=rulepilot \
-                --filter label=com.docker.compose.service="$service" \
-                --format '{{.ID}}'
-            )
-            if (( ${#service_containers[@]} != 1 )); then
-              echo "Production recommendation runtime identity is ambiguous" >&2
-              exit 1
-            fi
-            mapfile -t effective_generation_modes < <(
-              docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
-                "${service_containers[0]}" |
-                sed -n 's/^DEEPSEEK_GENERATION_THINKING=//p'
-            )
-            if (( ${#effective_generation_modes[@]} != 1 )) \
-              || [[ "${effective_generation_modes[0]}" != false ]]; then
-              echo "Production recommendation runtime is not in non-thinking mode" >&2
-              exit 1
-            fi
-          done
-          printf '%s\n%s\n%s' \
+          printf '%s\n%s' \
             "$(read_value RULEPILOT_USER_USERNAME)" \
-            "$(read_value RULEPILOT_USER_PASSWORD)" \
-            "$generation_thinking"
+            "$(read_value RULEPILOT_USER_PASSWORD)"
           REMOTE
           )
           mapfile -t credential_lines <<< "$credentials"
           player_username=${credential_lines[0]:-}
           player_password=${credential_lines[1]:-}
-          generation_thinking=${credential_lines[2]:-}
           test -n "$player_username"
           test -n "$player_password"
-          test "$generation_thinking" = false
           echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
-          printf 'RULEPILOT_RECOMMENDATION_GENERATION_MODE=NON_THINKING\n' >> "$GITHUB_ENV"
-
-          trace_start_epoch_seconds=$(date +%s)
-          read -r canary_trace_id canary_parent_span_id < <(
-            node --input-type=module -e \
-              'import { randomBytes } from "node:crypto"; console.log(`${randomBytes(16).toString("hex")} ${randomBytes(8).toString("hex")}`)'
-          )
-          if [[ ! "$canary_trace_id" =~ ^[0-9a-f]{32}$
-            || "$canary_trace_id" == 00000000000000000000000000000000
-            || ! "$canary_parent_span_id" =~ ^[0-9a-f]{16}$
-            || "$canary_parent_span_id" == 0000000000000000 ]]; then
-            echo "Failed to generate a sampled W3C canary trace context" >&2
-            exit 1
-          fi
-          canary_traceparent="00-${canary_trace_id}-${canary_parent_span_id}-01"
-          printf 'RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS=%s\n' \
-            "$trace_start_epoch_seconds" >> "$GITHUB_ENV"
-          printf 'RULEPILOT_RECOMMENDATION_TRACE_ID=%s\n' "$canary_trace_id" >> "$GITHUB_ENV"
-
-          resource_baseline="$artifact_dir/resource-baseline.tsv"
-          resource_samples="$artifact_dir/resource-samples.tsv"
-          resource_final="$artifact_dir/resource-final.tsv"
-          resource_sampler_diagnostics="$artifact_dir/resource-sampler-diagnostics.log"
-          resource_sampler_pid=
-          resource_baseline_captured=false
-
-          collect_resource_state() {
-            local output=$1
-            timeout --signal=TERM --kill-after=5s 60s \
-              ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              'bash -s' -- "$DEPLOY_PATH" "$active_release_id" \
-              > "$output" 2>> "$resource_sampler_diagnostics" <<'REMOTE'
-          set -Eeuo pipefail
-          application_root=$(readlink -f "$1")
-          expected_release_id=$2
-          active_release=$(readlink -f "$application_root/current")
-          [[ "${active_release##*/}" == "$expected_release_id" ]]
-          while IFS= read -r container_id; do
-            service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id")
-            case "$service" in
-              api|frontend|gateway|grafana|minio|postgres|prometheus|rabbitmq|redis|tempo|worker)
-                docker inspect --format \
-                  '{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{.Id}}{{"\t"}}{{.RestartCount}}{{"\t"}}{{.State.OOMKilled}}{{"\t"}}{{.State.Running}}' \
-                  "$container_id"
-                ;;
-            esac
-          done < <(docker ps -a --filter label=com.docker.compose.project=rulepilot --format '{{.ID}}' | sort)
-          REMOTE
-          }
-
-          stop_resource_sampler() {
-            if [[ -n "$resource_sampler_pid" ]]; then
-              kill "$resource_sampler_pid" 2>/dev/null || true
-              for _ in {1..10}; do
-                if ! kill -0 "$resource_sampler_pid" 2>/dev/null; then
-                  break
-                fi
-                sleep 1
-              done
-              if kill -0 "$resource_sampler_pid" 2>/dev/null; then
-                kill -KILL "$resource_sampler_pid" 2>/dev/null || true
-              fi
-              wait "$resource_sampler_pid" 2>/dev/null || true
-              resource_sampler_pid=
-            fi
-            if [[ "$resource_baseline_captured" == true ]]; then
-              if ! collect_resource_state "$resource_final"; then
-                echo "Final production resource state was unavailable; retaining typed NOT_AVAILABLE evidence." >&2
-              fi
-            fi
-          }
-          trap 'stop_resource_sampler' EXIT
-
-          if collect_resource_state "$resource_baseline"; then
-            resource_baseline_captured=true
-            ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              'bash -s' -- "$DEPLOY_PATH" "$active_release_id" \
-              > "$resource_samples" 2>> "$resource_sampler_diagnostics" <<'REMOTE' &
-          set -Eeuo pipefail
-          trap 'exit 0' HUP INT TERM
-          application_root=$(readlink -f "$1")
-          expected_release_id=$2
-          active_release=$(readlink -f "$application_root/current")
-          [[ "${active_release##*/}" == "$expected_release_id" ]]
-          while true; do
-            measured_at=$(date +%s)
-            host_total_kib=$(awk '$1 == "MemTotal:" {print $2}' /proc/meminfo)
-            host_available_kib=$(awk '$1 == "MemAvailable:" {print $2}' /proc/meminfo)
-            mapfile -t container_ids < <(
-              docker ps --filter label=com.docker.compose.project=rulepilot --format '{{.ID}}' | sort
-            )
-            if (( ${#container_ids[@]} > 0 )); then
-              docker stats --no-stream \
-                --format '{{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}' "${container_ids[@]}" |
-                while IFS=$'\t' read -r container_id cpu_percent memory_usage; do
-                  service=$(docker inspect \
-                    --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id")
-                  case "$service" in
-                    api|frontend|gateway|grafana|minio|postgres|prometheus|rabbitmq|redis|tempo|worker)
-                      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-                        "$measured_at" "$host_total_kib" "$host_available_kib" \
-                        "$service" "$cpu_percent" "$memory_usage"
-                      ;;
-                  esac
-                done
-            fi
-            sample_elapsed_seconds=$(($(date +%s) - measured_at))
-            if (( sample_elapsed_seconds < 5 )); then
-              sleep $((5 - sample_elapsed_seconds))
-            fi
-          done
-          REMOTE
-            resource_sampler_pid=$!
-          else
-            echo "Baseline production resource state was unavailable; journey will retain diagnostic evidence." >&2
-          fi
 
           set +e
           RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true \
           RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
           RULEPILOT_RECOMMENDATION_USER="$player_username" \
           RULEPILOT_RECOMMENDATION_PASSWORD="$player_password" \
-          RULEPILOT_RECOMMENDATION_TRACEPARENT="$canary_traceparent" \
-          RULEPILOT_RECOMMENDATION_REPORT="$artifact_dir/journey.json" \
+          RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA="$active_release_sha" \
+          RULEPILOT_RECOMMENDATION_REPORT="$report" \
             npm --prefix frontend exec -- playwright test \
               --config frontend/playwright.recommendation-production.config.ts
           journey_status=$?
           set -e
-          stop_resource_sampler
-          trap - EXIT
           chmod -R go-rwx "$artifact_dir"
           exit "$journey_status"
 
-      - name: Summarize exact-release production resources
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          umask 077
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          resource_evidence="$artifact_dir/resource-summary.json"
-          mkdir -p "$artifact_dir"
-          chmod 700 "$artifact_dir"
-          if [[ ! "${RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID:-}" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
-            jq -n '{
-              schemaVersion: 1,
-              releaseId: null,
-              collectionOutcome: "NOT_RUN",
-              failureCause: "ACTIVE_RELEASE_NOT_CONFIRMED",
-              sampleIntervalSeconds: 5,
-              sampleTimestampCount: 0,
-              host: {
-                totalMemoryMiB: null,
-                minimumAvailableMemoryMiB: null,
-                minimumAvailableMemoryPercent: null
-              },
-              services: [],
-              safety: {
-                evaluated: false,
-                passed: null,
-                oomObserved: null,
-                runtimeResetObserved: null
-              }
-            }' > "$resource_evidence"
-            chmod 600 "$resource_evidence"
-            exit 0
-          fi
-          node scripts/summarize-production-resource-samples.mjs \
-            --release-id "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
-            --baseline "$artifact_dir/resource-baseline.tsv" \
-            --samples "$artifact_dir/resource-samples.tsv" \
-            --final "$artifact_dir/resource-final.tsv" \
-            --fail-on-runtime-reset \
-            --output "$resource_evidence"
-
-      - name: Collect exact-release Tempo workflow terminals
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          umask 077
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          trace_evidence="$artifact_dir/release-traces.json"
-          trace_candidate="$artifact_dir/release-traces.candidate.json"
-          mkdir -p "$artifact_dir"
-          chmod 700 "$artifact_dir"
-
-          if [[ ! "${RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID:-}" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$
-            || ! "${RULEPILOT_RECOMMENDATION_TRACE_ID:-}" =~ ^[0-9a-f]{32}$
-            || "${RULEPILOT_RECOMMENDATION_TRACE_ID:-}" == 00000000000000000000000000000000
-            || ! "${RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS:-}" =~ ^[1-9][0-9]*$ ]]; then
-            jq -n '{
-              schemaVersion: 1,
-              releaseId: null,
-              traceId: null,
-              window: null,
-              queryOutcome: "NOT_RUN",
-              queryFailureCause: "CANARY_TRACE_NOT_STARTED",
-              releaseTraceObserved: false,
-              observedReleaseTraceCount: 0,
-              resultLimitReached: false,
-              attemptsUsed: 0,
-              businessWorkflowTerminal: {
-                workflow: "recommendation",
-                observed: false,
-                state: "NOT_OBSERVED",
-                latestDurationMs: null,
-                observedTraceCount: 0,
-                observedStateCounts: []
-              }
-            }' > "$trace_evidence"
-            chmod 600 "$trace_evidence"
-            exit 0
-          fi
-
-          trace_end_epoch_seconds=$(date +%s)
-          jq -n \
-            --arg releaseId "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
-            --arg traceId "$RULEPILOT_RECOMMENDATION_TRACE_ID" \
-            --argjson startEpochSeconds "$RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS" \
-            --argjson endEpochSeconds "$trace_end_epoch_seconds" '{
-              schemaVersion: 1,
-              releaseId: $releaseId,
-              traceId: $traceId,
-              window: {
-                startEpochSeconds: $startEpochSeconds,
-                endEpochSeconds: $endEpochSeconds
-              },
-              queryOutcome: "NOT_AVAILABLE",
-              queryFailureCause: "UNKNOWN",
-              releaseTraceObserved: false,
-              observedReleaseTraceCount: 0,
-              resultLimitReached: false,
-              attemptsUsed: 0,
-              businessWorkflowTerminal: {
-                workflow: "recommendation",
-                observed: false,
-                state: "NOT_OBSERVED",
-                latestDurationMs: null,
-                observedTraceCount: 0,
-                observedStateCounts: []
-              }
-            }' > "$trace_evidence"
-          chmod 600 "$trace_evidence"
-
-          tempo_tunnel_pid=
-          cleanup_tunnel() {
-            if [[ -n "$tempo_tunnel_pid" ]]; then
-              kill "$tempo_tunnel_pid" 2>/dev/null || true
-              wait "$tempo_tunnel_pid" 2>/dev/null || true
-            fi
-            rm -f "$trace_candidate"
-          }
-          trap cleanup_tunnel EXIT
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o ConnectTimeout=20 \
-            -o ExitOnForwardFailure=yes \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=20 \
-            -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_SSH_PORT" \
-            -N -L 13201:127.0.0.1:3200 \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" &
-          tempo_tunnel_pid=$!
-          tempo_ready=false
-          for attempt in {1..20}; do
-            if curl -fsS http://127.0.0.1:13201/ready >/dev/null 2>&1; then
-              tempo_ready=true
-              break
-            fi
-            sleep 1
-          done
-          if [[ "$tempo_ready" != true ]]; then
-            echo "Production Tempo tunnel is not ready; continuing bounded queries to retain NOT_AVAILABLE evidence." >&2
-          fi
-
-          node scripts/summarize-production-release-traces.mjs \
-            --tempo-url http://127.0.0.1:13201 \
-            --release-id "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
-            --trace-id "$RULEPILOT_RECOMMENDATION_TRACE_ID" \
-            --start-epoch-seconds "$RULEPILOT_RECOMMENDATION_TRACE_START_EPOCH_SECONDS" \
-            --end-epoch-seconds "$trace_end_epoch_seconds" \
-            --attempts 10 \
-            --retry-delay-ms 3000 \
-            --wait-for-workflow-terminal \
-            --output "$trace_candidate" || \
-            echo "Exact-release trace summarization failed; retaining sanitized NOT_AVAILABLE evidence." >&2
-          if jq -e \
-            --arg releaseId "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
-            --arg traceId "$RULEPILOT_RECOMMENDATION_TRACE_ID" \
-            '.schemaVersion == 1 and .releaseId == $releaseId and .traceId == $traceId' \
-            "$trace_candidate" >/dev/null 2>&1; then
-            mv "$trace_candidate" "$trace_evidence"
-          fi
-
-      - name: Build public-safe journey summary
-        if: always()
-        shell: bash
-        env:
-          CANARY_ASSERTION_OUTCOME: ${{ steps.production_journey.outcome }}
-        run: |
-          set -Eeuo pipefail
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          trace_evidence="$artifact_dir/release-traces.json"
-          if ! jq -e '.schemaVersion == 1 and has("queryOutcome") and has("traceId")' \
-            "$trace_evidence" >/dev/null 2>&1; then
-            jq -n '{
-              schemaVersion: 1,
-              releaseId: null,
-              traceId: null,
-              window: null,
-              queryOutcome: "NOT_AVAILABLE",
-              queryFailureCause: "TRACE_SUMMARY_STEP_FAILED",
-              releaseTraceObserved: false,
-              observedReleaseTraceCount: 0,
-              resultLimitReached: false,
-              attemptsUsed: 0,
-              businessWorkflowTerminal: {
-                workflow: "recommendation",
-                observed: false,
-                state: "NOT_OBSERVED",
-                latestDurationMs: null,
-                observedTraceCount: 0,
-                observedStateCounts: []
-              }
-            }' > "$trace_evidence"
-            chmod 600 "$trace_evidence"
-          fi
-          jq --arg canaryAssertionOutcome "$CANARY_ASSERTION_OUTCOME" \
-            --arg generationMode "${RULEPILOT_RECOMMENDATION_GENERATION_MODE:-NOT_VERIFIED}" \
-            --slurpfile traceEvidence "$trace_evidence" \
-            --slurpfile resourceEvidence "$artifact_dir/resource-summary.json" '{
-            generatedAt,
-            completed,
-            stage,
-            testedSha,
-            activeReleaseSha,
-            canaryAssertion: {
-              outcome: ($canaryAssertionOutcome | ascii_upcase)
-            },
-            productWorkflowTerminal: $traceEvidence[0].businessWorkflowTerminal,
-            resourceEvidence: $resourceEvidence[0],
-            traceEvidence: ($traceEvidence[0] | {
-              schemaVersion,
-              releaseId,
-              traceId,
-              window,
-              queryOutcome,
-              queryFailureCause,
-              releaseTraceObserved,
-              observedReleaseTraceCount,
-              resultLimitReached,
-              attemptsUsed
-            }),
-            journeyMode,
-            recommendationOnly,
-            requireFreshImport,
-            recommendationHarnessSafetyCategory,
-            selectedBggId,
-            selectedGameName,
-            routeStayedOnDiscover,
-            opening: {
-              generationMode: $generationMode,
-              firstSafeTextRendered: .openGuidanceFirstSafeTextRendered,
-              firstSafeTextMs: .openGuidanceFirstSafeTextMs,
-              observationElapsedMs: .openGuidanceObservationElapsedMs,
-              resultRenderedMs: .openGuidanceResultRenderedMs,
-              sloMs: 15000,
-              sloBasis: "FIRST_VALIDATED_PLAYER_TEXT_RENDER",
-              sloMet: .openGuidanceSloMet,
-              outcome: .openGuidanceOutcome,
-              terminalObserved: .openGuidanceTerminalObserved,
-              persistedTerminalMs: .openGuidanceTerminalObservedMs,
-              terminalCategory: .openGuidanceTerminalCategory,
-              modelCalls: .openGuidanceModelCalls,
-              catalogCalls: .openGuidanceCatalogCalls,
-              failureBoundary: .openGuidanceFailureBoundary
-            },
-            readyTeaching: {
-              requested: .readyTeachingRequested,
-              availability: .readyTeachingAvailability,
-              readyCount: .readyTeachingReadyCount,
-              candidateCount: .readyTeachingCandidateCount,
-              renderedReadyCardCount: .renderedReadyTeachingCardCount,
-              guideOpened: .readyTeachingGuideOpened,
-              questionsRouteOpened: .readyTeachingQuestionsOpened,
-              failureCategory: .readyTeachingFailureCategory,
-              importRequestsAfterReadyOpen: .importRequestCount
-            },
-            publicLessonQa: {
-              requestSucceeded: .publicAnswerRequestSucceeded,
-              answerStatus,
-              citationCount: .answerCitationCount,
-              answerMs,
-              citedAnswer
-            },
-            teaching: {
-              runState: .teachingGenerationState,
-              lessonStatus,
-              completionCategory: .lessonCompletionCategory,
-              readable: .lessonReadable,
-              fullySupported: .lessonFullySupported,
-              sectionCount: .lessonSectionCount,
-              citedDraftSectionCount,
-              insufficientSectionCount
-            },
-            recommendation: {
-              sloMs: 20000,
-              sloBasis: "FULL_TYPED_RECOMMENDATION_SLATE_RENDER",
-              requestedCardCount: .recommendationRequestedCardCount,
-              persistedCardCount: .recommendationPersistedCardCount,
-              shortfallCount: .recommendationShortfallCount,
-              slateRendered: .recommendationSlateRendered,
-              slateMs: .recommendationSlateMs,
-              observationElapsedMs: .recommendationObservationElapsedMs,
-              sloMet: .recommendationSloMet,
-              terminalObserved: .recommendationPersistedTerminalObserved,
-              persistedTerminalMs: .recommendationPersistedTerminalMs,
-              outcome: .recommendationOutcome,
-              terminalCategory: .recommendationTerminalCategory,
-              cardCount: .recommendationCardCount,
-              modelCalls: .recommendationModelCalls,
-              catalogCalls: .recommendationCatalogCalls,
-              webResearchCalls: .recommendationWebResearchCalls,
-              publicationRecovered: .recommendationPublicationRecovered,
-              failureBoundary: .recommendationFailureBoundary
-            },
-            recommendationMs,
-            recommendationElapsedBasis,
-            recommendationOutcome,
-            recommendationTerminalCategory,
-            recommendationCardCount,
-            expectedRecommendationTitleTerm,
-            recommendationPublishedGames,
-            recommendationCompletedWork,
-            recommendationModelProvider,
-            recommendationModel,
-            recommendationModelCalls,
-            recommendationCatalogCalls,
-            recommendationWebResearchCalls,
-            recommendationPublicationRecovered,
-            recommendationFailureBoundary,
-            rawModelOutputCaptured,
-            importRequestCount,
-            importReused,
-            sourceDomain,
-            sourceMode,
-            sourceLanguage,
-            sourceLanguageVerified,
-            sourceOfficialDomainVerified,
-            confirmedMilestonesFinal,
-            lessonStatus,
-            lessonReadable,
-            lessonFullySupported,
-            lessonCompletionCategory,
-            lessonSectionCount,
-            citedLessonStep,
-            answerStatus,
-            answerCitationCount,
-            citedAnswer,
-            followUpAnswerStatus,
-            followUpCitationCount,
-            answerSessionPreserved,
-            recommendationRestored,
-            answerRestored,
-            pageErrorCount
-          }' "$artifact_dir/journey.json" > "$artifact_dir/public-summary.json"
-          chmod 600 "$artifact_dir/public-summary.json"
-
-      - name: Upload sanitized journey measurements
+      - name: Upload sanitized journey report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: production-recommendation-journey-${{ github.run_id }}
-          path: .artifacts/production-recommendation-journey/public-summary.json
+          path: .artifacts/production-recommendation-journey/journey.json
           if-no-files-found: error
           retention-days: 14

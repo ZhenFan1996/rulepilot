@@ -54,7 +54,7 @@ class RulePageImageCropperTest {
     }
 
     @Test
-    void acceptsTheMinimumModelValidatedIconRectangle() throws IOException {
+    void acceptsTheMinimumModelValidatedVisualRectangle() throws IOException {
         BufferedImage source = new BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         ImageIO.write(source, "jpeg", encoded);
@@ -70,7 +70,7 @@ class RulePageImageCropperTest {
     }
 
     @Test
-    void supportsACompactContextMarginForIconQuickReferenceCrops() throws IOException {
+    void supportsACompactContextMarginForSmallVisualCrops() throws IOException {
         BufferedImage source = new BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         ImageIO.write(source, "jpeg", encoded);
@@ -193,7 +193,7 @@ class RulePageImageCropperTest {
     }
 
     @Test
-    void servesConcurrentIconCropsWithoutMaterializingTheWholePageForEachRequest() throws Exception {
+    void servesConcurrentSmallCropsWithoutMaterializingTheWholePageForEachRequest() throws Exception {
         BufferedImage source = new BufferedImage(2_000, 3_000, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         ImageIO.write(source, "jpeg", encoded);

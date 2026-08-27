@@ -10,36 +10,18 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
-import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
-import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.VisualQuantityObservation;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
 import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
@@ -47,9 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import javax.imageio.ImageIO;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -125,74 +105,25 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private static final int OPTIONAL_METADATA_ABUSE_ITEM_LIMIT = 64;
     private static final int OPTIONAL_METADATA_ITEM_CHARACTER_LIMIT = 512;
     private static final int OPTIONAL_METADATA_TOTAL_CHARACTER_LIMIT = 8_192;
-    private static final Set<String> PROGRESSIVE_V4_ROOT_FIELDS =
-            Set.of("pageSketches", "selectedPageFacts");
-    private static final Set<String> PROGRESSIVE_V4_PAGE_FIELDS = Set.of(
-            "pageNumber",
-            "role",
-            "visibleHeading",
-            "visibleTerms",
-            "coverageTags",
-            "ruleGroupInventoryComplete",
-            "sourceDependencies",
-            "ruleGroupCoverage");
-    private static final Set<String> PROGRESSIVE_V4_SELECTED_FIELDS =
-            Set.of("pageNumber", "printedTerms", "ruleGroups", "keywords", "quantityObservations");
-    private static final Set<String> SOURCE_DEPENDENCY_FIELDS = Set.of("title", "missingCoverageTags");
-    private static final Set<String> PROGRESSIVE_COVERAGE_TAGS =
-            Set.of("setup", "core_loop", "end", "scoring", "source_coverage");
-    private static final Set<String> ITEMS_ROOT_FIELDS = Set.of("items");
-    private static final Set<String> ICON_LOCALIZATION_PRESENT_FIELDS =
-            Set.of("candidateIndex", "present", "x", "y", "width", "height", "observedLabel");
-    private static final Set<String> ICON_LOCALIZATION_ABSENT_FIELDS =
-            Set.of("candidateIndex", "present", "observedLabel");
-    private static final Set<String> ICON_CROP_VERDICT_FIELDS =
-            Set.of("candidateIndex", "matchesAppearance", "fullyContained", "standalonePictogram");
-    private static final Set<String> ICON_CROP_ACCEPTED_FIELDS = Set.of(
-            "candidateIndex",
-            "matchesAppearance",
-            "fullyContained",
-            "standalonePictogram",
-            "x",
-            "y",
-            "width",
-            "height");
-    private static final Set<String> RULE_GROUP_COVERAGE_FIELDS = Set.of("identifier", "role");
     private final RuntimeModelConfiguration models;
     private final FakeVisualRulebookPageCatalogModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
-    private final String systemPrompt;
     private final String teachingStartupPrompt;
-    private final String progressiveTeachingStartPrompt;
-    private final String iconLocalizationPrompt;
-    private final String iconCropReviewPrompt;
     private final String ocrModelName;
     private final int maxCompletionTokens;
 
     public SpringAiVisualRulebookPageCatalogModel(
             RuntimeModelConfiguration models,
             FakeVisualRulebookPageCatalogModel fake,
-            @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
             @Value("classpath:prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt")
                     Resource teachingStartupPrompt,
-            @Value("classpath:prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt")
-                    Resource progressiveTeachingStartPrompt,
-            @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
-            @Value("classpath:prompts/visual-icon-crop-review-v4-system.txt") Resource iconCropReviewPrompt,
             @Value("${rulepilot.visual.ocr-model:qwen3.5-ocr}") String ocrModelName,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
         this.models = models;
         this.fake = fake;
-        this.systemPrompt = systemPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.teachingStartupPrompt = teachingStartupPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        this.progressiveTeachingStartPrompt =
-                progressiveTeachingStartPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        this.iconLocalizationPrompt = iconLocalizationPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        this.iconCropReviewPrompt = iconCropReviewPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        if (this.systemPrompt.isBlank() || this.teachingStartupPrompt.isBlank()
-                || this.progressiveTeachingStartPrompt.isBlank()
-                || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()) {
+        if (this.teachingStartupPrompt.isBlank()) {
             throw new IllegalArgumentException("visual page catalog prompts must not be blank");
         }
         if (maxCompletionTokens < 800 || maxCompletionTokens > 8_000) {
@@ -250,11 +181,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     @Override
     public CatalogDraft summarize(CatalogRequest request) {
-        String owner = request.modelConfigurationOwner();
-        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
-            return fake.summarize(request);
-        }
-        return normalizePageBindings(request, summarizeOnce(request, owner, ""));
+        return summarizeForTeaching(request);
     }
 
     @Override
@@ -275,21 +202,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         return normalizeTeachingPageBindings(
                 request, summarizeTeachingOnce(request, owner, teachingCatalogRepairInstruction(repairCode)));
-    }
-
-    @Override
-    public boolean supportsProgressiveTeachingStart(String owner) {
-        return !models.usesFake(Role.VISUAL, owner)
-                && models.supportsVision(Role.VISUAL, owner)
-                && "qwen".equals(models.providerFor(Role.VISUAL, owner));
-    }
-
-    @Override
-    public Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
-        String owner = request.modelConfigurationOwner();
-        if (!supportsProgressiveTeachingStart(owner)) return Optional.empty();
-        return Optional.of(normalizeProgressiveTeachingStartBindings(
-                request, progressiveTeachingStartOnce(request, owner)));
     }
 
     @Override
@@ -377,397 +289,10 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .collect(Collectors.joining("\n"));
     }
 
-    private ProgressiveTeachingStartDraft progressiveTeachingStartOnce(CatalogRequest request, String owner) {
-        String provider = models.providerFor(Role.VISUAL, owner);
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(provider)) {
-            prompt = prompt.options(qwenJsonOptions(
-                    teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner)),
-                    Math.min(1_600, maxCompletionTokens)));
-        }
-        String content = prompt.system(progressiveTeachingStartPrompt)
-                .user(user -> {
-                    user.text("""
-                                    Supplied PDF page numbers: {pageNumbers}
-                                    Rulebook title: {rulebookTitle}
-                                    Attachment mapping: {attachmentOrder}
-                                    Follow the system contract exactly and return JSON only.
-                                    """)
-                            .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
-                            .param("rulebookTitle", request.rulebookTitle() == null
-                                    ? "not supplied; use only what is visible on each page"
-                                    : request.rulebookTitle())
-                            .param("attachmentOrder", java.util.stream.IntStream.range(0, request.pages().size())
-                                    .mapToObj(index -> "image " + (index + 1) + " = PDF page "
-                                            + request.pages().get(index).pageNumber())
-                                    .collect(java.util.stream.Collectors.joining("; ")));
-                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
-                            MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
-                })
-                .call()
-                .content();
-        return parseProgressiveTeachingStartV4(content);
-    }
-
-    private CatalogDraft summarizeOnce(CatalogRequest request, String owner, String correction) {
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(
-                    qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), maxCompletionTokens));
-        }
-        String content = prompt.system(systemPrompt)
-                .user(user -> {
-                    user.text("""
-                                    Attached rulebook page numbers: {pageNumbers}
-                                    Rulebook title: {rulebookTitle}
-                                    Attachment order: {attachmentOrder}
-                                    {viewportTask}
-                                    {crossPageTask}
-                                    If an image is credits, storage or assembly instructions, or an advertisement for
-                                    another named game, say explicitly in factualSummary that it is non-gameplay
-                                    material for this rulebook. Do not treat it as a turn, scoring, or end-game rule.
-                                    {correction}
-                                    Return a JSON object with a pages array. Each array item must have pageNumber,
-                                    printedTerms, factualSummary, keywords, visualAnchors, iconOccurrences, and
-                                    iconInventoryComplete.
-                                    """)
-                            .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
-                            .param("rulebookTitle", request.rulebookTitle() == null
-                                    ? "not supplied; use only what is visible on each page"
-                                    : request.rulebookTitle())
-                            .param("attachmentOrder", java.util.stream.IntStream.range(0, request.pages().size())
-                                    .mapToObj(index -> "image " + (index + 1) + " = PDF page "
-                                            + request.pages().get(index).pageNumber())
-                                    .collect(java.util.stream.Collectors.joining("; ")))
-                            .param("viewportTask", request.viewport() == null
-                                    ? "Each attachment is the complete rendered PDF page."
-                                    : "The attachment is only a bounded tile of PDF page "
-                                            + request.viewport().pageNumber()
-                                            + ". Inspect the complete attached tile, not unseen parts of the PDF page. "
-                                            + "All returned x, y, width, and height coordinates must use a top-left "
-                                            + "0-1000 grid relative to this attached tile. iconInventoryComplete means "
-                                            + "that every distinct gameplay icon in this tile was recorded.")
-                            .param("crossPageTask", request.pages().size() > 1
-                                    ? "These images are a deliberate labeled-reference and operational-rule pair. "
-                                            + "Your primary task is to compare repeated icon artwork across both "
-                                            + "images, copy the exact component label printed beside the matching "
-                                            + "icon, and reconcile every quantity and worked total before writing "
-                                            + "either page summary. Never carry a color, emoji, or guessed name into "
-                                            + "the final summaries."
-                                    : "Inspect this page without guessing the identity of an unlabeled icon.")
-                            .param("correction", correction);
-                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
-                            MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
-                })
-                .call()
-                .content();
-        return parseCatalog(content);
-    }
-
-    @Override
-    public IconLocalizationDraft localizeIcons(IconLocalizationRequest request) {
-        String owner = request.modelConfigurationOwner();
-        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
-            return VisualRulebookPageCatalogModel.super.localizeIcons(request);
-        }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(qwenJsonOptions(
-                    models.modelNameFor(Role.VISUAL, owner), Math.min(2_000, maxCompletionTokens)));
-        }
-        String candidates = iconLocalizationCandidates(request.candidates());
-        String content = prompt.system(iconLocalizationPrompt)
-                .user(user -> {
-                    user.text("""
-                                    PDF page number: {pageNumber}
-                                    Proposed symbols:
-                                    {candidates}
-                                    Return exactly one items entry for candidateIndex 0 through {lastCandidateIndex}.
-                                    """)
-                            .param("pageNumber", request.page().pageNumber())
-                            .param("candidates", candidates)
-                            .param("lastCandidateIndex", request.candidates().size() - 1);
-                    PageImageInput page = images.prepare(request.page());
-                    user.media(
-                            MimeTypeUtils.parseMimeType(page.mediaType()),
-                            new ByteArrayResource(page.content()));
-                })
-                .call()
-                .content();
-        return parseIconLocalization(content, request.candidates().size());
-    }
-
-    @Override
-    public IconCropReviewDraft reviewIconCrops(IconCropReviewRequest request) {
-        String owner = request.modelConfigurationOwner();
-        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
-            return VisualRulebookPageCatalogModel.super.reviewIconCrops(request);
-        }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(qwenJsonOptions(
-                    models.modelNameFor(Role.VISUAL, owner), Math.min(1_000, maxCompletionTokens)));
-        }
-        String attachmentOrder = java.util.stream.IntStream.range(0, request.candidates().size())
-                .mapToObj(index -> "image " + (index + 1) + " = candidateIndex "
-                        + request.locations().get(index).candidateIndex() + ", expected appearance="
-                        + cropReviewAppearance(request.candidates().get(index)))
-                .collect(Collectors.joining("\n"));
-        String content = prompt.system(iconCropReviewPrompt)
-                .user(user -> {
-                    user.text("""
-                                    PDF page number: {pageNumber}
-                                    Attachment mapping:
-                                    {attachmentOrder}
-                                    Return exactly one items entry for every listed candidateIndex.
-                                    """)
-                            .param("pageNumber", request.page().pageNumber())
-                            .param("attachmentOrder", attachmentOrder);
-                    java.util.stream.IntStream.range(0, request.locations().size())
-                            .mapToObj(index -> localizedCrop(request.page(), request.locations().get(index)))
-                            .forEach(crop -> user.media(
-                                    MimeTypeUtils.IMAGE_JPEG, new ByteArrayResource(crop)));
-                })
-                .call()
-                .content();
-        IconCropReviewDraft relativeReview = parseIconCropReview(
-                content,
-                request.locations().stream().map(IconLocation::candidateIndex).toList());
-        return projectIconCropReview(relativeReview, request.locations());
-    }
-
-    static String iconLocalizationCandidates(List<IconOccurrence> candidates) {
-        return java.util.stream.IntStream.range(0, candidates.size())
-                .mapToObj(index -> {
-                    IconOccurrence icon = candidates.get(index);
-                    return index + ": visible appearance=" + appearanceWithoutProposedIdentity(icon);
-                })
-                .collect(Collectors.joining("\n"));
-    }
-
-    static String cropReviewAppearance(IconOccurrence icon) {
-        return appearanceWithoutProposedIdentity(icon).strip();
-    }
-
-    private static String appearanceWithoutProposedIdentity(IconOccurrence icon) {
-        String appearance = icon.visualDescription();
-        if (icon.meaningStatus() == IconMeaningStatus.UNEXPLAINED) return appearance;
-        for (String proposedIdentity : List.of(icon.groupKey(), icon.name(), icon.evidenceText())) {
-            if (proposedIdentity == null || proposedIdentity.strip().length() < 3) continue;
-            appearance = Pattern.compile(Pattern.quote(proposedIdentity.strip()), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
-                    .matcher(appearance)
-                    .replaceAll("redacted-label");
-        }
-        return appearance;
-    }
-
-    static IconLocalizationDraft parseIconLocalization(String content, int expectedCandidates) {
-        if (content == null || content.isBlank()) {
-            throw new IllegalArgumentException("visual icon localization model returned no content");
-        }
-        String json = content.strip();
-        try {
-            JsonNode root = JSON.readTree(json);
-            requireExactObjectFields(root, ITEMS_ROOT_FIELDS, "visual icon localization root");
-            JsonNode items = root.get("items");
-            if (!items.isArray() || items.size() != expectedCandidates) {
-                throw new IllegalArgumentException("visual icon localization did not cover every candidate");
-            }
-            Map<Integer, IconLocation> byCandidate = new java.util.LinkedHashMap<>();
-            items.forEach(item -> {
-                boolean present = requiredBoolean(item.get("present"), "present");
-                Set<String> fields = new LinkedHashSet<>();
-                item.fieldNames().forEachRemaining(fields::add);
-                if (!fields.equals(present ? ICON_LOCALIZATION_PRESENT_FIELDS : ICON_LOCALIZATION_ABSENT_FIELDS)
-                        && !(fields.equals(ICON_LOCALIZATION_PRESENT_FIELDS) && !present)) {
-                    throw new IllegalArgumentException(
-                            "visual icon localization item fields do not match its present verdict");
-                }
-                int index = requiredInteger(item.get("candidateIndex"), "candidateIndex");
-                if (index < 0 || index >= expectedCandidates) {
-                    throw new IllegalArgumentException("visual icon localization returned an unknown candidate");
-                }
-                String observedLabel = requiredText(item.get("observedLabel"), "observedLabel", true);
-                IconLocation location = present
-                        ? new IconLocation(
-                                index,
-                                true,
-                                requiredInteger(item.get("x"), "x"),
-                                requiredInteger(item.get("y"), "y"),
-                                requiredInteger(item.get("width"), "width"),
-                                requiredInteger(item.get("height"), "height"),
-                                observedLabel)
-                        : IconLocation.absent(index);
-                if (!present) {
-                    if (!observedLabel.isEmpty()) {
-                        throw new IllegalArgumentException(
-                                "absent visual icon localization must have an empty observedLabel");
-                    }
-                    if (fields.equals(ICON_LOCALIZATION_PRESENT_FIELDS)
-                            && (requiredInteger(item.get("x"), "x") != 0
-                                    || requiredInteger(item.get("y"), "y") != 0
-                                    || requiredInteger(item.get("width"), "width") != 0
-                                    || requiredInteger(item.get("height"), "height") != 0)) {
-                        throw new IllegalArgumentException(
-                                "absent visual icon localization coordinates must be zero or omitted");
-                    }
-                }
-                if (byCandidate.putIfAbsent(index, location) != null) {
-                    throw new IllegalArgumentException("visual icon localization repeated a candidate");
-                }
-            });
-            if (!byCandidate.keySet().equals(
-                    java.util.stream.IntStream.range(0, expectedCandidates)
-                            .boxed()
-                            .collect(Collectors.toCollection(java.util.LinkedHashSet::new)))) {
-                throw new IllegalArgumentException("visual icon localization returned an unknown candidate");
-            }
-            return new IconLocalizationDraft(List.copyOf(byCandidate.values()));
-        } catch (JsonProcessingException invalidJson) {
-            throw new IllegalArgumentException("visual icon localization returned invalid JSON", invalidJson);
-        }
-    }
-
-    static IconCropReviewDraft parseIconCropReview(String content, List<Integer> expectedCandidates) {
-        if (content == null || content.isBlank() || expectedCandidates == null || expectedCandidates.isEmpty()) {
-            throw new IllegalArgumentException("visual icon crop review model returned no content");
-        }
-        try {
-            JsonNode root = JSON.readTree(content.strip());
-            requireExactObjectFields(root, ITEMS_ROOT_FIELDS, "visual icon crop review root");
-            JsonNode items = root.get("items");
-            if (!items.isArray() || items.size() != expectedCandidates.size()) {
-                throw new IllegalArgumentException("visual icon crop review did not cover every candidate");
-            }
-            Map<Integer, IconCropDecision> byCandidate = new java.util.LinkedHashMap<>();
-            items.forEach(item -> {
-                boolean matchesAppearance = requiredBoolean(item.get("matchesAppearance"), "matchesAppearance");
-                boolean fullyContained = requiredBoolean(item.get("fullyContained"), "fullyContained");
-                boolean standalonePictogram = requiredBoolean(item.get("standalonePictogram"), "standalonePictogram");
-                boolean accepted = matchesAppearance && fullyContained && standalonePictogram;
-                Set<String> fields = new LinkedHashSet<>();
-                item.fieldNames().forEachRemaining(fields::add);
-                if (!fields.equals(accepted ? ICON_CROP_ACCEPTED_FIELDS : ICON_CROP_VERDICT_FIELDS)
-                        && !(fields.equals(ICON_CROP_ACCEPTED_FIELDS) && !accepted)) {
-                    throw new IllegalArgumentException(
-                            "visual icon crop review item fields do not match its verdict");
-                }
-                int index = requiredInteger(item.get("candidateIndex"), "candidateIndex");
-                if (!expectedCandidates.contains(index) || byCandidate.containsKey(index)) {
-                    throw new IllegalArgumentException("visual icon crop review returned an unknown candidate");
-                }
-                IconCropDecision decision = accepted
-                        ? new IconCropDecision(
-                                index,
-                                true,
-                                requiredInteger(item.get("x"), "x"),
-                                requiredInteger(item.get("y"), "y"),
-                                requiredInteger(item.get("width"), "width"),
-                                requiredInteger(item.get("height"), "height"))
-                        : IconCropDecision.rejected(index);
-                if (!accepted && fields.equals(ICON_CROP_ACCEPTED_FIELDS)
-                        && (requiredInteger(item.get("x"), "x") != 0
-                                || requiredInteger(item.get("y"), "y") != 0
-                                || requiredInteger(item.get("width"), "width") != 0
-                                || requiredInteger(item.get("height"), "height") != 0)) {
-                    throw new IllegalArgumentException(
-                            "rejected visual icon crop coordinates must be zero or omitted");
-                }
-                byCandidate.put(index, decision);
-            });
-            if (!byCandidate.keySet().equals(new java.util.LinkedHashSet<>(expectedCandidates))) {
-                throw new IllegalArgumentException("visual icon crop review did not cover every candidate");
-            }
-            return new IconCropReviewDraft(List.copyOf(byCandidate.values()));
-        } catch (JsonProcessingException invalidJson) {
-            throw new IllegalArgumentException("visual icon crop review returned invalid JSON", invalidJson);
-        }
-    }
-
-    private static IconCropReviewDraft projectIconCropReview(
-            IconCropReviewDraft relativeReview, List<IconLocation> sourceLocations) {
-        Map<Integer, IconLocation> sourceByIndex = sourceLocations.stream()
-                .collect(Collectors.toMap(IconLocation::candidateIndex, java.util.function.Function.identity()));
-        return new IconCropReviewDraft(relativeReview.decisions().stream()
-                .map(decision -> {
-                    if (!decision.matchesAppearance()) return decision;
-                    CropBounds source = cropBounds(sourceByIndex.get(decision.candidateIndex()));
-                    int x = source.x() + decision.x() * source.width() / 1_000;
-                    int y = source.y() + decision.y() * source.height() / 1_000;
-                    int right = source.x()
-                            + (decision.x() + decision.width()) * source.width() / 1_000;
-                    int bottom = source.y()
-                            + (decision.y() + decision.height()) * source.height() / 1_000;
-                    try {
-                        return new IconCropDecision(
-                                decision.candidateIndex(),
-                                true,
-                                x,
-                                y,
-                                Math.max(1, right - x),
-                                Math.max(1, bottom - y));
-                    } catch (IllegalArgumentException invalidProjection) {
-                        return IconCropDecision.rejected(decision.candidateIndex());
-                    }
-                })
-                .toList());
-    }
-
-    private static byte[] localizedCrop(PageImageInput page, IconLocation location) {
-        try {
-            BufferedImage source = ImageIO.read(new ByteArrayInputStream(page.content()));
-            if (source == null) throw new IllegalArgumentException("visual icon crop source cannot be decoded");
-            CropBounds bounds = cropBounds(location);
-            int left = pixel(bounds.x(), source.getWidth());
-            int top = pixel(bounds.y(), source.getHeight());
-            int right = pixelCeiling(bounds.x() + bounds.width(), source.getWidth());
-            int bottom = pixelCeiling(bounds.y() + bounds.height(), source.getHeight());
-            BufferedImage crop = source.getSubimage(left, top, right - left, bottom - top);
-            int largestEdge = Math.max(crop.getWidth(), crop.getHeight());
-            double scale = largestEdge < 512 ? 512.0 / largestEdge : 1.0;
-            int outputWidth = Math.max(1, (int) Math.round(crop.getWidth() * scale));
-            int outputHeight = Math.max(1, (int) Math.round(crop.getHeight() * scale));
-            BufferedImage rgb = new BufferedImage(outputWidth, outputHeight, BufferedImage.TYPE_INT_RGB);
-            Graphics2D graphics = rgb.createGraphics();
-            try {
-                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-                graphics.drawImage(crop, 0, 0, outputWidth, outputHeight, null);
-            } finally {
-                graphics.dispose();
-            }
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            if (!ImageIO.write(rgb, "jpeg", output)) {
-                throw new IllegalStateException("JPEG image writer is unavailable");
-            }
-            return output.toByteArray();
-        } catch (IOException failure) {
-            throw new IllegalArgumentException("visual icon crop could not be prepared", failure);
-        }
-    }
-
-    private static CropBounds cropBounds(IconLocation location) {
-        // Keep the independently localized object central while showing enough edge context to expose clipping.
-        int padding = 16;
-        int x = Math.max(0, location.x() - padding);
-        int y = Math.max(0, location.y() - padding);
-        int right = Math.min(1_000, location.x() + location.width() + padding);
-        int bottom = Math.min(1_000, location.y() + location.height() + padding);
-        return new CropBounds(x, y, right - x, bottom - y);
-    }
-
-    private static int pixel(int normalized, int imageSize) {
-        return Math.min(imageSize - 1, normalized * imageSize / 1_000);
-    }
-
-    private static int pixelCeiling(int normalized, int imageSize) {
-        return Math.max(1, Math.min(imageSize, (normalized * imageSize + 999) / 1_000));
-    }
-
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName, int maxTokens) {
         return OpenAiChatOptions.builder()
                 .model(modelName)
-                // Spatial extraction and binary publication decisions must be replayable. Provider-default sampling
+                // Typed page-fact extraction must be replayable. Provider-default sampling
                 // made the same page alternate between valid rectangles, malformed JSON, and rejected crops.
                 .temperature(0.0)
                 .maxTokens(maxTokens)
@@ -787,12 +312,10 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         // Teaching startup is a bounded image-to-typed-facts workload, not the provider's general reasoning role.
         // A paid trace on the same immutable source page established that Qwen's dedicated VL flash model retained
         // the complete typed ledger while removing about four seconds from the semantic call. Keep the override at
-        // the request boundary so recommendation, answers, and the richer post-publication visual audit still honor
+        // the request boundary so recommendation, answers, and typed visual page facts still honor
         // their configured model, and expose the resolved name through teachingStartupExecutionIdentity for audit.
         return "qwen".equals(provider) ? QWEN_TEACHING_STARTUP_MODEL : configuredModel;
     }
-
-    private record CropBounds(int x, int y, int width, int height) {}
 
     static CatalogDraft parseCatalog(String content) {
         return parseCatalog(content, false, false);
@@ -937,29 +460,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             if (!EXTERNAL_DOCUMENT_COVERAGE_TAGS.containsAll(coverage)) {
                 throw new IllegalArgumentException(
                         "visual teaching catalog external document coverage tag is unknown");
-            }
-        }
-    }
-
-    private static void strictSourceDependencies(JsonNode value, String titleField) {
-        if (value == null || !value.isArray() || value.size() > 4) {
-            throw new IllegalArgumentException(
-                    "progressive visual teaching sourceDependencies must be an array of at most four items");
-        }
-        LinkedHashSet<String> titles = new LinkedHashSet<>();
-        for (JsonNode dependency : value) {
-            requireExactObjectFields(
-                    dependency, SOURCE_DEPENDENCY_FIELDS, "progressive visual teaching sourceDependencies item");
-            String title = requiredText(dependency.get(titleField), titleField, false).strip();
-            if (title.length() > 160 || !titles.add(title)) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching source dependency title is invalid or duplicated");
-            }
-            List<String> coverage = strictTextArray(
-                    dependency.get("missingCoverageTags"), "missingCoverageTags", 0, 4);
-            if (!EXTERNAL_DOCUMENT_COVERAGE_TAGS.containsAll(coverage)) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching source dependency coverage tag is unknown");
             }
         }
     }
@@ -1153,17 +653,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 // observations, but cannot claim a complete schema-36 ledger because the application no longer
                 // reconstructs JSON relationships from that prose.
                 ruleGroupInventoryComplete = ruleGroupInventoryComplete && requireBoundRuleGroups;
-                ParsedIconInventory parsedIcons = iconOccurrences(page.get("iconOccurrences"));
                 summaries.add(new PageSummary(
                         pageNumber,
                         printedTerms,
                         factualSummary,
                         normalizedStrings(page.get("keywords")),
                         visualAnchors(page.get("visualAnchors")),
-                        parsedIcons.occurrences(),
-                        page.path("iconInventoryComplete").isBoolean()
-                                && page.path("iconInventoryComplete").booleanValue()
-                                && parsedIcons.contractValid(),
                         dependencies,
                         ruleGroupIdentifiers,
                         ruleGroupInventoryComplete,
@@ -1245,273 +740,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return List.copyOf(identifiers);
     }
 
-    static ProgressiveTeachingStartDraft parseProgressiveTeachingStart(String content) {
-        return parseProgressiveTeachingStart(content, false, false);
-    }
-
-    static ProgressiveTeachingStartDraft parseProgressiveTeachingStartV3(String content) {
-        return parseProgressiveTeachingStart(content, true, false);
-    }
-
-    static ProgressiveTeachingStartDraft parseProgressiveTeachingStartV4(String content) {
-        return parseProgressiveTeachingStart(content, true, true);
-    }
-
-    private static ProgressiveTeachingStartDraft parseProgressiveTeachingStart(
-            String content, boolean requireQuantityObservations, boolean requireRuleGroupCoverage) {
-        if (content == null || content.isBlank()) {
-            throw new IllegalArgumentException("progressive visual teaching model returned no content");
-        }
-        String json = content.strip();
-        try {
-            JsonNode root = JSON.readTree(json);
-            if (requireRuleGroupCoverage) {
-                requireExactObjectFields(root, PROGRESSIVE_V4_ROOT_FIELDS, "progressive visual teaching root");
-            }
-            JsonNode pageSketches = root.path("pageSketches");
-            JsonNode selected = root.path("selectedPageFacts");
-            if (!pageSketches.isArray() || pageSketches.isEmpty() || !selected.isObject()) {
-                throw new IllegalArgumentException("progressive visual teaching JSON is incomplete");
-            }
-            if (requireRuleGroupCoverage) {
-                requireExactObjectFields(
-                        selected, PROGRESSIVE_V4_SELECTED_FIELDS, "progressive visual teaching selectedPageFacts");
-            }
-            List<TeachingPageSketch> sketches = new java.util.ArrayList<>();
-            for (JsonNode page : pageSketches) {
-                if (requireRuleGroupCoverage) {
-                    requireExactObjectFields(
-                            page, PROGRESSIVE_V4_PAGE_FIELDS, "progressive visual teaching pageSketches item");
-                }
-                JsonNode sourceDependencyInventory = page.get("sourceDependencies");
-                if (sourceDependencyInventory == null || !sourceDependencyInventory.isArray()) {
-                    throw new IllegalArgumentException(
-                            "progressive visual teaching must return sourceDependencies for every page");
-                }
-                TeachingPageRole role;
-                try {
-                    role = TeachingPageRole.valueOf(requiredText(page.get("role"), "role", false));
-                } catch (IllegalArgumentException invalidRole) {
-                    throw new IllegalArgumentException("progressive visual teaching returned an unknown page role");
-                }
-                if (requireRuleGroupCoverage) {
-                    int pageNumber = requiredInteger(page.get("pageNumber"), "pageNumber");
-                    if (pageNumber < 1) {
-                        throw new IllegalArgumentException("progressive visual teaching pageNumber must be positive");
-                    }
-                    requiredText(page.get("visibleHeading"), "visibleHeading", true);
-                    strictSourceDependencies(sourceDependencyInventory, "title");
-                }
-                JsonNode inventoryCompleteNode = page.get("ruleGroupInventoryComplete");
-                if (requireRuleGroupCoverage && (inventoryCompleteNode == null || !inventoryCompleteNode.isBoolean())) {
-                    throw new IllegalArgumentException(
-                            "progressive visual teaching ruleGroupInventoryComplete must be boolean");
-                }
-                boolean ruleGroupInventoryComplete = inventoryCompleteNode != null
-                        && inventoryCompleteNode.isBoolean()
-                        && inventoryCompleteNode.booleanValue();
-                List<String> visibleTerms = requireRuleGroupCoverage
-                        ? strictTextArray(page.get("visibleTerms"), "visibleTerms", 0, 8)
-                        : ruleGroupInventoryComplete
-                                ? strictIdentifiers(page.get("visibleTerms"), "progressive visual teaching")
-                                : normalizedStrings(page.get("visibleTerms"));
-                List<String> coverageTags = requireRuleGroupCoverage
-                        ? strictTextArray(page.get("coverageTags"), "coverageTags", 0, 5)
-                        : normalizedStrings(page.get("coverageTags"));
-                if (requireRuleGroupCoverage && !PROGRESSIVE_COVERAGE_TAGS.containsAll(coverageTags)) {
-                    throw new IllegalArgumentException("progressive visual teaching coverageTags contain an unknown value");
-                }
-                List<RuleGroupCoverage> ruleGroupCoverage = ruleGroupCoverage(
-                        page.get("ruleGroupCoverage"), requireRuleGroupCoverage);
-                if (requireRuleGroupCoverage) {
-                    List<String> classifiedTerms = ruleGroupCoverage.stream()
-                            .map(RuleGroupCoverage::identifier)
-                            .toList();
-                    if (role == TeachingPageRole.GAMEPLAY_RULES) {
-                        if (!classifiedTerms.equals(visibleTerms)) {
-                            throw new IllegalArgumentException(
-                                    "progressive visual teaching must classify every visibleTerms identifier in order");
-                        }
-                    } else if (!visibleTerms.isEmpty() || !coverageTags.isEmpty() || !ruleGroupCoverage.isEmpty()
-                            || ruleGroupInventoryComplete) {
-                        throw new IllegalArgumentException(
-                                "progressive visual teaching non-gameplay page must not claim rule coverage");
-                    }
-                }
-                sketches.add(new TeachingPageSketch(
-                        requireRuleGroupCoverage
-                                ? requiredInteger(page.get("pageNumber"), "pageNumber")
-                                : page.path("pageNumber").asInt(),
-                        role,
-                        requireRuleGroupCoverage
-                                ? requiredText(page.get("visibleHeading"), "visibleHeading", true)
-                                : joinedText(page.get("visibleHeading"), " "),
-                        visibleTerms,
-                        coverageTags,
-                        ruleGroupInventoryComplete,
-                        sourceDependencies(sourceDependencyInventory),
-                        ruleGroupCoverage));
-            }
-            int selectedPageNumber = requireRuleGroupCoverage
-                    ? requiredInteger(selected.get("pageNumber"), "pageNumber")
-                    : selected.path("pageNumber").asInt();
-            TeachingPageSketch selectedSketch = sketches.stream()
-                    .filter(page -> page.pageNumber() == selectedPageNumber)
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "progressive visual teaching selected an unknown source page"));
-            if (requireRuleGroupCoverage && selectedSketch.role() != TeachingPageRole.GAMEPLAY_RULES) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching must select a GAMEPLAY_RULES page");
-            }
-            List<SourceDependency> selectedDependencies = selectedSketch.sourceDependencies();
-            String printedTerms = requireRuleGroupCoverage
-                    ? String.join("; ", strictTextArray(selected.get("printedTerms"), "printedTerms", 0, 8))
-                    : joinedText(selected.get("printedTerms"), "; ");
-            List<RuleGroupFact> selectedRuleGroups = requireRuleGroupCoverage
-                    ? strictProgressiveRuleGroups(selected.get("ruleGroups"))
-                    : List.of();
-            if (requireRuleGroupCoverage && selectedRuleGroups.isEmpty()) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching selected page must contain a readable rule group");
-            }
-            List<String> selectedRuleGroupIdentifiers = requireRuleGroupCoverage
-                    ? selectedRuleGroups.stream().map(RuleGroupFact::identifier).toList()
-                    : selectedSketch.visibleTerms();
-            if (requireRuleGroupCoverage && !selectedRuleGroupIdentifiers.equals(selectedSketch.visibleTerms())) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching selected ruleGroups must match visibleTerms exactly");
-            }
-            String factualSummary = requireRuleGroupCoverage
-                    ? selectedRuleGroups.stream()
-                            .map(group -> group.identifier() + ": " + group.fact())
-                            .collect(java.util.stream.Collectors.joining("\n"))
-                    : joinedText(selected.get("factualSummary"), "\n");
-            if (!selectedDependencies.isEmpty()) {
-                String dependencyTitles = selectedDependencies.stream()
-                        .map(SourceDependency::title)
-                        .collect(java.util.stream.Collectors.joining("; "));
-                String dependencyFacts = selectedDependencies.stream()
-                        .map(SpringAiVisualRulebookPageCatalogModel::sourceDependencyFact)
-                        .collect(java.util.stream.Collectors.joining("\n"));
-                printedTerms = printedTerms.isBlank() ? dependencyTitles : printedTerms + "; " + dependencyTitles;
-                factualSummary = factualSummary.isBlank() ? dependencyFacts : factualSummary + "\n" + dependencyFacts;
-            }
-            factualSummary = factualSummary == null ? "" : factualSummary.strip();
-            boolean selectedInventoryComplete = selectedSketch.ruleGroupInventoryComplete() && requireRuleGroupCoverage;
-            if (selectedInventoryComplete) {
-                validateRuleGroupFactBindings(
-                        selectedRuleGroupIdentifiers, selectedRuleGroups, "progressive visual teaching");
-                if (!selectedRuleGroupIdentifiers.equals(selectedSketch.visibleTerms())) {
-                    throw new IllegalArgumentException(
-                            "progressive visual teaching selected ruleGroups must match visibleTerms exactly");
-                }
-            }
-            List<VisualQuantityObservation> quantityObservations = quantityObservations(
-                    selected.get("quantityObservations"), requireQuantityObservations);
-            List<String> selectedKeywords = requireRuleGroupCoverage
-                    ? strictTextArray(selected.get("keywords"), "keywords", 2, 6)
-                    : normalizedStrings(selected.get("keywords"));
-            if (requireRuleGroupCoverage && quantityObservations.size() > 8) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching quantityObservations must have at most eight items");
-            }
-            if (requireRuleGroupCoverage && quantityObservations.stream().anyMatch(observation ->
-                    observation.pageNumber() != selectedPageNumber
-                            || !selectedRuleGroupIdentifiers.contains(observation.ruleGroupIdentifier()))) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching quantity observation is not bound to the selected rule group");
-            }
-            return new ProgressiveTeachingStartDraft(
-                    sketches,
-                    new PageSummary(
-                            selectedPageNumber,
-                            printedTerms,
-                            factualSummary,
-                            selectedKeywords,
-                            List.of(),
-                            List.of(),
-                            false,
-                            selectedDependencies,
-                            selectedRuleGroupIdentifiers,
-                            selectedInventoryComplete,
-                            quantityObservations,
-                            selectedRuleGroups));
-        } catch (JsonProcessingException invalidJson) {
-            throw new IllegalArgumentException("progressive visual teaching returned invalid JSON", invalidJson);
-        }
-    }
-
-    private static List<RuleGroupCoverage> ruleGroupCoverage(JsonNode value, boolean required) {
-        if (value == null || value.isMissingNode()) {
-            if (required) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching must return ruleGroupCoverage for every page");
-            }
-            return List.of();
-        }
-        if (!value.isArray()) {
-            throw new IllegalArgumentException("progressive visual teaching ruleGroupCoverage is invalid");
-        }
-        List<RuleGroupCoverage> coverage = new java.util.ArrayList<>();
-        LinkedHashSet<String> classifiedIdentifiers = new LinkedHashSet<>();
-        for (JsonNode item : value) {
-            if (!item.isObject()) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching ruleGroupCoverage item must be an object");
-            }
-            Set<String> fields = new java.util.LinkedHashSet<>();
-            item.fieldNames().forEachRemaining(fields::add);
-            if (!fields.equals(RULE_GROUP_COVERAGE_FIELDS)) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching ruleGroupCoverage item must contain the exact fields");
-            }
-            try {
-                String identifier = requiredText(item.get("identifier"), "identifier", false);
-                if (!classifiedIdentifiers.add(identifier)) {
-                    throw new IllegalArgumentException("identifier is duplicated");
-                }
-                coverage.add(new RuleGroupCoverage(
-                        identifier,
-                        SourceCoverageRole.valueOf(requiredText(item.get("role"), "role", false))));
-            } catch (IllegalArgumentException invalidCoverage) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching ruleGroupCoverage item is invalid: "
-                                + invalidCoverage.getMessage(),
-                        invalidCoverage);
-            }
-        }
-        return List.copyOf(coverage);
-    }
-
-    private static List<RuleGroupFact> strictProgressiveRuleGroups(JsonNode value) {
-        if (value == null || !value.isArray()) {
-            throw new IllegalArgumentException("progressive visual teaching must return selected ruleGroups");
-        }
-        List<RuleGroupFact> facts = new java.util.ArrayList<>();
-        Set<String> identifiers = new java.util.LinkedHashSet<>();
-        for (JsonNode item : value) {
-            if (!item.isObject()) {
-                throw new IllegalArgumentException("progressive visual teaching ruleGroups item must be an object");
-            }
-            Set<String> fields = new java.util.LinkedHashSet<>();
-            item.fieldNames().forEachRemaining(fields::add);
-            if (!fields.equals(RULE_GROUP_FIELDS)) {
-                throw new IllegalArgumentException(
-                        "progressive visual teaching ruleGroups item must contain exactly identifier and fact");
-            }
-            String identifier = requiredText(item.get("identifier"), "identifier", false);
-            if (!identifiers.add(identifier)) {
-                throw new IllegalArgumentException("progressive visual teaching duplicated a ruleGroups identifier");
-            }
-            facts.add(new RuleGroupFact(
-                    identifier,
-                    identifier,
-                    requiredText(item.get("fact"), "fact", false)));
-        }
-        return List.copyOf(facts);
-    }
-
     private static void validateRuleGroupFactBindings(
             List<String> identifiers, List<RuleGroupFact> facts, String contract) {
         if (VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, facts)) return;
@@ -1521,15 +749,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         contract + " rule group has no same-page fact: " + identifier);
             }
         }
-    }
-
-    private static JsonNode firstPresent(JsonNode object, String preferred, String legacy) {
-        JsonNode preferredValue = object.get(preferred);
-        return preferredValue == null ? object.get(legacy) : preferredValue;
-    }
-
-    private static List<SourceDependency> sourceDependencies(JsonNode value) {
-        return sourceDependencies(value, "title");
     }
 
     private static List<SourceDependency> sourceDependencies(JsonNode value, String titleField) {
@@ -1804,13 +1023,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return value.intValue();
     }
 
-    private static boolean requiredBoolean(JsonNode value, String field) {
-        if (value == null || !value.isBoolean()) {
-            throw new IllegalArgumentException(field + " must be boolean");
-        }
-        return value.booleanValue();
-    }
-
     private static Integer nullableInteger(JsonNode value, String field) {
         if (value == null || value.isNull()) return null;
         return requiredInteger(value, field);
@@ -1836,30 +1048,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         })
                         .collect(java.util.stream.Collectors.joining("、"));
         return "来源可用性：当前页明确指向“" + dependency.title() + "”；当前页本身不提供" + missing + "。";
-    }
-
-    static ProgressiveTeachingStartDraft normalizeProgressiveTeachingStartBindings(
-            CatalogRequest request,
-            ProgressiveTeachingStartDraft draft) {
-        if (draft == null) throw new IllegalArgumentException("progressive visual teaching model returned no draft");
-        List<Integer> requestedOrder = request.pages().stream().map(PageImageInput::pageNumber).toList();
-        List<Integer> returnedOrder = draft.pages().stream().map(TeachingPageSketch::pageNumber).toList();
-        if (returnedOrder.size() != requestedOrder.size()
-                || Set.copyOf(returnedOrder).size() != returnedOrder.size()
-                || !Set.copyOf(returnedOrder).equals(Set.copyOf(requestedOrder))) {
-            throw new IllegalArgumentException("progressive visual teaching did not bind every supplied page exactly");
-        }
-        if (!Set.copyOf(requestedOrder).contains(draft.selectedPageFacts().pageNumber())) {
-            throw new IllegalArgumentException("progressive visual teaching selected an unknown supplied page");
-        }
-        List<TeachingPageSketch> ordered = requestedOrder.stream()
-                .map(pageNumber -> draft.pages().stream()
-                        .filter(page -> page.pageNumber() == pageNumber)
-                        .findFirst()
-                        .orElseThrow())
-                .toList();
-        return new ProgressiveTeachingStartDraft(
-                ordered, withoutVisualEnrichment(draft.selectedPageFacts()));
     }
 
     private static String joinedText(JsonNode value, String separator) {
@@ -1917,41 +1105,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         });
         return anchors;
     }
-
-    /** One malformed optional icon keeps valid page facts, but permanently prevents a false completeness claim. */
-    private static ParsedIconInventory iconOccurrences(JsonNode value) {
-        if (value == null || value.isNull() || !value.isArray()) {
-            return new ParsedIconInventory(java.util.List.of(), false);
-        }
-        java.util.List<IconOccurrence> icons = new java.util.ArrayList<>();
-        boolean contractValid = true;
-        for (JsonNode icon : value) {
-            if (!icon.isObject() || icon.size() != 10) {
-                contractValid = false;
-                continue;
-            }
-            try {
-                IconMeaningStatus status = IconMeaningStatus.valueOf(
-                        requiredText(icon.get("meaningStatus"), "meaningStatus", false));
-                icons.add(new IconOccurrence(
-                        requiredText(icon.get("groupKey"), "groupKey", false),
-                        requiredText(icon.get("name"), "name", false),
-                        requiredText(icon.get("visualDescription"), "visualDescription", false),
-                        requiredText(icon.get("explanation"), "explanation", true),
-                        requiredText(icon.get("evidenceText"), "evidenceText", true),
-                        status,
-                        requiredInteger(icon.get("x"), "x"),
-                        requiredInteger(icon.get("y"), "y"),
-                        requiredInteger(icon.get("width"), "width"),
-                        requiredInteger(icon.get("height"), "height")));
-            } catch (IllegalArgumentException invalidIcon) {
-                contractValid = false;
-            }
-        }
-        return new ParsedIconInventory(java.util.List.copyOf(icons), contractValid);
-    }
-
-    private record ParsedIconInventory(List<IconOccurrence> occurrences, boolean contractValid) {}
 
     static CatalogDraft normalizePageBindings(CatalogRequest request, CatalogDraft draft) {
         if (draft == null) throw new IllegalArgumentException("visual page catalog model returned no draft");
@@ -2023,8 +1176,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 summary.factualSummary(),
                 summary.keywords(),
                 List.of(),
-                List.of(),
-                false,
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
                 summary.ruleGroupInventoryComplete(),
@@ -2039,8 +1190,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 summary.factualSummary(),
                 summary.keywords(),
                 summary.visualAnchors(),
-                summary.iconOccurrences(),
-                summary.iconInventoryComplete(),
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
                 summary.ruleGroupInventoryComplete(),

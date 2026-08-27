@@ -18,7 +18,6 @@ import com.rulepilot.teaching.application.PublicCoverThumbnailService;
 import com.rulepilot.teaching.application.PublicLessonCatalog;
 import com.rulepilot.teaching.application.PublicLessonQuestionService;
 import com.rulepilot.teaching.application.PublicLessonReader;
-import com.rulepilot.teaching.application.RulebookIconGlossaryService;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Instant;
 import java.util.List;
@@ -42,13 +41,12 @@ class PublicLessonControllerTest {
     private final PublicCoverThumbnailService coverThumbnails = mock(PublicCoverThumbnailService.class);
     private final DocumentPageImages pageImages = mock(DocumentPageImages.class);
     private final DocumentPageImageCropper crops = mock(DocumentPageImageCropper.class);
-    private final RulebookIconGlossaryService iconGlossary = mock(RulebookIconGlossaryService.class);
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new PublicLessonController(
-                lessons, catalog, questions, localizations, coverThumbnails, pageImages, crops, iconGlossary)).build();
+                lessons, catalog, questions, localizations, coverThumbnails, pageImages, crops)).build();
     }
 
     @Test

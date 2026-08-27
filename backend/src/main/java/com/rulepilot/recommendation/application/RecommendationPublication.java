@@ -62,8 +62,6 @@ final class RecommendationPublication {
             String locale) {
         Permit permit = permit(state, seed);
         boolean chinese = runtime.chinese(locale);
-        Map<Integer, com.rulepilot.catalog.PublicTeachingContinuationCatalog.Continuation> readyContinuations =
-                new LinkedHashMap<>(state.teachingContinuations);
         Set<String> publishedEvidenceIds = new LinkedHashSet<>();
         if (narrative != null) publishedEvidenceIds.addAll(narrative.lead().evidenceIds());
         List<RecommendedGame> games = selector.present(
@@ -89,13 +87,9 @@ final class RecommendationPublication {
                             game.tradeoffs(),
                             game.reasons(),
                             game.claims(),
-                            replyParts,
-                            RecommendationContinuationProjection.card(
-                                    readyContinuations.get(game.game().ranking().bggId())));
+                            replyParts);
                 })
                 .toList();
-
-        var continuation = RecommendationContinuationProjection.response(state, games);
 
         String lead = narrative == null || narrative.lead().text().isBlank()
                 ? unavailableNarrativeLead(chinese)
@@ -134,8 +128,7 @@ final class RecommendationPublication {
                 games,
                 state.comparison,
                 permit.shortfall(),
-                lead,
-                continuation);
+                lead);
 
         state.finalResponseGameIds.addAll(permit.selectedGames().stream()
                 .map(game -> game.ranking().bggId())

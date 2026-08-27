@@ -212,7 +212,7 @@ class RecommendationConversationCoordinatorTest {
                 .thenReturn(response("先前回答。"), response("当前回答。"));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
         String priorMessage = "先看旧港。";
-        String currentMessage = "我改选新港，请从它开始讲解。";
+        String currentMessage = "我改选新港，请把它作为当前选择。";
 
         var first = coordinator.converse(
                 new SessionTurn(null, 0, UUID.randomUUID(), request(priorMessage)),

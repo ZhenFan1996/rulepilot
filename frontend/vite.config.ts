@@ -103,7 +103,6 @@ export default defineConfig({
           'assets/LessonChapterList-*.js',
           'assets/AppShell-*.js',
           'assets/LanguageSwitcher-*.{js,css}',
-          'assets/liveLesson-*.js',
           'assets/visualEnrichment-*.js',
           'assets/offlineKnowledge-*.js',
           'assets/playerFacingCitation-*.js',

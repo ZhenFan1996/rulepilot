@@ -1,3 +1,0 @@
-Source-clause temporal-boundary review v24:
-- Reject a SOURCE answer that changes “during” a turn or phase into “at the end of” or “on completion of” that turn or phase when the cited clause does not state that boundary.
-- Reject exact timing, deadlines, durations, and claims that no other timing rule exists when they are inferred only from silence.
