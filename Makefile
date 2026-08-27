@@ -13,7 +13,7 @@ AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
 AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
 AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-teaching-page-canary agent-visual-real agent-context-real agent-recommendation-real agent-recommendation-canary agent-rulebook-acquisition-real agent-security-real agent-release-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke format backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-teaching-real agent-teaching-page-canary agent-visual-real agent-recommendation-canary agent-rulebook-acquisition-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke format backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -59,12 +59,6 @@ agent-baseline: ## Validate and summarize the ignored five-family real-rulebook 
 agent-tool-probe: ## Probe enabled paid models with bounded synthetic required-tool/no-tool requests
 	@sh scripts/run-paid-model-tool-probe.sh --output "$(AGENT_TOOL_PROBE_OUTPUT)"
 
-agent-tool-loop-real: ## Run the bounded Spring AI tool loop against two ignored real rulebooks and paid models
-	@sh scripts/run-real-agent-tool-loop.sh
-
-agent-answer-real: ## Evaluate observation-driven answer evidence refinement on ignored real rulebooks
-	@sh scripts/run-real-answer-agent.sh
-
 agent-teaching-real: ## Run the explicitly authorized complete real-rulebook teaching richness canary
 	@sh scripts/run-real-teaching-agent.sh
 
@@ -74,23 +68,11 @@ agent-teaching-page-canary: ## Run one explicitly authorized paid Gstone image-p
 agent-visual-real: ## Evaluate opaque visual-candidate selection on ignored local rulebook crops
 	@sh scripts/run-real-visual-agent.sh
 
-agent-context-real: ## Evaluate multi-turn context, recovery, and fallback on ignored real rulebooks
-	@sh scripts/run-real-context-agent.sh
-
-agent-recommendation-real: ## Evaluate natural multi-turn recommendation ReAct behavior across paid providers
-	@sh scripts/run-real-recommendation-agent.sh
-
-agent-recommendation-canary: ## Run one explicitly authorized paid recommendation/card/streaming canary
-	@RULEPILOT_RECOMMENDATION_CANARY_SCENARIO=critical-path sh scripts/run-recommendation-paid-canary.sh
+agent-recommendation-canary: ## Run one explicitly authorized paid recommendation direct-path canary
+	@sh scripts/run-recommendation-paid-canary.sh
 
 agent-rulebook-acquisition-real: ## Discover and download one ignored real publisher rulebook through application gates
 	@sh scripts/run-real-rulebook-acquisition.sh
-
-agent-security-real: ## Validate adversarial tools and all five ignored real-rulebook families
-	@sh scripts/run-real-agent-security.sh
-
-agent-release-real: ## Regenerate and verify the complete Agent across providers, corpus, player needs, and viewports
-	@sh scripts/run-complete-agent-release.sh
 
 mcp-grafana-setup: ## Install pinned Grafana MCP and create or reuse its local Viewer credential
 	@sh scripts/setup-grafana-mcp.sh
@@ -167,9 +149,6 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@node --test scripts/preflight-public-rulebook.test.mjs
 	@node --test scripts/generate-public-corpus-entry.test.mjs
 	@node --test scripts/evaluate-agent-baseline.test.mjs
-	@node --test scripts/evaluate-agent-security.test.mjs
-	@node --test scripts/verify-complete-agent-release.test.mjs
-	@node --test scripts/verify-conversational-agent-release.test.mjs
 	@node --test scripts/probe-model-tool-capabilities.test.mjs
 	@node --test scripts/verify-paid-canary-entrypoints.test.mjs
 	@node --test scripts/smoke-production-ordinary-user.test.mjs

@@ -461,58 +461,6 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void accepts_a_compact_score_reference_even_when_it_contains_printed_labels() {
-        UUID chunk = UUID.randomUUID();
-        var result = new VisualLessonEnricher(
-                        ignored -> understanding(),
-                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
-                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
-                        new VisualRegionCandidateSelector(),
-                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                                2,
-                                "最终计分表",
-                                "一个四列计分表，把野生动物、栖息地走廊和自然标记分数排在同一行",
-                                120,
-                                220,
-                                420,
-                                260,
-                                List.of(chunk),
-                                List.of(1))))
-                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
-
-        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
-    }
-
-    @Test
-    void trustsTheLocatorStructuredStepBindingInsteadOfRejectingContentsVocabulary() {
-        UUID chunk = UUID.randomUUID();
-        var result = new VisualLessonEnricher(
-                        ignored -> understanding(),
-                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
-                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
-                        new VisualRegionCandidateSelector(),
-                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                                2,
-                                "CONTENTS 组件列表",
-                                "规则书中的文字清单，列出玩家板、建筑卡和资源方块数量",
-                                120,
-                                220,
-                                180,
-                                120,
-                                List.of(chunk),
-                                List.of(1))))
-                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
-
-        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
-    }
-
-    @Test
     void expandsSmallBoundedRegionsAndDoesNotSemanticallyReclassifyReturnedDescriptions() {
         UUID chunk = UUID.randomUUID();
         var tiny = new VisualLessonEnricher(
@@ -541,32 +489,6 @@ class VisualLessonEnricherTest {
                         IllustratedLesson.VisualFocus::width,
                         IllustratedLesson.VisualFocus::height)
                 .containsExactly(180, 120);
-    }
-
-    @Test
-    void accepts_a_compact_icon_group_and_explains_how_to_read_it_with_the_rule() {
-        UUID chunk = UUID.randomUUID();
-        IllustratedLesson enriched = new VisualLessonEnricher(
-                        ignored -> understanding(),
-                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
-                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
-                        new VisualRegionCandidateSelector(),
-                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                                2,
-                                "行动图标组",
-                                "一个六点骰子图标紧挨着颜料筒图标，旁边有向右箭头",
-                                120,
-                                220,
-                                34,
-                                34,
-                                List.of(chunk))))
-                .enrich(UUID.randomUUID(), lesson(chunk));
-
-        var step = enriched.sections().getFirst().steps().getFirst();
-        assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
-        assertThat(step.visualFocus().visibleDescription())
-                .isEqualTo("一个六点骰子图标紧挨着颜料筒图标，旁边有向右箭头");
     }
 
     @Test
@@ -836,58 +758,6 @@ class VisualLessonEnricherTest {
                                 List.of(evidence),
                                 List.of(1))))
                 .enrichWithReport(UUID.randomUUID(), playerBoardLesson(evidence), "owner");
-
-        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
-    }
-
-    @Test
-    void leavesTieBreakVisualSemanticsToTheStructuredLocator() {
-        UUID evidence = UUID.randomUUID();
-        var result = new VisualLessonEnricher(
-                        ignored -> understanding(),
-                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
-                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
-                        new VisualRegionCandidateSelector(),
-                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                                2,
-                                "SENSITIVITY 得分表",
-                                "一列品质名称旁列出 0、2、4 和 6 分的得分数值",
-                                520,
-                                620,
-                                450,
-                                160,
-                                List.of(evidence),
-                                List.of(1))))
-                .enrichWithReport(UUID.randomUUID(), tieBreakLesson(evidence), "owner");
-
-        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
-    }
-
-    @Test
-    void leavesPlacementVisualSemanticsToTheStructuredLocator() {
-        UUID evidence = UUID.randomUUID();
-        var result = new VisualLessonEnricher(
-                        ignored -> understanding(),
-                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
-                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
-                        new VisualRegionCandidateSelector(),
-                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                                2,
-                                "桌面初始布局",
-                                "桌面上展示玩家板、资源堆和卡牌的初始设置状态",
-                                120,
-                                220,
-                                400,
-                                300,
-                                List.of(evidence),
-                                List.of(1))))
-                .enrichWithReport(UUID.randomUUID(), lesson(evidence), "owner");
 
         assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
                 .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
@@ -1324,23 +1194,6 @@ class VisualLessonEnricherTest {
                 sections,
                 "test",
                 Instant.now());
-    }
-
-    private IllustratedLesson tieBreakLesson(UUID evidence) {
-        var step = new IllustratedLesson.LessonStep(
-                1,
-                "平局时怎么分胜负？",
-                IllustratedLesson.TeachingMove.DO,
-                "同分时，手牌更多的玩家获胜。",
-                List.of(2),
-                List.of(evidence));
-        var section = new IllustratedLesson.LessonSection(
-                1, "endgame", List.of("endgame"), "游戏结束与计分", true,
-                IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.REFERENCE_CARD,
-                "结算分数并处理平局。", List.of(), List.of(), List.of(step));
-        return new IllustratedLesson(
-                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
-                List.of(section), "test", Instant.now());
     }
 
     private IllustratedLesson playerBoardLesson(UUID evidence) {

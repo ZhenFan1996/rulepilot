@@ -105,12 +105,9 @@ flowchart LR
 | `make product-eval` | 运行普通玩家产品评测 |
 | `make agent-baseline` | 校验五类私有真实规则书 Agent 基线 |
 | `make agent-tool-probe` | 对已启用的付费模型运行最小工具能力探针 |
-| `make agent-answer-real` | 用两本私有真实规则书验证答疑 Agent 的观察驱动证据补全 |
 | `make agent-teaching-real` | 用三本私有真实规则书验证教学 Agent 的覆盖缺口证据补全 |
 | `make agent-visual-real` | 用三类私有真实规则书验证视觉 Agent 的原页读取、精确裁剪、弃答和文本模型降级 |
-| `make agent-context-real` | 用两本私有真实规则书验证多轮指代、重新查证、恢复与降级边界 |
-| `make agent-security-real` | 验证对抗工具夹具与五类私有真实规则书的安全、延迟和调用预算 |
-| `make agent-release-real` | 重新生成并验证完整 Agent 的 12 项证据、双 provider、五类语料、五类玩家需求与桌面/移动端 |
+| `make agent-recommendation-canary` | 运行一条显式授权的直接推荐真实模型 canary |
 | `make verify` | 运行提交前完整质量门禁 |
 
 生产式 API/Worker 拆分、部署与性能/安全检查可通过 `make help` 查看对应命令。

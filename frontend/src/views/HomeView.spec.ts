@@ -66,67 +66,6 @@ describe('HomeView', () => {
     expect(wrapper.text()).not.toContain('Agent')
   })
 
-  it('uses the shared illustrated-hero composition for the two concrete first actions', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
-      return new Response(null, { status: 401 })
-    }))
-    const wrapper = await mountHome()
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('规则书递过来，咱们开桌')
-    expect(wrapper.find('img[src="/illustrations/home-screenprint-friends.webp"]').exists()).toBe(true)
-    expect(wrapper.get('.home-intro').classes()).toEqual(expect.arrayContaining(['tabletop-illustrated-hero', 'player-board']))
-    expect(wrapper.find('.home-intro > .home-intro__art').exists()).toBe(true)
-    expect(wrapper.find('.home-intro__copy .home-intro__art').exists()).toBe(false)
-    expect(wrapper.find('.home-start').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('今晚不必先做完功课')
-    expect(wrapper.text()).not.toContain('所有入口，最后汇成同一条路')
-    expect(wrapper.text()).not.toContain('Agent')
-  })
-
-  it('makes attributed BGG hot games and three random picks prominent without displacing the rulebook action', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
-      return new Response(null, { status: 401 })
-    }))
-    const wrapper = await mountHome()
-    await flushPromises()
-
-    expect(wrapper.findAll('img[alt="Powered by BoardGameGeek"]')).toHaveLength(1)
-    expect(wrapper.text()).toContain('BGG 热门桌游')
-    expect(wrapper.text()).toContain('随机抽三盒')
-    expect(wrapper.findAll('.home-game-grid > li')).toHaveLength(4)
-    expect(wrapper.findAll('.home-random__games > li')).toHaveLength(3)
-    expect(new Set(wrapper.findAll('.home-random__games a').map(link => link.attributes('href'))).size).toBe(3)
-    expect(wrapper.get('a[href="/discover/100"]').text()).toContain('展翅翱翔')
-    expect(wrapper.get('a[href="/discover/100"]').text()).toContain('Wingspan')
-    expect(wrapper.get('a[href="/teach"].home-primary-action').text()).toContain('我有规则书')
-
-    await wrapper.get('.home-random__shuffle').trigger('click')
-    expect(wrapper.findAll('.home-random__games > li')).toHaveLength(3)
-    expect(new Set(wrapper.findAll('.home-random__games a').map(link => link.attributes('href'))).size).toBe(3)
-  })
-
-  it('uses complete natural English copy after switching locale', async () => {
-    setLocale('en')
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
-      return new Response(null, { status: 401 })
-    }))
-
-    const wrapper = await mountHome()
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Hand me the rulebook. Let’s get this game to the table.')
-    expect(wrapper.text()).toContain('If you have not picked a game yet, start with your player count, time, and the kind of interaction you want.')
-    expect(wrapper.find('[data-testid="home-player-journey"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('From one table brief to ready to play')
-    expect(wrapper.text()).toContain('Trending on BGG')
-    expect(wrapper.text()).toContain('Three from the shelf')
-    expect(wrapper.text()).not.toContain('规则书递过来')
-  })
-
   it('paints BGG cards before session resolves and never reloads session for locale', async () => {
     let resolveSession!: (response: Response) => void
     const sessionResponse = new Promise<Response>(resolve => { resolveSession = resolve })

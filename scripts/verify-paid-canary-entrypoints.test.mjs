@@ -14,7 +14,6 @@ const paidOrRealEntrypoints = readdirSync(path.join(root, 'scripts'))
     /^run-real-.*\.sh$/.test(name)
     || /^run-.*-canary\.sh$/.test(name)
     || [
-      'run-complete-agent-release.sh',
       'run-paid-model-tool-probe.sh',
       'run-public-corpus-generation.sh',
     ].includes(name)
@@ -32,7 +31,6 @@ const teachingPage = scriptContents['scripts/run-gstone-visual-page-canary.sh']
 const historicalTeaching = scriptContents['scripts/run-real-teaching-agent.sh']
 const formerTeachingCriticalPath = scriptContents['scripts/run-teaching-critical-path-canary.sh']
 const visualCatalog = scriptContents['scripts/run-visual-teaching-catalog-canary.sh']
-const completeRelease = scriptContents['scripts/run-complete-agent-release.sh']
 
 function withoutPaidAuthorization() {
   const environment = { ...process.env }
@@ -50,17 +48,11 @@ test('Make routes paid and real public commands through guarded shell entrypoint
   const guardedTargets = {
     'corpus-generate': 'run-public-corpus-generation.sh',
     'agent-tool-probe': 'run-paid-model-tool-probe.sh',
-    'agent-tool-loop-real': 'run-real-agent-tool-loop.sh',
-    'agent-answer-real': 'run-real-answer-agent.sh',
     'agent-teaching-real': 'run-real-teaching-agent.sh',
     'agent-teaching-page-canary': 'run-gstone-visual-page-canary.sh',
     'agent-visual-real': 'run-real-visual-agent.sh',
-    'agent-context-real': 'run-real-context-agent.sh',
-    'agent-recommendation-real': 'run-real-recommendation-agent.sh',
     'agent-recommendation-canary': 'run-recommendation-paid-canary.sh',
     'agent-rulebook-acquisition-real': 'run-real-rulebook-acquisition.sh',
-    'agent-security-real': 'run-real-agent-security.sh',
-    'agent-release-real': 'run-complete-agent-release.sh',
   }
   for (const [target, script] of Object.entries(guardedTargets)) {
     assert.match(makeRecipe(target), new RegExp(script.replaceAll('.', '\\.')))
@@ -69,9 +61,7 @@ test('Make routes paid and real public commands through guarded shell entrypoint
   const coveredRealTargets = Object.keys(guardedTargets).filter((target) => target.endsWith('-real')).sort()
   assert.deepEqual(realTargets, coveredRealTargets)
   assert.match(makefile, /^agent-recommendation-canary:.*explicitly authorized paid recommendation/m)
-  assert.match(makeRecipe('agent-recommendation-canary'), /RULEPILOT_RECOMMENDATION_CANARY_SCENARIO=critical-path/)
   assert.match(makefile, /^agent-teaching-page-canary:.*explicitly authorized paid Gstone image-page/m)
-  assert.doesNotMatch(makeRecipe('agent-security-real'), /NativeAgentSecurityEvaluationTest/)
 })
 
 test('every retained paid or real shell entrypoint fails closed without explicit authorization', () => {
@@ -105,23 +95,12 @@ test('the shared gate precedes credential loading, provider commands, and full v
       }
     }
   }
-  assert.ok(
-    completeRelease.indexOf('require-paid-canary-authorization.sh') < completeRelease.indexOf('make verify'),
-    'the full release must reject an unapproved run before make verify',
-  )
 })
 
-test('recommendation scenarios are bounded and fail closed instead of silently running the full class', () => {
-  assert.match(
-    recommendation,
-    /RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-critical-path/,
-  )
-  assert.match(
-    recommendation,
-    /publishesOneClaimScopedRecommendationAfterValidation/,
-  )
-  assert.match(recommendation, /\[ "\$scenario" = "all" \]/)
-  assert.match(recommendation, /unsupported recommendation canary scenario/)
+test('recommendation canary has one representative direct-publication journey', () => {
+  assert.match(recommendation, /publishesAComplexTitleBoundedSlateWithoutOptionalResearch/)
+  assert.doesNotMatch(recommendation, /RULEPILOT_RECOMMENDATION_CANARY_SCENARIO/)
+  assert.doesNotMatch(recommendation, /BoardGameRecommendationAgentPaidCanaryTest test/)
   assert.doesNotMatch(recommendation, /sanitized diagnostics/)
 })
 
