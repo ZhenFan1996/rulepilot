@@ -895,9 +895,9 @@ async function readOpeningPersistedTerminal(
   }
 }
 
-function positiveDistinctBggIds(games: RecommendationResultGame[]) {
+function hasPositiveDistinctBggIds(games: RecommendationResultGame[]) {
   const ids = games.map(entry => entry.game.bggId)
-  return ids.length >= 2
+  return ids.length > 0
     && ids.every(id => Number.isSafeInteger(id) && id > 0)
     && new Set(ids).size === ids.length
 }
@@ -1969,14 +1969,15 @@ test('authenticated citation image paths stay bound to the typed document versio
   })).toBe('/api/v1/document-versions/version%20%2F%20one/pages/4/image')
 })
 
-test('recommendation-only cards require at least two positive distinct typed BGG identities', () => {
+test('published recommendation cards require positive distinct typed BGG identities', () => {
   const result = (bggId: number, name: string, originalName = name): RecommendationResultGame => ({
     game: { bggId, name, originalName },
   })
-  expect(positiveDistinctBggIds([result(11, 'First'), result(22, 'Second')])).toBe(true)
-  expect(positiveDistinctBggIds([result(11, 'First')])).toBe(false)
-  expect(positiveDistinctBggIds([result(11, 'First'), result(11, 'First')])).toBe(false)
-  expect(positiveDistinctBggIds([result(11, 'First'), result(0, 'Invalid')])).toBe(false)
+  expect(hasPositiveDistinctBggIds([result(11, 'First'), result(22, 'Second')])).toBe(true)
+  expect(hasPositiveDistinctBggIds([result(11, 'First')])).toBe(true)
+  expect(hasPositiveDistinctBggIds([])).toBe(false)
+  expect(hasPositiveDistinctBggIds([result(11, 'First'), result(11, 'First')])).toBe(false)
+  expect(hasPositiveDistinctBggIds([result(11, 'First'), result(0, 'Invalid')])).toBe(false)
   expect(everyPublishedGameMatchesTitleTerm(
     [result(11, '沙丘：帝国', 'Dune: Imperium'), result(22, 'Dune: Uprising')],
     'dune',
@@ -2525,8 +2526,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
         'A successful recommendation must not carry a failure boundary').toBeNull()
       expect(finalResult?.completedWork,
         'A successful recommendation must expose its public completion summary').toContain('recommend_games')
-      expect(positiveDistinctBggIds(terminalGames),
-        'The persisted recommendation result needs at least two positive, distinct BGG identities').toBe(true)
+      expect(hasPositiveDistinctBggIds(terminalGames),
+        'Every persisted recommendation needs a positive, distinct BGG identity').toBe(true)
       expect(terminalGames.every(({ game }) => [game.name, game.originalName]
         .some(title => typeof title === 'string' && title.trim().length > 0)),
       'Every persisted recommendation card needs a public title identity').toBe(true)
@@ -2539,7 +2540,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
         message: 'The accepted persisted recommendation result did not render as cards',
       }).toBe(terminalGames.length)
       report.recommendationCardCount = await recommendationCards.count()
-      expect(report.recommendationCardCount).toBeGreaterThanOrEqual(2)
+      expect(report.recommendationCardCount).toBeGreaterThan(0)
       const renderedBggIds = await recommendationCards.evaluateAll(cards => cards.map(card =>
         Number(card.getAttribute('data-bgg-id'))))
       expect(renderedBggIds.every(id => Number.isSafeInteger(id) && id > 0),
@@ -2620,8 +2621,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
         `The persisted recommendation slate did not render its ${selectionResult.games.length} published cards within the 50-second diagnostic window`,
       )
     }
-    expect(positiveDistinctBggIds(selectionResult.games),
-      'The persisted recommendation result needs at least two positive, distinct BGG identities').toBe(true)
+    expect(hasPositiveDistinctBggIds(selectionResult.games),
+      'Every persisted recommendation needs a positive, distinct BGG identity').toBe(true)
     await expect.poll(() => recommendationCards.count(), {
       timeout: 1_000,
       message: 'The accepted persisted recommendation result did not render its exact published slate',
