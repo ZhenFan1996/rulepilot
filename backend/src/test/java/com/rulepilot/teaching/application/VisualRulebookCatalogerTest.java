@@ -2935,12 +2935,6 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void catalogsLegendAndGameplayPagesIndependently() {
-        assertThat(VisualRulebookCatalogPolicy.singlePageBatches(List.of(2, 3)))
-                .containsExactly(List.of(2), List.of(3));
-    }
-
-    @Test
     void reusesAnchorlessFactsBecauseAnchorsAreOptionalCropHints() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();

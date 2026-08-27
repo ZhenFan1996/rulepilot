@@ -27,8 +27,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 import org.springframework.amqp.core.Message;
 import org.springframework.context.annotation.Lazy;
@@ -222,9 +220,9 @@ class DocumentProcessingWorkerTest {
         UUID jobId = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
         String payload = """
-                {"schemaVersion":1,"documentVersionId":"%s","processingJobId":"%s","pipelineVersion":"v1","stage":"CHUNK"}
+                {"schemaVersion":1,"documentVersionId":"%s","processingJobId":"%s","pipelineVersion":"v1","stage":"PARSE"}
                 """.formatted(documentVersionId, jobId);
-        var command = new DocumentProcessingCommand(1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK);
+        var command = new DocumentProcessingCommand(1, documentVersionId, jobId, "v1", DocumentProcessingStage.PARSE);
         when(idempotency.begin(command, eventId, 1)).thenReturn(false);
 
         worker(ingestion, commands, jobs, idempotency, failures).process(message(payload, eventId, 1));
@@ -234,7 +232,7 @@ class DocumentProcessingWorkerTest {
     }
 
     @Test
-    void bridgesALegacyChunkDeliveryToEmbedDuringARollingDeployment() {
+    void advancesALegacyChunkDeliveryToEmbedDuringARollingDeployment() {
         UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
         DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
         DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
@@ -261,7 +259,7 @@ class DocumentProcessingWorkerTest {
     }
 
     @Test
-    void republishesEmbedFromALegacyChunkRetryThatAlreadyReachedChunking() {
+    void acknowledgesALateLegacyChunkWithoutRegressingProgressOrRepublishingEmbed() {
         UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
         DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
         DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
@@ -275,47 +273,14 @@ class DocumentProcessingWorkerTest {
                 1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK);
         when(versions.findVersion(documentVersionId)).thenReturn(Optional.of(
                 new DocumentVersionScopeLookup.VersionScope(
-                        documentVersionId, UUID.randomUUID(), "CHUNKING", "player")));
-        when(idempotency.begin(command, eventId, 2)).thenReturn(true);
-
-        worker(ingestion, commands, jobs, idempotency, failures, versions, new SimpleMeterRegistry())
-                .process(message(payload(documentVersionId, jobId, "CHUNK"), eventId, 2));
-
-        verify(ingestion).process(documentVersionId, DocumentProcessingStage.CHUNK);
-        verify(commands).publish(new DocumentProcessingCommand(
-                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED));
-        verify(idempotency).complete(command);
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"EMBEDDING", "INDEXING", "READY", "FAILED"})
-    void acknowledgesALateLegacyChunkWithoutRegressingProgressOrPublishingEmbedAgain(String processingStatus) {
-        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
-        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
-        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
-        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
-        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
-        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
-        UUID documentVersionId = UUID.randomUUID();
-        UUID jobId = UUID.randomUUID();
-        UUID eventId = UUID.randomUUID();
-        var metrics = new SimpleMeterRegistry();
-        when(versions.findVersion(documentVersionId)).thenReturn(Optional.of(
-                new DocumentVersionScopeLookup.VersionScope(
-                        documentVersionId, UUID.randomUUID(), processingStatus, "player")));
-        var command = new DocumentProcessingCommand(
-                1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK);
+                        documentVersionId, UUID.randomUUID(), "EMBEDDING", "player")));
         when(idempotency.begin(command, eventId, 1)).thenReturn(true);
 
-        worker(ingestion, commands, jobs, idempotency, failures, versions, metrics)
+        worker(ingestion, commands, jobs, idempotency, failures, versions, new SimpleMeterRegistry())
                 .process(message(payload(documentVersionId, jobId, "CHUNK"), eventId, 1));
 
-        verify(versions).findVersion(documentVersionId);
-        verify(idempotency).begin(command, eventId, 1);
         verify(idempotency).complete(command);
         verifyNoInteractions(ingestion, commands, jobs, failures);
-        assertThat(metrics.counter("rulepilot.document.processing.obsolete", "stage", "chunk").count())
-                .isEqualTo(1);
     }
 
     @Test

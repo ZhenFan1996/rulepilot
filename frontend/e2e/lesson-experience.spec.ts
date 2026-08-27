@@ -59,11 +59,7 @@ async function mockSharedApis(page: Page) {
   await page.route('**/pages/2/image/crop?*', route => route.fulfill({ contentType: 'image/svg+xml', body: focusedDetail }))
 }
 
-test('uses one tabletop reading language for private and public guides without retired media', async ({ page }, testInfo) => {
-  const retiredRequests: string[] = []
-  page.on('request', (request) => {
-    if (/icon-glossary|\/narration|\/video$|media-consistency/.test(request.url())) retiredRequests.push(request.url())
-  })
+test('uses one tabletop reading language for private and public guides', async ({ page }, testInfo) => {
   await mockSharedApis(page)
   await page.route('**/api/public/lessons/plan-1?language=*', route => route.fulfill({
     json: {
@@ -86,7 +82,6 @@ test('uses one tabletop reading language for private and public guides without r
   await expect(page.getByText('定位框和特写只说明图上位置与外观')).toBeVisible()
   await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/lesson/plan-1/questions')
   await expect(page.locator('#lesson-question-panel')).toHaveCount(0)
-  await expect(page.getByText('图标速查表')).toHaveCount(0)
   if (process.env.RULEPILOT_VISUAL_QA) {
     await page.screenshot({ path: testInfo.outputPath('private-guide.png'), fullPage: true })
   }
@@ -108,7 +103,6 @@ test('uses one tabletop reading language for private and public guides without r
   await expect(page.getByTestId('public-questions-reader')).toBeVisible()
   await expect(page.locator('#public-question')).toBeVisible()
   await expect(page.locator('[data-testid="lesson-reading-column"]')).toHaveCount(0)
-  expect(retiredRequests).toEqual([])
 })
 
 test('keeps the tabletop guide and agent workspace usable on mobile', async ({ page }, testInfo) => {

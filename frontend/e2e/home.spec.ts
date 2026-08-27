@@ -33,7 +33,12 @@ test('uses the full illustrated-hero rhythm while BGG hot and random games lead 
   await expect(page.getByRole('heading', { name: '随机抽三盒' })).toBeVisible()
   await expect(page.locator('.home-game-grid > li')).toHaveCount(4)
   await expect(page.locator('.home-random__games > li')).toHaveCount(3)
-  expect(new Set(await page.locator('.home-random__games a').evaluateAll(links => links.map(link => link.getAttribute('href')))).size).toBe(3)
+  const randomLinks = page.locator('.home-random__games a')
+  const initialRandomHrefs = await randomLinks.evaluateAll(links => links.map(link => link.getAttribute('href')))
+  expect(new Set(initialRandomHrefs).size).toBe(3)
+  await page.getByRole('button', { name: '再换三盒' }).click()
+  await expect.poll(() => randomLinks.evaluateAll(links => links.map(link => link.getAttribute('href'))))
+    .not.toEqual(initialRandomHrefs)
   await expect(page.locator('img[alt="Powered by BoardGameGeek"]')).toHaveCount(1)
 
   const heroLayout = await page.locator('.home-intro__art').evaluate((element) => {

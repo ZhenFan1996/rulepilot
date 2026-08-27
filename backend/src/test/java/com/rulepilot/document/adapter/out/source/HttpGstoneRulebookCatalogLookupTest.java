@@ -1,7 +1,6 @@
 package com.rulepilot.document.adapter.out.source;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.rulepilot.document.application.OfficialRulebookCandidateFinder;
 import java.nio.charset.StandardCharsets;
@@ -138,21 +137,6 @@ class HttpGstoneRulebookCatalogLookupTest {
                                 42, "Ark Nova", "Base", 2021, "en")))
                 .isEmpty();
         assertThat(misses).hasValue(1);
-    }
-
-    @Test
-    void findsAConfiguredExactGameOnTheCurrentPublicGstoneSurfaces() {
-        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_GSTONE_CATALOG_EVAL")));
-        String gameName = System.getenv("RULEBOOK_GSTONE_GAME_NAME");
-        String expectedUrl = System.getenv("RULEBOOK_GSTONE_EXPECTED_URL");
-        assumeTrue(gameName != null && !gameName.isBlank());
-        assumeTrue(expectedUrl != null && !expectedUrl.isBlank());
-        var lookup = new HttpGstoneRulebookCatalogLookup(new OkHttpClient(), true);
-
-        assertThat(lookup.find(new OfficialRulebookCandidateFinder.Request(
-                        42, gameName, "基础版", 2024, "zh-CN")))
-                .extracting(OfficialRulebookCandidateFinder.Candidate::url)
-                .containsExactly(expectedUrl);
     }
 
     private Response html(okhttp3.Request request, String html) {

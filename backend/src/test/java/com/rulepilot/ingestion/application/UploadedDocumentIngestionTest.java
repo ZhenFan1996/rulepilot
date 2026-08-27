@@ -360,7 +360,6 @@ class UploadedDocumentIngestionTest {
         ProcessingProgressTracker progress = Mockito.mock(ProcessingProgressTracker.class);
         RuleStructureService structures = Mockito.mock(RuleStructureService.class);
         RuleChunkEmbeddingService embeddings = Mockito.mock(RuleChunkEmbeddingService.class);
-        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         UploadedDocumentIngestion ingestion = new UploadedDocumentIngestion(
                 documents,
                 pdfPreparation,
@@ -369,15 +368,16 @@ class UploadedDocumentIngestionTest {
                 progress,
                 structures,
                 embeddings,
-                metrics);
+                new SimpleMeterRegistry());
         UUID versionId = UUID.randomUUID();
         when(documents.pageCount(versionId)).thenReturn(1);
 
         ingestion.process(versionId, DocumentProcessingStage.CHUNK);
 
         verify(documents).pageCount(versionId);
-        verify(documents, never()).pages(versionId);
+        verify(documents, never()).open(versionId);
         verify(documents).markChunking(versionId);
+        verify(progress).update(versionId, "CHUNKING", 85, 1, false);
         verifyNoInteractions(pdfPreparation, pageImages, structures, embeddings);
     }
 
