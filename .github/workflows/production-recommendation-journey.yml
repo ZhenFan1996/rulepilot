@@ -19,7 +19,7 @@ on:
         default: 3
       expected_title_term:
         description: Optional case-insensitive title term that every card must match
-        required: true
+        required: false
         type: string
         default: ''
 

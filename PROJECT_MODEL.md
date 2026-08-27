@@ -126,6 +126,9 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 只验证一次登录用户的推荐对话、持久化和
    卡片；普通用户 canary 使用私有上传验证规则书、讲解、局部图示和引用答疑，并在结束后清理测试数据。
 
+如果 GitHub 没有送达 `main` 的 push CI 事件，恢复动作是手工触发同一份 `CI` workflow；只有该 main SHA
+的 CI 成功，`workflow_run` 才能进入部署。部署 workflow 本身没有直接手工入口，因而恢复不会绕过测试。
+
 因此失败含义是可定位的：CI 红表示代码或运行镜像不满足确定性合同；deploy 红表示该 SHA 未能安全激活；
 推荐 canary 红只说明推荐结果；规则书 canary 红只说明其最后到达的 acquisition、preparation、lesson、visual
 或 Q&A 阶段。provider 变慢会单独记录为延迟超标，不再把已经生成的正确结果改写成“功能失败”。
