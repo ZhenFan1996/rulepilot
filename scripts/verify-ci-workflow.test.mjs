@@ -45,19 +45,28 @@ const productionRecommendationSpec = await readFile(
   'utf8',
 )
 
-test('CI publishes the browser report and builds the native backend image used by deployment', () => {
+test('CI owns automatic and manual deployment qualification', () => {
   assert.match(ciWorkflow, /uses:\s*actions\/upload-artifact@v(?:6|7)\b/)
   assert.doesNotMatch(ciWorkflow, /uses:\s*actions\/upload-artifact@v[1-5]\b/)
   assert.match(ciWorkflow, /path:\s*frontend\/playwright-report\//)
   assert.match(ciWorkflow, /if-no-files-found:\s*error/)
   assert.match(playwrightConfig, /outputFolder:\s*'playwright-report'/)
   assert.match(ciWorkflow, /make backend-test[\s\S]*?make backend-runtime-image-smoke/)
+  assert.match(ciWorkflow, /^  workflow_dispatch:\s*$/m)
   assert.match(deploymentWorkflow, /docker build[\s\S]*?--file backend\/Dockerfile\.runtime/)
+  assert.match(deploymentWorkflow,
+    /workflow_run\.event == 'push' \|\|[\s\S]*?workflow_run\.event == 'workflow_dispatch'/)
+  assert.match(deploymentWorkflow, /workflow_run\.head_branch == 'main'/)
+  assert.match(deploymentWorkflow, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/)
+  assert.doesNotMatch(deploymentWorkflow, /^  workflow_dispatch:\s*$/m)
+  assert.doesNotMatch(deploymentWorkflow, /github\.event_name == 'workflow_dispatch'/)
 })
 
 test('production recommendation verifies one deployed main release without owning later product stages', () => {
   assert.match(productionRecommendationWorkflow,
     /tested_sha:[\s\S]*?required: true[\s\S]*?type: string/)
+  assert.match(productionRecommendationWorkflow,
+    /expected_title_term:[\s\S]*?required: false[\s\S]*?type: string/)
   assert.match(productionRecommendationWorkflow,
     /uses:\s*actions\/checkout@v6[\s\S]*?ref:\s*\$\{\{ inputs\.tested_sha \}\}[\s\S]*?fetch-depth:\s*0/)
   assert.match(productionRecommendationWorkflow, /environment:\s*\n\s+name:\s*production/)
