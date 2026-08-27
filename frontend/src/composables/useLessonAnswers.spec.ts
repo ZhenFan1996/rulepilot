@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useLessonAnswers } from './useLessonAnswers'
 import { setLocale } from '@/lib/locale'
 
+function answerStreamResponse(result: unknown) {
+  return new Response(`event: result\ndata: ${JSON.stringify(result)}\n\n`, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  })
+}
+
 function createAnswers() {
   return useLessonAnswers({
     currentContext: () => ({
@@ -41,7 +47,7 @@ describe('useLessonAnswers', () => {
     setLocale('zh-CN')
   })
 
-  it('uses an English current question for a secure-session failure under a Chinese UI', async () => {
+  it('uses the explicit answer-context locale for a secure-session failure', async () => {
     setLocale('zh-CN')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
     const answers = createAnswers()
@@ -70,23 +76,11 @@ describe('useLessonAnswers', () => {
     )
   })
 
-  it('uses a Chinese current question for an unexpected transport failure under an English UI', async () => {
-    setLocale('en')
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue({}))
-    const answers = createAnswers()
-    answers.question.value = '青色棱柱什么时候结算？'
-
-    await answers.submitQuestion(answers.question.value, null)
-
-    expect(answers.answerError.value).toBe('这次没有成功发送问题。问题仍保留在这里；检查后可以直接重试。')
-    expect(answers.question.value).toBe('青色棱柱什么时候结算？')
-  })
-
   it('rejects a malformed answer envelope without exposing schema or runtime diagnostics', async () => {
     setLocale('zh-CN')
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
-      .mockResolvedValueOnce(Response.json({
+      .mockResolvedValueOnce(answerStreamResponse({
         schemaDiagnostic: 'citations is required by PlayerFacingRuleAnswer',
         answer: { status: 'INVALID_MODEL_OUTPUT' },
       })))
@@ -203,7 +197,7 @@ describe('useLessonAnswers', () => {
       const path = String(input)
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/answers')) {
-        return Response.json({
+        return answerStreamResponse({
           assistantRunId: internalId,
           answer: {
             language: 'en',
@@ -247,7 +241,7 @@ describe('useLessonAnswers', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/answers') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
-        return Response.json(answerCreation({
+        return answerStreamResponse(answerCreation({
             status: 'ANSWERED', shortVerdict: 'Verified.', explanation: 'Supported.', citations: [],
             exceptions: [], confidence: 'HIGH', source: 'UPLOADED', clarification: null, warnings: [],
           }))
@@ -273,7 +267,7 @@ describe('useLessonAnswers', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/answers') && init?.method === 'POST') {
         requestBody = JSON.parse(String(init.body)) as Record<string, unknown>
-        return Response.json(answerCreation({
+        return answerStreamResponse(answerCreation({
             status: 'ANSWERED', shortVerdict: 'Verified.', explanation: 'Supported.', citations: [],
             exceptions: [], confidence: 'HIGH', source: 'UPLOADED', clarification: null, warnings: [],
           }))
@@ -300,7 +294,7 @@ describe('useLessonAnswers', () => {
       if (path.includes('/answers') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         answerNumber += 1
-        return Response.json(answerCreation({
+        return answerStreamResponse(answerCreation({
             status: answerNumber === 1 ? 'CLARIFICATION_REQUIRED' : 'ANSWERED',
             shortVerdict: answerNumber === 1 ? 'Please identify the object.' : 'It triggers after scoring.',
             explanation: '', citations: [], exceptions: [], confidence: answerNumber === 1 ? 'LOW' : 'HIGH',
@@ -383,7 +377,7 @@ describe('useLessonAnswers', () => {
         return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
       }
       if (path.includes('/answers')) {
-        return Promise.resolve(Response.json(answerCreation(answerFixture('Completed answer.'))))
+        return Promise.resolve(answerStreamResponse(answerCreation(answerFixture('Completed answer.'))))
       }
       return Promise.resolve(new Response(null, { status: 404 }))
     }))

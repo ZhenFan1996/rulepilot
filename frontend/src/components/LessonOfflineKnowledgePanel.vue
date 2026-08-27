@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
 import type { OfflineCitation, OfflineKnowledgeEntry } from '@/lib/offlineKnowledge'
 import { useLocale } from '@/lib/locale'
 
@@ -56,7 +55,7 @@ function entryCountLabel(count: number) {
           <ol class="mt-4 stack-y-sm">
             <li v-for="(citation, citationIndex) in (entry.ruling?.citations ?? entry.answer.citations)" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-xl bg-indigo/5 p-3 text-sm">
               <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
-              <p class="mt-1 leading-6 text-ink/60">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
+              <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>
             </li>
           </ol>
         </details>

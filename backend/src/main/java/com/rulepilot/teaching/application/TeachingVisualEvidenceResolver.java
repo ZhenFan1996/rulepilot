@@ -24,7 +24,7 @@ final class TeachingVisualEvidenceResolver {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingVisualEvidenceResolver.class);
     private static final int MAX_PAGES_PER_TOOL_READ = 5;
-    private static final int MAX_CATALOG_OWNER_MODEL_CALLS_PER_PAGE = 3;
+    private static final int MAX_CATALOG_OWNER_MODEL_CALLS_PER_PAGE = 2;
 
     private final AssistantReadTools tools;
     private final AuditedAgentInvocations invocations;
@@ -149,9 +149,9 @@ final class TeachingVisualEvidenceResolver {
 
     static int maximumModelCalls(TeachingPlan plan) {
         if (plan == null || plan.sections().isEmpty()) return 0;
-        // One page has one catalog owner regardless of how many chapters cite it. The ordinary path is one semantic
-        // call. Reserve the larger mutually exclusive failure branch: initial semantics plus OCR plus changed typed
-        // semantics (three calls total); a transient image-only replay consumes only two.
+        // One page has one catalog owner regardless of how many chapters cite it. Reserve the longest mutually
+        // exclusive branch: the initial image-to-typed-facts call plus either one contract repair or one transient
+        // replay. Both retries reuse the original page image.
         long uniquePages = plan.sections().stream()
                 .flatMap(section -> section.sourcePageNumbers().stream())
                 .distinct()

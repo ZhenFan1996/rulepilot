@@ -42,6 +42,13 @@ const catalogPresentation = {
   bggUrl: 'https://boardgamegeek.com/boardgame/42',
 }
 
+function answerStreamResult(result: unknown) {
+  return {
+    contentType: 'text/event-stream',
+    body: `event: result\ndata: ${JSON.stringify(result)}\n\n`,
+  }
+}
+
 async function mockSharedApis(page: Page) {
   await page.route('**/api/auth/session', route => route.fulfill({ json: { username: 'player', roles: ['USER'] } }))
   await page.route('**/api/v1/assistant-runs/active?mode=TEACHING', route => route.fulfill({ json: [] }))
@@ -106,7 +113,7 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   }))
   await page.route('**/api/v1/document-versions/version-1/answers/stream', (route) => {
     answerRequest = route.request().postDataJSON() as Record<string, unknown>
-    return route.fulfill({ json: {
+    return route.fulfill(answerStreamResult({
       answer: {
         language: 'zh-CN', status: 'ANSWERED', shortVerdict: '按规则书给出的设置顺序放置。',
         explanation: '规则书要求把灯塔牌放在航线起点。',
@@ -121,7 +128,7 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
       rulingReference: {
         citationIds: ['chunk-1'], confirmedRulingId: null, confirmedRulingVersion: null,
       },
-    } })
+    }))
   })
 
   await page.goto('/lesson/plan-1')

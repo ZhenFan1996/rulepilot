@@ -82,7 +82,10 @@ public class RulebookUnderstandingBuilder {
         if (block.y() >= 945 && text.length() <= 30 && text.matches(".*\\d.*")) {
             return BlockRole.FOOTER;
         }
-        if (text.length() <= 160 && text.split("\\s+").length <= 14 && !text.matches(".*[.!?。！？]$")
+        if (!text.contains("\n")
+                && text.length() <= 160
+                && text.split("\\s+").length <= 14
+                && !text.matches(".*[.!?。！？]$")
                 && (isMostlyUppercase(text) || block.y() < 420)) {
             return BlockRole.HEADING;
         }

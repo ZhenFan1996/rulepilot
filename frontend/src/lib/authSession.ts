@@ -15,7 +15,7 @@ export function notifySessionCleared() {
   window.dispatchEvent(new Event(SESSION_CLEARED_EVENT))
 }
 
-export function safeAuthReturnPath(value: unknown) {
+function safeAuthReturnPath(value: unknown) {
   if (typeof value !== 'string' || !value.startsWith('/')) return null
 
   try {
@@ -32,8 +32,6 @@ export function safeAuthReturnPath(value: unknown) {
     return null
   }
 }
-
-export const safeLoginReturnPath = safeAuthReturnPath
 
 export function safeKnownAuthReturnPath(router: Pick<Router, 'resolve'>, value: unknown) {
   const path = safeAuthReturnPath(value)

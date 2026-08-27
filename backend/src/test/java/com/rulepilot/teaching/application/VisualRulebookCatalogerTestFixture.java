@@ -50,7 +50,6 @@ final class VisualRulebookCatalogerTestFixture {
                 Duration.ofSeconds(45),
                 4,
                 10,
-                4,
-                10);
+                4);
     }
 }

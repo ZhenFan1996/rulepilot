@@ -14,7 +14,6 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
@@ -873,7 +872,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void observesSingleCallOcrRepairTransientReplayAndPersistenceWithOnlyLowCardinalityTags() {
+    void observesSingleCallContractRepairTransientReplayAndPersistenceWithOnlyLowCardinalityTags() {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger pageTwoInitialCalls = new AtomicInteger();
         var recorded = new java.util.concurrent.CopyOnWriteArrayList<String>();
@@ -911,18 +910,6 @@ class VisualRulebookCatalogerTest {
             }
 
             @Override
-            public boolean supportsTeachingPageTranscription(String owner) {
-                return true;
-            }
-
-            @Override
-            public PageTranscript transcribeTeachingPage(
-                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
-                    String owner) {
-                return new PageTranscript(page.pageNumber(), "stable transcript");
-            }
-
-            @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
                 int pageNumber = request.pages().getFirst().pageNumber();
                 if (pageNumber == 1) {
@@ -955,7 +942,6 @@ class VisualRulebookCatalogerTest {
                 4,
                 1,
                 1,
-                1,
                 observations);
 
         cataloger.ensureTeachingPageFacts(documentVersionId, Set.of(1), 2, "Example game", "owner", null);
@@ -963,9 +949,8 @@ class VisualRulebookCatalogerTest {
 
         assertThat(recorded).containsExactly(
                 "semantic:single_call:failed",
-                "ocr_window:ocr_repair:completed",
-                "semantic:ocr_repair:completed",
-                "persist:ocr_repair:completed",
+                "semantic:contract_repair:completed",
+                "persist:contract_repair:completed",
                 "semantic:single_call:failed",
                 "semantic:transient_replay:completed",
                 "persist:transient_replay:completed");
@@ -1029,7 +1014,6 @@ class VisualRulebookCatalogerTest {
     void ordinaryColdPagesUseOneSemanticCallWithTheBoundedFourRequestLane()
             throws InterruptedException {
         UUID documentVersionId = UUID.randomUUID();
-        AtomicInteger ocrCalls = new AtomicInteger();
         AtomicInteger semanticCalls = new AtomicInteger();
         AtomicInteger activeSemantic = new AtomicInteger();
         AtomicInteger peakSemantic = new AtomicInteger();
@@ -1038,19 +1022,6 @@ class VisualRulebookCatalogerTest {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
                 throw new AssertionError("teaching startup must use the teaching catalog");
-            }
-
-            @Override
-            public boolean supportsTeachingPageTranscription(String owner) {
-                return true;
-            }
-
-            @Override
-            public PageTranscript transcribeTeachingPage(
-                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
-                    String owner) {
-                ocrCalls.incrementAndGet();
-                throw new AssertionError("ordinary vision semantics must not prepay OCR");
             }
 
             @Override
@@ -1064,7 +1035,6 @@ class VisualRulebookCatalogerTest {
                         firstSemanticWindow.countDown();
                         assertThat(firstSemanticWindow.await(2, TimeUnit.SECONDS)).isTrue();
                     }
-                    assertThat(request.transcripts()).isEmpty();
                     return new CatalogDraft(List.of(teachingSummary(
                             pageNumber,
                             "PAGE " + pageNumber,
@@ -1089,8 +1059,7 @@ class VisualRulebookCatalogerTest {
                 Duration.ofSeconds(3),
                 4,
                 10,
-                4,
-                10);
+                4);
 
         List<PageInput> result = cataloger.catalogVisualPages(
                 documentVersionId,
@@ -1099,7 +1068,6 @@ class VisualRulebookCatalogerTest {
                 "owner",
                 null);
 
-        assertThat(ocrCalls).hasValue(0);
         assertThat(semanticCalls).hasValue(12);
         assertThat(peakSemantic).hasValue(4);
         assertThat(result).hasSize(12);
@@ -1109,7 +1077,6 @@ class VisualRulebookCatalogerTest {
     void keepsLargeTeachingImageReadsBoundedToTheCurrentSemanticWindow() {
         UUID documentVersionId = UUID.randomUUID();
         List<List<Integer>> imageReads = new java.util.concurrent.CopyOnWriteArrayList<>();
-        AtomicInteger ocrCalls = new AtomicInteger();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
@@ -1117,22 +1084,8 @@ class VisualRulebookCatalogerTest {
             }
 
             @Override
-            public boolean supportsTeachingPageTranscription(String owner) {
-                return true;
-            }
-
-            @Override
-            public PageTranscript transcribeTeachingPage(
-                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
-                    String owner) {
-                ocrCalls.incrementAndGet();
-                throw new AssertionError("ordinary vision semantics must not prepay OCR");
-            }
-
-            @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
                 int pageNumber = request.pages().getFirst().pageNumber();
-                assertThat(request.transcripts()).isEmpty();
                 return new CatalogDraft(List.of(teachingSummary(
                         pageNumber,
                         "PAGE " + pageNumber,
@@ -1154,8 +1107,7 @@ class VisualRulebookCatalogerTest {
                 Duration.ofSeconds(2),
                 4,
                 10,
-                4,
-                10);
+                4);
 
         List<PageInput> result = cataloger.catalogVisualPages(
                 documentVersionId,
@@ -1165,7 +1117,6 @@ class VisualRulebookCatalogerTest {
                 null);
 
         assertThat(result).hasSize(18);
-        assertThat(ocrCalls).hasValue(0);
         assertThat(imageReads).allSatisfy(read -> assertThat(read)
                 .hasSizeLessThanOrEqualTo(DocumentPageImages.MAX_PAGES_PER_READ));
         assertThat(imageReads).containsExactly(
@@ -1181,11 +1132,10 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void typedRepairKeepsSuccessfulPageBoundTranscriptsAndLocalizesOneOcrFailure() {
+    void typedRepairReusesEachOriginalPageAndKeepsSuccessfulPagesIndependent() {
         UUID documentVersionId = UUID.randomUUID();
         List<String> operations = new java.util.concurrent.CopyOnWriteArrayList<>();
-        Map<Integer, List<PageTranscript>> semanticTranscripts = new java.util.concurrent.ConcurrentHashMap<>();
-        Map<Integer, AtomicInteger> ocrCalls = new java.util.concurrent.ConcurrentHashMap<>();
+        Map<Integer, AtomicInteger> repairCalls = new java.util.concurrent.ConcurrentHashMap<>();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
@@ -1193,22 +1143,7 @@ class VisualRulebookCatalogerTest {
             }
 
             @Override
-            public boolean supportsTeachingPageTranscription(String owner) {
-                return true;
-            }
-
-            @Override
-            public PageTranscript transcribeTeachingPage(
-                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
-                    String owner) {
-                ocrCalls.computeIfAbsent(page.pageNumber(), ignored -> new AtomicInteger()).incrementAndGet();
-                if (page.pageNumber() == 2) return new PageTranscript(1, "misbound transcript");
-                return new PageTranscript(page.pageNumber(), "literal page " + page.pageNumber());
-            }
-
-            @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                assertThat(request.transcripts()).isEmpty();
                 throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
             }
 
@@ -1217,7 +1152,7 @@ class VisualRulebookCatalogerTest {
                     CatalogRequest request, TeachingCatalogRepairCode repairCode) {
                 assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
                 int pageNumber = request.pages().getFirst().pageNumber();
-                semanticTranscripts.put(pageNumber, request.transcripts());
+                repairCalls.computeIfAbsent(pageNumber, ignored -> new AtomicInteger()).incrementAndGet();
                 return new CatalogDraft(List.of(teachingSummary(
                         pageNumber,
                         "PAGE " + pageNumber,
@@ -1225,10 +1160,6 @@ class VisualRulebookCatalogerTest {
                         List.of("page " + pageNumber))));
             }
 
-            @Override
-            public Optional<ModelExecutionIdentity> teachingPageTranscriptionExecutionIdentity(String owner) {
-                return Optional.of(new ModelExecutionIdentity("qwen", "qwen3.5-ocr"));
-            }
         };
         AuditedAgentInvocations audit = new AuditedAgentInvocations() {
             @Override
@@ -1255,7 +1186,6 @@ class VisualRulebookCatalogerTest {
                 Duration.ofSeconds(2),
                 4,
                 3,
-                3,
                 3);
 
         cataloger.catalogVisualPages(
@@ -1265,35 +1195,21 @@ class VisualRulebookCatalogerTest {
                 "owner",
                 UUID.randomUUID());
 
-        assertThat(ocrCalls).hasSize(3).allSatisfy((page, calls) -> assertThat(calls).hasValue(1));
-        assertThat(semanticTranscripts.get(1)).singleElement().satisfies(transcript -> {
-            assertThat(transcript.pageNumber()).isEqualTo(1);
-            assertThat(transcript.text()).isEqualTo("literal page 1");
-        });
-        assertThat(semanticTranscripts.get(2)).isEmpty();
-        assertThat(semanticTranscripts.get(3)).singleElement().satisfies(transcript -> {
-            assertThat(transcript.pageNumber()).isEqualTo(3);
-            assertThat(transcript.text()).isEqualTo("literal page 3");
-        });
+        assertThat(repairCalls).hasSize(3).allSatisfy((page, calls) -> assertThat(calls).hasValue(1));
         assertThat(operations).contains(
                 "inspectTeachingVisualPage|1|3",
                 "inspectTeachingVisualPage|2|3",
                 "inspectTeachingVisualPage|3|3",
-                "transcribeTeachingVisualRepairPage|1|3",
-                "transcribeTeachingVisualRepairPage|2|3",
-                "transcribeTeachingVisualRepairPage|3|3",
                 "inspectTeachingVisualRepair|1|3|SCHEMA_MISMATCH",
                 "inspectTeachingVisualRepair|2|3|SCHEMA_MISMATCH",
                 "inspectTeachingVisualRepair|3|3|SCHEMA_MISMATCH");
     }
 
     @Test
-    void transientReplayRemainsImageOnlyAndNeverStartsOcr() {
+    void transientReplayRereadsOnlyTheFailedOriginalImage() {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger imageReads = new AtomicInteger();
-        AtomicInteger ocrCalls = new AtomicInteger();
         AtomicInteger semanticCalls = new AtomicInteger();
-        List<List<PageTranscript>> suppliedTranscripts = new java.util.concurrent.CopyOnWriteArrayList<>();
         List<String> operations = new java.util.concurrent.CopyOnWriteArrayList<>();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
@@ -1302,21 +1218,7 @@ class VisualRulebookCatalogerTest {
             }
 
             @Override
-            public boolean supportsTeachingPageTranscription(String owner) {
-                return true;
-            }
-
-            @Override
-            public PageTranscript transcribeTeachingPage(
-                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
-                    String owner) {
-                ocrCalls.incrementAndGet();
-                return new PageTranscript(page.pageNumber(), "stable literal transcript");
-            }
-
-            @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                suppliedTranscripts.add(request.transcripts());
                 if (semanticCalls.incrementAndGet() == 1) {
                     throw new org.springframework.ai.retry.TransientAiException("provider connection reset");
                 }
@@ -1350,19 +1252,16 @@ class VisualRulebookCatalogerTest {
                 Duration.ofSeconds(2),
                 4,
                 10,
-                4,
-                10);
+                4);
 
         cataloger.catalogVisualPages(
                 documentVersionId, List.of(page(1)), "Example game", "owner", UUID.randomUUID());
 
         assertThat(imageReads).hasValue(2);
-        assertThat(ocrCalls).hasValue(0);
         assertThat(semanticCalls).hasValue(2);
         assertThat(operations).containsExactly(
                 "inspectTeachingVisualPage|1|1",
                 "inspectTeachingVisualRetry|1|1");
-        assertThat(suppliedTranscripts).hasSize(2).allSatisfy(transcripts -> assertThat(transcripts).isEmpty());
     }
 
     @Test
@@ -1478,28 +1377,14 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void stoppedInitialSemanticBudgetPropagatesBeforeProviderOrOcrRepair() {
+    void stoppedInitialSemanticBudgetPropagatesBeforeProviderOrRepair() {
         UUID documentVersionId = UUID.randomUUID();
-        AtomicInteger providerCalls = new AtomicInteger();
         AtomicInteger semanticCalls = new AtomicInteger();
         AtomicInteger reservations = new AtomicInteger();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
                 throw new AssertionError("teaching startup must use the teaching catalog");
-            }
-
-            @Override
-            public boolean supportsTeachingPageTranscription(String owner) {
-                return true;
-            }
-
-            @Override
-            public PageTranscript transcribeTeachingPage(
-                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
-                    String owner) {
-                providerCalls.incrementAndGet();
-                return new PageTranscript(page.pageNumber(), "must not be called");
             }
 
             @Override
@@ -1531,8 +1416,7 @@ class VisualRulebookCatalogerTest {
                 Duration.ofSeconds(2),
                 4,
                 10,
-                4,
-                10);
+                4);
 
         assertThatThrownBy(() -> cataloger.catalogVisualPages(
                         documentVersionId,
@@ -1544,7 +1428,6 @@ class VisualRulebookCatalogerTest {
                         AgentExecutionStoppedException.class,
                         stopped -> assertThat(stopped.reason()).isEqualTo(StopReason.MODEL_BUDGET));
         assertThat(reservations).hasValue(1);
-        assertThat(providerCalls).hasValue(0);
         assertThat(semanticCalls).hasValue(0);
     }
 
@@ -1601,22 +1484,16 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void concurrentTypedContractRepairRunsOneSemanticOcrAndRepairStack() throws Exception {
+    void concurrentTypedContractRepairRunsOneInitialAndOneRepairCall() throws Exception {
         UUID documentVersionId = UUID.randomUUID();
         CountDownLatch distinctReaders = new CountDownLatch(2);
         AtomicInteger initialCalls = new AtomicInteger();
-        AtomicInteger ocrCalls = new AtomicInteger();
         AtomicInteger repairCalls = new AtomicInteger();
         InMemoryFacts facts = new InMemoryFacts(distinctReaders);
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
                 throw new AssertionError("Teaching facts must use the Teaching catalog");
-            }
-
-            @Override
-            public boolean supportsTeachingPageTranscription(String owner) {
-                return true;
             }
 
             @Override
@@ -1627,20 +1504,10 @@ class VisualRulebookCatalogerTest {
             }
 
             @Override
-            public PageTranscript transcribeTeachingPage(
-                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
-                    String owner) {
-                ocrCalls.incrementAndGet();
-                return new PageTranscript(page.pageNumber(), "literal page transcript");
-            }
-
-            @Override
             public CatalogDraft repairTeachingCatalog(
                     CatalogRequest request, TeachingCatalogRepairCode repairCode) {
                 repairCalls.incrementAndGet();
                 assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
-                assertThat(request.transcripts()).singleElement().satisfies(transcript ->
-                        assertThat(transcript.text()).isEqualTo("literal page transcript"));
                 return new CatalogDraft(List.of(teachingSummary(
                         1, "SETUP", "Prepare the shared board before play.", List.of("setup"))));
             }
@@ -1662,7 +1529,6 @@ class VisualRulebookCatalogerTest {
             assertThat(second.get(2, TimeUnit.SECONDS)).singleElement().satisfies(fact ->
                     assertThat(fact.factualSummary()).contains("Prepare the shared board"));
             assertThat(initialCalls).hasValue(1);
-            assertThat(ocrCalls).hasValue(1);
             assertThat(repairCalls).hasValue(1);
         } finally {
             callers.shutdownNow();
@@ -2071,7 +1937,6 @@ class VisualRulebookCatalogerTest {
                 directAudit(),
                 Duration.ofSeconds(2),
                 4,
-                1,
                 1,
                 1,
                 ObservationRegistry.NOOP,

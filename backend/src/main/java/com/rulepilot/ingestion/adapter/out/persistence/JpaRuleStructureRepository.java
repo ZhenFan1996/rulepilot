@@ -1,7 +1,6 @@
 package com.rulepilot.ingestion.adapter.out.persistence;
 
 import com.rulepilot.ingestion.application.RuleStructureRepository;
-import com.rulepilot.ingestion.domain.LessonRuleSectionType;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.CoverageLedgerEntry;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
@@ -14,7 +13,6 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,7 +31,6 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
     @Override
     public void replace(
             UUID documentVersionId,
-            List<DetectedRuleSection> sections,
             List<DetectedRuleChunk> chunks,
             RulebookUnderstanding understanding) {
         entityManager
@@ -56,21 +53,7 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
                 .createQuery("delete from RuleChunkEntity c where c.documentVersionId = :versionId")
                 .setParameter("versionId", documentVersionId)
                 .executeUpdate();
-        entityManager
-                .createQuery("delete from RuleStructureSectionEntity s where s.documentVersionId = :versionId")
-                .setParameter("versionId", documentVersionId)
-                .executeUpdate();
         Instant now = Instant.now();
-        for (int index = 0; index < sections.size(); index++) {
-            var section = sections.get(index);
-            entityManager.persist(new RuleStructureSectionEntity(
-                    UUID.randomUUID(),
-                    documentVersionId,
-                    section.type().name(),
-                    section.content(),
-                    section.pageNumbers().stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")),
-                    now));
-        }
         for (int index = 0; index < chunks.size(); index++) {
             var chunk = chunks.get(index);
             entityManager.persist(new RuleChunkEntity(
@@ -87,19 +70,6 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
         }
         persistUnderstanding(documentVersionId, understanding, now);
         entityManager.flush();
-    }
-
-    @Override
-    public List<DetectedRuleSection> findByDocumentVersion(UUID documentVersionId) {
-        return entityManager
-                .createQuery(
-                        "select s from RuleStructureSectionEntity s where s.documentVersionId = :versionId order by s.sectionType",
-                        RuleStructureSectionEntity.class)
-                .setParameter("versionId", documentVersionId)
-                .getResultList()
-                .stream()
-                .map(RuleStructureSectionEntity::toView)
-                .toList();
     }
 
     @Override
@@ -453,53 +423,5 @@ class RuleChunkEntity {
         this.pageTo = pageTo;
         this.chunkIndex = chunkIndex;
         this.createdAt = createdAt;
-    }
-}
-
-@Entity(name = "RuleStructureSectionEntity")
-@Table(name = "rule_structure_section")
-class RuleStructureSectionEntity {
-
-    @Id
-    UUID id;
-
-    @Column(name = "document_version_id", nullable = false)
-    UUID documentVersionId;
-
-    @Column(name = "section_type", nullable = false)
-    String sectionType;
-
-    @Column(nullable = false, columnDefinition = "text")
-    String content;
-
-    @Column(name = "page_numbers", nullable = false)
-    String pageNumbers;
-
-    @Column(name = "created_at", nullable = false)
-    Instant createdAt;
-
-    protected RuleStructureSectionEntity() {}
-
-    RuleStructureSectionEntity(
-            UUID id,
-            UUID documentVersionId,
-            String sectionType,
-            String content,
-            String pageNumbers,
-            Instant createdAt) {
-        this.id = id;
-        this.documentVersionId = documentVersionId;
-        this.sectionType = sectionType;
-        this.content = content;
-        this.pageNumbers = pageNumbers;
-        this.createdAt = createdAt;
-    }
-
-    RuleStructureRepository.DetectedRuleSection toView() {
-        List<Integer> pages = pageNumbers.isBlank()
-                ? List.of()
-                : Arrays.stream(pageNumbers.split(",")).map(Integer::valueOf).toList();
-        return new RuleStructureRepository.DetectedRuleSection(
-                LessonRuleSectionType.valueOf(sectionType), content, pages);
     }
 }

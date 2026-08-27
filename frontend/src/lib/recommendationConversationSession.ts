@@ -2,8 +2,7 @@ import type { RecommendationProfile } from '@/components/gameRecommendationTypes
 import type { AppLocale } from '@/lib/locale'
 import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 
-const STORAGE_PREFIX = 'rulepilot:recommendation-conversation:v1:'
-const STORAGE_VERSION = 3
+const STORAGE_PREFIX = 'rulepilot:recommendation-conversation:v2:'
 const MAX_RAW_LENGTH = 200_000
 const MAX_TRANSCRIPT = 24
 const MAX_KNOWN_GAMES = 60
@@ -41,23 +40,6 @@ export type RecommendationConversationSnapshot = {
   pending: RecommendationConversationPending | null
 }
 
-type StoredRecommendationConversation = Omit<RecommendationConversationSnapshot, 'selectedBggId'> & {
-  version: 3
-  selectedBggId?: number | null
-}
-type PreviousRecommendationPending = Omit<RecommendationConversationPending, 'responseLocale'>
-type PreviousRecommendationConversation = Omit<RecommendationConversationSnapshot, 'responseLocale' | 'pending' | 'selectedBggId'> & {
-  version: 2
-  pending: PreviousRecommendationPending | null
-}
-type LegacyRecommendationConversation = Omit<
-  PreviousRecommendationConversation,
-  'conversationId' | 'revision' | 'version' | 'pending'
-> & {
-  version: 1
-  pending: Omit<PreviousRecommendationPending, 'clientTurnId'> | null
-}
-
 export function readRecommendationConversation(
   storage: Storage,
   username: string,
@@ -72,12 +54,11 @@ export function readRecommendationConversation(
       return null
     }
     const parsed = JSON.parse(raw) as unknown
-    const stored = storedConversation(parsed)
-    if (!stored) {
+    if (!isStoredConversation(parsed)) {
       storage.removeItem(key)
       return null
     }
-    return withoutVersion(stored)
+    return copiedSnapshot(parsed)
   } catch {
     try {
       storage.removeItem(key)
@@ -101,7 +82,7 @@ export function rememberRecommendationConversation(
       storage.removeItem(key)
       return
     }
-    storage.setItem(key, JSON.stringify({ version: STORAGE_VERSION, ...bounded }))
+    storage.setItem(key, JSON.stringify(bounded))
   } catch {
     // The visible conversation remains authoritative when browser-session storage is unavailable.
   }
@@ -155,30 +136,8 @@ function boundedSnapshot(snapshot: RecommendationConversationSnapshot): Recommen
   }
 }
 
-function storedConversation(value: unknown): StoredRecommendationConversation | null {
-  if (isStoredConversation(value)) return value
-  if (isPreviousConversation(value)) {
-    return {
-      ...value,
-      version: STORAGE_VERSION,
-      responseLocale: null,
-      pending: value.pending ? { ...value.pending, responseLocale: null } : null,
-    }
-  }
-  if (!isLegacyConversation(value)) return null
-  return {
-    ...value,
-    version: STORAGE_VERSION,
-    conversationId: null,
-    revision: 0,
-    responseLocale: null,
-    pending: value.pending ? { ...value.pending, clientTurnId: null, responseLocale: null } : null,
-  }
-}
-
-function isStoredConversation(value: unknown): value is StoredRecommendationConversation {
+function isStoredConversation(value: unknown): value is RecommendationConversationSnapshot {
   return isRecord(value)
-    && value.version === STORAGE_VERSION
     && (value.conversationId === null || validUuid(value.conversationId))
     && validRevision(value.revision)
     && (value.responseLocale === null || validLocale(value.responseLocale))
@@ -194,52 +153,12 @@ function isStoredConversation(value: unknown): value is StoredRecommendationConv
     && value.shownBggIds.length <= MAX_SHOWN_GAMES
     && value.shownBggIds.every(isPositiveInteger)
     && new Set(value.shownBggIds).size === value.shownBggIds.length
-    && (value.selectedBggId === undefined || value.selectedBggId === null || isPositiveInteger(value.selectedBggId))
+    && (value.selectedBggId === null || isPositiveInteger(value.selectedBggId))
     && typeof value.failed === 'boolean'
     && (value.pending === null || isConversationPending(value.pending))
 }
 
-function isPreviousConversation(value: unknown): value is PreviousRecommendationConversation {
-  return isRecord(value)
-    && value.version === 2
-    && (value.conversationId === null || validUuid(value.conversationId))
-    && validRevision(value.revision)
-    && isProfile(value.profile)
-    && Array.isArray(value.transcript)
-    && value.transcript.length <= MAX_TRANSCRIPT
-    && value.transcript.every(isConversationTurn)
-    && Array.isArray(value.knownGames)
-    && value.knownGames.length <= MAX_KNOWN_GAMES
-    && value.knownGames.every(isConversationGame)
-    && hasUniqueGameIds(value.knownGames)
-    && Array.isArray(value.shownBggIds)
-    && value.shownBggIds.length <= MAX_SHOWN_GAMES
-    && value.shownBggIds.every(isPositiveInteger)
-    && new Set(value.shownBggIds).size === value.shownBggIds.length
-    && typeof value.failed === 'boolean'
-    && (value.pending === null || isPreviousPending(value.pending))
-}
-
-function isLegacyConversation(value: unknown): value is LegacyRecommendationConversation {
-  return isRecord(value)
-    && value.version === 1
-    && isProfile(value.profile)
-    && Array.isArray(value.transcript)
-    && value.transcript.length <= MAX_TRANSCRIPT
-    && value.transcript.every(isConversationTurn)
-    && Array.isArray(value.knownGames)
-    && value.knownGames.length <= MAX_KNOWN_GAMES
-    && value.knownGames.every(isConversationGame)
-    && hasUniqueGameIds(value.knownGames)
-    && Array.isArray(value.shownBggIds)
-    && value.shownBggIds.length <= MAX_SHOWN_GAMES
-    && value.shownBggIds.every(isPositiveInteger)
-    && new Set(value.shownBggIds).size === value.shownBggIds.length
-    && typeof value.failed === 'boolean'
-    && (value.pending === null || isLegacyPending(value.pending))
-}
-
-function withoutVersion(value: StoredRecommendationConversation): RecommendationConversationSnapshot {
+function copiedSnapshot(value: RecommendationConversationSnapshot): RecommendationConversationSnapshot {
   return {
     conversationId: value.conversationId,
     revision: value.revision,
@@ -248,7 +167,7 @@ function withoutVersion(value: StoredRecommendationConversation): Recommendation
     transcript: value.transcript.map(turn => ({ ...turn })),
     knownGames: value.knownGames.map(game => ({ ...game })),
     shownBggIds: [...value.shownBggIds],
-    selectedBggId: isPositiveInteger(value.selectedBggId) ? value.selectedBggId : null,
+    selectedBggId: value.selectedBggId,
     failed: value.failed,
     pending: value.pending ? {
       message: value.pending.message,
@@ -279,27 +198,20 @@ function isEmptySnapshot(snapshot: RecommendationConversationSnapshot) {
 
 function isProfile(value: unknown): value is RecommendationProfile {
   return isRecord(value)
-    && (value.players === undefined || nullableIntegerInRange(value.players, 1, 20))
-    && (value.maxMinutes === undefined || nullableIntegerInRange(value.maxMinutes, 0, 1_440))
-    && (value.maxMinutes === undefined
-      || value.maxMinutes === null
-      || value.maxMinutes === 0
-      || Number(value.maxMinutes) >= 5)
-    && (value.maxWeight === undefined || nullableNumberInRange(value.maxWeight, 0, 5))
     && hasText(value.type)
     && hasText(value.interaction)
-    && optionalConstraintRange(value.playerCount, 1, 20, true)
-    && optionalConstraintRange(value.durationMinutes, 5, 1_440, true)
-    && optionalConstraintRange(value.complexity, 0, 5, false)
+    && constraintRange(value.playerCount, 1, 20, true)
+    && constraintRange(value.durationMinutes, 5, 1_440, true)
+    && constraintRange(value.complexity, 0, 5, false)
 }
 
-function optionalConstraintRange(
+function constraintRange(
   value: unknown,
   minimumAllowed: number,
   maximumAllowed: number,
   integers: boolean,
 ) {
-  if (value === undefined || value === null) return true
+  if (value === null) return true
   if (!isRecord(value)) return false
   const minimum = value.minimum
   const maximum = value.maximum
@@ -344,28 +256,6 @@ function isConversationPending(value: unknown): value is RecommendationConversat
     && (value.responseLocale === null || validLocale(value.responseLocale))
 }
 
-function isPreviousPending(value: unknown): value is PreviousRecommendationPending {
-  return isRecord(value)
-    && hasText(value.message)
-    && Array.isArray(value.excludedBggIds)
-    && value.excludedBggIds.length <= MAX_SHOWN_GAMES
-    && value.excludedBggIds.every(isPositiveInteger)
-    && new Set(value.excludedBggIds).size === value.excludedBggIds.length
-    && (value.focusedBggId === null || isPositiveInteger(value.focusedBggId))
-    && (value.clientTurnId === null || validUuid(value.clientTurnId))
-}
-
-function isLegacyPending(value: unknown): value is Omit<PreviousRecommendationPending, 'clientTurnId'> {
-  return isRecord(value)
-    && !('clientTurnId' in value)
-    && hasText(value.message)
-    && Array.isArray(value.excludedBggIds)
-    && value.excludedBggIds.length <= MAX_SHOWN_GAMES
-    && value.excludedBggIds.every(isPositiveInteger)
-    && new Set(value.excludedBggIds).size === value.excludedBggIds.length
-    && (value.focusedBggId === null || isPositiveInteger(value.focusedBggId))
-}
-
 function uniqueGames(games: RecommendationConversationGame[]) {
   return games.filter((game, index) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
 }
@@ -380,14 +270,6 @@ function uniquePositiveIntegers(values: number[]) {
 
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0
-}
-
-function nullableIntegerInRange(value: unknown, minimum: number, maximum: number) {
-  return value === null || Number.isSafeInteger(value) && Number(value) >= minimum && Number(value) <= maximum
-}
-
-function nullableNumberInRange(value: unknown, minimum: number, maximum: number) {
-  return value === null || typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum
 }
 
 function hasText(value: unknown): value is string {

@@ -53,8 +53,7 @@ public class PublicLessonQuestionService {
     }
 
     private PublicAnswer answer(PublicLessonReader.PublicLesson lesson, QuestionRequest request) {
-        PlayerLocale language = PlayerLocale.forQuestion(
-                request.question(), PlayerLocale.fromRequest(request.language()));
+        PlayerLocale language = PlayerLocale.fromRequest(request.language());
         var creation = answers.answerForPublicReader(
                 lesson.documentVersionId(),
                 request.question().strip(),

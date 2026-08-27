@@ -79,7 +79,6 @@ class BggRecommendationAgentControllerTest {
                         List.of(
                                 "SEARCH_BGG_CATALOG",
                                 "REJECTED_ACTION:bad",
-                                "RESEARCH_SKIPPED_FOR_PUBLICATION_ALREADY_ATTEMPTED",
                                 "RECOMMEND_GAMES")),
                 List.of(),
                 null,
@@ -102,7 +101,6 @@ class BggRecommendationAgentControllerTest {
         assertThat(response.modelCalls()).isEqualTo(2);
         assertThat(response.catalogCalls()).isEqualTo(1);
         assertThat(response.webResearchCalls()).isZero();
-        assertThat(response.publicationRecovered()).isTrue();
         assertThat(response.completedWork()).containsExactly("browse_bgg_catalog", "recommend_games");
     }
 
@@ -123,7 +121,7 @@ class BggRecommendationAgentControllerTest {
                         0,
                         0,
                         false,
-                        List.of("STREAMED_NATURAL_REPLY:GREETING")),
+                        List.of("REJECTED_ACTION:bad")),
                 List.of(),
                 null);
 
@@ -350,14 +348,17 @@ class BggRecommendationAgentControllerTest {
         var response = controller.converse(
                 new BggRecommendationAgentController.RecommendationConversationRequest(
                         new BggRecommendationAgentController.RecommendationProfileRequest(
-                                4, null, null, "all", "any"),
+                                "all",
+                                "any",
+                                new BggRecommendationAgentController.ConstraintRangeRequest<>(
+                                        4, 4, "hard", "4 人", 1),
+                                null,
+                                null),
                         ""),
                 "zh-CN",
                 principal);
 
         assertThat(response.outcome()).isEqualTo("needs_clarification");
-        assertThat(response.profile().players()).isNull();
-        assertThat(response.profile().maxMinutes()).isEqualTo(90);
         assertThat(response.profile().playerCount()).satisfies(range -> {
             assertThat(range.minimum()).isEqualTo(3);
             assertThat(range.maximum()).isEqualTo(4);
@@ -376,9 +377,6 @@ class BggRecommendationAgentControllerTest {
     void acceptsTwoSidedConstraintRangesWithoutCollapsingTheirEvidence() {
         var request = new BggRecommendationAgentController.RecommendationConversationRequest(
                 new BggRecommendationAgentController.RecommendationProfileRequest(
-                        null,
-                        null,
-                        null,
                         "strategy",
                         "competitive",
                         new BggRecommendationAgentController.ConstraintRangeRequest<>(
@@ -391,12 +389,12 @@ class BggRecommendationAgentControllerTest {
 
         var profile = request.toCommand().profile();
 
-        assertThat(profile.minPlayers()).isEqualTo(3);
-        assertThat(profile.maxPlayers()).isEqualTo(5);
-        assertThat(profile.minMinutes()).isEqualTo(90);
-        assertThat(profile.maxMinutes()).isEqualTo(150);
-        assertThat(profile.minWeight()).isEqualByComparingTo("2.5");
-        assertThat(profile.maxWeight()).isEqualByComparingTo("3.5");
+        assertThat(profile.playerCount().minimum()).isEqualTo(3);
+        assertThat(profile.playerCount().maximum()).isEqualTo(5);
+        assertThat(profile.durationMinutes().minimum()).isEqualTo(90);
+        assertThat(profile.durationMinutes().maximum()).isEqualTo(150);
+        assertThat(profile.complexity().minimum()).isEqualByComparingTo("2.5");
+        assertThat(profile.complexity().maximum()).isEqualByComparingTo("3.5");
         assertThat(profile.playerCount().sourceText()).isEqualTo("3–5 人");
         assertThat(profile.playerCount().confirmedTurn()).isEqualTo(4);
         assertThat(profile.type()).isEqualTo(BggGameType.STRATEGY);
@@ -406,7 +404,11 @@ class BggRecommendationAgentControllerTest {
     @Test
     void returnsAttributedCardsWithOfficialChineseNamesAndTranslatedTaxonomy() {
         RecommendationProfile profile = new RecommendationProfile(
-                4, 90, new BigDecimal("3.2"), BggGameType.STRATEGY, InteractionPreference.COOPERATIVE);
+                ConstraintRange.hardExact(4),
+                ConstraintRange.hardAtMost(90),
+                ConstraintRange.hardAtMost(new BigDecimal("3.2")),
+                BggGameType.STRATEGY,
+                InteractionPreference.COOPERATIVE);
         Ranking ranked = new Ranking(
                 266192,
                 "Wingspan",

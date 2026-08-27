@@ -4,6 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import RulebookReaderView from './RulebookReaderView.vue'
 
+function answerStreamResponse(result: unknown) {
+  return new Response(`event: result\ndata: ${JSON.stringify(result)}\n\n`, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  })
+}
+
 describe('RulebookReaderView', () => {
   afterEach(() => {
     localStorage.clear()
@@ -30,7 +36,7 @@ describe('RulebookReaderView', () => {
       if (path.endsWith('/api/auth/session')) return Response.json({ username: 'player' })
       if (path.endsWith('/api/auth/csrf')) return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path.endsWith('/api/v1/document-versions/version-1/answers/stream') && options?.method === 'POST') {
-        return Response.json({
+        return answerStreamResponse({
           answer: {
             language: 'zh-CN',
             status: 'ANSWERED', shortVerdict: '先放置玩家牌。', explanation: '这是开局的第一步。',

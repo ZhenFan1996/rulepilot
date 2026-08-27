@@ -78,8 +78,7 @@ public final class AnswerEvidenceRetriever {
                 questionPlan.currentRuleObjectSpans(),
                 visualFactsByPage,
                 directQuestionVisualFactPages);
-        List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(
-                question, context, questionPlan);
+        List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, questionPlan);
         for (RetrievalIntent intent : intents) {
             List<HybridEvidenceHit> retrieved;
             try {
@@ -96,8 +95,8 @@ public final class AnswerEvidenceRetriever {
                                                         || questionPlan.evidenceNeeds().contains(EvidenceNeed.COMPLETE_LIST)
                                                 ? 8
                                                 : 5,
-                                        intent.sectionTypes(),
-                                        intent.currentSectionType(),
+                                        Set.of(),
+                                        null,
                                         context.allowedEvidencePages())),
                         this::evidenceTokens);
                 successfulCoreRetrievals++;

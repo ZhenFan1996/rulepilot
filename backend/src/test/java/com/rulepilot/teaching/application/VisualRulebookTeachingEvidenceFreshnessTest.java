@@ -268,7 +268,12 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 1, "first-turn", List.of("turn"), "First turn", true, EvidenceStatus.SUPPORTED,
                 null, null, List.of(), List.of(), List.of(step));
         return new IllustratedLesson(
-                UUID.randomUUID(), planId, LessonStatus.DRAFT_READY, List.of(section), Instant.parse("2026-08-17T00:00:00Z"));
+                UUID.randomUUID(),
+                planId,
+                LessonStatus.DRAFT_READY,
+                List.of(section),
+                "test",
+                Instant.parse("2026-08-17T00:00:00Z"));
     }
 
     private PageFact completePageFact(int pageNumber, int schemaVersion) {

@@ -38,18 +38,18 @@ final class TeachingLessonAssemblyPolicy {
     LessonStatus status(TeachingPlan plan, List<LessonSection> sections) {
         if (sections.size() < plan.sections().size()) return LessonStatus.INCOMPLETE;
         List<LessonSection> required = sections.stream().filter(LessonSection::required).toList();
-        if (required.stream().anyMatch(section -> section.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE)) {
-            return LessonStatus.INCOMPLETE;
-        }
+        boolean hasReadableSection = sections.stream()
+                .anyMatch(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        if (!hasReadableSection) return LessonStatus.INCOMPLETE;
         TeachingSourceCoverageContract.Assessment sourceCoverage =
                 TeachingSourceCoverageContract.assess(plan, sections);
-        if (sourceCoverage.applicable() && !sourceCoverage.complete()) return LessonStatus.INCOMPLETE;
         boolean allRequiredSupported =
                 required.stream().allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
         boolean sourcePageCatalogPartial = plan.sections().stream()
                 .flatMap(section -> section.coverageTags().stream())
                 .anyMatch(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG::equals);
-        return allRequiredSupported && !sourcePageCatalogPartial
+        boolean sourceCoverageComplete = !sourceCoverage.applicable() || sourceCoverage.complete();
+        return allRequiredSupported && sourceCoverageComplete && !sourcePageCatalogPartial
                 ? LessonStatus.COMPLETE
                 : LessonStatus.DRAFT_READY;
     }

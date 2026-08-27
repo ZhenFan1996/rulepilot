@@ -27,7 +27,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     void countsEveryBoundPageEvenWhenASectionBindsMoreThanOneReadBatch() {
         TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)));
 
-        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(18);
+        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(12);
         assertThat(TeachingSectionEvidenceRetriever.maximumToolCalls(plan.sections().getFirst(), 3))
                 .isEqualTo(3);
         assertThat(TeachingSourcePageEvidenceRefiner.maximumToolCalls(plan.sections().getFirst()))
@@ -301,9 +301,8 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     void countsVisualInterpretationFromTheImmutablePageBindings() {
         TeachingPlan plan = plan(List.of(List.of(1), List.of(2), List.of(3)));
 
-        // Reserve the longest mutually exclusive owner branch: initial semantic, OCR, then changed typed semantic.
-        // The ordinary path remains one image-to-typed-facts call per distinct page.
-        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(9);
+        // Reserve the initial image interpretation plus either one contract repair or one transient replay.
+        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(6);
     }
 
     private TeachingPlan plan(List<List<Integer>> sourcePages) {

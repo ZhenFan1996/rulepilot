@@ -7,8 +7,6 @@ import {
   notifyLoginRequired,
   notifySessionCleared,
   safeKnownAuthReturnPath,
-  safeAuthReturnPath,
-  safeLoginReturnPath,
 } from './authSession'
 
 describe('auth session UI policy', () => {
@@ -33,35 +31,34 @@ describe('auth session UI policy', () => {
     window.removeEventListener(LOGIN_REQUIRED_EVENT, listener)
   })
 
-  it('accepts only canonical local paths outside the authentication views', () => {
-    expect(safeAuthReturnPath('/lesson/plan-1?lang=en#sources')).toBe('/lesson/plan-1?lang=en#sources')
-    expect(safeLoginReturnPath('/catalog/../lessons?filter=pending')).toBe('/lessons?filter=pending')
-    expect(safeAuthReturnPath('https://example.com')).toBeNull()
-    expect(safeAuthReturnPath('//example.com')).toBeNull()
-    expect(safeAuthReturnPath('/\\example.com')).toBeNull()
-    expect(safeAuthReturnPath('/%2Fexample.com')).toBeNull()
-    expect(safeAuthReturnPath('/login')).toBeNull()
-    expect(safeAuthReturnPath('/LOGIN/?redirect=/catalog')).toBeNull()
-    expect(safeAuthReturnPath('/register#form')).toBeNull()
-    expect(safeAuthReturnPath(['/account'])).toBeNull()
-  })
-
-  it('keeps only local return paths that resolve to a current application route', () => {
+  it('keeps only canonical local return paths that resolve to a current application route', () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+        { path: '/lesson/:planId', name: 'lesson', component: { template: '<div />' } },
         { path: '/login', name: 'login', component: { template: '<div />' } },
+        { path: '/register', name: 'register', component: { template: '<div />' } },
         { path: '/:pathMatch(.*)*', name: 'not-found', component: { template: '<div />' } },
       ],
     })
 
+    expect(safeKnownAuthReturnPath(router, '/lesson/plan-1?lang=en#sources'))
+      .toBe('/lesson/plan-1?lang=en#sources')
+    expect(safeKnownAuthReturnPath(router, '/catalog/../lessons?filter=pending'))
+      .toBe('/lessons?filter=pending')
     expect(safeKnownAuthReturnPath(router, '/lessons?filter=pending#ready'))
       .toBe('/lessons?filter=pending#ready')
     expect(safeKnownAuthReturnPath(router, '/retired-player-area')).toBeNull()
     expect(safeKnownAuthReturnPath(router, 'https://example.com')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, '//example.com')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, '/\\example.com')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, '/%2Fexample.com')).toBeNull()
     expect(safeKnownAuthReturnPath(router, '/login?redirect=/lessons')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, '/LOGIN/?redirect=/catalog')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, '/register#form')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, ['/lessons'])).toBeNull()
   })
 
   it('announces a completed logout so mounted private views can discard owner data', () => {

@@ -11,7 +11,6 @@ import type { LearningIntent } from '@/composables/useLessonAnswers'
 import { groundedLearningPrompt } from '@/lib/groundedLearningPrompt'
 import { useLocale } from '@/lib/locale'
 import { publicLessonTitle } from '@/lib/lessonPresentation'
-import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { publicCoverUrl } from '@/lib/publicCover'
 
 interface VisualFocus {
@@ -148,7 +147,7 @@ const heroDescription = computed(() => questionMode.value ? t('public.question.d
 const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
 const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
 const publicAnswerSoftBudgetCopy = computed(() => {
-  const english = playerTurnLocale(publicQuestion.value, locale.value) === 'en'
+  const english = locale.value === 'en'
   const elapsed = english ? `${publicAnswerElapsedSeconds.value} seconds` : `${publicAnswerElapsedSeconds.value} 秒`
   if (publicAnswerTurns.value.length) {
     return english
@@ -615,7 +614,7 @@ function answerWarningMessage(warning: PublicAnswer['answer']['warnings'][number
 async function preparePublicAnswerReply(turn: PublicAnswerTurn) {
   if (publicAnswerLoading.value) return
   if (!publicQuestion.value.trim() || publicQuestion.value.trim() === turn.question.trim()) {
-    const replyLanguage = playerTurnLocale(turn.question, locale.value)
+    const replyLanguage = locale.value
     if (turn.answer.answer.status === 'CLARIFICATION_REQUIRED') {
       publicQuestion.value = replyLanguage === 'en' ? 'I mean: ' : '我指的是：'
     } else if (turn.answer.answer.status === 'INSUFFICIENT_EVIDENCE') {
@@ -633,7 +632,7 @@ async function preparePublicAnswerReply(turn: PublicAnswerTurn) {
 }
 
 function publicRecoveryCopy(turn: PublicAnswerTurn) {
-  const english = playerTurnLocale(turn.question, locale.value) === 'en'
+  const english = locale.value === 'en'
   if (turn.answer.answer.status === 'CLARIFICATION_REQUIRED') {
     return { message: '', action: english ? 'Add this detail' : '补充这项信息' }
   }
@@ -718,10 +717,7 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
     if (!isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
     ) || controller.signal.aborted) return
-    publicAnswerError.value = publicAnswerRequestFailureCopy(
-      failureKind,
-      playerTurnLocale(question, requestedLocale),
-    )
+    publicAnswerError.value = publicAnswerRequestFailureCopy(failureKind, requestedLocale)
   } finally {
     const requestStillCurrent = isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,

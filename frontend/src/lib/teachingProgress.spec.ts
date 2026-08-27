@@ -234,47 +234,15 @@ describe('teaching progress', () => {
       '返回格式没有通过校验，正在修正图像规则页第 7 / 16 页的规则整理',
       '图像规则页第 8 / 16 页的规则整理修正结果已生成，正在保存',
       '图像规则页第 8 / 16 页的规则组已经保存',
-      '图像规则页第 9 / 16 页的规则整理经过一次修正后仍未完成',
-      '图像规则页第 10 / 16 页的规则整理经过一次修正后仍未通过校验',
+      '图像规则页第 9 / 16 页的规则整理经过一次修正后仍未完成；仅本页暂不可用，其他页面继续保留',
+      '图像规则页第 10 / 16 页的规则整理经过一次修正后仍未通过校验；仅本页暂不可用，其他页面继续保留',
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
       'The returned format did not pass validation; correcting the rule grouping for visual rulebook page 7 of 16',
       'Rule grouping correction generated for visual rulebook page 8 of 16; saving it now',
       'Saved the typed rule groups for visual rulebook page 8 of 16',
-      'Rule grouping for visual rulebook page 9 of 16 still did not complete after one correction',
-      'Rule grouping for visual rulebook page 10 of 16 still did not pass validation after one correction',
-    ])
-  })
-
-  it('keeps repair transcription intermediate only while the preparation run can still advance', () => {
-    const activities = [
-      activity(1, 'inspectTeachingVisualPage|7|16', 'REJECTED'),
-      activity(2, 'transcribeTeachingVisualRepairPage|7|16', 'FAILED'),
-    ]
-
-    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      '图像规则页第 7 / 16 页的规则整理本次校验未通过',
-      '图像规则页第 7 / 16 页本次逐字识别未完成；会保留原图继续修正规则组',
-    ])
-    expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
-      'Rule grouping for visual rulebook page 7 of 16 did not pass validation this time',
-      'Text recognition for visual rulebook page 7 of 16 did not complete; keeping the original image for the rule-group correction',
-    ])
-    expect(summarizeTeachingVisualPageRuleGroups(activities)).toEqual([expect.objectContaining({
-      pageNumber: 7,
-      latestStage: 'transcription',
-      latestAttempt: 'repair',
-      latestOutcome: 'FAILED',
-      state: 'processing',
-    })])
-    expect(summarizeTeachingVisualPageRuleGroups(activities, 'FAILED')).toEqual([
-      expect.objectContaining({ pageNumber: 7, state: 'no-rule-groups' }),
-    ])
-    expect(summarizeTeachingVisualPageRuleGroups(activities, 'CANCELLED')).toEqual([
-      expect.objectContaining({ pageNumber: 7, state: 'no-rule-groups' }),
-    ])
-    expect(summarizeTeachingVisualPageRuleGroups(activities, 'COMPLETED')).toEqual([
-      expect.objectContaining({ pageNumber: 7, state: 'no-rule-groups' }),
+      'Rule grouping for visual rulebook page 9 of 16 still did not complete after one correction; only this page stays unavailable',
+      'Rule grouping for visual rulebook page 10 of 16 still did not pass validation after one correction; only this page stays unavailable',
     ])
   })
 
@@ -323,7 +291,7 @@ describe('teaching progress', () => {
       activity(3, 'inspectTeachingVisualPage|3|6', 'FAILED'),
       activity(8, 'inspectTeachingVisualRetry|3|6', 'SUCCEEDED'),
       activity(4, 'inspectTeachingVisualPage|4|6', 'REJECTED'),
-      activity(9, 'transcribeTeachingVisualRepairPage|4|6', 'RUNNING'),
+      activity(9, 'inspectTeachingVisualRepair|4|6|MALFORMED_JSON', 'RUNNING'),
       activity(5, 'inspectTeachingVisualPage|5|6', 'FAILED'),
       activity(13, 'inspectTeachingVisualPage|5|6|unexpected', 'SUCCEEDED'),
       activity(10, 'inspectTeachingVisualRepair|6|6', 'SUCCEEDED'),
@@ -366,7 +334,7 @@ describe('teaching progress', () => {
         pageNumber: 4,
         totalPages: 6,
         latestSequence: 9,
-        latestStage: 'transcription',
+        latestStage: 'grouping',
         latestAttempt: 'repair',
         latestOutcome: 'RUNNING',
         state: 'processing',

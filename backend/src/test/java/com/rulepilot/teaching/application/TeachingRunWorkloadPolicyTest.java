@@ -15,14 +15,13 @@ class TeachingRunWorkloadPolicyTest {
     private final TeachingRunWorkloadPolicy policy = new TeachingRunWorkloadPolicy(3);
 
     @Test
-    void countsEverySectionFallbackReadAndItsSharedThreeCallRecovery() {
+    void countsEverySectionFallbackReadAndItsSharedTwoCallRecovery() {
         var demand = policy.demand(plan(19, true));
 
         // Three searches, one possible image read, and one canonical fallback read per section.
         assertThat(demand.requiredToolCalls()).isEqualTo(95);
-        // Three shared section calls, plus the conservative OCR-repair branch (semantic + OCR + changed semantic)
-        // for each page and final review. Ordinary cold pages consume only the first semantic reservation.
-        assertThat(demand.requiredModelCalls()).isEqualTo(134);
+        // Three shared section calls, plus one initial page interpretation and at most one page-local repair or retry.
+        assertThat(demand.requiredModelCalls()).isEqualTo(115);
     }
 
     @Test
@@ -38,12 +37,12 @@ class TeachingRunWorkloadPolicyTest {
         var demand = policy.demand(plan(30, true));
 
         assertThat(demand.requiredToolCalls()).isEqualTo(150);
-        assertThat(demand.requiredModelCalls()).isEqualTo(200);
+        assertThat(demand.requiredModelCalls()).isEqualTo(170);
     }
 
     @Test
     void countsVisualInterpretationFromTheImmutablePlanInsteadOfMutableCatalogAvailability() {
-        assertThat(policy.demand(plan(19, true)).requiredModelCalls()).isEqualTo(134);
+        assertThat(policy.demand(plan(19, true)).requiredModelCalls()).isEqualTo(115);
     }
 
     @Test
@@ -56,9 +55,9 @@ class TeachingRunWorkloadPolicyTest {
         TeachingPlan plan = plan(pageBindings);
         int visualCalls = TeachingVisualEvidenceResolver.maximumModelCalls(plan);
 
-        assertThat(visualCalls).isEqualTo(63);
+        assertThat(visualCalls).isEqualTo(42);
         assertThat(policy.demand(plan))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 140));
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 119));
     }
 
     private TeachingPlan plan(int sectionCount, boolean sourceBound) {

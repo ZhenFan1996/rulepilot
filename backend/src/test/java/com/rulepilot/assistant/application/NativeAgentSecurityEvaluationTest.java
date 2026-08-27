@@ -18,6 +18,7 @@ import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolAgent.RunRequest;
 import com.rulepilot.assistant.NativeToolAgent.RunStatus;
+import com.rulepilot.assistant.NativeToolAgent.TerminalContract;
 import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolModel.MessageRole;
 import com.rulepilot.assistant.NativeToolModel.ModelRequest;
@@ -28,6 +29,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -118,7 +120,13 @@ class NativeAgentSecurityEvaluationTest {
                 "Resolve one bounded player need.",
                 "Deterministic fallback.",
                 iterations,
-                256);
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of(),
+                Math.min(24, iterations * 4),
+                TerminalContract.none(),
+                Map.of(),
+                true);
     }
 
     private ToolScope scope(UUID versionId) {

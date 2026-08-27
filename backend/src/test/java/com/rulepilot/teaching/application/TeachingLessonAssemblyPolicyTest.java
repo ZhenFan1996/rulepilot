@@ -42,6 +42,14 @@ class TeachingLessonAssemblyPolicyTest {
                                 section(2, "scoring", EvidenceStatus.SUPPORTED, false)),
                         "test-generator",
                         Instant.EPOCH).status())
+                .isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(policy.snapshot(
+                        UUID.randomUUID(),
+                        plan,
+                        List.of(section(1, "setup", EvidenceStatus.INSUFFICIENT_EVIDENCE, false),
+                                section(2, "scoring", EvidenceStatus.INSUFFICIENT_EVIDENCE, false)),
+                        "test-generator",
+                        Instant.EPOCH).status())
                 .isEqualTo(LessonStatus.INCOMPLETE);
     }
 

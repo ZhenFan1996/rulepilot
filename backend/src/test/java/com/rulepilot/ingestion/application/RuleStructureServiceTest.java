@@ -14,10 +14,9 @@ import org.junit.jupiter.api.Test;
 class RuleStructureServiceTest {
 
     @Test
-    void persistsWholeDocumentUnderstandingTogetherWithExistingStructure() {
+    void persistsWholeDocumentUnderstandingTogetherWithRetrievalChunks() {
         CapturingRepository repository = new CapturingRepository();
         RuleStructureService service = new RuleStructureService(
-                new RuleStructureClassifier(),
                 new RulePageChunker(),
                 new RulebookUnderstandingBuilder(),
                 repository);
@@ -41,16 +40,10 @@ class RuleStructureServiceTest {
         @Override
         public void replace(
                 UUID documentVersionId,
-                List<DetectedRuleSection> sections,
                 List<DetectedRuleChunk> chunks,
                 RulebookUnderstanding understanding) {
             this.chunks = chunks;
             this.understanding = understanding;
-        }
-
-        @Override
-        public List<DetectedRuleSection> findByDocumentVersion(UUID documentVersionId) {
-            return List.of();
         }
 
         @Override

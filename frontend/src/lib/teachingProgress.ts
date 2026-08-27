@@ -50,7 +50,7 @@ export type TeachingVisualPageRuleGroupState =
   | 'no-rule-groups'
 
 export type TeachingVisualPageRuleGroupAttempt = 'direct' | 'repair' | 'temporary-retry'
-export type TeachingVisualPageRuleGroupStage = 'transcription' | 'grouping' | 'persistence'
+export type TeachingVisualPageRuleGroupStage = 'grouping' | 'persistence'
 
 export interface TeachingVisualPageRuleGroupSummary {
   pageNumber: number
@@ -390,11 +390,8 @@ function teachingPreparationActivityText(
   locale: AppLocale,
 ) {
   const visualPageProgress = visualPreparationPageProgress(activity.operation)
-  if (activity.operation.startsWith('transcribeTeachingVisual')) {
-    return visualPageActivityText(activity.outcome, visualPageProgress, 'transcription', locale)
-  }
   if (activity.operation.startsWith('inspectTeachingVisual')) {
-    return visualPageActivityText(activity.outcome, visualPageProgress, 'grouping', locale)
+    return visualPageActivityText(activity.outcome, visualPageProgress, locale)
   }
   if (activity.operation.startsWith('persistTeachingVisualPage')) {
     return visualPagePersistenceActivityText(activity.outcome, visualPageProgress, locale)
@@ -440,7 +437,6 @@ function teachingPreparationActivityText(
 function visualPageActivityText(
   outcome: TeachingActivityDisplayOutcome,
   progress: ReturnType<typeof visualPreparationPageProgress>,
-  kind: 'transcription' | 'grouping',
   locale: AppLocale,
 ) {
   if (outcome === 'UNKNOWN') {
@@ -453,72 +449,53 @@ function visualPageActivityText(
       ? `The latest activity status for ${target} is unrecognized; use the overall task state`
       : `${target}的最新活动状态无法识别，请以整条任务状态为准`
   }
-  if (progress?.kind === 'transcription' && progress.attempt === 'repair') {
-    return visualRepairTranscriptionActivityText(outcome, progress, locale)
-  }
   if (progress?.attempt === 'repair' && progress.repairCode) {
     const reason = visualContractRepairReason(progress.repairCode, locale)
     if (locale === 'en') {
       const target = `visual rulebook page ${progress.page} of ${progress.total}`
       if (outcome === 'RUNNING') return `${reason}; correcting the rule grouping for ${target}`
       if (outcome === 'SUCCEEDED') return `Rule grouping correction generated for ${target}; saving it now`
-      if (outcome === 'FAILED') return `Rule grouping for ${target} still did not complete after one correction`
-      return `Rule grouping for ${target} still did not pass validation after one correction`
+      if (outcome === 'FAILED') return `Rule grouping for ${target} still did not complete after one correction; only this page stays unavailable`
+      return `Rule grouping for ${target} still did not pass validation after one correction; only this page stays unavailable`
     }
     const target = `图像规则页第 ${progress.page} / ${progress.total} 页的规则整理`
     if (outcome === 'RUNNING') return `${reason}，正在修正${target}`
     if (outcome === 'SUCCEEDED') return `${target}修正结果已生成，正在保存`
-    if (outcome === 'FAILED') return `${target}经过一次修正后仍未完成`
-    return `${target}经过一次修正后仍未通过校验`
+    if (outcome === 'FAILED') return `${target}经过一次修正后仍未完成；仅本页暂不可用，其他页面继续保留`
+    return `${target}经过一次修正后仍未通过校验；仅本页暂不可用，其他页面继续保留`
   }
   if (locale === 'en') {
-    const label = kind === 'transcription' ? 'Text recognition' : 'Rule grouping'
+    const label = 'Rule grouping'
     const target = progress ? ` for visual rulebook page ${progress.page} of ${progress.total}` : ''
-    const subject = progress ? `${label}${target}` : `Visual rulebook page ${kind}`
+    const subject = progress ? `${label}${target}` : 'Visual rulebook page grouping'
     if (progress?.attempt === 'temporary-retry') {
       if (outcome === 'RUNNING') return `A temporary service error occurred; retrying ${label.toLocaleLowerCase()}${target}`
-      if (outcome === 'SUCCEEDED') return kind === 'transcription'
-        ? `${label} retry completed after a temporary service error${target}`
-        : `${label} retry generated a result after a temporary service error${target}; saving it now`
+      if (outcome === 'SUCCEEDED') return `${label} retry generated a result after a temporary service error${target}; saving it now`
       if (outcome === 'FAILED') return `${label} retry${target} still did not complete after a temporary service error`
       return `${label} retry${target} did not pass validation after a temporary service error`
     }
-    if (outcome === 'SUCCEEDED') return kind === 'transcription'
-      ? `${subject} completed`
-      : `${subject} generated a result; saving it now`
+    if (outcome === 'SUCCEEDED') return `${subject} generated a result; saving it now`
     if (outcome === 'FAILED') return `${subject} did not complete this time`
     if (outcome === 'REJECTED') return `${subject} did not pass validation this time`
     return progress
-      ? kind === 'transcription'
-        ? `Transcribing visual rulebook page ${progress.page} of ${progress.total}`
-        : `Organising the rules on visual rulebook page ${progress.page} of ${progress.total}`
-      : kind === 'transcription'
-        ? 'Transcribing the visual rulebook page'
-        : 'Organising the visual rulebook page into rule groups'
+      ? `Organising the rules on visual rulebook page ${progress.page} of ${progress.total}`
+      : 'Organising the visual rulebook page into rule groups'
   }
   const subject = progress
-    ? `图像规则页第 ${progress.page} / ${progress.total} 页的${kind === 'transcription' ? '逐字识别' : '规则整理'}`
-    : `图像规则页的${kind === 'transcription' ? '逐字识别' : '规则整理'}`
+    ? `图像规则页第 ${progress.page} / ${progress.total} 页的规则整理`
+    : '图像规则页的规则整理'
   if (progress?.attempt === 'temporary-retry') {
     if (outcome === 'RUNNING') return `临时服务异常，正在重试${subject}`
-    if (outcome === 'SUCCEEDED') return kind === 'transcription'
-      ? `${subject}在临时服务异常后重试完成`
-      : `${subject}在临时服务异常后已生成结果，正在保存`
+    if (outcome === 'SUCCEEDED') return `${subject}在临时服务异常后已生成结果，正在保存`
     if (outcome === 'FAILED') return `${subject}在临时服务异常后重试仍未完成`
     return `${subject}在临时服务异常后重试仍未通过校验`
   }
-  if (outcome === 'SUCCEEDED') return kind === 'transcription'
-    ? `${subject}完成`
-    : `${subject}已生成结果，正在保存`
+  if (outcome === 'SUCCEEDED') return `${subject}已生成结果，正在保存`
   if (outcome === 'FAILED') return `${subject}本次未完成`
   if (outcome === 'REJECTED') return `${subject}本次校验未通过`
   return progress
-    ? kind === 'transcription'
-      ? `正在逐字识别图像规则页第 ${progress.page} / ${progress.total} 页`
-      : `正在整理图像规则页第 ${progress.page} / ${progress.total} 页的规则组`
-    : kind === 'transcription'
-      ? '正在逐字识别图像规则页'
-      : '正在把图像规则页整理成规则组'
+    ? `正在整理图像规则页第 ${progress.page} / ${progress.total} 页的规则组`
+    : '正在把图像规则页整理成规则组'
 }
 
 function visualPreparationPageProgress(operation: string) {
@@ -527,23 +504,21 @@ function visualPreparationPageProgress(operation: string) {
   const grouping = kind === 'inspectTeachingVisualPage'
     || kind === 'inspectTeachingVisualRetry'
     || kind === 'inspectTeachingVisualRepair'
-  const transcription = kind === 'transcribeTeachingVisualRepairPage'
   const persistence = kind === 'persistTeachingVisualPage'
-  if (!grouping && !transcription && !persistence) return null
+  if (!grouping && !persistence) return null
   const groupingRepair = kind === 'inspectTeachingVisualRepair'
   if (parts.length !== (groupingRepair ? 4 : 3)) return null
   const page = Number(pageText)
   const total = Number(totalText)
   if (!Number.isInteger(page) || page < 1 || !Number.isInteger(total) || total < page) return null
-  const repair = groupingRepair || kind === 'transcribeTeachingVisualRepairPage'
-  const attempt: TeachingVisualPageRuleGroupAttempt = repair
+  const attempt: TeachingVisualPageRuleGroupAttempt = groupingRepair
     ? 'repair'
     : kind === 'inspectTeachingVisualRetry'
       ? 'temporary-retry'
       : 'direct'
   if (groupingRepair && !repairCode) return null
   return {
-    kind: grouping ? 'grouping' as const : transcription ? 'transcription' as const : 'persistence' as const,
+    kind: grouping ? 'grouping' as const : 'persistence' as const,
     page,
     total,
     attempt,
@@ -558,7 +533,6 @@ function visualPageRuleGroupState(
   runCanProgress: boolean,
 ): TeachingVisualPageRuleGroupState {
   if (outcome === 'UNKNOWN') return 'no-rule-groups'
-  if (stage === 'transcription') return runCanProgress ? 'processing' : 'no-rule-groups'
   if (outcome === 'RUNNING') return runCanProgress ? 'processing' : 'no-rule-groups'
   if (outcome === 'SUCCEEDED') {
     if (stage === 'grouping') {
@@ -594,35 +568,16 @@ function visualPagePersistenceActivityText(
   return `${target}的规则组没有保存成功`
 }
 
-function visualRepairTranscriptionActivityText(
-  outcome: TeachingActivityDisplayOutcome,
-  progress: NonNullable<ReturnType<typeof visualPreparationPageProgress>>,
-  locale: AppLocale,
-) {
-  if (locale === 'en') {
-    const target = `visual rulebook page ${progress.page} of ${progress.total}`
-    if (outcome === 'RUNNING') return `Transcribing ${target} to support its rule-group correction`
-    if (outcome === 'SUCCEEDED') return `Text recognition for the rule-group correction completed for ${target}`
-    if (outcome === 'FAILED') return `Text recognition for ${target} did not complete; keeping the original image for the rule-group correction`
-    return `Text recognition for ${target} did not pass validation; keeping the original image for the rule-group correction`
-  }
-  const target = `图像规则页第 ${progress.page} / ${progress.total} 页`
-  if (outcome === 'RUNNING') return `正在逐字识别${target}，为本页规则组修正提供原文`
-  if (outcome === 'SUCCEEDED') return `${target}用于规则组修正的逐字识别完成`
-  if (outcome === 'FAILED') return `${target}本次逐字识别未完成；会保留原图继续修正规则组`
-  return `${target}的逐字识别结果未通过校验；会保留原图继续修正规则组`
-}
-
 function visualContractRepairReason(code: string, locale: AppLocale) {
   if (locale === 'en') {
     if (code === 'MALFORMED_JSON') return 'The returned format did not pass validation'
-    if (code === 'SCHEMA_MISMATCH') return 'The returned fields did not match the rule-group contract'
+    if (code === 'SCHEMA_MISMATCH') return 'This page returned fields that need correction; other pages are unaffected'
     if (code === 'DUPLICATE_RULE_GROUP') return 'The returned result contained an exactly duplicated rule group'
     if (code === 'PAGE_BINDING_MISMATCH') return 'The returned result was not safely bound to this page'
     return 'The returned rule-group structure did not pass validation'
   }
   if (code === 'MALFORMED_JSON') return '返回格式没有通过校验'
-  if (code === 'SCHEMA_MISMATCH') return '返回字段不符合规则组约定'
+  if (code === 'SCHEMA_MISMATCH') return '这一页返回的字段需要修正，其他页面不受影响'
   if (code === 'DUPLICATE_RULE_GROUP') return '返回结果含有完全重复的规则组'
   if (code === 'PAGE_BINDING_MISMATCH') return '返回结果无法安全绑定到这一页'
   return '返回的规则组结构没有通过校验'

@@ -24,14 +24,9 @@ export async function streamGameRecommendation(
   url: string,
   init: RequestInit,
   onProgress: (update: RecommendationProgressUpdate) => void,
-  onAnswerPart: (text: string) => void = () => undefined,
 ) {
   const response = await fetch(url, init)
   if (!response.ok) throw new RecommendationRequestError(response.status)
-  const contentType = response.headers.get('content-type') ?? ''
-  if (contentType.includes('application/json')) {
-    return await response.json() as RecommendationAgentResponse
-  }
   if (!response.body) throw new Error('recommendation stream unavailable')
 
   const reader = response.body.getReader()
@@ -49,11 +44,6 @@ export async function streamGameRecommendation(
       }
     } else if (event.event === 'result') {
       result = JSON.parse(event.data) as RecommendationAgentResponse
-    } else if (event.event === 'answer_part') {
-      const payload = JSON.parse(event.data) as { field?: unknown; text?: unknown }
-      if (payload.field === 'message' && typeof payload.text === 'string' && payload.text.trim()) {
-        onAnswerPart(payload.text)
-      }
     } else if (event.event === 'error') {
       const payload = JSON.parse(event.data) as { code?: unknown }
       throw new RecommendationStreamError(typeof payload.code === 'string' ? payload.code : 'recommendation_unavailable')

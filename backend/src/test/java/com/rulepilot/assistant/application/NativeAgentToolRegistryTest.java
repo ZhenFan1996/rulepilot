@@ -25,13 +25,15 @@ class NativeAgentToolRegistryTest {
         NativeAgentToolRegistry registry = registry(List.of(answerTool));
         ToolScope scope = scope();
 
-        assertThat(registry.specifications(Role.ANSWER)).singleElement().satisfies(spec -> {
+        assertThat(registry.specifications(Role.ANSWER, Set.of("search_rule_evidence")))
+                .singleElement()
+                .satisfies(spec -> {
             assertThat(spec.name()).isEqualTo("search_rule_evidence");
             assertThat(spec.schemaVersion()).isEqualTo("1");
             assertThat(spec.schemaHash()).matches("[a-f0-9]{64}");
             assertThat(spec.inputSchema()).doesNotContain("documentVersionId", "ownerUsername");
         });
-        assertThat(registry.specifications(Role.TEACHING)).isEmpty();
+        assertThat(registry.specifications(Role.TEACHING, Set.of("search_rule_evidence"))).isEmpty();
 
         var execution = registry.execute(Role.ANSWER, "search_rule_evidence", "{\"query\":\"setup\"}", scope);
 
@@ -50,6 +52,16 @@ class NativeAgentToolRegistryTest {
         assertThat(registry.execute(Role.ANSWER, "write_file", "{}", scope()).observation().code())
                 .isEqualTo("TOOL_NOT_ALLOWED");
         assertThat(receivedScope.get()).isNull();
+    }
+
+    @Test
+    void requiresEveryAgentTurnToDeclareItsToolPortfolio() {
+        NativeAgentToolRegistry registry = registry(List.of(
+                tool("search_rule_evidence", Set.of(Role.ANSWER), new AtomicReference<>())));
+
+        assertThatThrownBy(() -> registry.specifications(Role.ANSWER, Set.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allow-list");
     }
 
     @Test

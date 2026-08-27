@@ -190,9 +190,6 @@ rulepilot:
     # per-call batches; the visual Agent decides when another finite batch is no longer useful.
     # Complete post-publication positioning and visual audits use their own bounded pool.
     request-parallelism: ${VISUAL_REQUEST_PARALLELISM:10}
-    # OCR is page-local and I/O bound, but it runs only after an image-to-typed-facts contract failure. Its repair
-    # capacity is independent of ordinary semantic concurrency and the later full visual audit.
-    ocr-request-parallelism: ${VISUAL_OCR_REQUEST_PARALLELISM:10}
     # Structured rule interpretation is heavier and retains the measured four-request provider headroom.
     semantic-request-parallelism: ${VISUAL_SEMANTIC_REQUEST_PARALLELISM:4}
     # Inspect only a small distributed sample of unowned sparse-text pages before coverage refinement. A cataloged
@@ -298,12 +295,8 @@ rulepilot:
       hourly-limit: ${BGG_TRANSLATION_HOURLY_LIMIT:60}
       provider-concurrency: ${BGG_TRANSLATION_PROVIDER_CONCURRENCY:2}
     recommendation-agent:
-      enabled: ${BGG_RECOMMENDATION_AGENT_ENABLED:${BGG_TRANSLATION_ENABLED:false}}
       provider: ${BGG_RECOMMENDATION_PROVIDER:fake}
       model-provider: ${BGG_RECOMMENDATION_MODEL_PROVIDER:qwen}
-      cache-ttl: ${BGG_RECOMMENDATION_AGENT_CACHE_TTL:P1D}
-      hourly-limit: ${BGG_RECOMMENDATION_AGENT_HOURLY_LIMIT:240}
-      provider-concurrency: ${BGG_RECOMMENDATION_AGENT_PROVIDER_CONCURRENCY:2}
       temperature: ${BGG_RECOMMENDATION_TEMPERATURE:0.0}
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}

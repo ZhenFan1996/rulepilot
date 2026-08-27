@@ -46,17 +46,14 @@ public class NativeAgentToolRegistry {
         this.scopeAuthorizer = scopeAuthorizer;
     }
 
-    public List<ToolSpec> specifications(Role role) {
-        return specifications(role, Set.of());
-    }
-
-    /** An empty allow-list preserves the role-wide registry for compatibility callers. */
     public List<ToolSpec> specifications(Role role, Set<String> allowedNames) {
         if (role == null) throw new IllegalArgumentException("native tool role is required");
-        if (allowedNames == null) throw new IllegalArgumentException("native tool allow-list is required");
+        if (allowedNames == null || allowedNames.isEmpty()) {
+            throw new IllegalArgumentException("native tool allow-list is required");
+        }
         return tools.values().stream()
                 .filter(tool -> tool.tool().allowedRoles().contains(role))
-                .filter(tool -> allowedNames.isEmpty() || allowedNames.contains(tool.spec().name()))
+                .filter(tool -> allowedNames.contains(tool.spec().name()))
                 .map(RegisteredTool::spec)
                 .sorted(Comparator.comparing(ToolSpec::name))
                 .toList();

@@ -34,16 +34,6 @@ public interface VisualRulebookPageFactSearch {
             keywords = keywords.stream().map(String::strip).filter(value -> !value.isBlank()).distinct().toList();
         }
 
-        /** Compatibility constructor for callers that already supply a bounded atomic rule-fact fixture. */
-        public PageFactMatch(
-                int pageNumber,
-                String printedTerms,
-                String factualSummary,
-                List<String> keywords,
-                double score) {
-            this(pageNumber, printedTerms, factualSummary, keywords, score, RuleFactStatus.CURRENT_RULE_FACTS);
-        }
-
         public boolean supportsRuleClaims() {
             return ruleFactStatus == RuleFactStatus.CURRENT_RULE_FACTS;
         }

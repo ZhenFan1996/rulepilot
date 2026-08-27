@@ -70,28 +70,6 @@ public interface VisualRulebookPageCatalogModel {
         }
     }
 
-    /**
-     * Whether this adapter can run a page-local document transcription as a changed typed-repair input after the
-     * ordinary vision-to-facts request violates its contract. The transcription is a separate, audited model call:
-     * implementations must not hide it inside {@link #summarizeForTeaching(CatalogRequest)}.
-     */
-    default boolean supportsTeachingPageTranscription(String modelConfigurationOwner) {
-        return false;
-    }
-
-    /**
-     * Copies visible page text without interpreting rules. The returned text is untrusted source input and must stay
-     * bound to the supplied page number when it is passed to the semantic catalog model.
-     */
-    default PageTranscript transcribeTeachingPage(PageImageInput page, String modelConfigurationOwner) {
-        throw new UnsupportedOperationException("visual page transcription is unavailable");
-    }
-
-    default Optional<ModelExecutionIdentity> teachingPageTranscriptionExecutionIdentity(
-            String modelConfigurationOwner) {
-        return Optional.empty();
-    }
-
     default Optional<ModelExecutionIdentity> teachingStartupExecutionIdentity(String modelConfigurationOwner) {
         return Optional.empty();
     }
@@ -114,27 +92,10 @@ public interface VisualRulebookPageCatalogModel {
         };
     }
 
-    record PageTranscript(int pageNumber, String text) {
-
-        public PageTranscript {
-            if (pageNumber < 1 || text == null || text.isBlank()) {
-                throw new IllegalArgumentException("visual page transcript is invalid");
-            }
-        }
-    }
-
-    record CatalogRequest(
-            List<PageImageInput> pages,
-            String modelConfigurationOwner,
-            String rulebookTitle,
-            List<PageTranscript> transcripts) {
+    record CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner, String rulebookTitle) {
 
         public CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner) {
-            this(pages, modelConfigurationOwner, null, List.of());
-        }
-
-        public CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner, String rulebookTitle) {
-            this(pages, modelConfigurationOwner, rulebookTitle, List.of());
+            this(pages, modelConfigurationOwner, null);
         }
 
         public CatalogRequest {
@@ -146,19 +107,6 @@ public interface VisualRulebookPageCatalogModel {
                     ? null
                     : modelConfigurationOwner.strip();
             rulebookTitle = rulebookTitle == null || rulebookTitle.isBlank() ? null : rulebookTitle.strip();
-            transcripts = transcripts == null ? List.of() : List.copyOf(transcripts);
-            if (!transcripts.isEmpty()) {
-                Set<Integer> pageNumbers = pages.stream()
-                        .map(PageImageInput::pageNumber)
-                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
-                Set<Integer> transcriptPages = transcripts.stream()
-                        .map(PageTranscript::pageNumber)
-                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
-                if (transcriptPages.size() != transcripts.size() || !transcriptPages.equals(pageNumbers)) {
-                    throw new IllegalArgumentException(
-                            "visual page transcripts must bind every requested page exactly once");
-                }
-            }
         }
     }
 

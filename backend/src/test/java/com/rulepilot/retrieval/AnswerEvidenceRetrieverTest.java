@@ -33,7 +33,12 @@ class AnswerEvidenceRetrieverTest {
         HybridEvidenceHit source = evidence("执行该行动后获得一分。", 0.7);
         VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> List.of(
                 new VisualRulebookPageFactSearch.PageFactMatch(
-                        4, "Score marker", "The marker advances one space after this action.", List.of("marker"), 0.9));
+                        4,
+                        "Score marker",
+                        "The marker advances one space after this action.",
+                        List.of("marker"),
+                        0.9,
+                        RuleFactStatus.CURRENT_RULE_FACTS));
         RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
             @Override
             public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
@@ -72,7 +77,12 @@ class AnswerEvidenceRetrieverTest {
             visualLimits.add(limit);
             if (!Set.of("A - 01", "B#02").contains(query)) return List.of();
             return List.of(new VisualRulebookPageFactSearch.PageFactMatch(
-                    7, "A-01 B#02", "A-01 grants movement; B#02 grants energy.", List.of("A-01", "B#02"), 1.0));
+                    7,
+                    "A-01 B#02",
+                    "A-01 grants movement; B#02 grants energy.",
+                    List.of("A-01", "B#02"),
+                    1.0,
+                    RuleFactStatus.CURRENT_RULE_FACTS));
         };
         RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
             @Override
@@ -127,7 +137,8 @@ class AnswerEvidenceRetrieverTest {
                     "RECOVER",
                     "RECOVER returns every previously played action card to the player's hand.",
                     List.of("RECOVER", "action cards"),
-                    1.0));
+                    1.0,
+                    RuleFactStatus.CURRENT_RULE_FACTS));
         };
         RuleEvidenceHit directRule = hit(
                         "ACTIONS",
@@ -174,7 +185,12 @@ class AnswerEvidenceRetrieverTest {
         VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> {
             visualQueries.add(query);
             return List.of(new VisualRulebookPageFactSearch.PageFactMatch(
-                    3, "Visible rule text", factualSummary, List.of("page fact"), 0.9));
+                    3,
+                    "Visible rule text",
+                    factualSummary,
+                    List.of("page fact"),
+                    0.9,
+                    RuleFactStatus.CURRENT_RULE_FACTS));
         };
         RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
             @Override

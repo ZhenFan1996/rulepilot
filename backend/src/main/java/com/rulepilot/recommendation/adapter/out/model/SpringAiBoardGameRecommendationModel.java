@@ -2,20 +2,13 @@ package com.rulepilot.recommendation.adapter.out.model;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.StructuredTurn;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -27,7 +20,6 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
-import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -71,11 +63,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     }
 
     @Override
-    public boolean structuredPublicationConfigured(String ownerUsername) {
-        return configured(ownerUsername);
-    }
-
-    @Override
     public Turn next(Request request) {
         return next(request, null);
     }
@@ -83,108 +70,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     @Override
     public Turn next(Request request, String ownerUsername) {
         return invoke(request, temperature, "react", ownerUsername);
-    }
-
-    @Override
-    public StructuredTurn streamStructured(
-            Request request,
-            String ownerUsername,
-            Consumer<String> jsonDeltaListener) {
-        return streamJson(
-                modelFor(ownerUsername),
-                request,
-                ownerUsername,
-                jsonDeltaListener,
-                "structured_publication_stream");
-    }
-
-    private StructuredTurn streamJson(
-            ChatModel model,
-            Request request,
-            String ownerUsername,
-            Consumer<String> jsonDeltaListener,
-            String operation) {
-        List<Message> providerMessages = new ArrayList<>(request.messages());
-        if (!usesNativeJsonSchema(model, request, ownerUsername)) {
-            int schemaPosition = 0;
-            while (schemaPosition < providerMessages.size()
-                    && providerMessages.get(schemaPosition).role() == BoardGameRecommendationModel.Role.SYSTEM) {
-                schemaPosition++;
-            }
-            providerMessages.add(
-                    schemaPosition,
-                    Message.system("The exact JSON schema for this response is:\n"
-                            + request.structuredOutput().jsonSchema()));
-        }
-        providerMessages = mergeLeadingSystemMessages(providerMessages);
-        Prompt prompt = new Prompt(
-                providerMessages.stream().map(this::message).toList(),
-                requestOptions(model, request, ownerUsername).build());
-        long startedAt = System.nanoTime();
-        AtomicLong firstChunkAt = new AtomicLong();
-        AtomicReference<ChatResponse> lastObservedResponse = new AtomicReference<>();
-        AtomicReference<ChatResponse> lastUsableResponse = new AtomicReference<>();
-        AtomicReference<BoardGameRecommendationModel.CompletionStatus> completion =
-                new AtomicReference<>(BoardGameRecommendationModel.CompletionStatus.UNKNOWN);
-        AtomicBoolean actionSeen = new AtomicBoolean();
-        StringBuilder accumulatedJson = new StringBuilder();
-
-        model.stream(prompt).doOnNext(response -> {
-            if (response != null) lastObservedResponse.set(response);
-            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) return;
-            lastUsableResponse.set(response);
-            AssistantMessage output = response.getResult().getOutput();
-            if (!output.getToolCalls().isEmpty()) actionSeen.set(true);
-            String chunk = output.getText();
-            if (chunk != null && !chunk.isEmpty()) {
-                accumulatedJson.append(chunk);
-                firstChunkAt.compareAndSet(0, System.nanoTime());
-                jsonDeltaListener.accept(chunk);
-            }
-            String finishReason = response.getResult().getMetadata() == null
-                    ? null
-                    : response.getResult().getMetadata().getFinishReason();
-            BoardGameRecommendationModel.CompletionStatus observed = completionStatus(finishReason);
-            if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) completion.set(observed);
-        }).blockLast();
-
-        ChatResponse response = lastUsableResponse.get();
-        if (response == null) {
-            throw new IllegalStateException("recommendation model returned no structured stream");
-        }
-        if (actionSeen.get()) {
-            throw new IllegalStateException("structured recommendation turn returned an action call");
-        }
-        if (accumulatedJson.isEmpty()) {
-            throw new IllegalStateException("recommendation model returned an empty structured stream");
-        }
-        logUsage(
-                request,
-                lastObservedResponse.get() == null ? response : lastObservedResponse.get(),
-                (System.nanoTime() - startedAt) / 1_000_000,
-                temperature,
-                operation,
-                ownerUsername,
-                firstChunkAt.get() == 0 ? -1 : (firstChunkAt.get() - startedAt) / 1_000_000);
-        return new StructuredTurn(accumulatedJson.toString(), completion.get());
-    }
-
-    private List<Message> mergeLeadingSystemMessages(List<Message> messages) {
-        int systemCount = 0;
-        while (systemCount < messages.size()
-                && messages.get(systemCount).role() == BoardGameRecommendationModel.Role.SYSTEM) {
-            systemCount++;
-        }
-        if (systemCount < 2) {
-            return messages;
-        }
-        String merged = messages.subList(0, systemCount).stream()
-                .map(Message::content)
-                .collect(java.util.stream.Collectors.joining("\n\n"));
-        List<Message> normalized = new ArrayList<>(messages.size() - systemCount + 1);
-        normalized.add(Message.system(merged));
-        normalized.addAll(messages.subList(systemCount, messages.size()));
-        return normalized;
     }
 
     private Turn invoke(
@@ -205,8 +90,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 (System.nanoTime() - startedAt) / 1_000_000,
                 requestTemperature,
                 operation,
-                ownerUsername,
-                -1);
+                ownerUsername);
         return turn(response);
     }
 
@@ -226,34 +110,14 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             } else if ("qwen".equals(providerFor(ownerUsername))) {
                 builder.extraBody(Map.of("enable_thinking", false));
             }
-            if (request.tools().isEmpty()) {
-                builder.toolChoice(null);
-                builder.parallelToolCalls(null);
-                OpenAiChatModel.ResponseFormat format = usesNativeJsonSchema(model, request, ownerUsername)
-                        ? OpenAiChatModel.ResponseFormat.builder()
-                                .type(OpenAiChatModel.ResponseFormat.Type.JSON_SCHEMA)
-                                .jsonSchema(request.structuredOutput().jsonSchema())
-                                .build()
-                        : OpenAiChatModel.ResponseFormat.builder()
-                                .type(OpenAiChatModel.ResponseFormat.Type.JSON_OBJECT)
-                                .build();
-                builder.responseFormat(format);
-            } else {
-                // Action turns use the provider's native function-calling contract.
-                builder.toolChoice("required");
-                builder.parallelToolCalls(false);
-            }
+            builder.toolChoice("required");
+            builder.parallelToolCalls(false);
             options = builder;
         } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {
             GoogleGenAiChatOptions.Builder builder = defaults.mutate();
-            if (request.tools().isEmpty()) {
-                builder.toolChoice(null);
-                builder.responseMimeType("application/json");
-            } else {
-                builder.toolChoice(new GoogleGenAiChatOptions.ToolChoice(
-                        GoogleGenAiChatOptions.ToolChoice.Mode.ANY,
-                        request.tools().stream().map(ToolSpec::name).toList()));
-            }
+            builder.toolChoice(new GoogleGenAiChatOptions.ToolChoice(
+                    GoogleGenAiChatOptions.ToolChoice.Mode.ANY,
+                    request.tools().stream().map(ToolSpec::name).toList()));
             options = builder;
         } else if (model.getOptions() instanceof ToolCallingChatOptions defaults) {
             options = defaults.mutate();
@@ -263,13 +127,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         return options.toolCallbacks(callbacks)
                 .temperature(temperature)
                 .maxTokens(request.maxOutputTokens());
-    }
-
-    private boolean usesNativeJsonSchema(ChatModel model, Request request, String ownerUsername) {
-        return request.structuredOutput() != null
-                && request.structuredOutput().strictPreferred()
-                && model.getOptions() instanceof OpenAiChatOptions
-                && "openai".equals(providerFor(ownerUsername));
     }
 
     private Turn turn(ChatResponse response) {
@@ -301,8 +158,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             long elapsedMs,
             double requestTemperature,
             String operation,
-            String ownerUsername,
-            long firstChunkMs) {
+            String ownerUsername) {
         int inputCharacters = request.messages().stream()
                         .mapToInt(message -> message.content().length())
                         .sum()
@@ -310,21 +166,16 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                         .mapToInt(tool -> tool.name().length()
                                 + tool.description().length()
                                 + tool.inputSchema().length())
-                        .sum()
-                + (request.structuredOutput() == null
-                        ? 0
-                        : request.structuredOutput().name().length()
-                                + request.structuredOutput().jsonSchema().length());
+                        .sum();
         org.springframework.ai.chat.metadata.Usage usage = response.getMetadata() == null
                 ? null
                 : response.getMetadata().getUsage();
         LOGGER.info(
-                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, firstChunkMs={}, elapsedMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
+                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
                 operation,
                 providerFor(ownerUsername),
                 modelNameFor(ownerUsername),
                 requestTemperature,
-                firstChunkMs,
                 elapsedMs,
                 inputCharacters,
                 request.maxOutputTokens(),

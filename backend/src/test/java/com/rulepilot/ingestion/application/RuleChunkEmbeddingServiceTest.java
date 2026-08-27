@@ -10,7 +10,6 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.ingestion.EmbeddingProvider;
 import com.rulepilot.ingestion.EmbeddingProvider.EmbeddingVector;
-import com.rulepilot.ingestion.RuleChunkEmbeddingIndexer.EmbeddingIndexReport;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.List;
 import java.util.UUID;
@@ -35,9 +34,8 @@ class RuleChunkEmbeddingServiceTest {
         when(provider.embed(List.of(first.embeddingText(), second.embeddingText())))
                 .thenReturn(List.of(firstVector, secondVector));
 
-        var report = new RuleChunkEmbeddingService(provider, chunks, metrics).index(documentVersionId);
+        new RuleChunkEmbeddingService(provider, chunks, metrics).index(documentVersionId);
 
-        assertThat(report).isEqualTo(new EmbeddingIndexReport("bounded-provider", 2, 2));
         var order = inOrder(chunks, provider);
         order.verify(chunks).findPending(documentVersionId, "bounded-provider");
         order.verify(provider).embed(List.of(first.embeddingText(), second.embeddingText()));
@@ -66,9 +64,8 @@ class RuleChunkEmbeddingServiceTest {
         when(provider.dimensions()).thenReturn(2);
         when(chunks.findPending(documentVersionId, "bounded-provider")).thenReturn(List.of());
 
-        var report = new RuleChunkEmbeddingService(provider, chunks, metrics).index(documentVersionId);
+        new RuleChunkEmbeddingService(provider, chunks, metrics).index(documentVersionId);
 
-        assertThat(report).isEqualTo(new EmbeddingIndexReport("bounded-provider", 2, 0));
         verify(chunks).findPending(documentVersionId, "bounded-provider");
         verifyNoMoreInteractions(chunks);
         assertThat(metrics.find(RuleChunkEmbeddingService.PHASE_DURATION_METRIC).timers())

@@ -25,6 +25,12 @@ const rulingReference = {
   citationIds: ['chunk-1'], confirmedRulingId: null, confirmedRulingVersion: null,
 }
 
+function answerStreamResponse(result: unknown) {
+  return new Response(`event: result\ndata: ${JSON.stringify(result)}\n\n`, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  })
+}
+
 const AnswerPanelStub = defineComponent({
   name: 'LessonAnswerPanel',
   props: {
@@ -92,7 +98,7 @@ describe('RecommendationAnswerWorkspace', () => {
         id: 'session-1', editionId: 'edition-1', documentVersionId: 'document-1',
       })
       if (path.includes('/answers/conversation?')) return Response.json([])
-      if (path === '/api/v1/document-versions/document-1/answers/stream' && init?.method === 'POST') return Response.json({
+      if (path === '/api/v1/document-versions/document-1/answers/stream' && init?.method === 'POST') return answerStreamResponse({
         answer, conversationTurnId: 'turn-1', rulingReference,
       })
       return new Response(null, { status: 404 })

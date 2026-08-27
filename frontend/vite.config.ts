@@ -105,7 +105,6 @@ export default defineConfig({
           'assets/LanguageSwitcher-*.{js,css}',
           'assets/visualEnrichment-*.js',
           'assets/offlineKnowledge-*.js',
-          'assets/playerFacingCitation-*.js',
           'assets/NotFoundView-*.js',
         ],
         globIgnores: ['ocr-assets/**'],

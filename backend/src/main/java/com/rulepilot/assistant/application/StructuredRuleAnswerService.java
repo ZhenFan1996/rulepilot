@@ -335,7 +335,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             PlayerLocale outputLanguage,
             RuleAnswering.PublicLearningIntent learningIntent,
             Set<Integer> allowedPublicPages) {
-        PlayerLocale turnLanguage = PlayerLocale.forQuestion(question, outputLanguage);
+        PlayerLocale turnLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
         AnswerCreation creation = answerWithRun(
                 question,
                 new QuestionContext(
@@ -432,7 +432,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             UUID gameSessionId,
             UUID assistantRunId,
             boolean useCache) {
-        context = context.withOutputLanguage(PlayerLocale.forQuestion(question, context.outputLanguage()));
         UnderstoodQuestion deterministic = understanding.understand(question, context);
         UnderstoodQuestion understood = deterministic;
         AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);

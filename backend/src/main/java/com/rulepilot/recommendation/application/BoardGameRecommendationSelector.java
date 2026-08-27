@@ -8,7 +8,11 @@ import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReplyPart;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -52,19 +56,40 @@ class BoardGameRecommendationSelector {
     List<RecommendedGame> present(
             List<Game> selected,
             RecommendationProfile profile,
-            List<Game> references,
-            boolean chinese,
-            com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research research) {
+            boolean chinese) {
         return selected.stream()
-                // Cards retain verified candidate-scoped fit claims. The single typed candidate action supplies the
-                // player lead, while deterministic publication turns these claims into player-facing reply parts.
-                .map(game -> new RecommendedGame(
-                        game,
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        fitClaims(game, profile, chinese)))
+                .map(game -> present(game, profile, chinese))
                 .toList();
+    }
+
+    private RecommendedGame present(
+            Game game,
+            RecommendationProfile profile,
+            boolean chinese) {
+        List<CandidateClaim> claims = fitClaims(game, profile, chinese);
+        List<String> matches = claims.stream()
+                .filter(claim -> claim.relation() == CandidateClaim.Relation.SATISFIED)
+                .map(CandidateClaim::text)
+                .toList();
+        List<String> tradeoffs = claims.stream()
+                .filter(claim -> claim.relation() == CandidateClaim.Relation.CONFLICT
+                        || claim.relation() == CandidateClaim.Relation.UNKNOWN)
+                .map(CandidateClaim::text)
+                .toList();
+        List<RecommendationReason> reasons = claims.stream()
+                .map(claim -> new RecommendationReason(
+                        ReasonKind.BGG_FACT,
+                        claim.text(),
+                        claim.sourceIndexes()))
+                .toList();
+        List<RecommendationReplyPart> replyParts = claims.stream()
+                .map(claim -> new RecommendationReplyPart(
+                        claim.relation() == CandidateClaim.Relation.SATISFIED
+                                ? ReplyPartRole.WHY_FIT
+                                : ReplyPartRole.TRADEOFF,
+                        claim))
+                .toList();
+        return new RecommendedGame(game, matches, tradeoffs, reasons, claims, replyParts);
     }
 
     Candidate researchCandidate(Game game) {

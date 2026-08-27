@@ -1,7 +1,6 @@
 package com.rulepilot.ingestion.application;
 
 import com.rulepilot.ingestion.EmbeddingProvider;
-import com.rulepilot.ingestion.RuleChunkEmbeddingIndexer;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Instant;
@@ -15,7 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Profile("!test")
-public class RuleChunkEmbeddingService implements RuleChunkEmbeddingIndexer {
+public class RuleChunkEmbeddingService {
 
     static final String PHASE_DURATION_METRIC = "rulepilot.document.processing.embedding.phase.duration";
     private static final Logger LOGGER = LoggerFactory.getLogger(RuleChunkEmbeddingService.class);
@@ -33,9 +32,8 @@ public class RuleChunkEmbeddingService implements RuleChunkEmbeddingIndexer {
         this.metrics = metrics;
     }
 
-    @Override
     @Transactional
-    public EmbeddingIndexReport index(UUID documentVersionId) {
+    public void index(UUID documentVersionId) {
         if (documentVersionId == null) throw new IllegalArgumentException("document version is required");
         long pendingLoadStartedAt = System.nanoTime();
         var pending = chunks.findPending(documentVersionId, provider.id());
@@ -44,7 +42,7 @@ public class RuleChunkEmbeddingService implements RuleChunkEmbeddingIndexer {
             LOGGER.info(
                     "Document embedding completed: chunks=0, pendingLoadMs={}, providerMs=0, persistenceMs=0",
                     milliseconds(pendingLoadNanos));
-            return new EmbeddingIndexReport(provider.id(), provider.dimensions(), 0);
+            return;
         }
         long providerStartedAt = System.nanoTime();
         var embeddings = provider.embed(pending.stream()
@@ -67,7 +65,6 @@ public class RuleChunkEmbeddingService implements RuleChunkEmbeddingIndexer {
                 milliseconds(pendingLoadNanos),
                 milliseconds(providerNanos),
                 milliseconds(persistenceNanos));
-        return new EmbeddingIndexReport(provider.id(), provider.dimensions(), pending.size());
     }
 
     private long recordPhase(String phase, long startedAt) {

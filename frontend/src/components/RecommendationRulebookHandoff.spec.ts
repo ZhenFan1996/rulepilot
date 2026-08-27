@@ -2,7 +2,6 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { readPendingRulebookLessons } from '@/lib/pendingRulebookLesson'
 import { BACKGROUND_WORK_CHANGED_EVENT } from '@/lib/backgroundWorkRefresh'
 import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
 import { setLocale } from '@/lib/locale'
@@ -387,7 +386,6 @@ describe('RecommendationRulebookHandoff', () => {
       sourceLanguageVerified: true,
       identityConfirmed: true,
     })
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(backgroundWorkChanged).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.name).toBe('home')
     await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
@@ -723,7 +721,7 @@ describe('RecommendationRulebookHandoff', () => {
           activities: [
             { sequence: 1, operation: 'inspectTeachingVisualPage|1|8', summary: 'page one grouped', outcome: 'SUCCEEDED' },
             { sequence: 2, operation: 'persistTeachingVisualPage|1|8', summary: 'page one stored', outcome: 'SUCCEEDED' },
-            { sequence: 3, operation: 'transcribeTeachingVisualRepairPage|2|8', summary: 'OCR stopped', outcome: 'FAILED' },
+            { sequence: 3, operation: 'inspectTeachingVisualRepair|2|8|SCHEMA_MISMATCH', summary: 'page repair stopped', outcome: 'FAILED' },
           ],
         }
         return Response.json(failed)
@@ -1186,7 +1184,7 @@ describe('RecommendationRulebookHandoff', () => {
       const failureBoundary = wrapper.get('[data-testid="recommendation-teaching-failure-boundary"]')
       expect(failureBoundary.get('[data-failure-classification="local-degradation"]').text())
         .toContain('局部降级：可用内容保留')
-      expect(failureBoundary.text()).toContain('页码绑定错误只修正当前结果一次')
+      expect(failureBoundary.text()).toContain('页码绑定错误只用原图修正当前页一次')
       expect(failureBoundary.get('[data-failure-classification="preserved-stop"]').text())
         .toContain('全局时限耗尽')
       expect(failureBoundary.get('[data-failure-classification="external-repair"]').text())
@@ -1222,7 +1220,7 @@ describe('RecommendationRulebookHandoff', () => {
 
       const activityList = wrapper.get('[data-testid="recommendation-teaching-activity-list"]')
       expect(activityList.findAll('li')).toHaveLength(11)
-      expect(activityList.text()).toContain('第 6 / 20 页的规则整理经过一次修正后仍未通过校验')
+      expect(activityList.text()).toContain('第 6 / 20 页的规则整理经过一次修正后仍未通过校验；仅本页暂不可用，其他页面继续保留')
       expect(activityList.text()).toContain('正在整理图像规则页第 4 / 20 页的规则组')
       expect(activityList.text()).toContain('第 3 / 20 页的规则整理在临时服务异常后已生成结果，正在保存')
       expect(activityList.text()).toContain('图像规则页第 3 / 20 页的规则组已经保存')
@@ -1326,7 +1324,7 @@ describe('RecommendationRulebookHandoff', () => {
       const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
       expect(generationSteps.text()).toContain('通读整本规则书，形成整局认识并规划章节')
       expect(generationSteps.text()).toContain('图片页直接生成带页码绑定的结构化规则事实')
-      expect(generationSteps.text()).toContain('只有结构化契约未通过时才退回 OCR 并修正一次')
+      expect(generationSteps.text()).toContain('结构化契约未通过时只用原图修正当前页一次')
       expect(generationSteps.text()).toContain('按页面整理规则组')
       expect(generationSteps.text()).toContain('读取当前章节绑定的规则页与引用')
       expect(generationSteps.text()).toContain('依据原文生成玩家可以直接照做的讲解步骤')

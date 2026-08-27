@@ -66,13 +66,6 @@ describe('streamStructuredAnswer', () => {
     expect(statuses).toEqual(['running', 'succeeded'])
   })
 
-  it('keeps the JSON response as a backward-compatible transport fallback', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ answer: { status: 'ANSWERED' } })))
-
-    await expect(streamStructuredAnswer('/answers', { method: 'POST' }, () => undefined))
-      .resolves.toEqual({ answer: { status: 'ANSWERED' } })
-  })
-
   it('publishes the validated answer without waiting for the proxy to close the SSE connection', async () => {
     const encoder = new TextEncoder()
     let transportCancelled = false

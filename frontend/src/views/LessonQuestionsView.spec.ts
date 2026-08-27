@@ -6,6 +6,12 @@ import { setLocale } from '@/lib/locale'
 import { rememberLessonAnswerThread } from '@/lib/lessonAnswerThread'
 import LessonQuestionsView from './LessonQuestionsView.vue'
 
+function answerStreamResponse(result: unknown) {
+  return new Response(`event: result\ndata: ${JSON.stringify(result)}\n\n`, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  })
+}
+
 describe('LessonQuestionsView', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -85,7 +91,7 @@ describe('LessonQuestionsView', () => {
     await flushPromises()
     await router.push('/lesson/plan-2/questions')
     await flushPromises()
-    resolveAnswer!(Response.json({
+    resolveAnswer!(answerStreamResponse({
       answer: {
         language: 'zh-CN',
         status: 'ANSWERED', shortVerdict: '第一份规则的旧答案', explanation: '不应出现。',
@@ -111,7 +117,7 @@ describe('LessonQuestionsView', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path.endsWith('/answers/stream') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
-        return Response.json({
+        return answerStreamResponse({
           answer: {
             language: 'zh-CN',
             status: 'ANSWERED', shortVerdict: '完成放置后结算。', explanation: '规则书给出了这个顺序。',
@@ -158,7 +164,7 @@ describe('LessonQuestionsView', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path.endsWith('/answers/stream') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
-        return Response.json({
+        return answerStreamResponse({
           answer: {
             language: 'en',
             status: 'ANSWERED', shortVerdict: 'Score after resolving the objective.',

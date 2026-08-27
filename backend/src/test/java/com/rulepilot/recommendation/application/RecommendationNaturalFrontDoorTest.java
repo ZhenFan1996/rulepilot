@@ -95,7 +95,6 @@ class RecommendationNaturalFrontDoorTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.assistantMessage()).isEqualTo(playerReply);
-        assertThat(response.recommendationLead()).isEqualTo(playerReply);
         assertThat(response.games())
                 .singleElement()
                 .satisfies(game -> {
@@ -120,7 +119,6 @@ class RecommendationNaturalFrontDoorTest {
                                     "\"required\":[\"title\",\"purpose\",\"evidence\"]")
                             .doesNotContain("\"reason\"");
                 });
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -234,7 +232,6 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.harness().actions()).containsExactly(
                 "UNSTRUCTURED_EVIDENCE_REPLY",
                 "UNAVAILABLE:UNSTRUCTURED_EVIDENCE_REPLY");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -287,7 +284,6 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(captured.get().tools())
                 .extracting(BoardGameRecommendationModel.ToolSpec::name)
                 .contains(BoardGameRecommendationAgent.ASK_TOOL);
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -384,16 +380,14 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(observedOffsets).containsExactly(0, 2);
         assertThat(firstIds).containsExactly(901, 902);
         assertThat(secondIds).containsExactly(903, 904).doesNotContainAnyElementsOf(firstIds);
-        assertNarrativeUnavailable(first);
-        assertNarrativeUnavailable(second);
+        assertDeterministicPublication(first);
+        assertDeterministicPublication(second);
         assertThat(first.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(second.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(first.harness().modelCalls()).isEqualTo(1);
         assertThat(second.harness().modelCalls()).isEqualTo(1);
         assertThat(second.harness().actions())
-                .containsSubsequence("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
-                .contains("RECOMMENDATION_NARRATIVE_UNAVAILABLE");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
+                .containsSubsequence("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES");
 
         loop.stopBoundedCalls();
     }
@@ -518,7 +512,7 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(701, 702);
-        assertNarrativeUnavailable(response);
+        assertDeterministicPublication(response);
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
         assertThat(response.harness().actions())
@@ -527,7 +521,6 @@ class RecommendationNaturalFrontDoorTest {
                         "DISCOVER_CANDIDATES",
                         "DISCOVERY_RELATIONSHIP_VERIFIED",
                         "RECOMMEND_GAMES");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -630,7 +623,7 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(711, 712);
-        assertNarrativeUnavailable(response);
+        assertDeterministicPublication(response);
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(response.researchSources()).isEmpty();
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
@@ -642,7 +635,6 @@ class RecommendationNaturalFrontDoorTest {
                         "DISCOVERY_RELATIONSHIP_REJECTED:MISSING_OR_OTHER",
                         "RECOMMEND_GAMES");
         assertThat(response.harness().modelCalls()).isOne();
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -921,7 +913,6 @@ class RecommendationNaturalFrontDoorTest {
                         "IDENTITY_UNRESOLVED:INSUFFICIENT_PUBLIC_EVIDENCE",
                         "REPLY_TO_USER:IDENTITY_UNRESOLVED")
                 .doesNotContain("RECOMMEND_GAMES", "RESEARCH_GAME_FIT");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -1068,7 +1059,7 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.profile().playerCount().minimum()).isEqualTo(4);
         assertThat(response.profile().playerCount().maximum()).isEqualTo(4);
         assertThat(response.profile().durationMinutes().maximum()).isEqualTo(75);
-        assertNarrativeUnavailable(response);
+        assertDeterministicPublication(response);
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().fallbackUsed()).isFalse();
@@ -1097,7 +1088,6 @@ class RecommendationNaturalFrontDoorTest {
                         "Every candidate read must set requestedCount plus requestedCountBasis",
                         "defaultRecommendationCount",
                         "never reuse an older turn's count");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -1188,7 +1178,6 @@ class RecommendationNaturalFrontDoorTest {
                 properties,
                 new ObjectMapper());
 
-        List<String> publishedAnswerParts = new ArrayList<>();
         var response = loop.converse(
                 new ConversationRequest(
                         RecommendationProfile.empty(),
@@ -1203,14 +1192,10 @@ class RecommendationNaturalFrontDoorTest {
                         List.of()),
                 "zh-CN",
                 "player",
-                ignored -> {},
-                publishedAnswerParts::add);
+                ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(response.assistantMessage()).isEqualTo(naturalReply);
-        assertThat(publishedAnswerParts)
-                .as("only the validated terminal reply may reach the player stream")
-                .containsExactly(naturalReply);
         assertThat(response.assistantMessage()).doesNotContain("Anchor Workshop");
         assertThat(response.harness().actions())
                 .contains("REPLY_TO_USER")
@@ -1223,7 +1208,6 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(observedFollowup.messages().get(3).content())
                 .contains("discoveredRelationship", "Studio Architect", "verifiedGames")
                 .doesNotContain("UNTRUSTED WRONG DRAFT");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -1329,7 +1313,6 @@ class RecommendationNaturalFrontDoorTest {
                         "IDENTITY_UNRESOLVED:INSUFFICIENT_PUBLIC_EVIDENCE",
                         "REPLY_TO_USER:IDENTITY_UNRESOLVED")
                 .doesNotContain("RESEARCH_GAME_FIT");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -1422,7 +1405,6 @@ class RecommendationNaturalFrontDoorTest {
                 .isEqualTo("知道，这个称呼说的不是某一位，而是 Avery Stone、Blake North 和 Casey Rivers 这组设计搭档。你要是感兴趣，我们还可以继续聊他们共同作品里的设计取向。");
         assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions()).contains("REPLY_TO_USER");
-        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -1434,7 +1416,7 @@ class RecommendationNaturalFrontDoorTest {
         }
         assertThat(game.replyParts()).allSatisfy(part -> {
             assertThat(part.claim().type())
-                    .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.PREFERENCE_INFERENCE);
+                    .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.CONSTRAINT_FIT);
             assertThat(part.claim().bggId()).isEqualTo(game.game().ranking().bggId());
             assertThat(part.claim().evidence()).isNotEmpty().allSatisfy(evidence ->
                     assertThat(evidence.bggId()).isEqualTo(game.game().ranking().bggId()));
@@ -1444,11 +1426,9 @@ class RecommendationNaturalFrontDoorTest {
         });
     }
 
-    private void assertNarrativeUnavailable(BoardGameRecommendationAgent.ConversationResponse response) {
-        assertThat(response.recommendationLead()).contains("自然讲解没有生成完成");
-        assertThat(response.harness().actions()).contains(
-                "RECOMMENDATION_NARRATIVE_SKIPPED:CAPABILITY_UNAVAILABLE",
-                "RECOMMENDATION_NARRATIVE_UNAVAILABLE");
+    private void assertDeterministicPublication(BoardGameRecommendationAgent.ConversationResponse response) {
+        assertThat(response.assistantMessage()).contains("核对了目录资料", "卡片里列出了匹配点");
+        assertThat(response.harness().actions()).contains("RECOMMEND_GAMES");
     }
 
     private RecommendationAgentState optionalDeadlineState() {

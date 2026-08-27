@@ -14,7 +14,6 @@ import {
   type PlayerFacingRuleAnswer,
   type PlayerRuleCitation,
 } from '@/lib/playerAnswerContract'
-import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import {
   StructuredAnswerRequestError,
   StructuredAnswerStreamError,
@@ -157,7 +156,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   async function submitQuestion(text: string, learningIntent: LearningIntent | null) {
     const context = options.currentContext()
     if (!text || !context || answerLoading.value) return
-    const responseLocale = playerTurnLocale(text, context.locale)
+    const responseLocale = context.locale
     let failureKind: AnswerRequestFailure = 'request'
     const lessonRequest = options.currentLessonRequest()
     const answerRequest = ++latestAnswerRequest
@@ -278,7 +277,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     activeLearningIntent.value = null
     agentTrace.value = []
     const fallback = options.currentContext()?.locale ?? 'zh-CN'
-    answerError.value = answerRequestFailureCopy('cancelled', playerTurnLocale(question.value, fallback))
+    answerError.value = answerRequestFailureCopy('cancelled', fallback)
     answerOutcome.value = 'cancelled'
   }
 

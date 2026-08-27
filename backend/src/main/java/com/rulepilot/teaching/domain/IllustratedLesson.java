@@ -20,15 +20,6 @@ public record IllustratedLesson(
         sections = List.copyOf(sections);
     }
 
-    public IllustratedLesson(
-            UUID id,
-            UUID teachingPlanId,
-            LessonStatus status,
-            List<LessonSection> sections,
-            Instant createdAt) {
-        this(id, teachingPlanId, status, sections, "legacy", createdAt);
-    }
-
     public enum LessonStatus {
         COMPLETE,
         DRAFT_READY,

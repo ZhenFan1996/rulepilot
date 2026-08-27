@@ -8,7 +8,27 @@ import { setLocale } from '@/lib/locale'
 import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
 import GameRecommendationAgent from './GameRecommendationAgent.vue'
 
-const baseProfile = { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' }
+const baseProfile = {
+  type: 'all',
+  interaction: 'any',
+  playerCount: null,
+  durationMinutes: null,
+  complexity: null,
+}
+const exactConstraint = (value: number) => ({
+  minimum: value,
+  maximum: value,
+  strength: 'hard' as const,
+  sourceText: String(value),
+  confirmedTurn: 1,
+})
+const maximumConstraint = (value: number) => ({
+  minimum: null,
+  maximum: value,
+  strength: 'hard' as const,
+  sourceText: String(value),
+  confirmedTurn: 1,
+})
 const game = {
   bggId: 266192, name: '展翅翱翔', originalName: 'Wingspan', nameLocalized: true, publicationYear: 2019,
   overallRank: 34, geekRating: 7.79, averageRating: 8.09, usersRated: 102030,
@@ -23,6 +43,12 @@ const secondGame = {
   originalName: 'Ark Nova',
   thumbnailUrl: 'https://example.test/ark-nova.jpg',
   bggUrl: 'https://boardgamegeek.com/boardgame/342942',
+}
+
+function recommendationStreamResult(result: unknown) {
+  return new Response(`event: result\ndata: ${JSON.stringify(result)}\n\n`, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  })
 }
 
 describe('GameRecommendationAgent', () => {
@@ -84,7 +110,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('条件已保留在这个浏览器会话中')
     expect(wrapper.get('a[href^="/login"]').attributes('href')).toContain('redirect=/discover')
     expect(wrapper.get('a[href^="/register"]').attributes('href')).toContain('redirect=/discover')
-    expect(sessionStorage.getItem('rulepilot:recommendation-draft:v1'))
+    expect(sessionStorage.getItem('rulepilot:recommendation-draft:v2'))
       .toContain(detailedDraft)
 
     wrapper.unmount()
@@ -123,7 +149,7 @@ describe('GameRecommendationAgent', () => {
       if (String(input) === '/api/auth/csrf') {
         return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       }
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'conversation',
         mode: 'model_assisted',
         assistantMessage: '**Short answer**\n\n- [Useful source](https://example.test/source)\n- [unsafe](javascript:alert(1))\n\n<script>alert(1)</script>',
@@ -148,19 +174,21 @@ describe('GameRecommendationAgent', () => {
     expect(turn.text()).toContain('<script>alert(1)</script>')
   })
 
-  it('完整显示带推荐卡片的助手回答，而不是用短 recommendationLead 覆盖它', async () => {
+  it('renders the assistant narrative and card tradeoffs from one result', async () => {
     const assistantMessage = '如果你们四个人今晚想玩一局，我会先选《展翅翱翔》：人数和约 70 分钟时长都在你给出的范围内；它的卡牌组合会让每个人都有规划空间。取舍是卡牌文字较多，第一次讲解最好预留一点时间。'
-    const recommendationLead = '先选它。'
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') {
         return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       }
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations',
         mode: 'model_assisted',
         assistantMessage,
-        recommendationLead,
-        profile: { ...baseProfile, players: 4, maxMinutes: 90 },
+        profile: {
+          ...baseProfile,
+          playerCount: exactConstraint(4),
+          durationMinutes: maximumConstraint(90),
+        },
         clarification: null,
         sourceCount: 1,
         candidatesEvaluated: 1,
@@ -195,7 +223,6 @@ describe('GameRecommendationAgent', () => {
 
     const turn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
     expect(turn.text()).toContain(assistantMessage)
-    expect(turn.text()).not.toContain(recommendationLead)
     expect(turn.findAll('dt').filter(label => label.text() === '为什么选它')).toHaveLength(1)
     expect(turn.findAll('dt').filter(label => label.text() === '需要留意')).toHaveLength(1)
   })
@@ -205,9 +232,13 @@ describe('GameRecommendationAgent', () => {
       if (String(input) === '/api/auth/csrf') {
         return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       }
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '我核对了这款候选，可以继续比较。',
-        profile: { ...baseProfile, players: 4, maxMinutes: 90 }, clarification: null,
+        profile: {
+          ...baseProfile,
+          playerCount: exactConstraint(4),
+          durationMinutes: maximumConstraint(90),
+        }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 1,
         games: [{ game, matches: ['支持 4 人游玩'], tradeoffs: [] }],
       })
@@ -285,7 +316,7 @@ describe('GameRecommendationAgent', () => {
           latestResponse: recommendation,
         })
       }
-      return Response.json(recommendation)
+      return recommendationStreamResult(recommendation)
     }))
     const wrapper = await mountAgent({ RecommendationRulebookHandoff: true }, { sessionIdentity: 'alice' })
     await flushPromises()
@@ -342,9 +373,6 @@ describe('GameRecommendationAgent', () => {
     const requests: Array<Record<string, unknown>> = []
     const restoredProfile = {
       ...baseProfile,
-      players: 4,
-      maxMinutes: 180,
-      maxWeight: 3.2,
       playerCount: { minimum: 3, maximum: 4, strength: 'hard', sourceText: '3–4 players', confirmedTurn: 1 },
       durationMinutes: { minimum: 120, maximum: 180, strength: 'hard', sourceText: '120–180 minutes', confirmedTurn: 1 },
       complexity: { minimum: 2.4, maximum: 3.2, strength: 'soft', sourceText: 'prefer 2.4–3.2', confirmedTurn: 1 },
@@ -377,7 +405,7 @@ describe('GameRecommendationAgent', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>
       requests.push(request)
-      return Response.json({
+      return recommendationStreamResult({
         ...latestResponse,
         revision: 5,
         clientTurnId: request.clientTurnId,
@@ -485,7 +513,7 @@ describe('GameRecommendationAgent', () => {
     expect(turns.filter(turn => turn.includes('服务器已经完成并保存了这一轮'))).toHaveLength(1)
 
     wrapper.unmount()
-    sessionStorage.removeItem('rulepilot:recommendation-conversation:v1:alice')
+    sessionStorage.removeItem('rulepilot:recommendation-conversation:v2:alice')
     const refreshed = await mountAgent({}, { sessionIdentity: 'alice' })
     await flushPromises()
     expect(sessionReads).toBe(3)
@@ -530,7 +558,7 @@ describe('GameRecommendationAgent', () => {
           headers: { 'Content-Type': 'text/event-stream' },
         })
       }
-      return Response.json({
+      return recommendationStreamResult({
         ...previousResponse,
         revision: 4,
         clientTurnId: body.clientTurnId,
@@ -562,7 +590,6 @@ describe('GameRecommendationAgent', () => {
   it('keeps an unavailable result retryable and shows its terminal player-facing explanation', async () => {
     const conversationId = 'cb9e5386-415f-48ea-8991-0cad2fc67d02'
     const originalRequest = '找一些适合四个人的科幻主题桌游'
-    const provisionalAnswer = '我已经找到几款可核对的候选，正在确认它们与主题的关系。'
     const unavailableMessage = '推荐服务暂时不可用。'
     const requestBodies: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -572,9 +599,7 @@ describe('GameRecommendationAgent', () => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       requestBodies.push(body)
       if (requestBodies.length === 1) {
-        return new Response([
-          `event: answer_part\ndata: ${JSON.stringify({ field: 'message', text: provisionalAnswer })}\n\n`,
-          `event: result\ndata: ${JSON.stringify({
+        return recommendationStreamResult({
             conversationId,
             revision: 1,
             clientTurnId: body.clientTurnId,
@@ -589,10 +614,9 @@ describe('GameRecommendationAgent', () => {
             sourceCount: 179737,
             candidatesEvaluated: 0,
             games: [],
-          })}\n\n`,
-        ].join(''), { headers: { 'Content-Type': 'text/event-stream' } })
+        })
       }
-      return Response.json({
+      return recommendationStreamResult({
         conversationId,
         revision: 2,
         clientTurnId: body.clientTurnId,
@@ -620,8 +644,6 @@ describe('GameRecommendationAgent', () => {
     expect(failedTurn.text()).not.toContain(unavailableMessage)
     expect(wrapper.get('[data-testid="recommendation-failed-assistant-reply"]').text())
       .toBe(unavailableMessage)
-    expect(wrapper.find('[data-testid="recommendation-provisional-failure"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain(provisionalAnswer)
     expect(requestBodies[0]).toMatchObject({ revision: 0, message: originalRequest })
     expect(wrapper.findAll('[data-conversation-message]').filter(turn => turn.text().includes(originalRequest)))
       .toHaveLength(1)
@@ -653,7 +675,7 @@ describe('GameRecommendationAgent', () => {
       recommendationCalls += 1
       const body = JSON.parse(String(init?.body)) as { clientTurnId: string }
       if (recommendationCalls === 1) {
-        return Response.json({
+        return recommendationStreamResult({
           conversationId,
           revision: 1,
           clientTurnId: body.clientTurnId,
@@ -673,7 +695,7 @@ describe('GameRecommendationAgent', () => {
           games: [],
         })
       }
-      return Response.json({
+      return recommendationStreamResult({
         conversationId,
         revision: 2,
         clientTurnId: body.clientTurnId,
@@ -760,7 +782,7 @@ describe('GameRecommendationAgent', () => {
           headers: { 'Content-Type': 'text/event-stream' },
         })
       }
-      return Response.json({
+      return recommendationStreamResult({
         ...clarificationResponse,
         revision: 2,
         clientTurnId: body.clientTurnId,
@@ -846,7 +868,7 @@ describe('GameRecommendationAgent', () => {
           headers: { 'Content-Type': 'text/event-stream' },
         })
       }
-      return Response.json({
+      return recommendationStreamResult({
         ...oldResponse,
         revision: 2,
         clientTurnId: body.clientTurnId,
@@ -896,7 +918,7 @@ describe('GameRecommendationAgent', () => {
         return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       }
       const body = JSON.parse(String(init?.body)) as { clientTurnId: string }
-      return Response.json({
+      return recommendationStreamResult({
         conversationId: '2c17aa9e-4895-4e5b-868f-0c2615c0dd6b',
         revision: 1,
         clientTurnId: body.clientTurnId,
@@ -963,7 +985,7 @@ describe('GameRecommendationAgent', () => {
           headers: { 'Content-Type': 'text/event-stream' },
         })
       }
-      return Response.json({
+      return recommendationStreamResult({
         ...previousResponse,
         revision: 4,
         clientTurnId: body.clientTurnId,
@@ -1092,7 +1114,7 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('刚才没有接上')
     expect(requestBodies[0]?.message).toBe(boundaryMessage)
-    const stored = JSON.parse(sessionStorage.getItem('rulepilot:recommendation-conversation:v1:alice') ?? 'null') as {
+    const stored = JSON.parse(sessionStorage.getItem('rulepilot:recommendation-conversation:v2:alice') ?? 'null') as {
       transcript: Array<{ role: string; text: string }>
       pending: { message: string }
     }
@@ -1123,9 +1145,9 @@ describe('GameRecommendationAgent', () => {
       if (String(input) === '/api/auth/csrf') {
         return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       }
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'conversation', mode: 'model_assisted', assistantMessage: '记住了 Alice 的聚会条件。',
-        profile: { ...baseProfile, players: 5 }, clarification: null,
+        profile: { ...baseProfile, playerCount: exactConstraint(5) }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 0, games: [],
       })
     }))
@@ -1160,9 +1182,14 @@ describe('GameRecommendationAgent', () => {
         transcript: { role: string; text: string }[]
       }
       requests.push(body as unknown as Record<string, unknown>)
-      if (body.focusedBggId === 266192) return Response.json({
+      if (body.focusedBggId === 266192) return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '发行商资料展示了分步教学流程；但现有资料还不能证明实际互动感或节奏。',
-        profile: { ...baseProfile, players: 4, maxMinutes: 90, maxWeight: 3.2 }, clarification: null,
+        profile: {
+          ...baseProfile,
+          playerCount: exactConstraint(4),
+          durationMinutes: maximumConstraint(90),
+          complexity: maximumConstraint(3.2),
+        }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 1,
         userModel: { summary: '家庭局，重视参与感', hypotheses: [{ text: '可能不喜欢长时间等待', confidence: 'medium', basedOn: '希望大家都有参与感' }] },
         researchSources: [{ index: 1, title: 'Publisher guide', url: 'https://publisher.example/wingspan', domain: 'publisher.example' }],
@@ -1180,16 +1207,21 @@ describe('GameRecommendationAgent', () => {
           ],
         }],
       })
-      if (body.message === '朋友聚会，想热闹但不要尴尬') return Response.json({
+      if (body.message === '朋友聚会，想热闹但不要尴尬') return recommendationStreamResult({
         outcome: 'needs_clarification', mode: 'model_assisted',
         assistantMessage: '听起来你更在意全桌参与感。这次大概几个人、能留多少时间？想到多少说多少就行。',
         profile: baseProfile, sourceCount: 179737, candidatesEvaluated: 0, games: [],
         clarification: { field: 'conversation', prompt: '这次大概几个人、能留多少时间？', options: [] },
         completedWork: [],
       })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '4 人、90 分钟内，我会先看《展翅翱翔》：BGG 标注的 1–5 人和约 70 分钟都落在这局范围里。',
-        profile: { ...baseProfile, players: 4, maxMinutes: 90, maxWeight: 3.2 }, clarification: null,
+        profile: {
+          ...baseProfile,
+          playerCount: exactConstraint(4),
+          durationMinutes: maximumConstraint(90),
+          complexity: maximumConstraint(3.2),
+        }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 20,
         completedWork: ['browse_bgg_catalog', 'lookup_bgg_games', 'recommend_games'],
         games: [{ game, matches: [], tradeoffs: [] }],
@@ -1259,10 +1291,15 @@ describe('GameRecommendationAgent', () => {
   it('accepts a natural-language turn with CSRF while preserving a truthful no-match result', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'no_match', mode: 'model_assisted',
         assistantMessage: '20 个已核对候选中没有同时满足全部硬条件的桌游。最小可行调整是只临时放宽时长；不会自动更改你的条件。',
-        profile: { ...baseProfile, players: 8, maxMinutes: 30, maxWeight: 2.3 },
+        profile: {
+          ...baseProfile,
+          playerCount: exactConstraint(8),
+          durationMinutes: maximumConstraint(30),
+          complexity: maximumConstraint(2.3),
+        },
         clarification: {
           field: 'conversation',
           prompt: '要只临时放宽时长，保留人数和复杂度硬条件吗？',
@@ -1305,7 +1342,7 @@ describe('GameRecommendationAgent', () => {
   it('scrolls to the start of a newly returned recommendation turn instead of its card footer', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted',
         assistantMessage: '我先核对参考游戏，再给出有具体共同机制的候选。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
@@ -1343,7 +1380,7 @@ describe('GameRecommendationAgent', () => {
       requests.push(body)
       const knownGames = body.knownGames as Array<{ bggId: number }> | undefined
       const focused = knownGames?.some(entry => entry.bggId === game.bggId) === true
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted',
         assistantMessage: focused ? '这是刚才那款游戏的详细介绍。' : '先看这款是否接近你的想法。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
@@ -1389,13 +1426,13 @@ describe('GameRecommendationAgent', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       turn += 1
-      if (turn === 1) return Response.json({
+      if (turn === 1) return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '先给你一组有共同机制的候选。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 3,
         games: [{ game, matches: ['共享已核对的机制'], tradeoffs: [] }],
         completedWork: ['inspect_candidate_titles', 'lookup_bgg_games', 'recommend_games'],
       })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'conversation', mode: 'model_assisted', assistantMessage: '明白，我们可以沿着刚才的方向继续聊。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 0, games: [],
         completedWork: [],
@@ -1447,7 +1484,7 @@ describe('GameRecommendationAgent', () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       sentBodies.push(String(init?.body))
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'conversation', mode: 'model_assisted', assistantMessage: '我会结合这些细节一起判断。',
         profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
       })
@@ -1468,111 +1505,13 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('我会结合这些细节一起判断')
   })
 
-  it('requests the response language from the current turn while leaving the UI locale unchanged', async () => {
-    const requestedUrls: string[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      requestedUrls.push(String(input))
-      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return Response.json({
-        outcome: 'conversation', mode: 'model_assisted', assistantMessage: 'Here is the direct comparison.',
-        profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
-      })
-    }))
-    const wrapper = await mountAgent()
-
-    await wrapper.get('textarea').setValue('Which one works better for exactly three players?')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(requestedUrls).toContain('/api/v1/bgg/recommendation-agent/stream?locale=en')
-    expect(wrapper.text()).toContain('Here is the direct comparison.')
-    expect(wrapper.text()).toContain('今晚想玩什么？')
-  })
-
-  it('uses a Chinese current turn after English for the whole new recommendation surface', async () => {
-    setLocale('en')
-    const requestedUrls: string[] = []
-    let turn = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      requestedUrls.push(path)
-      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      turn += 1
-      if (turn === 1) {
-        return Response.json({
-          responseLocale: 'en', outcome: 'conversation', mode: 'model_assisted',
-          assistantMessage: 'I kept the first turn in English.', profile: baseProfile,
-          clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
-        })
-      }
-      return Response.json({
-        responseLocale: 'zh-CN', outcome: 'recommendations', mode: 'model_assisted',
-        assistantMessage: '这轮按你当前的中文问题回答。', profile: baseProfile,
-        clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
-        completedWork: ['inspect_candidate_titles', 'lookup_bgg_games', 'recommend_games'],
-        games: [{
-          game,
-          matches: [],
-          tradeoffs: [],
-          fitClaims: [{
-            subject: 'playerCount', strength: 'hard', relation: 'satisfied',
-            text: '候选人数范围满足当前硬条件。',
-          }],
-        }],
-      })
-    }))
-    const wrapper = await mountAgent()
-
-    await wrapper.get('textarea').setValue('Which option is better for exactly three players?')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-    await wrapper.get('textarea').setValue('现在请用中文比较，并保留刚才的三人条件。')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(requestedUrls).toContain('/api/v1/bgg/recommendation-agent/stream?locale=en')
-    expect(requestedUrls).toContain('/api/v1/bgg/recommendation-agent/stream?locale=zh-CN')
-    const currentTurn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
-    expect(currentTurn.text()).toContain('这轮按你当前的中文问题回答。')
-    expect(currentTurn.text()).toContain('本轮查找与核对')
-    expect(currentTurn.text()).toContain('完整目录按标题找候选')
-    expect(currentTurn.text()).toContain('从完整 BGG 目录中核对了 1 款候选。')
-    expect(currentTurn.text()).toContain('换一批')
-    expect(currentTurn.text()).toContain('1–5 人 · 约 70 分钟 · 复杂度 2.5')
-    expect(currentTurn.text()).not.toContain('条件核对')
-    expect(currentTurn.text()).not.toContain('Agent trajectory this turn')
-    expect(currentTurn.text()).not.toContain('Find titles in the full catalog')
-    expect(currentTurn.text()).not.toContain('Checked 1 candidates')
-    expect(currentTurn.text()).not.toContain('Try another batch')
-  })
-
-  it('keeps a failed English turn and its retry action in the attempted turn language', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return new Response(null, { status: 500 })
-    }))
-    const wrapper = await mountAgent()
-
-    await wrapper.get('textarea').setValue('Could you compare the remaining options?')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    const alert = wrapper.get('[role="alert"]')
-    expect(alert.text()).toContain('That reply did not come through. Your preferences are still here.')
-    expect(alert.get('button').text()).toBe('Retry')
-    expect(alert.text()).not.toContain('刚才没有接上')
-    expect(alert.text()).not.toContain('重试')
-    expect(wrapper.get('[data-testid="recommendation-failed-assistant-reply"]').text())
-      .toContain('I did not guess or invent candidates')
-  })
-
   it('keeps the browser fallback recovery summary in the last successful response language', async () => {
     setLocale('en')
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/bgg/recommendation-agent/session') return new Response(null, { status: 204 })
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return Response.json({
+      return recommendationStreamResult({
         responseLocale: 'en', outcome: 'recommendations', mode: 'model_assisted',
         assistantMessage: 'I verified this candidate and kept it available.', profile: baseProfile,
         clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
@@ -1604,7 +1543,7 @@ describe('GameRecommendationAgent', () => {
       requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
       turn += 1
       if (turn === 1) {
-        return Response.json({
+        return recommendationStreamResult({
           outcome: 'conversation', mode: 'model_assisted',
           assistantMessage: 'For the tighter time window, I would pick Loom City: its listed range is 45–60 minutes, while Wingspan is 40–70. Actual table feel is still unknown for both, so that could reverse the choice once we have attributed play reports.',
           profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 2, games: [],
@@ -1632,7 +1571,7 @@ describe('GameRecommendationAgent', () => {
           },
         })
       }
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'conversation', mode: 'model_assisted', assistantMessage: 'I kept both candidates in context.',
         profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 2, games: [],
       })
@@ -1666,9 +1605,9 @@ describe('GameRecommendationAgent', () => {
   it('confirms reset, preserves unsent text, and does not silently clear on locale changes', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以作为候选。',
-        profile: { ...baseProfile, players: 4 }, clarification: null, sourceCount: 179737,
+        profile: { ...baseProfile, playerCount: exactConstraint(4) }, clarification: null, sourceCount: 179737,
         candidatesEvaluated: 1, games: [{ game, matches: [], tradeoffs: [] }],
       })
     }))
@@ -1714,14 +1653,14 @@ describe('GameRecommendationAgent', () => {
         return new Response(null, { status: deleteAttempts === 1 ? 503 : 204 })
       }
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-      return Response.json({
+      return recommendationStreamResult({
         conversationId,
         revision: 1,
         clientTurnId: body.clientTurnId,
         replayed: false,
         responseLocale: 'zh-CN',
         outcome: 'conversation', mode: 'model_assisted', assistantMessage: '这段对话已经保存在服务器。',
-        profile: { ...baseProfile, players: 4 }, clarification: null,
+        profile: { ...baseProfile, playerCount: exactConstraint(4) }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 0, games: [],
       })
     }))
@@ -1810,9 +1749,9 @@ describe('GameRecommendationAgent', () => {
         },
         candidates: [],
       })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以先看看。',
-        profile: { ...baseProfile, players: 4 }, clarification: null,
+        profile: { ...baseProfile, playerCount: exactConstraint(4) }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 1, games: [{ game, matches: [], tradeoffs: [] }],
       })
     })
@@ -1829,8 +1768,7 @@ describe('GameRecommendationAgent', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/266192/import', expect.objectContaining({ method: 'POST' }))
     expect(document.body.textContent).toContain('已选《展翅翱翔》')
-    expect(document.body.textContent).toContain('自动查找已停下')
-    expect(document.body.textContent).toContain('可以提供公开 PDF / 规则页链接或上传自己的规则书')
+    expect(document.body.textContent).toContain('提供公开链接或自己的规则书')
     expect(document.body.querySelector('[data-testid="player-journey-surface"]')?.getAttribute('style'))
       .toContain('opacity: 1')
 
@@ -1893,7 +1831,7 @@ describe('GameRecommendationAgent', () => {
     })
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以继续准备规则书。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
         games: [{ game, matches: [], tradeoffs: [] }],
@@ -1962,7 +1900,7 @@ describe('GameRecommendationAgent', () => {
     })
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return Response.json({
+      return recommendationStreamResult({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以继续准备规则书。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
         games: [{ game, matches: [], tradeoffs: [] }],
@@ -2019,7 +1957,7 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在回复')
-    expect(wrapper.get('[role="status"]').text()).toContain('正在生成回复')
+    expect(wrapper.get('[role="status"]').text()).toContain('收到，接着聊下去')
 
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"started","action":"browse_bgg_catalog","focus":{"kind":"catalog_mechanics","values":["牌组构筑"]},"elapsedMs":120}\n\n'))
     await flushPromises()
@@ -2062,7 +2000,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.find('[data-testid="recommendation-soft-budget"]').exists()).toBe(false)
   })
 
-  it('shows streamed conversational text without exposing routing or model internals', async () => {
+  it('shows immediate causal progress without exposing routing or model internals', async () => {
     const encoder = new TextEncoder()
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -2077,19 +2015,18 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('你好')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"understanding_request","phase":"completed","action":"understand_request","elapsedMs":2}\n\n'))
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"composing_response","phase":"started","action":null,"elapsedMs":3}\n\n'))
-    streamController?.enqueue(encoder.encode('event: answer_part\ndata: {"field":"message","text":"嗨，"}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"understanding_request","phase":"started","action":"understand_request","elapsedMs":0}\n\n'))
     await flushPromises()
 
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在回复')
-    expect(wrapper.get('[data-testid="recommendation-answer-preview"]').text()).toBe('嗨，')
-    expect(wrapper.find('[data-testid="recommendation-progress-steps"]').exists()).toBe(false)
+    expect(wrapper.get('[role="status"]').text()).toContain('正在结合前文理解你这句话')
+    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text())
+      .toContain('开始：读取当前消息与对话上下文')
     expect(wrapper.get('[role="status"]').text()).not.toContain('第 1 轮')
     expect(wrapper.get('[role="status"]').text()).not.toContain('轻量模型')
     expect(wrapper.get('[role="status"]').text()).not.toContain('工具流程')
 
-    streamController?.enqueue(encoder.encode('event: answer_part\ndata: {"field":"message","text":"嗨，今天想聊哪款桌游？"}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"composing_response","phase":"started","action":"reply_to_user","elapsedMs":3}\n\n'))
     streamController?.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({
       outcome: 'conversation', mode: 'model_fast_path', assistantMessage: '嗨，今天想聊哪款桌游？',
       profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
@@ -2100,7 +2037,6 @@ describe('GameRecommendationAgent', () => {
 
     expect(wrapper.text()).toContain('嗨，今天想聊哪款桌游？')
     expect(wrapper.find('[data-testid="recommendation-execution-audit"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('STREAM_NATURAL_REPLY')
     expect(wrapper.text()).not.toContain('轻量模型')
   })
 })

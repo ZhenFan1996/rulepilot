@@ -63,7 +63,7 @@ class StructuredRuleAnswerControllerContractTest {
                 turnId,
                 "When does the violet dial advance?",
                 PlayerFacingAnswerPresenter.present(
-                        answer, "When does the violet dial advance?", PlayerLocale.ZH_CN),
+                        answer, "When does the violet dial advance?", PlayerLocale.EN),
                 Instant.parse("2026-08-16T00:00:00Z"),
                 null,
                 StructuredRuleAnswerController.RulingReference.from(answer));
