@@ -25,6 +25,7 @@ permissions:
 
 concurrency:
   group: production-runtime
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -34,13 +35,6 @@ jobs:
     timeout-minutes: 35
     environment:
       name: production
-    env:
-      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
-      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
-      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -48,6 +42,11 @@ jobs:
 
       - name: Configure production SSH trust
         shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -Eeuo pipefail
           for required_secret in DEPLOY_HOST DEPLOY_KNOWN_HOSTS DEPLOY_SSH_PRIVATE_KEY DEPLOY_USER; do
@@ -65,6 +64,10 @@ jobs:
       - name: Open an authenticated production tunnel and manage the candidate
         shell: bash
         env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           PLAN_ID: ${{ inputs.plan_id }}
           LESSON_TITLE: ${{ inputs.lesson_title }}
           OPERATION: ${{ inputs.operation }}
@@ -109,12 +112,29 @@ jobs:
 
           ssh "${ssh_options[@]}" -N -L 18081:127.0.0.1:8080 "${DEPLOY_USER}@${DEPLOY_HOST}" &
           tunnel_pid=$!
-          trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
+          cleanup_authority() {
+            kill "$tunnel_pid" 2>/dev/null || true
+            rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          }
+          trap cleanup_authority EXIT
           for attempt in {1..20}; do
             curl --fail --silent --output /dev/null http://127.0.0.1:18081/actuator/health && break
             [[ "$attempt" == 20 ]] && { echo "Production SSH tunnel did not become ready" >&2; exit 1; }
             sleep 1
           done
+
+          rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          test ! -e "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/known_hosts"
+          unset DEPLOY_HOST DEPLOY_PATH DEPLOY_SSH_PORT DEPLOY_USER credentials
+
+          runner_env_file="$GITHUB_ENV"
+          runner_path_file="$GITHUB_PATH"
+          case "$runner_env_file" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
+          case "$runner_path_file" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
+          rm -f -- "$runner_env_file" "$runner_path_file"
+          install -m 600 /dev/null "$runner_env_file"
+          install -m 600 /dev/null "$runner_path_file"
 
           lesson_selector=()
           if [[ -n "$PLAN_ID" && -z "$LESSON_TITLE" ]]; then
@@ -126,8 +146,14 @@ jobs:
             exit 2
           fi
 
-          RULEPILOT_ADMIN_USERNAME="$admin_username" RULEPILOT_ADMIN_PASSWORD="$admin_password" \
-            bash scripts/manage-public-lesson-candidate.sh \
+          /usr/bin/env -i \
+            HOME="$HOME" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            PATH=/usr/bin:/bin \
+            RULEPILOT_ADMIN_USERNAME="$admin_username" \
+            RULEPILOT_ADMIN_PASSWORD="$admin_password" \
+            /bin/bash scripts/manage-public-lesson-candidate.sh \
               --base-url http://127.0.0.1:18081 \
               "${lesson_selector[@]}" \
               --operation "$OPERATION"

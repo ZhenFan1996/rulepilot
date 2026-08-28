@@ -4,6 +4,10 @@ set -Eeuo pipefail
 
 readonly LEASE_STALE_SECONDS=150
 readonly WATCHDOG_DEADLINE_SECONDS=2100
+readonly WATCHDOG_POLL_SECONDS=5
+readonly WATCHDOG_READY_ATTEMPTS=100
+readonly WATCHDOG_READY_POLL_SECONDS=0.05
+readonly QUALIFIED_MAIN_REMOTE=https://github.com/ZhenFan1996/rulepilot.git
 
 fail() {
 	printf '%s\n' "$*" >&2
@@ -18,6 +22,22 @@ require_candidate_release_id() {
 	[[ "$1" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] || fail "Invalid candidate release id"
 }
 
+require_current_qualified_main() {
+	local release_id=$1
+	local candidate_sha remote_line remote_sha remote_ref extra
+	require_candidate_release_id "$release_id"
+	candidate_sha=${release_id%%-*}
+	if ! remote_line=$(GIT_TERMINAL_PROMPT=0 timeout 20s git ls-remote \
+		--exit-code "$QUALIFIED_MAIN_REMOTE" refs/heads/main); then
+		fail "Could not verify the current qualified main revision"
+	fi
+	read -r remote_sha remote_ref extra <<< "$remote_line"
+	[[ -z "${extra:-}" && "$remote_sha" =~ ^[0-9a-f]{40}$ && "$remote_ref" == refs/heads/main ]] \
+		|| fail "Current qualified main revision response is invalid"
+	[[ "$candidate_sha" == "$remote_sha" ]] \
+		|| fail "Candidate release is no longer the current qualified main revision"
+}
+
 resolve_application_root() {
 	local root
 	root=$(readlink -f "$1")
@@ -27,6 +47,73 @@ resolve_application_root() {
 
 guard_directory() {
 	printf '%s/deployment-guards/%s\n' "$1" "$2"
+}
+
+active_transaction_file() {
+	printf '%s/deployment-guards/active-transaction\n' "$1"
+}
+
+transaction_terminal() {
+	local state_dir=$1
+	[[ -f "$state_dir/committed" || -f "$state_dir/rolled-back" || -f "$state_dir/unchanged" ]]
+}
+
+staged_bgg_credential() {
+	local release_id=$1
+	require_candidate_release_id "$release_id"
+	printf '/tmp/rulepilot-bgg-token-%s\n' "$release_id"
+}
+
+environment_snapshot() {
+	printf '%s/environment.snapshot\n' "$1"
+}
+
+require_environment_snapshot() {
+	local state_dir=$1
+	local snapshot permissions
+	snapshot=$(environment_snapshot "$state_dir")
+	[[ -f "$snapshot" && ! -L "$snapshot" ]] \
+		|| fail "Rollback environment snapshot is unavailable"
+	permissions=$(stat -c '%a' "$snapshot")
+	[[ "$permissions" == 600 ]] || fail "Rollback environment snapshot permissions are invalid"
+	printf '%s\n' "$snapshot"
+}
+
+snapshot_environment() {
+	local application_root=$1
+	local state_dir=$2
+	local source snapshot temporary
+	source="$application_root/.env"
+	snapshot=$(environment_snapshot "$state_dir")
+	[[ -f "$source" && ! -L "$source" ]] || fail "Production environment file is unavailable"
+	temporary=$(mktemp "${snapshot}.tmp.XXXXXX")
+	if ! install -m 0600 "$source" "$temporary" || ! mv -f "$temporary" "$snapshot"; then
+		rm -f -- "$temporary"
+		fail "Could not create the rollback environment snapshot"
+	fi
+}
+
+restore_environment() {
+	local application_root=$1
+	local state_dir=$2
+	local target snapshot temporary
+	target="$application_root/.env"
+	snapshot=$(require_environment_snapshot "$state_dir")
+	temporary=$(mktemp "${target}.rollback.XXXXXX")
+	if ! install -m 0600 "$snapshot" "$temporary" || ! mv -f "$temporary" "$target"; then
+		rm -f -- "$temporary"
+		fail "Could not restore the rollback environment snapshot"
+	fi
+}
+
+discard_transaction_secrets() {
+	local state_dir=$1
+	local release_id=$2
+	# One rm invocation attempts every bounded release-owned secret even if one path cannot be removed.
+	rm -f -- \
+		"$(environment_snapshot "$state_dir")" \
+		"$(staged_bgg_credential "$release_id")" \
+		"$state_dir/watchdog-failed"
 }
 
 compose_container() {
@@ -117,12 +204,108 @@ atomic_write() {
 	mv -f "$temporary" "$target"
 }
 
-checkpoint() {
+require_active_transaction() {
+	local application_root=$1
+	local release_id=$2
+	local ownership_file owner
+	require_candidate_release_id "$release_id"
+	ownership_file=$(active_transaction_file "$application_root")
+	[[ -f "$ownership_file" && ! -L "$ownership_file" ]] \
+		|| fail "Production release transaction ownership is unavailable"
+	owner=$(<"$ownership_file")
+	require_candidate_release_id "$owner"
+	[[ "$owner" == "$release_id" ]] \
+		|| fail "Another production release transaction owns the runtime"
+}
+
+claim_active_transaction_held() {
+	local application_root=$1
+	local release_id=$2
+	local guards_root ownership_file owner owner_state candidate_state candidate_id
+	require_candidate_release_id "$release_id"
+	guards_root="$application_root/deployment-guards"
+	ownership_file=$(active_transaction_file "$application_root")
+	install -d -m 0700 "$guards_root"
+	if [[ -e "$ownership_file" ]]; then
+		[[ -f "$ownership_file" && ! -L "$ownership_file" ]] \
+			|| fail "Production release transaction ownership is invalid"
+		owner=$(<"$ownership_file")
+		require_candidate_release_id "$owner"
+		owner_state=$(guard_directory "$application_root" "$owner")
+		if [[ -d "$owner_state" ]] && ! transaction_terminal "$owner_state"; then
+			fail "Another production release transaction is still active"
+		fi
+	fi
+	# The ownership file was introduced after the first immutable guard. Scan legacy guard state as a one-way
+	# compatibility boundary so an already-running watchdog cannot overlap the first deployment using ownership.
+	for candidate_state in "$guards_root"/*; do
+		[[ -d "$candidate_state" && -f "$candidate_state/previous-release" ]] || continue
+		candidate_id=${candidate_state##*/}
+		[[ "$candidate_id" == "$release_id" ]] && continue
+		require_candidate_release_id "$candidate_id"
+		if ! transaction_terminal "$candidate_state"; then
+			fail "Another production release transaction is still active"
+		fi
+	done
+	atomic_write "$ownership_file" "$release_id"
+}
+
+release_active_transaction_held() {
+	local application_root=$1
+	local release_id=$2
+	local ownership_file owner
+	ownership_file=$(active_transaction_file "$application_root")
+	[[ -e "$ownership_file" ]] || return 0
+	[[ -f "$ownership_file" && ! -L "$ownership_file" ]] \
+		|| fail "Production release transaction ownership is invalid"
+	owner=$(<"$ownership_file")
+	require_candidate_release_id "$owner"
+	[[ "$owner" == "$release_id" ]] || return 0
+	rm -f -- "$ownership_file"
+}
+
+checkpoint() (
 	local application_root release_id releases_root current_release previous_release_id
 	local api_container worker_container frontend_container api_image worker_image frontend_image
+	local start_status state_dir
+	local checkpoint_claimed=false
+	local watchdog_start_attempted=false
+	local checkpoint_published=false
+	cleanup_unpublished_checkpoint() {
+		local status=$?
+		trap - EXIT
+		if [[ "$checkpoint_published" != true && "$watchdog_start_attempted" != true ]]; then
+			if [[ -n "${state_dir:-}" && -d "$state_dir" ]]; then
+				discard_transaction_secrets "$state_dir" "$release_id" || true
+				# This candidate was never published to a watchdog. Remove every bounded transaction marker so a
+				# failed snapshot/tag/write cannot masquerade as a legacy non-terminal transaction forever.
+				rm -f -- \
+					"$state_dir/previous-release" \
+					"$state_dir/armed" \
+					"$state_dir/lease" \
+					"$state_dir/watchdog.pid" \
+					"$state_dir/watchdog-generation" \
+					"$state_dir/watchdog-ready" \
+					"$state_dir/committed" \
+					"$state_dir/rolled-back" \
+					"$state_dir/unchanged" \
+					"$state_dir/watchdog-failed" || true
+			fi
+			if [[ "$checkpoint_claimed" == true ]]; then
+				release_active_transaction_held "$application_root" "$release_id" || true
+			fi
+		fi
+		exit "$status"
+	}
+	trap cleanup_unpublished_checkpoint EXIT
 	application_root=$(resolve_application_root "$1")
 	release_id=$2
 	require_candidate_release_id "$release_id"
+	exec 9>"$application_root/deployment.lock"
+	flock -x 9
+	# workflow_run events and their reruns can arrive out of order. Recheck the public repository while holding the
+	# production mutation lock so a previously qualified but now stale commit can never move the runtime backward.
+	require_current_qualified_main "$release_id"
 	releases_root=$(readlink -f "$application_root/releases")
 	[[ -L "$application_root/current" ]] || fail "Current production release is not an immutable symlink"
 	current_release=$(readlink -f "$application_root/current")
@@ -145,16 +328,44 @@ checkpoint() {
 		|| fail "The active API and worker do not share one immutable backend image"
 	docker image inspect "$api_image" >/dev/null
 	docker image inspect "$frontend_image" >/dev/null
+	state_dir=$(guard_directory "$application_root" "$release_id")
+	claim_active_transaction_held "$application_root" "$release_id"
+	checkpoint_claimed=true
 	docker tag "$api_image" "rulepilot-backend:${previous_release_id}"
 	docker tag "$frontend_image" "rulepilot-frontend:${previous_release_id}"
 
-	local state_dir
-	state_dir=$(guard_directory "$application_root" "$release_id")
 	install -d -m 0700 "$state_dir"
 	atomic_write "$state_dir/previous-release" "$previous_release_id"
-	rm -f "$state_dir/armed" "$state_dir/committed" "$state_dir/rolled-back"
-	printf '%s\n' "$previous_release_id"
-}
+	rm -f \
+		"$state_dir/armed" \
+		"$state_dir/committed" \
+		"$state_dir/rolled-back" \
+		"$state_dir/unchanged" \
+		"$state_dir/watchdog-ready" \
+		"$state_dir/watchdog-failed"
+	rm -f -- "$(staged_bgg_credential "$release_id")"
+	snapshot_environment "$application_root" "$state_dir"
+	# Starting the watchdog is part of checkpoint publication. Once this child returns, a lost SSH response still has
+	# an independent owner that will either observe arm or remove the unmodified secret checkpoint at its deadline.
+	watchdog_start_attempted=true
+	# The detached watchdog must not inherit this process's flock-holding descriptor. Otherwise it would keep the
+	# deployment lock forever and deadlock activation as well as its own deadline recovery.
+	if bash "$0" start "$application_root" "$release_id" "$previous_release_id" 9>&-; then
+		checkpoint_published=true
+		trap - EXIT
+		printf '%s\n' "$previous_release_id"
+		return 0
+	else
+		start_status=$?
+	fi
+	printf 'Could not start the rollback watchdog; closing the unarmed checkpoint.\n' >&2
+	if ! finalize_unchanged_held "$application_root" "$release_id" "$previous_release_id"; then
+		printf 'Could not close the unarmed checkpoint after watchdog startup failed.\n' >&2
+	else
+		checkpoint_published=true
+	fi
+	return "$start_status"
+)
 
 require_checkpoint() {
 	local application_root=$1
@@ -169,16 +380,27 @@ require_checkpoint() {
 	recorded_previous=$(<"$state_dir/previous-release")
 	[[ "$recorded_previous" == "$previous_release_id" ]] \
 		|| fail "Rollback checkpoint does not match the requested previous release"
+	if ! transaction_terminal "$state_dir"; then
+		require_environment_snapshot "$state_dir" >/dev/null
+	fi
 	printf '%s\n' "$state_dir"
 }
 
 heartbeat() {
-	local application_root release_id previous_release_id state_dir
+	local application_root release_id previous_release_id state_dir releases_root active_release
 	application_root=$(resolve_application_root "$1")
 	release_id=$2
 	previous_release_id=$3
 	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
-	[[ ! -f "$state_dir/committed" && ! -f "$state_dir/rolled-back" ]] || return 0
+	transaction_terminal "$state_dir" && return 0
+	require_active_transaction "$application_root" "$release_id"
+	require_live_watchdog "$state_dir"
+	if [[ -f "$state_dir/armed" ]]; then
+		releases_root=$(readlink -f "$application_root/releases")
+		active_release=$(readlink -f "$application_root/current" 2>/dev/null || true)
+		[[ "$active_release" == "$releases_root/$release_id" ]] \
+			|| fail "Guarded candidate release is not active"
+	fi
 	touch "$state_dir/lease"
 }
 
@@ -188,9 +410,62 @@ arm() {
 	release_id=$2
 	previous_release_id=$3
 	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
-	[[ ! -f "$state_dir/committed" ]] || fail "Committed release cannot be re-armed"
+	transaction_terminal "$state_dir" && fail "Terminal release checkpoint cannot be re-armed"
+	require_active_transaction "$application_root" "$release_id"
+	require_live_watchdog "$state_dir"
 	touch "$state_dir/lease"
 	atomic_write "$state_dir/armed" "$release_id"
+}
+
+assert_activation_held() {
+	local application_root release_id previous_release_id state_dir releases_root active_release
+	application_root=$(resolve_application_root "$1")
+	release_id=$2
+	previous_release_id=$3
+	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
+	transaction_terminal "$state_dir" \
+		&& fail "Terminal release checkpoint cannot be activated"
+	require_active_transaction "$application_root" "$release_id"
+	require_live_watchdog "$state_dir"
+	[[ -f "$state_dir/armed" ]] || fail "Release checkpoint is not armed for activation"
+	releases_root=$(readlink -f "$application_root/releases")
+	active_release=$(readlink -f "$application_root/current" 2>/dev/null || true)
+	[[ "$active_release" == "$releases_root/$previous_release_id" ]] \
+		|| fail "Production moved away from the guarded rollback checkpoint before activation"
+	# The caller already owns deployment.lock. Refresh only after every fail-closed ownership and state assertion passes.
+	touch "$state_dir/lease"
+}
+
+finalize_unchanged_held() {
+	local application_root release_id previous_release_id state_dir
+	application_root=$(resolve_application_root "$1")
+	release_id=$2
+	previous_release_id=$3
+	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
+	if transaction_terminal "$state_dir"; then
+		discard_transaction_secrets "$state_dir" "$release_id"
+		release_active_transaction_held "$application_root" "$release_id"
+		return 0
+	fi
+	require_active_transaction "$application_root" "$release_id"
+	if [[ -f "$state_dir/armed" ]]; then
+		printf 'Armed release checkpoint requires rollback, not unchanged finalization.\n' >&2
+		return 2
+	fi
+	atomic_write "$state_dir/unchanged" "$previous_release_id"
+	discard_transaction_secrets "$state_dir" "$release_id"
+	release_active_transaction_held "$application_root" "$release_id"
+	printf 'Closed unarmed production checkpoint %s without a runtime mutation.\n' "$release_id"
+}
+
+finalize_unchanged() {
+	local application_root release_id previous_release_id
+	application_root=$(resolve_application_root "$1")
+	release_id=$2
+	previous_release_id=$3
+	exec 9>"$application_root/deployment.lock"
+	flock -x 9
+	finalize_unchanged_held "$application_root" "$release_id" "$previous_release_id"
 }
 
 rollback_held() {
@@ -201,7 +476,12 @@ rollback_held() {
 	release_id=$2
 	previous_release_id=$3
 	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
-	[[ ! -f "$state_dir/committed" ]] || return 0
+	if transaction_terminal "$state_dir"; then
+		discard_transaction_secrets "$state_dir" "$release_id"
+		release_active_transaction_held "$application_root" "$release_id"
+		return 0
+	fi
+	require_active_transaction "$application_root" "$release_id"
 	releases_root=$(readlink -f "$application_root/releases")
 	failed_release=$(readlink -f "$releases_root/$release_id" 2>/dev/null || true)
 	previous_release=$(readlink -f "$releases_root/$previous_release_id")
@@ -216,10 +496,15 @@ rollback_held() {
 	fi
 	backend_image="rulepilot-backend:${previous_release_id}"
 	frontend_image="rulepilot-frontend:${previous_release_id}"
+	# Prove both immutable rollback images exist before changing the shared runtime environment. A transient image
+	# inspection failure must leave the still-running candidate and its configuration together for the next retry.
 	docker image inspect "$backend_image" >/dev/null
 	docker image inspect "$frontend_image" >/dev/null
 	backend_image_id=$(docker image inspect --format '{{.Id}}' "$backend_image")
 	frontend_image_id=$(docker image inspect --format '{{.Id}}' "$frontend_image")
+	# Every release links to the shared root environment. Restore its exact checkpoint before Compose evaluates the
+	# previous release so rollback covers runtime configuration as well as immutable images.
+	restore_environment "$application_root" "$state_dir"
 	# Compatibility is owned by this reviewed guard, not by the previous release's launcher. The first deployment of
 	# immutable frontend rollback necessarily targets a release whose Compose file still names the local frontend
 	# alias, so point both aliases at their pinned image IDs before one explicit no-build topology switch.
@@ -248,6 +533,8 @@ rollback_held() {
 	require_running_image "$previous_release" frontend "$frontend_image_id"
 	ln -sfn "$previous_release" "$application_root/current"
 	atomic_write "$state_dir/rolled-back" "$previous_release_id"
+	discard_transaction_secrets "$state_dir" "$release_id"
+	release_active_transaction_held "$application_root" "$release_id"
 	printf 'Rolled production back from %s to %s\n' "$release_id" "$previous_release_id"
 }
 
@@ -269,7 +556,12 @@ rollback_if_stale() (
 	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
 	exec 9>"$application_root/deployment.lock"
 	flock -x 9
-	[[ ! -f "$state_dir/committed" && ! -f "$state_dir/rolled-back" ]] || return 0
+	if transaction_terminal "$state_dir"; then
+		discard_transaction_secrets "$state_dir" "$release_id"
+		release_active_transaction_held "$application_root" "$release_id"
+		return 0
+	fi
+	require_active_transaction "$application_root" "$release_id"
 	[[ -f "$state_dir/armed" && -f "$state_dir/lease" ]] || return 0
 	# The candidate can legitimately spend longer than one lease interval building while it owns the deployment
 	# lock. Re-read the lease only after acquiring that same lock: an activation heartbeat or public commit that won
@@ -282,6 +574,27 @@ rollback_if_stale() (
 	rollback_held "$application_root" "$release_id" "$previous_release_id"
 )
 
+finalize_deadline() {
+	local application_root release_id previous_release_id state_dir
+	application_root=$(resolve_application_root "$1")
+	release_id=$2
+	previous_release_id=$3
+	exec 9>"$application_root/deployment.lock"
+	flock -x 9
+	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
+	if transaction_terminal "$state_dir"; then
+		discard_transaction_secrets "$state_dir" "$release_id"
+		release_active_transaction_held "$application_root" "$release_id"
+		return 0
+	fi
+	require_active_transaction "$application_root" "$release_id"
+	if [[ -f "$state_dir/armed" ]]; then
+		rollback_held "$application_root" "$release_id" "$previous_release_id"
+		return 0
+	fi
+	finalize_unchanged_held "$application_root" "$release_id" "$previous_release_id"
+}
+
 commit_release() {
 	local application_root release_id previous_release_id state_dir releases_root active_release
 	local backend_image frontend_image backend_image_id frontend_image_id worker_container worker_health
@@ -289,10 +602,17 @@ commit_release() {
 	release_id=$2
 	previous_release_id=$3
 	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
-	touch "$state_dir/lease"
 	exec 9>"$application_root/deployment.lock"
 	flock -x 9
-	[[ ! -f "$state_dir/rolled-back" ]] || fail "A rolled-back release cannot be committed"
+	if [[ -f "$state_dir/committed" ]]; then
+		discard_transaction_secrets "$state_dir" "$release_id"
+		release_active_transaction_held "$application_root" "$release_id"
+		return 0
+	fi
+	touch "$state_dir/lease"
+	[[ ! -f "$state_dir/rolled-back" && ! -f "$state_dir/unchanged" ]] \
+		|| fail "A closed release checkpoint cannot be committed"
+	require_active_transaction "$application_root" "$release_id"
 	releases_root=$(readlink -f "$application_root/releases")
 	active_release=$(readlink -f "$application_root/current")
 	[[ "$active_release" == "$releases_root/$release_id" ]] \
@@ -310,52 +630,165 @@ commit_release() {
 		"$worker_container")
 	[[ "$worker_health" == healthy ]] || fail "Worker readiness was lost before release commit"
 	atomic_write "$state_dir/committed" "$release_id"
+	discard_transaction_secrets "$state_dir" "$release_id"
+	release_active_transaction_held "$application_root" "$release_id"
 	printf 'Committed public production release %s\n' "$release_id"
 }
 
+record_watchdog_failure() {
+	local state_dir=$1
+	local action=$2
+	local status=$3
+	atomic_write "$state_dir/watchdog-failed" "${action}:exit-${status}"
+}
+
+watchdog_generation_matches() {
+	local state_dir=$1
+	local expected_generation=$2
+	local actual_generation
+	[[ -z "$expected_generation" ]] && return 0
+	[[ -f "$state_dir/watchdog-generation" ]] || return 1
+	actual_generation=$(<"$state_dir/watchdog-generation")
+	[[ "$actual_generation" == "$expected_generation" ]]
+}
+
+watchdog_process_matches() {
+	local process_id=$1
+	local expected_generation=$2
+	local argument
+	[[ "$process_id" =~ ^[1-9][0-9]*$ ]] && kill -0 "$process_id" 2>/dev/null || return 1
+	[[ -r "/proc/$process_id/cmdline" ]] || return 1
+	while IFS= read -r -d '' argument; do
+		[[ "$argument" == "$expected_generation" ]] && return 0
+	done < "/proc/$process_id/cmdline"
+	return 1
+}
+
+watchdog_ready_matches() {
+	local state_dir=$1
+	local expected_generation=$2
+	local ready_generation
+	[[ -n "$expected_generation" && -f "$state_dir/watchdog-ready" ]] || return 1
+	ready_generation=$(<"$state_dir/watchdog-ready")
+	[[ "$ready_generation" == "$expected_generation" ]]
+}
+
+require_live_watchdog() {
+	local state_dir=$1
+	local process_id generation
+	[[ -f "$state_dir/watchdog.pid" && -f "$state_dir/watchdog-generation" ]] \
+		|| fail "Rollback watchdog identity is unavailable"
+	process_id=$(<"$state_dir/watchdog.pid")
+	generation=$(<"$state_dir/watchdog-generation")
+	watchdog_ready_matches "$state_dir" "$generation" \
+		|| fail "Rollback watchdog did not publish readiness"
+	watchdog_process_matches "$process_id" "$generation" \
+		|| fail "Rollback watchdog is not live for this release generation"
+}
+
 watchdog() {
-	local application_root release_id previous_release_id state_dir started now lease_epoch
+	local application_root release_id previous_release_id generation state_dir started now lease_epoch action_status
 	application_root=$(resolve_application_root "$1")
 	release_id=$2
 	previous_release_id=$3
+	generation=${4:-}
 	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
+	watchdog_generation_matches "$state_dir" "$generation" || return 0
+	require_active_transaction "$application_root" "$release_id"
+	atomic_write "$state_dir/watchdog-ready" "$generation"
 	started=$(date +%s)
 	while :; do
-		[[ ! -f "$state_dir/committed" && ! -f "$state_dir/rolled-back" ]] || return 0
+		watchdog_generation_matches "$state_dir" "$generation" || return 0
+		if transaction_terminal "$state_dir"; then
+			if bash "$0" finalize-deadline "$application_root" "$release_id" "$previous_release_id"; then
+				return 0
+			fi
+			printf 'Release guard terminal ownership cleanup failed; retrying before the watchdog deadline.\n' >&2
+		fi
 		now=$(date +%s)
+		if (( now - started >= WATCHDOG_DEADLINE_SECONDS )); then
+			# Run the deadline decision in a child so fail()/set -e cannot terminate this watchdog before the exit status
+			# is recorded. The child acquires the deployment lock and rechecks terminal/armed state before acting.
+			if bash "$0" finalize-deadline "$application_root" "$release_id" "$previous_release_id"; then
+				return 0
+			else
+				action_status=$?
+			fi
+			printf 'Release guard deadline recovery failed for release %s with exit %s.\n' \
+				"$release_id" "$action_status" >&2
+			if ! record_watchdog_failure "$state_dir" deadline-recovery "$action_status"; then
+				printf 'Release guard could not persist its terminal failure marker.\n' >&2
+			fi
+			return "$action_status"
+		fi
 		if [[ -f "$state_dir/armed" && -f "$state_dir/lease" ]]; then
 			lease_epoch=$(stat -c %Y "$state_dir/lease")
 			if (( now - lease_epoch >= LEASE_STALE_SECONDS )); then
-				rollback_if_stale "$application_root" "$release_id" "$previous_release_id"
-				[[ ! -f "$state_dir/committed" && ! -f "$state_dir/rolled-back" ]] || return 0
+				# rollback_held uses explicit exit-on-boundary failures. Isolate it so one transient Docker or readiness
+				# failure is logged and retried instead of permanently killing the independent watchdog.
+				if bash "$0" rollback-if-stale "$application_root" "$release_id" "$previous_release_id"; then
+					if transaction_terminal "$state_dir"; then
+						if bash "$0" finalize-deadline "$application_root" "$release_id" "$previous_release_id"; then
+							return 0
+						fi
+						printf 'Release guard terminal ownership cleanup failed; retrying before the watchdog deadline.\n' >&2
+					fi
+				else
+					action_status=$?
+					printf 'Release guard rollback attempt failed for release %s with exit %s; retrying before the deadline.\n' \
+						"$release_id" "$action_status" >&2
+				fi
 			fi
 		fi
-		if (( now - started >= WATCHDOG_DEADLINE_SECONDS )); then
-			if [[ -f "$state_dir/armed" ]]; then
-				rollback "$application_root" "$release_id" "$previous_release_id"
-			fi
-			return 0
-		fi
-		sleep 5
+		sleep "$WATCHDOG_POLL_SECONDS"
 	done
 }
 
 start_watchdog() {
-	local application_root release_id previous_release_id state_dir log_file existing_pid
+	local application_root release_id previous_release_id state_dir log_file existing_pid generation process_id attempt
 	application_root=$(resolve_application_root "$1")
 	release_id=$2
 	previous_release_id=$3
 	state_dir=$(require_checkpoint "$application_root" "$release_id" "$previous_release_id")
-	if [[ -f "$state_dir/watchdog.pid" ]]; then
+	if [[ -f "$state_dir/watchdog.pid" && -f "$state_dir/watchdog-generation" ]]; then
 		existing_pid=$(<"$state_dir/watchdog.pid")
-		if [[ "$existing_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
-			return 0
-		fi
+		generation=$(<"$state_dir/watchdog-generation")
+		for ((attempt = 1; attempt <= WATCHDOG_READY_ATTEMPTS; attempt++)); do
+			if watchdog_ready_matches "$state_dir" "$generation" \
+				&& watchdog_process_matches "$existing_pid" "$generation"; then
+				return 0
+			fi
+			watchdog_process_matches "$existing_pid" "$generation" || break
+			sleep "$WATCHDOG_READY_POLL_SECONDS"
+		done
 	fi
 	log_file="$state_dir/watchdog.log"
-	nohup "$0" watchdog "$application_root" "$release_id" "$previous_release_id" \
+	generation="$(date +%s%N)-$$-$RANDOM"
+	rm -f -- "$state_dir/watchdog-ready"
+	atomic_write "$state_dir/watchdog-generation" "$generation"
+	nohup bash "$0" watchdog "$application_root" "$release_id" "$previous_release_id" \
+		"$generation" \
 		>>"$log_file" 2>&1 </dev/null &
-	atomic_write "$state_dir/watchdog.pid" "$!"
+	process_id=$!
+	atomic_write "$state_dir/watchdog.pid" "$process_id"
+	for ((attempt = 1; attempt <= WATCHDOG_READY_ATTEMPTS; attempt++)); do
+		if watchdog_ready_matches "$state_dir" "$generation" \
+			&& watchdog_process_matches "$process_id" "$generation"; then
+			return 0
+		fi
+		watchdog_process_matches "$process_id" "$generation" || break
+		sleep "$WATCHDOG_READY_POLL_SECONDS"
+	done
+	if watchdog_process_matches "$process_id" "$generation"; then
+		kill "$process_id" 2>/dev/null || true
+	fi
+	if watchdog_generation_matches "$state_dir" "$generation"; then
+		rm -f -- \
+			"$state_dir/watchdog.pid" \
+			"$state_dir/watchdog-generation" \
+			"$state_dir/watchdog-ready"
+	fi
+	fail "Rollback watchdog did not become ready"
 }
 
 case "${1:-}" in
@@ -370,6 +803,10 @@ case "${1:-}" in
 	arm)
 		[[ $# -eq 4 ]] || fail "Usage: $0 arm APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"
 		arm "$2" "$3" "$4"
+		;;
+	assert-activation-held)
+		[[ $# -eq 4 ]] || fail "Usage: $0 assert-activation-held APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"
+		assert_activation_held "$2" "$3" "$4"
 		;;
 	heartbeat)
 		[[ $# -eq 4 ]] || fail "Usage: $0 heartbeat APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"
@@ -391,11 +828,19 @@ case "${1:-}" in
 		[[ $# -eq 4 ]] || fail "Usage: $0 rollback-held APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"
 		rollback_held "$2" "$3" "$4"
 		;;
+	finalize-unchanged)
+		[[ $# -eq 4 ]] || fail "Usage: $0 finalize-unchanged APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"
+		finalize_unchanged "$2" "$3" "$4"
+		;;
+	finalize-deadline)
+		[[ $# -eq 4 ]] || fail "Usage: $0 finalize-deadline APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"
+		finalize_deadline "$2" "$3" "$4"
+		;;
 	watchdog)
-		[[ $# -eq 4 ]] || fail "Usage: $0 watchdog APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"
-		watchdog "$2" "$3" "$4"
+		[[ $# -eq 4 || $# -eq 5 ]] || fail "Usage: $0 watchdog APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID [GENERATION]"
+		watchdog "$2" "$3" "$4" "${5:-}"
 		;;
 	*)
-		fail "Usage: $0 {checkpoint|start|arm|heartbeat|commit|rollback|rollback-if-stale|rollback-held|watchdog} ..."
+		fail "Usage: $0 {checkpoint|start|arm|assert-activation-held|heartbeat|commit|rollback|rollback-if-stale|rollback-held|finalize-unchanged|finalize-deadline|watchdog} ..."
 		;;
 esac

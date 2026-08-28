@@ -244,6 +244,26 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('keeps the first cited section readable when continuation admission times out', () => {
+    const timedOut = run('FAILED')
+    timedOut.run.lastErrorCode = 'TEACHING_CONTINUATION_QUEUE_TIMEOUT'
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+      }),
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
+      ] },
+      teachingRun: timedOut,
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+    }))).toMatchObject({
+      phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
+      errorCode: 'TEACHING_CONTINUATION_QUEUE_TIMEOUT', failureClassification: 'preserved-stop',
+      failureRecovery: 'retry-step', canReadLesson: true,
+    })
+  })
+
   it('does not offer an identical retry for an unknown teaching workflow failure', () => {
     const failed = run('FAILED')
     failed.run.lastErrorCode = 'TEACHING_WORKFLOW_FAILED'

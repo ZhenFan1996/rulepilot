@@ -1,12 +1,15 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
@@ -32,6 +35,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 class GroundedTeachingAgentRetryTest {
 
@@ -261,6 +266,51 @@ class GroundedTeachingAgentRetryTest {
             assertThat(section.steps().getFirst().text()).isEqualTo("把主棋盘放在桌面中央。");
             assertThat(section.steps().getFirst().visualFoci()).isEmpty();
         });
+    }
+
+    @ParameterizedTest
+    @EnumSource(StopReason.class)
+    void propagatesAWholeRunStopFromTheFinalSectionVisualAttempt(StopReason stopReason) {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        AssistantReadTools tools = request -> List.of(new RuleEvidence(
+                evidenceId,
+                versionId,
+                "SETUP",
+                "Central board",
+                "Place the central board in the middle before the first turn.",
+                2,
+                2));
+        CountingInvocations invocations = new CountingInvocations();
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
+        VisualLessonEnricher visuals = mock(VisualLessonEnricher.class);
+        when(visuals.supportsVisualEvidence("player")).thenReturn(true);
+        when(visuals.enrichSection(
+                        eq(versionId), any(LessonSection.class), any(), eq("player"), any(), any()))
+                .thenThrow(new AgentExecutionStoppedException(stopReason));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                request -> validDraft(evidenceId),
+                new PolicyEvidenceVerifier(),
+                cleanCritic(),
+                invocations,
+                visualFacts,
+                3,
+                null,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts),
+                visuals);
+        List<com.rulepilot.teaching.domain.IllustratedLesson> snapshots = new ArrayList<>();
+
+        assertThatThrownBy(() -> agent.createBase(plan(versionId), UUID.randomUUID(), null, snapshots::add))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue("reason", stopReason);
+
+        assertThat(snapshots).singleElement().satisfies(snapshot ->
+                assertThat(snapshot.sections()).singleElement().satisfies(section -> {
+                    assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+                    assertThat(section.steps().getFirst().text()).isEqualTo("把主棋盘放在桌面中央。");
+                    assertThat(section.steps().getFirst().visualFoci()).isEmpty();
+                }));
     }
 
     @Test

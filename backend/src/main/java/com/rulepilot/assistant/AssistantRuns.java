@@ -1,5 +1,6 @@
 package com.rulepilot.assistant;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -22,6 +23,60 @@ public interface AssistantRuns {
             String ownerUsername,
             WorkloadDemand workloadDemand) {
         return start(mode, subjectId, ownerUsername);
+    }
+
+    /** Re-bases a queued run's wall deadline at worker admission without changing its visible RECEIVED state. */
+    default RunSnapshot activateQueued(RunSnapshot queued) {
+        return queued;
+    }
+
+    /** Idempotently admits one durable worker delivery across an ambiguous transaction response. */
+    default RunSnapshot activateQueued(RunSnapshot queued, UUID activationId) {
+        return activateQueued(queued);
+    }
+
+    /** Replays one delivery with the immutable instant at which its in-memory worker lane was acquired. */
+    default RunSnapshot activateQueued(RunSnapshot queued, UUID activationId, Instant admittedAt) {
+        return activateQueued(queued, activationId);
+    }
+
+    /** Preserves a Teaching run's active-work budget while a continuation waits in its bounded executor queue. */
+    default RunSnapshot resumeAfterQueue(RunSnapshot queued, Duration queueWait) {
+        return queued;
+    }
+
+    /** Fails queued work only when the same durable admission row proves that no worker claimed it first. */
+    default boolean failQueuedIfUnactivated(
+            UUID runId,
+            String ownerUsername,
+            String errorCode,
+            String stepSummary) {
+        return false;
+    }
+
+    /**
+     * Fails work before model execution only when it is still unclaimed or belongs to the exact failed delivery.
+     * A different durable activation token always wins.
+     */
+    default boolean failQueuedIfUnactivatedOrOwned(
+            UUID runId,
+            String ownerUsername,
+            UUID activationId,
+            String errorCode,
+            String stepSummary) {
+        return failQueuedIfUnactivated(runId, ownerUsername, errorCode, stepSummary);
+    }
+
+    /**
+     * Fails already-admitted work at a queue boundary while preserving a terminal state or owner cancellation that
+     * won first. A terminal run is considered durably settled and returns true.
+     */
+    default boolean failActiveIfOwned(
+            UUID runId,
+            String ownerUsername,
+            String errorCode,
+            String stepSummary) {
+        return false;
     }
 
     RunSnapshot advance(UUID runId, long expectedRevision, AssistantRunState nextState, String stepSummary);

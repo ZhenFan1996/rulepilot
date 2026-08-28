@@ -268,6 +268,7 @@ final class RecommendationReActLoop {
         List<Message> messages = new ArrayList<>(actionFoundation);
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
         int stateEpoch = 0;
+        boolean missingActionRepairUsed = false;
 
         while (state.modelCalls < MAX_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             state.modelCalls++;
@@ -280,6 +281,7 @@ final class RecommendationReActLoop {
                     currentTurnEvidenceIds);
             OperationObservation decisionObservation = startOperation(
                     "decision_model", "choose_next_action");
+            long modelCallStartedAt = System.nanoTime();
             try {
                 List<Message> turnMessages = messages;
                 Request modelRequest = new Request(
@@ -291,16 +293,19 @@ final class RecommendationReActLoop {
                         state,
                         () -> model.next(modelRequest, state.modelConfigurationOwner));
             } catch (RunInterrupted exception) {
+                state.recordModelCallElapsed(modelCallStartedAt);
                 decisionObservation.stop("interrupted", false, exception);
                 progress.fail();
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RunDeadlineExceeded exception) {
+                state.recordModelCallElapsed(modelCallStartedAt);
                 decisionObservation.stop("deadline", false, exception);
                 progress.fail();
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RuntimeException exception) {
+                state.recordModelCallElapsed(modelCallStartedAt);
                 decisionObservation.stop("error", false, exception);
                 String failureCode = exception instanceof BoardGameRecommendationModel.ProtocolFailure protocol
                         ? "MODEL_PROTOCOL_FAILED:" + protocol.code()
@@ -313,6 +318,7 @@ final class RecommendationReActLoop {
                 state.actions.add(failureCode);
                 return unavailable(state, locale, failureCode);
             }
+            state.recordModelCallElapsed(modelCallStartedAt);
             if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
                 decisionObservation.stop("output_limit", false, null);
                 progress.fail();
@@ -320,8 +326,20 @@ final class RecommendationReActLoop {
                 return unavailable(state, locale, "MODEL_OUTPUT_TRUNCATED");
             }
             if (turn.toolCalls().isEmpty()) {
+                if (!missingActionRepairUsed && state.modelCalls < MAX_MODEL_CALLS) {
+                    missingActionRepairUsed = true;
+                    decisionObservation.stop("missing_action_retry", false, null);
+                    LOGGER.warn("Recommendation Agent turn returned no typed action; requesting one bounded repair");
+                    progress.retry();
+                    state.actions.add("REJECTED_MISSING_ACTION");
+                    messages.set(0, Message.system(
+                            systemPromptV2()
+                                    + "\n\nProtocol repair: the previous response did not contain a typed action. "
+                                    + "Return exactly one action from the currently supplied tools; do not return prose."));
+                    continue;
+                }
                 decisionObservation.stop("missing_action", false, null);
-                LOGGER.warn("Recommendation Agent turn returned no required typed action");
+                LOGGER.warn("Recommendation Agent turn returned no typed action after the bounded repair");
                 progress.fail();
                 state.actions.add("UNSTRUCTURED_EVIDENCE_REPLY");
                 return unavailable(state, locale, "UNSTRUCTURED_EVIDENCE_REPLY");
@@ -598,7 +616,8 @@ final class RecommendationReActLoop {
                         state.webResearchCalls,
                         false,
                         state.actions,
-                        state.elapsedMs()),
+                        state.elapsedMs(),
+                        state.modelCallElapsedMs),
                 List.of(),
                 null);
         logRun(response);
@@ -607,11 +626,12 @@ final class RecommendationReActLoop {
 
     void logRun(ConversationResponse response) {
         LOGGER.info(
-                "Recommendation ReAct run completed: promptVersion={}, outcome={}, totalElapsedMs={}, modelCalls={}, catalogCalls={}, webResearchCalls={}, candidatesEvaluated={}, actions={}",
+                "Recommendation ReAct run completed: promptVersion={}, outcome={}, totalElapsedMs={}, modelCalls={}, modelCallElapsedMs={}, catalogCalls={}, webResearchCalls={}, candidatesEvaluated={}, actions={}",
                 PROMPT_VERSION,
                 response.outcome(),
                 response.harness().totalElapsedMs(),
                 response.harness().modelCalls(),
+                response.harness().modelCallElapsedMs(),
                 response.harness().catalogCalls(),
                 response.harness().webResearchCalls(),
                 response.candidatesEvaluated(),

@@ -753,7 +753,7 @@ const englishMessages = {
     'documents.error': 'We could not work with this rulebook right now. Please try again shortly.',
     'documents.titleFallback': 'Rulebook',
     'documents.prepare.outline': 'The page essentials are ready; now arranging the teaching order.',
-    'documents.prepare.received': 'Got it. Starting the guide now.',
+    'documents.prepare.received': 'Queued with a firm limit: up to 2 minutes ordinarily or 30 minutes for image rulebooks. A timeout ends explicitly and can be retried.',
     'documents.prepare.readiness': 'Checking the rulebook pages and images.',
     'documents.prepare.planning': 'Reading the text and pictures, then arranging the guide.',
     'documents.prepare.completed': 'The guide outline is ready; opening the readable version.',

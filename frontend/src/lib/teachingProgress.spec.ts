@@ -457,6 +457,36 @@ describe('teaching progress', () => {
     expect(teachingRunStopReasonText(failed)).toContain('保留')
   })
 
+  it('explains that a preparation queue timeout happened before model work started', () => {
+    const failed = run('run-queue-timeout', [])
+    failed.run.state = 'FAILED'
+    failed.run.lastErrorCode = 'TEACHING_PREPARATION_QUEUE_TIMEOUT'
+
+    expect(teachingRunStopReasonText(failed)).toContain('限定排队时间')
+    expect(teachingRunStopReasonText(failed)).toContain('模型工作尚未开始')
+    expect(teachingRunStopReasonText(failed, 'en')).toContain('No model work started')
+  })
+
+  it('explains that a direct teaching queue timeout happened before model work started', () => {
+    const failed = run('run-teaching-queue-timeout', [])
+    failed.run.state = 'FAILED'
+    failed.run.lastErrorCode = 'TEACHING_QUEUE_TIMEOUT'
+
+    expect(teachingRunStopReasonText(failed)).toContain('限定排队时间')
+    expect(teachingRunStopReasonText(failed)).toContain('模型工作尚未开始')
+    expect(teachingRunStopReasonText(failed, 'en')).toContain('No model work started')
+  })
+
+  it('explains that continuation admission timeout preserves the first cited section', () => {
+    const failed = run('run-continuation-timeout', [])
+    failed.run.state = 'FAILED'
+    failed.run.lastErrorCode = 'TEACHING_CONTINUATION_QUEUE_TIMEOUT'
+
+    expect(teachingRunStopReasonText(failed)).toContain('第一段带引用讲解仍可阅读')
+    expect(teachingRunStopReasonText(failed)).toContain('没有获得并持久接管 worker')
+    expect(teachingRunStopReasonText(failed, 'en')).toContain('first cited section remains readable')
+  })
+
   it('explains cancellation separately from service failure', () => {
     const cancelled = run('run-cancelled', [])
     cancelled.run.state = 'FAILED'

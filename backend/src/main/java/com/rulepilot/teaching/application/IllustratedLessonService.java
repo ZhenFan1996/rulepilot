@@ -5,12 +5,14 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentWorkAlreadyClaimedException;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.List;
 import java.util.UUID;
@@ -118,18 +120,53 @@ public class IllustratedLessonService {
                 .observe(() -> continueGenerationObserved(continuation));
     }
 
+    void admitContinuation(GenerationContinuation continuation, Duration queueWait) {
+        if (continuation == null) throw new IllegalArgumentException("teaching continuation is required");
+        if (queueWait == null || queueWait.isNegative()) {
+            throw new IllegalArgumentException("teaching continuation queue wait is invalid");
+        }
+        RunSnapshot run = continuation.run();
+        try {
+            runs.resumeAfterQueue(run, queueWait);
+        } catch (AgentWorkAlreadyClaimedException duplicateDelivery) {
+            throw duplicateDelivery;
+        } catch (AgentExecutionStoppedException stopped) {
+            failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped while queued", stopped);
+            throw stopped;
+        } catch (RuntimeException failure) {
+            failRun(
+                    run,
+                    "TEACHING_CONTINUATION_ADMISSION_FAILED",
+                    "Remaining teaching work could not resume from its queue",
+                    failure);
+            throw failure;
+        }
+    }
+
     private GenerationContinuation startGenerationObserved(
             UUID teachingPlanId,
             String ownerUsername,
             RunSnapshot initialRun) {
-        var plan = requireReadyPlan(teachingPlanId, ownerUsername);
-        return startGenerationObserved(plan, initialRun);
+        TeachingPlan plan;
+        try {
+            plan = requireReadyPlan(teachingPlanId, ownerUsername);
+        } catch (RuntimeException failure) {
+            failRun(initialRun, "TEACHING_WORKFLOW_FAILED", "Teaching plan could not be loaded", failure);
+            throw failure;
+        }
+        return startClaimedGenerationObserved(plan, initialRun);
     }
 
     private GenerationContinuation startGenerationObserved(
             TeachingPlan plan,
             RunSnapshot initialRun) {
-        RunSnapshot run = initialRun;
+        return startClaimedGenerationObserved(plan, initialRun);
+    }
+
+    private GenerationContinuation startClaimedGenerationObserved(
+            TeachingPlan plan,
+            RunSnapshot claimedRun) {
+        RunSnapshot run = claimedRun;
         try {
             run = advance(run, AssistantRunState.DOCUMENT_READINESS, "Rule document readiness is checked");
             run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
@@ -142,6 +179,8 @@ public class IllustratedLessonService {
                     previousLesson,
                     progressPublisher::publish);
             return new GenerationContinuation(run, base);
+        } catch (AgentWorkAlreadyClaimedException duplicateDelivery) {
+            throw duplicateDelivery;
         } catch (AgentExecutionStoppedException stopped) {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
             throw stopped;
@@ -164,6 +203,8 @@ public class IllustratedLessonService {
             }
             run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
+        } catch (AgentWorkAlreadyClaimedException duplicateDelivery) {
+            throw duplicateDelivery;
         } catch (AgentExecutionStoppedException stopped) {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
             throw stopped;
@@ -198,6 +239,8 @@ public class IllustratedLessonService {
                             : progressPublisher::publishCandidate);
             run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
+        } catch (AgentWorkAlreadyClaimedException duplicateDelivery) {
+            throw duplicateDelivery;
         } catch (AgentExecutionStoppedException stopped) {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
             throw stopped;
@@ -219,6 +262,9 @@ public class IllustratedLessonService {
                 run = advanceAfterWork(run, AssistantRunState.LESSON_COMPOSITION, "Cited illustrated lesson is composed");
                 run = advanceAfterWork(run, AssistantRunState.COMPLETED, "Illustrated lesson generation completed");
             }
+        } catch (AgentExecutionStoppedException stopped) {
+            failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped before completion", stopped);
+            throw stopped;
         } catch (RuntimeException exception) {
             failRun(run, "TEACHING_COMPLETION_FAILED", "Persisted lesson could not be marked complete", exception);
             throw exception;
@@ -229,18 +275,6 @@ public class IllustratedLessonService {
     public void failScheduling(RunSnapshot run) {
         if (!run.state().terminal()) {
             runs.fail(run.id(), run.revision(), "TEACHING_QUEUE_FULL", "Teaching generation could not be scheduled");
-        }
-    }
-
-    @Transactional
-    public void failContinuationScheduling(GenerationContinuation continuation) {
-        RunSnapshot run = continuation.run();
-        if (!run.state().terminal()) {
-            runs.fail(
-                    run.id(),
-                    run.revision(),
-                    "TEACHING_CONTINUATION_QUEUE_FULL",
-                    "The first cited section is readable but remaining teaching work could not be scheduled");
         }
     }
 
@@ -257,6 +291,17 @@ public class IllustratedLessonService {
     @Transactional(readOnly = true)
     public Optional<IllustratedLesson> latest(UUID teachingPlanId) {
         return repository.findLatestByPlan(teachingPlanId);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean hasDurableCitedSection(UUID teachingPlanId) {
+        if (teachingPlanId == null) throw new IllegalArgumentException("teaching plan is required");
+        return repository.findLatestByPlan(teachingPlanId).stream()
+                .flatMap(lesson -> lesson.sections().stream())
+                .filter(section -> section.evidenceStatus() == IllustratedLesson.EvidenceStatus.SUPPORTED
+                        || section.evidenceStatus() == IllustratedLesson.EvidenceStatus.CITED_DRAFT)
+                .flatMap(section -> section.steps().stream())
+                .anyMatch(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty());
     }
 
     @Transactional(readOnly = true)

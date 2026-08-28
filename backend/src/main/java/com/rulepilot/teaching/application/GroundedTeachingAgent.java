@@ -181,7 +181,14 @@ public class GroundedTeachingAgent {
                     reusable,
                     assistantRunId,
                     queriesPerTopic);
-            outcome = enrichForPublication(plan, outcome, sections, assistantRunId);
+            outcome = enrichForPublicationPreservingValidatedTextOnStop(
+                    plan,
+                    outcome,
+                    sections,
+                    assistantRunId,
+                    lessonId,
+                    createdAt,
+                    progressPublisher);
             if (outcome.reviewCandidate() != null
                     && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
                 reviewCandidates.add(outcome.reviewCandidate());
@@ -239,7 +246,14 @@ public class GroundedTeachingAgent {
                     reusable,
                     assistantRunId,
                     queriesPerTopic);
-            outcome = enrichForPublication(plan, outcome, sections, assistantRunId);
+            outcome = enrichForPublicationPreservingValidatedTextOnStop(
+                    plan,
+                    outcome,
+                    sections,
+                    assistantRunId,
+                    lessonId,
+                    createdAt,
+                    progressPublisher);
             continuation.track(outcome);
             sections.add(outcome.section());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
@@ -477,7 +491,14 @@ public class GroundedTeachingAgent {
                     sections.size(),
                     GenerationMode.COMPATIBILITY_COMPLETE,
                     true);
-            outcome = enrichForPublication(plan, outcome, sections, assistantRunId);
+            outcome = enrichForPublicationPreservingValidatedTextOnStop(
+                    plan,
+                    outcome,
+                    sections,
+                    assistantRunId,
+                    lessonId,
+                    createdAt,
+                    progressPublisher);
             sections.add(outcome.section());
             if (outcome.reviewCandidate() != null
                     && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
@@ -535,6 +556,31 @@ public class GroundedTeachingAgent {
                 plan, outcome.planned(), outcome.section(), alreadyPublished, assistantRunId));
     }
 
+    private SectionOutcome enrichForPublicationPreservingValidatedTextOnStop(
+            TeachingPlan plan,
+            SectionOutcome outcome,
+            List<LessonSection> alreadyPublished,
+            UUID assistantRunId,
+            UUID lessonId,
+            Instant createdAt,
+            Consumer<IllustratedLesson> progressPublisher) {
+        try {
+            return enrichForPublication(plan, outcome, alreadyPublished, assistantRunId);
+        } catch (AgentExecutionStoppedException stopped) {
+            // A whole-run stop remains authoritative, but optional image work must not erase the cited chapter that
+            // already passed deterministic validation. Publish that exact text snapshot before the lifecycle owner
+            // records AGENT_CANCELLED / AGENT_*_BUDGET / AGENT_TIMEOUT.
+            alreadyPublished.add(outcome.section());
+            publishProgress(progressPublisher, lessonId, plan, alreadyPublished, createdAt);
+            recordPublication(
+                    assistantRunId,
+                    outcome.planned(),
+                    outcome.publicationOutcome(),
+                    outcome.publicationCategory());
+            throw stopped;
+        }
+    }
+
     private LessonSection enrichValidatedSection(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
@@ -566,11 +612,7 @@ public class GroundedTeachingAgent {
                     enriched.outcome().summary());
             return enriched.section();
         } catch (AgentExecutionStoppedException stopped) {
-            if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) throw stopped;
-            log.warn(
-                    "Optional visual enrichment stopped for teaching topic {}; publishing cited text",
-                    planned.topicKey());
-            return section;
+            throw stopped;
         } catch (RuntimeException visualFailure) {
             log.warn(
                     "Optional visual enrichment failed for teaching topic {}; publishing cited text: {}",

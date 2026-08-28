@@ -55,19 +55,37 @@ function replyPartLabel(role: NonNullable<RecommendedGame['replyParts']>[number]
 </script>
 
 <template>
-  <article class="game-tile min-w-0 p-3 sm:p-4" data-testid="recommendation-game-card" :data-bgg-id="entry.game.bggId">
+  <article
+    class="game-tile min-w-0 p-3 sm:p-4"
+    data-testid="recommendation-game-card"
+    :data-bgg-id="entry.game.bggId"
+    :data-game-name="entry.game.name"
+    :data-original-name="entry.game.originalName"
+    :data-min-players="entry.game.minPlayers"
+    :data-max-players="entry.game.maxPlayers"
+    :data-minimum-play-time="entry.game.minimumPlayTimeMinutes ?? entry.game.playingTimeMinutes"
+    :data-maximum-play-time="entry.game.maximumPlayTimeMinutes ?? entry.game.playingTimeMinutes"
+  >
     <button type="button" class="block w-full text-left" :aria-label="`${labels.details}${cardLocale === 'zh-CN' ? '：' : ': '}${entry.game.name}`" @click="$emit('details', entry.game)">
       <div class="flex aspect-[16/10] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
         <img v-if="entry.game.thumbnailUrl" :src="entry.game.thumbnailUrl" :alt="`${entry.game.name}${labels.cover}`" loading="lazy" class="h-full w-full object-contain" @error="hideBrokenImage">
         <TabletopGlyph v-else name="cards" :size="44" :aria-label="labels.noCover" />
       </div>
-      <h3 class="mt-3 line-clamp-2 font-display text-xl font-semibold leading-tight">{{ entry.game.name }}</h3>
-      <p v-if="entry.game.nameLocalized" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ entry.game.originalName }}</p>
-      <p v-if="quickFacts.length" class="mt-2 line-clamp-2 text-xs leading-5 text-ink/55">{{ quickFacts.join(' · ') }}</p>
+      <h3 data-testid="recommendation-game-title" class="mt-3 line-clamp-2 font-display text-xl font-semibold leading-tight">{{ entry.game.name }}</h3>
+      <p v-if="entry.game.nameLocalized" data-testid="recommendation-game-original-title" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ entry.game.originalName }}</p>
+      <p v-if="quickFacts.length" data-testid="recommendation-game-quick-facts" class="mt-2 line-clamp-2 text-xs leading-5 text-ink/55">{{ quickFacts.join(' · ') }}</p>
     </button>
 
     <dl v-if="entry.replyParts?.length" class="mt-3 grid gap-2 border-t border-ink/8 pt-3 text-sm leading-5">
-      <div v-for="(part, index) in entry.replyParts" :key="`${part.role}-${part.subject}-${index}`" class="grid gap-0.5">
+      <div
+        v-for="(part, index) in entry.replyParts"
+        :key="`${part.role}-${part.subject}-${index}`"
+        class="grid gap-0.5"
+        :data-role="part.role"
+        :data-claim-type="part.claimType"
+        :data-subject="part.subject"
+        :data-source-indexes="part.sourceIndexes.join(',')"
+      >
         <dt class="text-[0.6875rem] font-semibold uppercase tracking-[0.08em]" :class="part.role === 'tradeoff' ? 'text-copper' : 'text-felt'">{{ replyPartLabel(part.role) }}</dt>
         <dd class="text-ink/65">{{ part.text }}</dd>
       </div>

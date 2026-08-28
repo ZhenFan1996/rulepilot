@@ -114,6 +114,30 @@ class BggXmlApiClientTest {
     }
 
     @Test
+    void treatsNonPositivePlayTimesAsUnknownAcrossRecommendationDetailFeeds() {
+        String response = """
+                <items><item type="boardgame" id="266192">
+                  <name type="primary" value="Unknown Duration"/>
+                  <yearpublished value="2025"/><minplayers value="2"/><maxplayers value="5"/>
+                  <playingtime value="0"/><minplaytime value="-5"/><maxplaytime value="0"/>
+                </item></items>
+                """;
+
+        var game = client.parseGame(response, 266192);
+        var discoveryGame = client.parseDiscoveryGames(
+                        response,
+                        List.of(new HotGame(1, 266192, "Unknown Duration", 2025, "")))
+                .getFirst();
+
+        assertThat(game.playingTimeMinutes()).isNull();
+        assertThat(game.minimumPlayTimeMinutes()).isNull();
+        assertThat(game.maximumPlayTimeMinutes()).isNull();
+        assertThat(discoveryGame.playingTimeMinutes()).isNull();
+        assertThat(discoveryGame.minimumPlayTimeMinutes()).isNull();
+        assertThat(discoveryGame.maximumPlayTimeMinutes()).isNull();
+    }
+
+    @Test
     void parsesHotGameCoversAndRanks() {
         var games = client.parseHotGames("""
                 <items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">

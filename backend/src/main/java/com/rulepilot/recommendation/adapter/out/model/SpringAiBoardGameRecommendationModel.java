@@ -1,5 +1,7 @@
 package com.rulepilot.recommendation.adapter.out.model;
 
+import com.openai.models.chat.completions.ChatCompletionNamedToolChoice;
+import com.openai.models.chat.completions.ChatCompletionToolChoiceOption;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
@@ -74,11 +76,12 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
 
     private Turn invoke(
             Request request, double requestTemperature, String operation, String ownerUsername) {
-        ChatModel model = modelFor(ownerUsername);
+        RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
+        ChatModel model = selected.model();
         long startedAt = System.nanoTime();
         ChatResponse response = model.call(new Prompt(
                 request.messages().stream().map(this::message).toList(),
-                requestOptions(model, request, ownerUsername)
+                requestOptions(selected, request)
                         .temperature(requestTemperature)
                         .build()));
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
@@ -90,14 +93,14 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 (System.nanoTime() - startedAt) / 1_000_000,
                 requestTemperature,
                 operation,
-                ownerUsername);
+                selected);
         return turn(response);
     }
 
     private ToolCallingChatOptions.Builder<?> requestOptions(
-            ChatModel model,
-            Request request,
-            String ownerUsername) {
+            RuntimeModelConfiguration.ResolvedModel selected,
+            Request request) {
+        ChatModel model = selected.model();
         List<ToolCallback> callbacks = request.tools().stream()
                 .map(DefinitionOnlyToolCallback::new)
                 .map(ToolCallback.class::cast)
@@ -105,16 +108,12 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         ToolCallingChatOptions.Builder<?> options;
         if (model.getOptions() instanceof OpenAiChatOptions defaults) {
             OpenAiChatOptions.Builder builder = defaults.mutate();
-            if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
+            if (selected.deepSeekNonThinkingGeneration()) {
                 builder.extraBody(Map.of("thinking", Map.of("type", "disabled")));
-            } else if ("qwen".equals(providerFor(ownerUsername))) {
+            } else if ("qwen".equals(selected.provider())) {
                 builder.extraBody(Map.of("enable_thinking", false));
             }
-            // Qwen's OpenAI-compatible endpoint accepts the same typed tools reliably in auto mode. Its required
-            // wire mode is unsupported by some current Qwen models and sends others down a severe latency path.
-            // The provider hint does not weaken the application contract: Request remains logically REQUIRED and
-            // the ReAct loop rejects zero, multiple incompatible, unknown, or schema-invalid action calls.
-            builder.toolChoice("qwen".equals(providerFor(ownerUsername)) ? "auto" : "required");
+            builder.toolChoice(openAiToolChoice(request, selected.provider()));
             builder.parallelToolCalls(false);
             options = builder;
         } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {
@@ -131,6 +130,22 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         return options.toolCallbacks(callbacks)
                 .temperature(temperature)
                 .maxTokens(request.maxOutputTokens());
+    }
+
+    private Object openAiToolChoice(Request request, String provider) {
+        if ("qwen".equals(provider) && request.tools().size() == 1) {
+            ToolSpec onlyAction = request.tools().getFirst();
+            ChatCompletionNamedToolChoice named = ChatCompletionNamedToolChoice.builder()
+                    .function(ChatCompletionNamedToolChoice.Function.builder()
+                            .name(onlyAction.name())
+                            .build())
+                    .build();
+            return ChatCompletionToolChoiceOption.ofNamedToolChoice(named);
+        }
+        // Qwen's OpenAI-compatible endpoint accepts multiple typed tools reliably in auto mode. Its required wire
+        // mode is unsupported by some current Qwen models and sends others down a severe latency path. The application
+        // ReAct boundary still rejects zero, incompatible, unknown, or schema-invalid action calls.
+        return "qwen".equals(provider) ? "auto" : "required";
     }
 
     private Turn turn(ChatResponse response) {
@@ -162,7 +177,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             long elapsedMs,
             double requestTemperature,
             String operation,
-            String ownerUsername) {
+            RuntimeModelConfiguration.ResolvedModel selected) {
         int inputCharacters = request.messages().stream()
                         .mapToInt(message -> message.content().length())
                         .sum()
@@ -177,8 +192,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         LOGGER.info(
                 "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
                 operation,
-                providerFor(ownerUsername),
-                modelNameFor(ownerUsername),
+                selected.provider(),
+                selected.modelName(),
                 requestTemperature,
                 elapsedMs,
                 inputCharacters,
@@ -187,35 +202,16 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
     }
 
-    private ChatModel modelFor(String ownerUsername) {
+    private RuntimeModelConfiguration.ResolvedModel resolvedModelFor(String ownerUsername) {
         return ownerUsername == null || ownerUsername.isBlank()
-                ? models.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)
-                : models.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
-    }
-
-    private String providerFor(String ownerUsername) {
-        return ownerUsername == null || ownerUsername.isBlank()
-                ? models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)
-                : models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
-    }
-
-    private String modelNameFor(String ownerUsername) {
-        return ownerUsername == null || ownerUsername.isBlank()
-                ? models.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)
-                : models.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
+                ? models.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)
+                : models.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
     }
 
     private boolean usesFake(String ownerUsername) {
         return ownerUsername == null || ownerUsername.isBlank()
                 ? models.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION)
                 : models.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
-    }
-
-    private boolean usesDeepSeekNonThinkingGeneration(String ownerUsername) {
-        return ownerUsername == null || ownerUsername.isBlank()
-                ? models.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.RECOMMENDATION)
-                : models.usesDeepSeekNonThinkingGeneration(
-                        RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
     }
 
     private org.springframework.ai.chat.messages.Message message(BoardGameRecommendationModel.Message message) {

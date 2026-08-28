@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -21,8 +22,242 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 class AssistantRunServiceTest {
+
+    @Test
+    void startsQueuedPreparationDeadlineWhenTheWorkerActuallyAdmitsIt() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant queuedAt = Instant.now().minus(Duration.ofHours(2));
+        AssistantRun queued = AssistantRun.start(
+                AssistantRunMode.TEACHING_PREPARATION,
+                UUID.randomUUID(),
+                "player",
+                queuedAt);
+        when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
+        var snapshot = new com.rulepilot.assistant.AssistantRuns.RunSnapshot(
+                queued.id(),
+                queued.mode(),
+                queued.subjectId(),
+                queued.ownerUsername(),
+                queued.state(),
+                queued.revision(),
+                queued.createdAt(),
+                queued.updatedAt(),
+                queued.completedAt(),
+                queued.lastErrorCode());
+        UUID activationId = UUID.randomUUID();
+        Instant admittedAt = Instant.now();
+        service.activateQueued(snapshot, activationId, admittedAt);
+
+        verify(execution).activate(queued.id(), activationId, admittedAt);
+        assertThat(admittedAt).isAfter(queuedAt.plus(Duration.ofHours(1)));
+    }
+
+    @Test
+    void startsQueuedTeachingDeadlineWhenItsFirstWorkerActuallyAdmitsIt() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant queuedAt = Instant.now().minus(Duration.ofMinutes(20));
+        AssistantRun queued = AssistantRun.start(
+                AssistantRunMode.TEACHING,
+                UUID.randomUUID(),
+                "player",
+                queuedAt);
+        when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
+        var snapshot = snapshot(queued);
+        UUID activationId = UUID.randomUUID();
+        Instant admittedAt = Instant.now();
+        service.activateQueued(snapshot, activationId, admittedAt);
+
+        verify(execution).activate(queued.id(), activationId, admittedAt);
+        assertThat(admittedAt).isAfter(queuedAt.plus(Duration.ofMinutes(19)));
+    }
+
+    @Test
+    void recordsAQueuedFailureOnlyWhileTheDurableAdmissionRowIsStillUnclaimed() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        AssistantRun queued = AssistantRun.start(
+                AssistantRunMode.TEACHING,
+                UUID.randomUUID(),
+                "player",
+                Instant.now().minusSeconds(30));
+        when(execution.lockUnactivated(queued.id())).thenReturn(true);
+        when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
+        when(repository.update(any(), any(), any())).thenReturn(true);
+
+        boolean failed = service.failQueuedIfUnactivated(
+                queued.id(),
+                "player",
+                "TEACHING_QUEUE_TIMEOUT",
+                "Teaching generation waited too long for a worker and is safe to retry");
+
+        assertThat(failed).isTrue();
+        ArgumentCaptor<AssistantRun> changed = ArgumentCaptor.forClass(AssistantRun.class);
+        verify(repository).update(eq(queued), changed.capture(), any());
+        assertThat(changed.getValue().state()).isEqualTo(AssistantRunState.FAILED);
+        assertThat(changed.getValue().lastErrorCode()).isEqualTo("TEACHING_QUEUE_TIMEOUT");
+    }
+
+    @Test
+    void aDurableWorkerClaimWinsBeforeAStaleInMemoryQueueExpiryCanFailTheRun() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        UUID runId = UUID.randomUUID();
+        when(execution.lockUnactivated(runId)).thenReturn(false);
+
+        boolean failed = service.failQueuedIfUnactivated(
+                runId,
+                "player",
+                "TEACHING_QUEUE_TIMEOUT",
+                "Teaching generation waited too long for a worker and is safe to retry");
+
+        assertThat(failed).isFalse();
+        verify(repository, never()).find(runId);
+        verify(repository, never()).update(any(), any(), any());
+        verify(execution, never()).stopRunning(any(), any(), any());
+    }
+
+    @Test
+    void aFailedDeliveryMayTerminateItsOwnAmbiguousClaimButNeverAnotherDeliverysClaim() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        AssistantRun queued = AssistantRun.start(
+                AssistantRunMode.TEACHING,
+                UUID.randomUUID(),
+                "player",
+                Instant.now().minusSeconds(30));
+        UUID activationId = UUID.randomUUID();
+        when(execution.lockUnactivatedOrOwned(queued.id(), activationId)).thenReturn(true);
+        when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
+        when(repository.update(any(), any(), any())).thenReturn(true);
+
+        assertThat(service.failQueuedIfUnactivatedOrOwned(
+                        queued.id(),
+                        "player",
+                        activationId,
+                        "TEACHING_WORKER_ADMISSION_FAILED",
+                        "Teaching generation could not acquire its durable worker lease"))
+                .isTrue();
+
+        ArgumentCaptor<AssistantRun> changed = ArgumentCaptor.forClass(AssistantRun.class);
+        verify(repository).update(eq(queued), changed.capture(), any());
+        assertThat(changed.getValue().lastErrorCode()).isEqualTo("TEACHING_WORKER_ADMISSION_FAILED");
+
+        UUID otherActivation = UUID.randomUUID();
+        when(execution.lockUnactivatedOrOwned(queued.id(), otherActivation)).thenReturn(false);
+        assertThat(service.failQueuedIfUnactivatedOrOwned(
+                        queued.id(),
+                        "player",
+                        otherActivation,
+                        "TEACHING_WORKER_ADMISSION_FAILED",
+                        "Teaching generation could not acquire its durable worker lease"))
+                .isFalse();
+    }
+
+    @Test
+    void failsAnAdmittedContinuationOnlyWhileItStillOwnsANonTerminalRun() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(30);
+        AssistantRun retrieving = AssistantRun.start(
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
+                .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
+                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(4));
+        when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+        when(repository.update(any(), any(), any())).thenReturn(true);
+
+        boolean failed = service.failActiveIfOwned(
+                retrieving.id(),
+                "player",
+                "TEACHING_CONTINUATION_QUEUE_TIMEOUT",
+                "The first cited section is readable but remaining teaching work waited too long for a worker");
+
+        assertThat(failed).isTrue();
+        verify(execution).assertFinalizationAllowed(retrieving.id());
+        ArgumentCaptor<AssistantRun> changed = ArgumentCaptor.forClass(AssistantRun.class);
+        verify(repository).update(eq(retrieving), changed.capture(), any());
+        assertThat(changed.getValue().state()).isEqualTo(AssistantRunState.FAILED);
+        assertThat(changed.getValue().lastErrorCode()).isEqualTo("TEACHING_CONTINUATION_QUEUE_TIMEOUT");
+    }
+
+    @Test
+    void treatsACompletedRunAsDurablySettledWithoutOverwritingIt() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(30);
+        AssistantRun completed = AssistantRun.start(
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
+                .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
+                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(4))
+                .advance(AssistantRunState.VERIFYING_EVIDENCE, startedAt.plusSeconds(5))
+                .advance(AssistantRunState.LESSON_COMPOSITION, startedAt.plusSeconds(6))
+                .advance(AssistantRunState.COMPLETED, startedAt.plusSeconds(7));
+        when(repository.find(completed.id())).thenReturn(java.util.Optional.of(completed));
+
+        boolean settled = service.failActiveIfOwned(
+                completed.id(),
+                "player",
+                "TEACHING_CONTINUATION_QUEUE_TIMEOUT",
+                "The first cited section is readable but remaining teaching work waited too long for a worker");
+
+        assertThat(settled).isTrue();
+        verify(execution, never()).assertFinalizationAllowed(completed.id());
+        verify(repository, never()).update(any(), any(), any());
+    }
+
+    @Test
+    void treatsAnAlreadyDeletedContinuationRunAsSettled() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        UUID runId = UUID.randomUUID();
+        when(repository.find(runId)).thenReturn(java.util.Optional.empty());
+
+        assertThat(service.failActiveIfOwned(
+                        runId,
+                        "player",
+                        "TEACHING_CONTINUATION_QUEUE_TIMEOUT",
+                        "The first cited section is readable but remaining teaching work waited too long for a worker"))
+                .isTrue();
+
+        verify(execution, never()).assertFinalizationAllowed(runId);
+        verify(repository, never()).update(any(), any(), any());
+    }
+
+    @Test
+    void excludesOnlyContinuationQueueWaitFromAnActiveTeachingDeadline() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minus(Duration.ofMinutes(3));
+        AssistantRun retrieving = AssistantRun.start(
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
+                .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
+                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(4));
+        when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+        Duration queueWait = Duration.ofSeconds(45);
+
+        service.resumeAfterQueue(snapshot(retrieving), queueWait);
+
+        verify(execution).excludeQueueWait(retrieving.id(), queueWait);
+    }
 
     @Test
     void turnsInterruptedTeachingRunsIntoRetryableFailuresOnStartup() {
@@ -62,6 +297,8 @@ class AssistantRunServiceTest {
                 40,
                 300_000,
                 Duration.ofMinutes(30),
+                Duration.ofHours(16),
+                16_000_000,
                 192,
                 600_000,
                 Duration.ofMinutes(30));
@@ -96,11 +333,87 @@ class AssistantRunServiceTest {
         verify(execution).initialize(any(), limits.capture(), any());
         assertThat(limits.getValue().maxToolCalls()).isEqualTo(95);
         assertThat(limits.getValue().maxModelCalls()).isEqualTo(127);
+        assertThat(limits.getValue().maxTokens()).isEqualTo(529_167);
+        assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofMinutes(52).plusSeconds(55));
+    }
+
+    @Test
+    void keepsTheOrdinaryTeachingTimeoutWhenTheAdmittedGraphFitsTheConfiguredBaseline() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+
+        service.start(
+                AssistantRunMode.TEACHING,
+                UUID.randomUUID(),
+                "player",
+                new WorkloadDemand(12, 72));
+
+        ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
+        verify(execution).initialize(any(), limits.capture(), any());
+        assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofMinutes(30));
         assertThat(limits.getValue().maxTokens()).isEqualTo(300_000);
     }
 
     @Test
-    void initializesPreparationWithItsPageAndPlannerSizedCallBudget() {
+    void extendsTheTeachingDeadlineProportionallyForASmallerAdmittedGraph() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+
+        service.start(
+                AssistantRunMode.TEACHING,
+                UUID.randomUUID(),
+                "player",
+                new WorkloadDemand(12, 108));
+
+        ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
+        verify(execution).initialize(any(), limits.capture(), any());
+        assertThat(limits.getValue().maxTokens()).isEqualTo(450_000);
+        assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofMinutes(45));
+    }
+
+    @Test
+    void initializesTwentyPagePreparationWithItsCollapsedPageOwnedCallGraph() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+
+        service.start(
+                AssistantRunMode.TEACHING_PREPARATION,
+                UUID.randomUUID(),
+                "player",
+                new WorkloadDemand(0, 128));
+
+        ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
+        verify(execution).initialize(any(), limits.capture(), any());
+        assertThat(limits.getValue().maxToolCalls()).isOne();
+        assertThat(limits.getValue().maxModelCalls()).isEqualTo(128);
+        assertThat(limits.getValue().maxTokens()).isEqualTo(533_334);
+        assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofMinutes(53).plusSeconds(20));
+    }
+
+    @Test
+    void givesTheLargestAcceptedVisualPreparationHeadroomBelowTheConfiguredHardDeadline() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+
+        service.start(
+                AssistantRunMode.TEACHING_PREPARATION,
+                UUID.randomUUID(),
+                "player",
+                new WorkloadDemand(0, 3_008));
+
+        ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
+        verify(execution).initialize(any(), limits.capture(), any());
+        assertThat(limits.getValue().maxModelCalls()).isEqualTo(3_008);
+        assertThat(limits.getValue().maxTokens()).isEqualTo(12_533_334);
+        assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofHours(16));
+    }
+
+    @Test
+    void capsTheScaledTokenEnvelopeForAWorkloadBeyondTheAcceptedDocumentCeiling() {
         AssistantRunRepository repository = mock(AssistantRunRepository.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = service(repository, execution);
@@ -113,9 +426,62 @@ class AssistantRunServiceTest {
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution).initialize(any(), limits.capture(), any());
-        assertThat(limits.getValue().maxToolCalls()).isOne();
-        assertThat(limits.getValue().maxModelCalls()).isEqualTo(3_888);
-        assertThat(limits.getValue().maxTokens()).isEqualTo(300_000);
+        assertThat(limits.getValue().maxTokens()).isEqualTo(16_000_000);
+        assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofHours(16));
+    }
+
+    @Test
+    void rejectsAWorkloadTimeoutBoundaryBelowTheOrdinaryTeachingTimeout() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+
+        assertThatThrownBy(() -> new AssistantRunService(
+                        repository,
+                        execution,
+                        72,
+                        24,
+                        16,
+                        24_000,
+                        Duration.ofMinutes(2),
+                        Duration.ofSeconds(30),
+                        72,
+                        72,
+                        300_000,
+                        Duration.ofMinutes(30),
+                        Duration.ofMinutes(29),
+                        16_000_000,
+                        192,
+                        600_000,
+                        Duration.ofMinutes(30)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum workload timeout");
+    }
+
+    @Test
+    void rejectsAWorkloadTokenBoundaryBelowTheOrdinaryTeachingBudget() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+
+        assertThatThrownBy(() -> new AssistantRunService(
+                        repository,
+                        execution,
+                        72,
+                        24,
+                        16,
+                        24_000,
+                        Duration.ofMinutes(2),
+                        Duration.ofSeconds(30),
+                        72,
+                        72,
+                        300_000,
+                        Duration.ofMinutes(30),
+                        Duration.ofHours(16),
+                        299_999,
+                        192,
+                        600_000,
+                        Duration.ofMinutes(30)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximum workload tokens");
     }
 
     @Test
@@ -138,7 +504,105 @@ class AssistantRunServiceTest {
                 "Lesson citations are scope checked");
 
         assertThat(verified.state()).isEqualTo(AssistantRunState.VERIFYING_EVIDENCE);
+        verify(execution).assertFinalizationAllowed(retrieving.id());
         verify(execution, never()).assertStepAllowed(any(), any(Long.class));
+    }
+
+    @Test
+    void locksTheCancellationBoundaryBeforeReadingTheRunForFinalization() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(60);
+        AssistantRun retrieving = AssistantRun.start(
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
+                .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
+                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(4));
+        when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+        when(repository.update(any(), any(), any())).thenReturn(true);
+
+        service.advanceAfterWork(
+                retrieving.id(),
+                retrieving.revision(),
+                AssistantRunState.VERIFYING_EVIDENCE,
+                "Lesson citations are scope checked");
+
+        InOrder order = org.mockito.Mockito.inOrder(execution, repository);
+        order.verify(execution).assertFinalizationAllowed(retrieving.id());
+        order.verify(repository).find(retrieving.id());
+        order.verify(repository).update(any(), any(), any());
+    }
+
+    @Test
+    void ownerCancellationPreventsPostWorkTeachingFinalization() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(60);
+        AssistantRun retrieving = AssistantRun.start(
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
+                .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
+                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(4));
+        when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+        org.mockito.Mockito.doThrow(new com.rulepilot.assistant.AgentExecutionStoppedException(
+                        com.rulepilot.assistant.AgentExecutionStoppedException.StopReason.CANCELLED))
+                .when(execution).assertFinalizationAllowed(retrieving.id());
+
+        assertThatThrownBy(() -> service.advanceAfterWork(
+                        retrieving.id(),
+                        retrieving.revision(),
+                        AssistantRunState.VERIFYING_EVIDENCE,
+                        "Lesson citations are scope checked"))
+                .isInstanceOf(com.rulepilot.assistant.AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue(
+                        "reason",
+                        com.rulepilot.assistant.AgentExecutionStoppedException.StopReason.CANCELLED);
+
+        verify(repository, never()).update(any(), any(), any());
+    }
+
+    @Test
+    void treatsCancellationAfterTerminalCommitAsIdempotentlySatisfied() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        UUID runId = UUID.randomUUID();
+        when(execution.requestCancellationIfActive(runId, "player")).thenReturn(false);
+
+        service.requestCancellation(runId, "player");
+
+        verify(repository, never()).find(any());
+        verify(repository, never()).update(any(), any(), any());
+        verify(execution, never()).stopRunning(any(), any(), any());
+    }
+
+    @Test
+    void recordsOwnerCancellationOnlyAfterItWinsTheSharedBoundary() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(10);
+        AssistantRun active = AssistantRun.start(
+                AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt);
+        when(execution.requestCancellationIfActive(active.id(), "player")).thenReturn(true);
+        when(repository.find(active.id())).thenReturn(java.util.Optional.of(active));
+        when(repository.update(any(), any(), any())).thenReturn(true);
+
+        service.requestCancellation(active.id(), "player");
+
+        ArgumentCaptor<AssistantRun> cancelled = ArgumentCaptor.forClass(AssistantRun.class);
+        InOrder order = org.mockito.Mockito.inOrder(execution, repository);
+        order.verify(execution).requestCancellationIfActive(active.id(), "player");
+        order.verify(repository).find(active.id());
+        order.verify(execution)
+                .stopRunning(active.id(), AgentExecutionControl.ActivityOutcome.REJECTED, "Work stopped by the user");
+        order.verify(repository).update(eq(active), cancelled.capture(), eq("Cancellation requested by run owner"));
+        assertThat(cancelled.getValue().state()).isEqualTo(AssistantRunState.FAILED);
+        assertThat(cancelled.getValue().lastErrorCode()).isEqualTo("AGENT_CANCELLED");
     }
 
     @Test
@@ -180,6 +644,8 @@ class AssistantRunServiceTest {
                 40,
                 300_000,
                 Duration.ofMinutes(30),
+                Duration.ofHours(16),
+                16_000_000,
                 192,
                 600_000,
                 Duration.ofMinutes(30));
@@ -268,11 +734,27 @@ class AssistantRunServiceTest {
                 Duration.ofMinutes(2),
                 Duration.ofSeconds(30),
                 72,
-                40,
+                72,
                 300_000,
                 Duration.ofMinutes(30),
+                Duration.ofHours(16),
+                16_000_000,
                 192,
                 600_000,
                 Duration.ofMinutes(30));
+    }
+
+    private com.rulepilot.assistant.AssistantRuns.RunSnapshot snapshot(AssistantRun run) {
+        return new com.rulepilot.assistant.AssistantRuns.RunSnapshot(
+                run.id(),
+                run.mode(),
+                run.subjectId(),
+                run.ownerUsername(),
+                run.state(),
+                run.revision(),
+                run.createdAt(),
+                run.updatedAt(),
+                run.completedAt(),
+                run.lastErrorCode());
     }
 }

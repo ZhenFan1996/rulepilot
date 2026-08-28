@@ -167,6 +167,9 @@ class RecommendationReActLifecycleTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().modelCallElapsedMs())
+                .hasSize(2)
+                .allMatch(elapsed -> elapsed >= 0);
         assertThat(model.requests).hasSize(2);
         assertThat(model.requests.get(1).toolChoice())
                 .isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
@@ -425,6 +428,9 @@ class RecommendationReActLifecycleTest {
                 });
         assertThat(response.assistantMessage()).contains("自然语言说明没有完成", "保留已核验的卡片事实");
         assertThat(response.harness().fallbackUsed()).isTrue();
+        assertThat(response.harness().modelCallElapsedMs())
+                .hasSize(2)
+                .allMatch(elapsed -> elapsed >= 0);
         assertThat(response.harness().actions())
                 .contains("MODEL_CALL_FAILED", "RECOMMENDATION_REPLY_FALLBACK:MODEL_CALL_FAILED", "RECOMMEND_GAMES");
         loop.stopBoundedCalls();

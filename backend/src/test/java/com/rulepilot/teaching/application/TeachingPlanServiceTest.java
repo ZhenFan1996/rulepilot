@@ -49,9 +49,15 @@ import org.mockito.ArgumentCaptor;
 class TeachingPlanServiceTest {
 
     @Test
-    void sizesVisualPreparationForEveryPageAttemptAndEveryBoundedPlannerStage() {
+    void sizesVisualPreparationForEveryPageAttemptAndEveryPageOwnedPlannerStage() {
         assertThat(TeachingPlanService.preparationWorkload(true, 20))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 3_888));
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 128));
+    }
+
+    @Test
+    void keepsTheLargestAcceptedDocumentWithinTheCollapsedPageOwnedCallGraph() {
+        assertThat(TeachingPlanService.preparationWorkload(true, 500))
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 3_008));
     }
 
     @Test
@@ -61,10 +67,27 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void isolatesOnlyWorkloadsBeyondTheOrdinaryPreparationCallGraph() {
+        assertThat(TeachingPlanService.requiresExtendedPreparationLane(
+                        new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 16)))
+                .isFalse();
+        assertThat(TeachingPlanService.requiresExtendedPreparationLane(
+                        new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 17)))
+                .isTrue();
+    }
+
+    @Test
     void rejectsAnEmptyPreparationInsteadOfStartingWithAnArbitraryFixedBudget() {
         assertThatThrownBy(() -> TeachingPlanService.preparationWorkload(true, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("page count");
+    }
+
+    @Test
+    void rejectsAVisualPreparationWhoseBoundedCallGraphCannotFitTheRunCounter() {
+        assertThatThrownBy(() -> TeachingPlanService.preparationWorkload(true, Integer.MAX_VALUE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("workload is too large");
     }
 
     @Test
@@ -522,6 +545,57 @@ class TeachingPlanServiceTest {
                         documentVersionId, "Teach the complete source", "alice", null))
                 .isInstanceOfSatisfying(AgentExecutionStoppedException.class,
                         stopped -> assertThat(stopped.reason()).isEqualTo(StopReason.CANCELLED));
+        verifyNoInteractions(publication);
+    }
+
+    @Test
+    void ownershipRefinementBudgetStopCannotPublishTheRetainedOutline() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID assistantRunId = UUID.randomUUID();
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        com.rulepilot.teaching.TeachingOutlineModel outlines =
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
+        TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
+        OutlineDraft overlapping = sourceBoundOutline(
+                "Example Game",
+                "Teach the complete game in dependency order.",
+                List.of(
+                        topic("overview", List.of("setup", "core_loop", "end", "scoring"), List.of(1)),
+                        topic("early-owner", List.of("setup", "core_loop"), List.of(2)),
+                        topic("late-owner", List.of("end", "scoring"), List.of(3))));
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, null, "READY", "alice", "Example Game")));
+        when(documents.pages(documentVersionId)).thenReturn(List.of(
+                page(1, "Overview source content with enough opaque text for structural admission."),
+                page(2, "Early source content with enough opaque text for structural admission."),
+                page(3, "Late source content with enough opaque text for structural admission.")));
+        when(outlines.organize(
+                        any(),
+                        any(com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor.class)))
+                .thenReturn(overlapping);
+        when(outlines.refineChapterOwnership(
+                        any(),
+                        any(),
+                        any(),
+                        any(com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor.class)))
+                .thenThrow(new AgentExecutionStoppedException(StopReason.TOKEN_BUDGET));
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                scopes,
+                mock(CatalogEditionLookup.class),
+                mock(VisualRulebookCataloger.class),
+                outlines,
+                mock(AuditedAgentInvocations.class),
+                new TeachingPlanFactory(),
+                mock(TeachingPlanRepository.class),
+                publication);
+
+        assertThatThrownBy(() -> service.create(
+                        documentVersionId, "Teach every rule", "alice", assistantRunId))
+                .isInstanceOfSatisfying(
+                        AgentExecutionStoppedException.class,
+                        stopped -> assertThat(stopped.reason()).isEqualTo(StopReason.TOKEN_BUDGET));
         verifyNoInteractions(publication);
     }
 

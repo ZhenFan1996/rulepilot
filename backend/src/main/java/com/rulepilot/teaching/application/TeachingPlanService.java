@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.catalog.CatalogEditionLookup;
@@ -37,11 +38,10 @@ public class TeachingPlanService {
     private static final int MAX_SOURCE_COVERAGE_REFINEMENTS = 1;
     private static final int MAX_VISUAL_PAGE_MODEL_ATTEMPTS = 2;
     private static final int MAX_OUTLINE_STAGE_MODEL_ATTEMPTS = 4;
-    // A hierarchical shard always contains at least one canonical slot. The typed visual-page contract admits at
-    // most 32 rule groups plus four external dependencies with four missing-coverage tags each, so even arbitrarily
-    // long facts can create at most 48 ownership shards per page. This structural ceiling does not infer anything
-    // from provider prose or assume a token-to-character ratio.
-    private static final int MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE = 48;
+    // Canonical ownership is page-local: all typed slots from one source page are classified together, and pages may
+    // run independently. Keeping one shard per page preserves relationships among rules visible on the same page and
+    // prevents dense ledgers from expanding into one serial model stage per slot.
+    private static final int MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE = 1;
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
     private final DocumentProcessing documents;
@@ -227,9 +227,8 @@ public class TeachingPlanService {
                         ? pageCount
                         : Math.min(pageCount, VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES));
         // Every planner stage has at most one transport replay and one complete structured-output replacement, whose
-        // own transport may replay once: four actual provider calls. Dense visual planning has up to 48 local
-        // ownership shards per page (one per structurally bounded canonical slot), one global ordering stage, and at
-        // most one later global ownership refinement.
+        // own transport may replay once: four actual provider calls. Dense visual planning has at most one local
+        // ownership shard per page, one global ordering stage, and at most one later global ownership refinement.
         long plannerStages = visualOnly
                 ? (long) MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE * pageCount + 2
                 : 2;
@@ -238,6 +237,14 @@ public class TeachingPlanService {
             throw new IllegalArgumentException("teaching preparation workload is too large");
         }
         return new WorkloadDemand(0, (int) requiredModelCalls);
+    }
+
+    static boolean requiresExtendedPreparationLane(WorkloadDemand workload) {
+        if (workload == null) throw new IllegalArgumentException("teaching preparation workload is required");
+        int ordinaryCallCeiling = MAX_VISUAL_PAGE_MODEL_ATTEMPTS
+                        * VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES
+                + MAX_OUTLINE_STAGE_MODEL_ATTEMPTS * 2;
+        return workload.requiredModelCalls() > ordinaryCallCeiling;
     }
 
     void refreshVisualEvidence(
@@ -330,6 +337,8 @@ public class TeachingPlanService {
                 plans.validate(current);
                 TeachingWholeGameUnderstandingPolicy.validateComplete(current);
                 if (current.equals(beforeRefinement)) return current;
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline ownership refinement was skipped: {}", refinementFailure.getMessage());
                 if (assistantRunId != null) {
@@ -378,6 +387,8 @@ public class TeachingPlanService {
                 plans.validate(current);
                 TeachingWholeGameUnderstandingPolicy.validateComplete(current);
                 if (current.equals(beforeRefinement)) return current;
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline source-coverage refinement was skipped: {}", refinementFailure.getMessage());
                 if (assistantRunId != null) {

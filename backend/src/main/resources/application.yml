@@ -95,6 +95,8 @@ management:
         enabled: false
 
 rulepilot:
+  release:
+    id: ${RULEPILOT_RELEASE_ID:local}
   runtime:
     api-enabled: true
     worker-enabled: true
@@ -138,6 +140,8 @@ rulepilot:
     model-provider: ${TEACHING_MODEL_PROVIDER:gemini}
     temperature: ${TEACHING_TEMPERATURE:0.2}
     outline-temperature: ${TEACHING_OUTLINE_TEMPERATURE:0.1}
+    # Page-owned outline shards are independent; bounded concurrency removes dense-rulebook serial critical paths.
+    outline-shard-parallelism: ${TEACHING_OUTLINE_SHARD_PARALLELISM:10}
     import-handoff:
       batch-size: ${TEACHING_IMPORT_HANDOFF_BATCH_SIZE:4}
       fixed-delay: ${TEACHING_IMPORT_HANDOFF_FIXED_DELAY:500ms}
@@ -148,10 +152,16 @@ rulepilot:
       # their immutable Teaching plan; account quota and administrator entitlement are separate concerns.
       max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:72}
       # Preparation may use one initial visual call plus one audited recovery call per page before the bounded
-      # outline work. Keep this aligned with the service default; token and wall-clock budgets remain independent.
+      # outline work. Keep this aligned with the service default; every scaled budget keeps its own hard cap.
       max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:72}
       max-tokens: ${TEACHING_AGENT_MAX_TOKENS:300000}
       timeout: ${TEACHING_AGENT_TIMEOUT:PT30M}
+      # Exact plan-sized call graphs extend the ordinary wall budget proportionally. Sixteen hours is an active-work
+      # boundary, not a promise that every source fits provider context or available account quota.
+      max-workload-timeout: ${TEACHING_AGENT_MAX_WORKLOAD_TIMEOUT:PT16H}
+      # Scale the ordinary execution-token envelope with the admitted call graph; provider account quota remains an
+      # independent entitlement boundary. The cap prevents an oversized workload from authorizing unbounded usage.
+      max-workload-tokens: ${TEACHING_AGENT_MAX_WORKLOAD_TOKENS:16000000}
     background:
       core-pool-size: ${TEACHING_BACKGROUND_CORE_POOL_SIZE:1}
       max-pool-size: ${TEACHING_BACKGROUND_MAX_POOL_SIZE:3}
@@ -160,6 +170,21 @@ rulepilot:
       # One lane covers outline preparation and the first cited section. Remaining chapters and review use the
       # background pool, preventing their long tail from occupying every path to a new player's first useful content.
       queue-capacity: ${TEACHING_STARTUP_QUEUE_CAPACITY:8}
+      # RECEIVED means queued, not active. If no worker claims it within this lease, fail explicitly so the player
+      # can retry instead of watching an unbounded background state.
+      admission-timeout: ${TEACHING_STARTUP_ADMISSION_TIMEOUT:PT2M}
+    long-preparation:
+      # Page-sharded visual rulebooks have their own bounded lane so they cannot age ordinary queued work past its
+      # deadline. Capacity is an overload boundary; the admission lease below is the user-visible wait boundary.
+      queue-capacity: ${TEACHING_LONG_PREPARATION_QUEUE_CAPACITY:8}
+      admission-timeout: ${TEACHING_LONG_PREPARATION_ADMISSION_TIMEOUT:PT30M}
+    candidate:
+      # Public-library regeneration is not on the player's first-use lane, but accepted work still needs a durable
+      # terminal boundary if every background worker remains occupied.
+      admission-timeout: ${TEACHING_CANDIDATE_ADMISSION_TIMEOUT:PT30M}
+    continuation:
+      # Every remaining chapter gets a fresh queue lease after the first cited section is already readable.
+      admission-timeout: ${TEACHING_CONTINUATION_ADMISSION_TIMEOUT:PT30M}
     visual-enrichment:
       # Retained only to read historical VISUAL_ENRICHMENT runs. New crops are bounded chapter work inside TEACHING.
       agent:
@@ -290,6 +315,7 @@ rulepilot:
     recommendation-agent:
       provider: ${BGG_RECOMMENDATION_PROVIDER:fake}
       model-provider: ${BGG_RECOMMENDATION_MODEL_PROVIDER:qwen}
+      model: ${BGG_RECOMMENDATION_MODEL:}
       temperature: ${BGG_RECOMMENDATION_TEMPERATURE:0.0}
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}

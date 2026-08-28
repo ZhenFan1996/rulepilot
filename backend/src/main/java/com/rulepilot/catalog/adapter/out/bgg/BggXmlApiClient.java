@@ -452,11 +452,11 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                 } else if (event == XMLStreamConstants.START_ELEMENT && "maxplayers".equals(reader.getLocalName())) {
                     maxPlayers = integer(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "playingtime".equals(reader.getLocalName())) {
-                    playingTime = integer(reader.getAttributeValue(null, "value"));
+                    playingTime = positiveInteger(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "minplaytime".equals(reader.getLocalName())) {
-                    minimumPlayTime = integer(reader.getAttributeValue(null, "value"));
+                    minimumPlayTime = positiveInteger(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "maxplaytime".equals(reader.getLocalName())) {
-                    maximumPlayTime = integer(reader.getAttributeValue(null, "value"));
+                    maximumPlayTime = positiveInteger(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "minage".equals(reader.getLocalName())) {
                     minimumAge = integer(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "average".equals(reader.getLocalName())) {
@@ -589,7 +589,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                 } else if (event == XMLStreamConstants.START_ELEMENT && "maxplayers".equals(reader.getLocalName())) {
                     maxPlayers = integer(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "playingtime".equals(reader.getLocalName())) {
-                    playingTime = integer(reader.getAttributeValue(null, "value"));
+                    playingTime = positiveInteger(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "minage".equals(reader.getLocalName())) {
                     minimumAge = integer(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.END_ELEMENT && "item".equals(reader.getLocalName())
@@ -732,11 +732,11 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                 } else if ("maxplayers".equals(element)) {
                     maxPlayers = integer(reader.getAttributeValue(null, "value"));
                 } else if ("playingtime".equals(element)) {
-                    playingTime = integer(reader.getAttributeValue(null, "value"));
+                    playingTime = positiveInteger(reader.getAttributeValue(null, "value"));
                 } else if ("minplaytime".equals(element)) {
-                    minimumPlayTime = integer(reader.getAttributeValue(null, "value"));
+                    minimumPlayTime = positiveInteger(reader.getAttributeValue(null, "value"));
                 } else if ("maxplaytime".equals(element)) {
-                    maximumPlayTime = integer(reader.getAttributeValue(null, "value"));
+                    maximumPlayTime = positiveInteger(reader.getAttributeValue(null, "value"));
                 } else if ("minage".equals(element)) {
                     minimumAge = integer(reader.getAttributeValue(null, "value"));
                 } else if ("average".equals(element)) {
@@ -868,6 +868,11 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
         } catch (NumberFormatException exception) {
             return null;
         }
+    }
+
+    private Integer positiveInteger(String value) {
+        Integer parsed = integer(value);
+        return parsed != null && parsed > 0 ? parsed : null;
     }
 
     private String value(XMLStreamReader reader) {

@@ -332,19 +332,59 @@ for command_name in curl jq mktemp; do
 done
 
 base_url=${base_url%/}
+forward_deadline=$((SECONDS + timeout_seconds))
 work_dir=$(mktemp -d)
+smoke_run_token="$(date -u +%Y%m%dT%H%M%SZ)-$$-${work_dir##*.}"
 cookie_jar="$work_dir/cookies.txt"
 run_failure_code_file="$work_dir/run-failure-code"
 document_id=
 cleanup_document=false
+upload_cleanup_canary_title=
 official_import_job_id=
 official_import_edition_id=
 official_import_canary_title=
+official_import_effective_source=
 preparation_run_id=
 lesson_run_id=
 page_attempts=null
 csrf_header=
 csrf_token=
+
+remaining_forward_seconds() {
+	local remaining=$((forward_deadline - SECONDS))
+	if [ "$remaining" -le 0 ]; then
+		echo "Ordinary-user journey exhausted its ${timeout_seconds}s total forward-work budget" >&2
+		return 1
+	fi
+	printf '%s' "$remaining"
+}
+
+forward_curl() {
+	local remaining connect_timeout
+	remaining=$(remaining_forward_seconds) || return 1
+	connect_timeout=5
+	if [ "$remaining" -lt "$connect_timeout" ]; then connect_timeout=$remaining; fi
+	local curl_status
+	curl --connect-timeout "$connect_timeout" --max-time "$remaining" "$@" || {
+		curl_status=$?
+		if [ "$curl_status" -eq 28 ] || [ "$SECONDS" -ge "$forward_deadline" ]; then
+			echo "HTTP request exhausted the remaining ${timeout_seconds}s total forward-work budget" >&2
+		fi
+		return "$curl_status"
+	}
+}
+
+sleep_for_forward_poll() {
+	local requested_seconds=$1
+	local remaining
+	remaining=$(remaining_forward_seconds) || return 1
+	if [ "$requested_seconds" -gt "$remaining" ]; then requested_seconds=$remaining; fi
+	sleep "$requested_seconds"
+}
+
+cleanup_curl() {
+	curl --connect-timeout 5 --max-time 10 "$@"
+}
 
 probe_navigation() {
 	[ -n "$navigation_file" ] || return 0
@@ -375,7 +415,7 @@ probe_navigation() {
 	fi
 	local path=${paths[$((completed_probe_count % ${#paths[@]}))]}
 	local measurement http_code elapsed_seconds
-	measurement=$(curl --location --silent --show-error --output /dev/null \
+	measurement=$(forward_curl --location --silent --show-error --output /dev/null \
 		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 		--write-out '%{http_code}\t%{time_total}' \
 		"$base_url$path" || printf '000\t0')
@@ -406,7 +446,7 @@ navigation_summary() {
 }
 
 get_json() {
-	curl --fail-with-body --silent --show-error \
+	forward_curl --fail-with-body --silent --show-error \
 		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 		"$base_url$1"
 }
@@ -414,7 +454,7 @@ get_json() {
 post_json() {
 	local path=$1
 	local payload=$2
-	curl --fail-with-body --silent --show-error \
+	forward_curl --fail-with-body --silent --show-error \
 		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 		--request POST --header "Content-Type: application/json" \
 		--header "$csrf_header: $csrf_token" \
@@ -424,7 +464,7 @@ post_json() {
 
 wait_for_official_import() {
 	local job_id=$1
-	local deadline=$((SECONDS + timeout_seconds))
+	local deadline=$forward_deadline
 	local response stage handoff
 	while [ "$SECONDS" -lt "$deadline" ]; do
 		probe_navigation "official-import"
@@ -443,18 +483,18 @@ wait_for_official_import() {
 			printf '%s' "$response"
 			return 0
 		fi
-		sleep 2
+		sleep_for_forward_poll 2 || break
 	done
-	echo "Official image-gallery import timed out after ${timeout_seconds}s" >&2
+	echo "Official image-gallery import exhausted the ${timeout_seconds}s total forward-work budget" >&2
 	return 1
 }
 
 wait_for_latest_teaching_run_id() {
 	local plan_id=$1
-	local deadline=$((SECONDS + timeout_seconds))
+	local deadline=$forward_deadline
 	local response http_code body
 	while [ "$SECONDS" -lt "$deadline" ]; do
-		response=$(curl --silent --show-error --write-out $'\n%{http_code}' \
+		response=$(forward_curl --silent --show-error --write-out $'\n%{http_code}' \
 			--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 			"$base_url/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=$plan_id")
 		http_code=${response##*$'\n'}
@@ -467,9 +507,9 @@ wait_for_latest_teaching_run_id() {
 			echo "Latest Teaching run endpoint returned HTTP $http_code" >&2
 			return 1
 		fi
-		sleep 1
+		sleep_for_forward_poll 1 || break
 	done
-	echo "Teaching run did not appear after ${timeout_seconds}s" >&2
+	echo "Teaching run did not appear within the ${timeout_seconds}s total forward-work budget" >&2
 	return 1
 }
 
@@ -646,7 +686,7 @@ refresh_csrf() {
 cancel_run() {
 	local run_id=$1
 	[ -n "$run_id" ] || return 0
-	curl --silent --show-error --output /dev/null \
+	cleanup_curl --silent --show-error --output /dev/null \
 		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 		--request POST --header "$csrf_header: $csrf_token" \
 		"$base_url/api/v1/assistant-runs/$run_id/cancellation" || true
@@ -657,7 +697,9 @@ wait_for_cancelled_run() {
 	[ -n "$run_id" ] || return 0
 	local attempt response state
 	for attempt in {1..15}; do
-		response=$(get_json "/api/v1/assistant-runs/$run_id" 2>/dev/null) || return 0
+		response=$(cleanup_curl --fail-with-body --silent --show-error \
+			--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+			"$base_url/api/v1/assistant-runs/$run_id" 2>/dev/null) || return 0
 		state=$(jq -r '.run.state // ""' <<<"$response")
 		case "$state" in
 			COMPLETED|FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED) return 0 ;;
@@ -668,20 +710,99 @@ wait_for_cancelled_run() {
 
 resolve_pending_official_import_for_cleanup() {
 	[ "$source_mode" = official_image_gallery ] || return 0
-	[ -n "$official_import_job_id" ] || return 0
 	[ "$cleanup_document" = false ] || return 0
-	if [ -z "$official_import_edition_id" ] || [ -z "$official_import_canary_title" ]; then
-		log_stage "cleanup-import-identity-missing job=$official_import_job_id"
+	if [ -z "$official_import_edition_id" ] || [ -z "$official_import_canary_title" ] \
+			|| [ -z "$official_import_effective_source" ]; then
+		log_stage "cleanup-import-identity-missing"
 		return 1
 	fi
 	local deadline=$((SECONDS + cleanup_import_wait_seconds))
 	local response stage duplicate version_id documents matched_document_id discovered_run_id
+	local jobs matched_job_count matched_job_id matched_document_count observed_listing=false
 	while [ "$SECONDS" -lt "$deadline" ]; do
-		response=$(get_json "/api/v1/documents/official-imports/$official_import_job_id" 2>/dev/null) || {
+		if [ -z "$official_import_job_id" ]; then
+			jobs=$(cleanup_curl --fail-with-body --silent --show-error \
+				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+				"$base_url/api/v1/documents/official-imports" 2>/dev/null) || {
+				sleep 2
+				continue
+			}
+			observed_listing=true
+			matched_job_count=$(jq -er \
+				--arg edition_id "$official_import_edition_id" \
+				--arg title "$official_import_canary_title" \
+				--arg source "$official_import_effective_source" '
+			        [.[]? | select(.editionId == $edition_id
+			          and .rulebookTitle == $title
+			          and .officialSourceUrl == $source)] | length
+			    ' <<<"$jobs" 2>/dev/null) || return 1
+			if [ "$matched_job_count" -gt 1 ]; then
+				log_stage "cleanup-import-identity-ambiguous"
+				return 1
+			fi
+			if [ "$matched_job_count" -eq 1 ]; then
+				matched_job_id=$(jq -er \
+					--arg edition_id "$official_import_edition_id" \
+					--arg title "$official_import_canary_title" \
+					--arg source "$official_import_effective_source" '
+				        first(.[]? | select(.editionId == $edition_id
+				          and .rulebookTitle == $title
+				          and .officialSourceUrl == $source)) | .id
+				    ' <<<"$jobs" 2>/dev/null) || return 1
+				official_import_job_id=$matched_job_id
+				log_stage "cleanup-import-job-discovered job=$official_import_job_id"
+			else
+				documents=$(cleanup_curl --fail-with-body --silent --show-error \
+					--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+					"$base_url/api/v1/documents" 2>/dev/null) || {
+					sleep 2
+					continue
+				}
+				matched_document_count=$(jq -er \
+					--arg edition_id "$official_import_edition_id" \
+					--arg title "$official_import_canary_title" \
+					--arg source "$official_import_effective_source" '
+				        [.[]? | select(.document.gameEditionId == $edition_id
+				          and .document.title == $title
+				          and .document.officialSourceUrl == $source)] | length
+				    ' <<<"$documents" 2>/dev/null) || return 1
+				if [ "$matched_document_count" -gt 1 ]; then
+					log_stage "cleanup-import-document-identity-ambiguous"
+					return 1
+				fi
+				if [ "$matched_document_count" -eq 1 ]; then
+					document_id=$(jq -er \
+						--arg edition_id "$official_import_edition_id" \
+						--arg title "$official_import_canary_title" \
+						--arg source "$official_import_effective_source" '
+					        first(.[]? | select(.document.gameEditionId == $edition_id
+					          and .document.title == $title
+					          and .document.officialSourceUrl == $source)) | .document.id
+					    ' <<<"$documents" 2>/dev/null) || return 1
+					cleanup_document=true
+					log_stage "cleanup-import-document-discovered"
+					return 0
+				fi
+				sleep 2
+				continue
+			fi
+		fi
+		response=$(cleanup_curl --fail-with-body --silent --show-error \
+			--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+			"$base_url/api/v1/documents/official-imports/$official_import_job_id" 2>/dev/null) || {
 			sleep 2
 			continue
 		}
-		if ! jq -e --arg job_id "$official_import_job_id" '.id == $job_id' >/dev/null <<<"$response"; then
+		if ! jq -e \
+				--arg job_id "$official_import_job_id" \
+				--arg edition_id "$official_import_edition_id" \
+				--arg title "$official_import_canary_title" \
+				--arg source "$official_import_effective_source" '
+		        .id == $job_id
+		        and .editionId == $edition_id
+		        and .rulebookTitle == $title
+		        and .officialSourceUrl == $source
+		    ' >/dev/null <<<"$response"; then
 			log_stage "cleanup-import-identity-mismatch job=$official_import_job_id"
 			return 1
 		fi
@@ -693,17 +814,21 @@ resolve_pending_official_import_for_cleanup() {
 			return 0
 		fi
 		if [ -n "$version_id" ]; then
-			documents=$(get_json "/api/v1/documents" 2>/dev/null) || {
+			documents=$(cleanup_curl --fail-with-body --silent --show-error \
+				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+				"$base_url/api/v1/documents" 2>/dev/null) || {
 				sleep 2
 				continue
 			}
 			matched_document_id=$(jq -er \
 				--arg version_id "$version_id" \
 				--arg title "$official_import_canary_title" \
-				--arg edition_id "$official_import_edition_id" '
+				--arg edition_id "$official_import_edition_id" \
+				--arg source "$official_import_effective_source" '
 			        first(.[]? | select(.latestVersion.id == $version_id
 			          and .document.title == $title
-			          and .document.gameEditionId == $edition_id)) | .document.id
+			          and .document.gameEditionId == $edition_id
+			          and .document.officialSourceUrl == $source)) | .document.id
 			    ' <<<"$documents" 2>/dev/null) || {
 				sleep 2
 				continue
@@ -721,7 +846,63 @@ resolve_pending_official_import_for_cleanup() {
 		fi
 		sleep 2
 	done
+	if [ -z "$official_import_job_id" ] && [ "$observed_listing" = true ]; then
+		log_stage "cleanup-import-identity-not-observed"
+		return 1
+	fi
 	log_stage "cleanup-import-unresolved job=$official_import_job_id"
+	return 1
+}
+
+resolve_pending_upload_for_cleanup() {
+	[ "$source_mode" = upload ] || return 0
+	[ "$cleanup_document" = false ] || return 0
+	if [ -z "$upload_cleanup_canary_title" ]; then
+		log_stage "cleanup-upload-identity-missing"
+		return 1
+	fi
+	local deadline=$((SECONDS + cleanup_import_wait_seconds))
+	local documents matched_document_count observed_listing=false
+	while [ "$SECONDS" -lt "$deadline" ]; do
+		documents=$(cleanup_curl --fail-with-body --silent --show-error \
+			--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+			"$base_url/api/v1/documents" 2>/dev/null) || {
+			sleep 2
+			continue
+		}
+		observed_listing=true
+		matched_document_count=$(jq -er \
+			--arg title "$upload_cleanup_canary_title" \
+			--arg source "$official_source_url" '
+		        [.[]? | select(.document.title == $title
+		          and (if $source == "" then
+		            (.document.officialSourceUrl == null or .document.officialSourceUrl == "")
+		          else .document.officialSourceUrl == $source end))] | length
+		    ' <<<"$documents" 2>/dev/null) || return 1
+		if [ "$matched_document_count" -gt 1 ]; then
+			log_stage "cleanup-upload-identity-ambiguous"
+			return 1
+		fi
+		if [ "$matched_document_count" -eq 1 ]; then
+			document_id=$(jq -er \
+				--arg title "$upload_cleanup_canary_title" \
+				--arg source "$official_source_url" '
+			        first(.[]? | select(.document.title == $title
+			          and (if $source == "" then
+			            (.document.officialSourceUrl == null or .document.officialSourceUrl == "")
+			          else .document.officialSourceUrl == $source end))) | .document.id
+			    ' <<<"$documents" 2>/dev/null) || return 1
+			cleanup_document=true
+			log_stage "cleanup-upload-document-discovered"
+			return 0
+		fi
+		sleep 2
+	done
+	if [ "$observed_listing" = true ]; then
+		log_stage "cleanup-upload-identity-not-observed"
+		return 1
+	fi
+	log_stage "cleanup-upload-unresolved"
 	return 1
 }
 
@@ -737,6 +918,7 @@ cleanup() {
 	if [ "$cleanup_required" = true ] && { [ -z "$csrf_header" ] || [ -z "$csrf_token" ]; }; then
 		cleanup_failed=1
 	elif [ -n "$csrf_header" ] && [ -n "$csrf_token" ]; then
+		if ! resolve_pending_upload_for_cleanup; then cleanup_failed=1; fi
 		if ! resolve_pending_official_import_for_cleanup; then cleanup_failed=1; fi
 		cancel_run "$lesson_run_id"
 		cancel_run "$preparation_run_id"
@@ -773,7 +955,7 @@ trap cleanup EXIT
 
 wait_for_document_ready() {
 	local version_id=$1
-	local deadline=$((SECONDS + timeout_seconds))
+	local deadline=$forward_deadline
 	local response status
 	while [ "$SECONDS" -lt "$deadline" ]; do
 		response=$(get_json "/api/v1/documents")
@@ -788,9 +970,9 @@ wait_for_document_ready() {
 				return 1
 				;;
 		esac
-		sleep 2
+		sleep_for_forward_poll 2 || break
 	done
-	echo "Document processing timed out after ${timeout_seconds}s" >&2
+	echo "Document processing exhausted the ${timeout_seconds}s total forward-work budget" >&2
 	return 1
 }
 
@@ -798,7 +980,7 @@ wait_for_run() {
 	local run_id=$1
 	local label=$2
 	local lesson_plan_id=${3:-}
-	local deadline=$((SECONDS + timeout_seconds))
+	local deadline=$forward_deadline
 	local response state lesson_response lesson_http lesson_body lesson_status lesson_rank
 	local lesson_seen=0
 	local previous_lesson_rank=0
@@ -811,7 +993,7 @@ wait_for_run() {
 		fi
 		state=$(jq -er '.run.state' <<<"$response")
 		if [ -n "$lesson_plan_id" ]; then
-			lesson_response=$(curl --silent --show-error --write-out $'\n%{http_code}' \
+			lesson_response=$(forward_curl --silent --show-error --write-out $'\n%{http_code}' \
 				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 				"$base_url/api/v1/teaching-plans/$lesson_plan_id/illustrated-lessons/latest")
 			lesson_http=${lesson_response##*$'\n'}
@@ -857,9 +1039,9 @@ wait_for_run() {
 				return 1
 				;;
 		esac
-		sleep 2
+		sleep_for_forward_poll 2 || break
 	done
-	echo "$label timed out after ${timeout_seconds}s" >&2
+	echo "$label exhausted the ${timeout_seconds}s total forward-work budget" >&2
 	return 1
 }
 
@@ -939,6 +1121,7 @@ run_official_image_gallery() {
 	fi
 	official_import_edition_id=$edition_id
 	official_import_canary_title=$canary_title
+	official_import_effective_source=$effective_source
 	log_stage "image-gallery-candidate-verified source=$official_source_url pages=$expected_page_count"
 	pending_failure_code=OFFICIAL_IMPORT_FAILED
 
@@ -956,6 +1139,7 @@ run_official_image_gallery() {
 		  sourceEdition: $sourceEdition, sourceLanguage: $sourceLanguage,
 		  sourceLanguageVerified: true, identityConfirmed: true}')
 	refresh_csrf
+	cleanup_required=true
 	import_launch=$(post_json "/api/v1/documents/official-imports" "$import_payload")
 	if ! jq -e --arg edition_id "$edition_id" --arg source "$effective_source" '
         .reused == false and .editionId == $edition_id and .officialSourceUrl == $source
@@ -965,7 +1149,6 @@ run_official_image_gallery() {
 		return 1
 	fi
 	official_import_job_id=$(jq -er '.id' <<<"$import_launch")
-	cleanup_required=true
 	log_stage "official-import-accepted job=$official_import_job_id"
 
 	import_result=$(wait_for_official_import "$official_import_job_id")
@@ -1150,7 +1333,7 @@ run_official_image_gallery() {
 pending_failure_code=AUTHENTICATION_FAILED
 refresh_csrf
 log_stage "csrf-ready"
-curl --fail-with-body --silent --show-error --output /dev/null \
+forward_curl --fail-with-body --silent --show-error --output /dev/null \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "Content-Type: application/x-www-form-urlencoded" \
 	--header "$csrf_header: $csrf_token" \
@@ -1172,20 +1355,41 @@ fi
 
 pending_failure_code=SOURCE_UPLOAD_FAILED
 refresh_csrf
+upload_cleanup_suffix=" - RulePilot canary upload-$smoke_run_token"
+upload_cleanup_prefix_length=$((160 - ${#upload_cleanup_suffix}))
+if [ "$upload_cleanup_prefix_length" -le 0 ]; then
+	echo "Generated upload cleanup identity exceeds 160 characters" >&2
+	exit 1
+fi
+upload_cleanup_canary_title="${uploaded_title:0:upload_cleanup_prefix_length}${upload_cleanup_suffix}"
 upload_form=(
-	--form "title=$uploaded_title"
+	--form "title=$upload_cleanup_canary_title"
 	--form "sourceType=BASE_RULEBOOK"
 	--form "file=@$pdf_file;type=application/pdf"
 )
 if [ -n "$official_source_url" ]; then
 	upload_form+=(--form "officialSourceUrl=$official_source_url")
 fi
-upload_response=$(curl --fail-with-body --silent --show-error \
+cleanup_required=true
+upload_response=$(forward_curl --fail-with-body --silent --show-error \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "$csrf_header: $csrf_token" \
 	"${upload_form[@]}" \
 	"$base_url/api/v1/documents")
 
+if ! jq -e \
+		--arg title "$upload_cleanup_canary_title" \
+		--arg source "$official_source_url" '
+	    .document.title == $title
+	    and (if $source == "" then
+	      (.document.officialSourceUrl == null or .document.officialSourceUrl == "")
+	    else .document.officialSourceUrl == $source end)
+	' >/dev/null <<<"$upload_response"; then
+	actual_upload_title=$(jq -r '.document.title // "<missing>"' <<<"$upload_response" 2>/dev/null || printf '<invalid>')
+	actual_upload_source=$(jq -r '.document.officialSourceUrl // ""' <<<"$upload_response" 2>/dev/null || printf '<invalid>')
+	echo "Synthetic smoke upload response changed its unique cleanup identity: expected title=$upload_cleanup_canary_title source=$official_source_url; actual title=$actual_upload_title source=$actual_upload_source" >&2
+	exit 1
+fi
 document_id=$(jq -er '.document.id' <<<"$upload_response")
 version_id=$(jq -er '.version.id' <<<"$upload_response")
 if ! jq -e '.duplicate == false' >/dev/null <<<"$upload_response"; then
@@ -1193,14 +1397,13 @@ if ! jq -e '.duplicate == false' >/dev/null <<<"$upload_response"; then
 	exit 1
 fi
 cleanup_document=true
-cleanup_required=true
 log_stage "upload-completed"
 wait_for_document_ready "$version_id"
 log_stage "document-ready"
 pending_failure_code=TEACHING_PREPARATION_FAILED
 
 refresh_csrf
-preparation_launch=$(curl --fail-with-body --silent --show-error \
+preparation_launch=$(forward_curl --fail-with-body --silent --show-error \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "Content-Type: application/json" \
 	--header "$csrf_header: $csrf_token" \
@@ -1254,7 +1457,7 @@ fi
 log_stage "title-verified"
 
 refresh_csrf
-lesson_launch=$(curl --fail-with-body --silent --show-error \
+lesson_launch=$(forward_curl --fail-with-body --silent --show-error \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "$csrf_header: $csrf_token" \
 	"$base_url/api/v1/teaching-plans/$plan_id/illustrated-lessons")
@@ -1292,7 +1495,7 @@ pending_failure_code=ANSWER_EVIDENCE_INVALID
 refresh_csrf
 answer_payload=$(jq -cn --arg question "$question" --arg language "$answer_language" \
 	'{question: $question, language: $language}')
-answer_response=$(curl --fail-with-body --silent --show-error \
+answer_response=$(forward_curl --fail-with-body --silent --show-error \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "Content-Type: application/json" \
 	--header "$csrf_header: $csrf_token" \

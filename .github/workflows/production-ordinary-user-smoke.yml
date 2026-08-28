@@ -3,6 +3,10 @@ name: Production ordinary-user smoke
 on:
   workflow_dispatch:
     inputs:
+      tested_sha:
+        description: Exact 40-character main commit SHA already active in production
+        required: true
+        type: string
       source_mode:
         description: Upload a PDF or let production import an ordered image-gallery source
         required: true
@@ -52,22 +56,15 @@ permissions:
 
 concurrency:
   group: production-runtime
+  queue: max
   cancel-in-progress: false
 
 jobs:
-  smoke:
-    name: Import, teach, verify, and clean up
+  prepare_smoke:
+    name: Prepare immutable ordinary-user probe without production authority
     runs-on: ubuntu-latest
-    timeout-minutes: 50
-    environment:
-      name: production
+    timeout-minutes: 15
     env:
-      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
-      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
-      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       RULEBOOK_URL: ${{ inputs.rulebook_url }}
       RULEBOOK_TITLE: ${{ inputs.rulebook_title }}
       RULEBOOK_QUESTION: ${{ inputs.question }}
@@ -76,35 +73,41 @@ jobs:
       RULEBOOK_EXPECTED_PAGE_COUNT: ${{ inputs.expected_page_count }}
       RULEBOOK_LANGUAGE: ${{ inputs.language }}
       RULEBOOK_RIGHTS_CONFIRMED: ${{ inputs.rights_confirmed }}
+      RULEPILOT_SMOKE_TESTED_SHA: ${{ inputs.tested_sha }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: main
+          fetch-depth: 0
+
+      - name: Validate and detach the exact tested main commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tested_sha="$RULEPILOT_SMOKE_TESTED_SHA"
+          [[ "$tested_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "tested_sha must be one exact lowercase 40-character commit SHA" >&2
+            exit 2
+          }
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git cat-file -e "${tested_sha}^{commit}"
+          git merge-base --is-ancestor "$tested_sha" origin/main
+          git checkout --detach "$tested_sha"
+          [[ "$(git rev-parse HEAD)" == "$tested_sha" ]]
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
 
-      - name: Configure production SSH trust
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for required_secret in DEPLOY_HOST DEPLOY_KNOWN_HOSTS DEPLOY_SSH_PRIVATE_KEY DEPLOY_USER; do
-            if [[ -z "${!required_secret}" ]]; then
-              echo "Missing required production deployment secret: ${required_secret}" >&2
-              exit 1
-            fi
-          done
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/id_ed25519"
-          chmod 644 "$HOME/.ssh/known_hosts"
-
       - name: Prepare a unique smoke source
         shell: bash
         run: |
           set -Eeuo pipefail
+          probe_dir="$RUNNER_TEMP/production-ordinary-user-probe"
+          mkdir -p "$probe_dir"
+          install -m 0755 scripts/smoke-production-ordinary-user.sh \
+            "$probe_dir/smoke-production-ordinary-user.sh"
+          printf '%s\n' "$RULEPILOT_SMOKE_TESTED_SHA" > "$probe_dir/source-sha"
           if [[ "$RULEBOOK_SOURCE_MODE" == official_image_gallery ]]; then
             [[ "$RULEBOOK_URL" == https://* ]] || { echo "rulebook_url must use HTTPS" >&2; exit 2; }
             [[ -n "$RULEBOOK_TITLE" && -n "$RULEBOOK_QUESTION" ]] || {
@@ -116,8 +119,8 @@ jobs:
               exit 2
             }
             [[ "$RULEBOOK_EXPECTED_PAGE_COUNT" =~ ^[1-9][0-9]*$ ]] \
-              && (( RULEBOOK_EXPECTED_PAGE_COUNT <= 500 )) || {
-                echo "expected_page_count must be between 1 and 500 for an image gallery" >&2
+              && (( RULEBOOK_EXPECTED_PAGE_COUNT <= 20 )) || {
+                echo "this bounded production canary accepts between 1 and 20 gallery pages" >&2
                 exit 2
               }
             [[ -n "$RULEBOOK_LANGUAGE" ]] || { echo "language is required" >&2; exit 2; }
@@ -125,7 +128,7 @@ jobs:
               echo "rights_confirmed must be explicitly true for an image gallery" >&2
               exit 2
             }
-            printf '%s\n' official_image_gallery > "$RUNNER_TEMP/preparation-mode"
+            printf '%s\n' official_image_gallery > "$probe_dir/preparation-mode"
             exit 0
           fi
           [[ "$RULEBOOK_SOURCE_MODE" == upload ]] || { echo "unknown source_mode" >&2; exit 2; }
@@ -138,8 +141,8 @@ jobs:
             printf '\nSMOKE RUN %s\n' "$GITHUB_RUN_ID" >> "$RUNNER_TEMP/lantern-relay-smoke.txt"
             node scripts/generate-demo-pdf.mjs \
               "$RUNNER_TEMP/lantern-relay-smoke.txt" \
-              "$RUNNER_TEMP/rulebook.pdf"
-            printf '%s\n' text > "$RUNNER_TEMP/preparation-mode"
+              "$probe_dir/rulebook.pdf"
+            printf '%s\n' text > "$probe_dir/preparation-mode"
           else
             [[ "$RULEBOOK_URL" == https://* ]] || { echo "rulebook_url must use HTTPS" >&2; exit 2; }
             [[ -n "$RULEBOOK_TITLE" && -n "$RULEBOOK_QUESTION" ]] || {
@@ -147,80 +150,270 @@ jobs:
               exit 2
             }
             curl --proto '=https' --location --fail --silent --show-error --max-filesize 26214400 \
-              "$RULEBOOK_URL" --output "$RUNNER_TEMP/rulebook.pdf"
-            [[ "$(head -c 5 "$RUNNER_TEMP/rulebook.pdf")" == '%PDF-' ]] || {
+              "$RULEBOOK_URL" --output "$probe_dir/rulebook.pdf"
+            [[ "$(head -c 5 "$probe_dir/rulebook.pdf")" == '%PDF-' ]] || {
               echo "Publisher response was not a PDF" >&2
               exit 1
             }
-            printf '%s\n' visual > "$RUNNER_TEMP/preparation-mode"
+            printf '%s\n' visual > "$probe_dir/preparation-mode"
           fi
 
-      - name: Open an authenticated production tunnel and replay the journey
+      - name: Seal the exact smoke probe
         shell: bash
         run: |
           set -Eeuo pipefail
+          artifact_dir="$RUNNER_TEMP/production-ordinary-user-probe-artifact"
+          archive="production-ordinary-user-probe-${RULEPILOT_SMOKE_TESTED_SHA}.tar.gz"
+          mkdir -p "$artifact_dir"
+          tar -C "$RUNNER_TEMP/production-ordinary-user-probe" -czf "$artifact_dir/$archive" .
+          (
+            cd "$artifact_dir"
+            sha256sum "$archive" > "${archive}.sha256"
+            sha256sum --check "${archive}.sha256"
+          )
+
+      - name: Publish the sealed probe for an isolated production runner
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-ordinary-user-probe-${{ inputs.tested_sha }}
+          path: ${{ runner.temp }}/production-ordinary-user-probe-artifact
+          if-no-files-found: error
+          retention-days: 1
+
+  smoke:
+    name: Import, teach, verify, and clean up
+    needs: prepare_smoke
+    if: needs.prepare_smoke.result == 'success'
+    runs-on: ubuntu-latest
+    # The longest forward journey is 110 minutes; the remainder is reserved for
+    # runner setup, bounded cancellation, document deletion, and artifact sealing.
+    timeout-minutes: 135
+    environment:
+      name: production
+    env:
+      RULEPILOT_PUBLIC_URL: https://rulepilot.cn
+      RULEPILOT_SMOKE_TESTED_SHA: ${{ inputs.tested_sha }}
+      RULEBOOK_URL: ${{ inputs.rulebook_url }}
+      RULEBOOK_TITLE: ${{ inputs.rulebook_title }}
+      RULEBOOK_QUESTION: ${{ inputs.question }}
+      RULEBOOK_SOURCE_MODE: ${{ inputs.source_mode }}
+      RULEBOOK_BGG_ID: ${{ inputs.bgg_id }}
+      RULEBOOK_EXPECTED_PAGE_COUNT: ${{ inputs.expected_page_count }}
+      RULEBOOK_LANGUAGE: ${{ inputs.language }}
+      RULEBOOK_RIGHTS_CONFIRMED: ${{ inputs.rights_confirmed }}
+    steps:
+      - name: Download the sealed probe on a fresh runner
+        uses: actions/download-artifact@v8
+        with:
+          name: production-ordinary-user-probe-${{ inputs.tested_sha }}
+          path: ${{ runner.temp }}/production-ordinary-user-probe-artifact
+
+      - name: Verify and extract the exact smoke probe before production authority exists
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tested_sha="$RULEPILOT_SMOKE_TESTED_SHA"
+          artifact_dir="$RUNNER_TEMP/production-ordinary-user-probe-artifact"
+          archive="production-ordinary-user-probe-${tested_sha}.tar.gz"
+          probe_dir="$RUNNER_TEMP/production-ordinary-user-probe"
+          [[ "$tested_sha" =~ ^[0-9a-f]{40}$ ]]
+          test -f "$artifact_dir/$archive" && test ! -L "$artifact_dir/$archive"
+          test -f "$artifact_dir/${archive}.sha256" && test ! -L "$artifact_dir/${archive}.sha256"
+          [[ "$(find "$artifact_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')" == 2 ]]
+          (cd "$artifact_dir" && sha256sum --check "${archive}.sha256")
+          mkdir -p "$probe_dir"
+          tar -xzf "$artifact_dir/$archive" -C "$probe_dir"
+          source_sha=$(<"$probe_dir/source-sha")
+          [[ "$source_sha" == "$tested_sha" ]]
+          test -x "$probe_dir/smoke-production-ordinary-user.sh"
+          preparation_mode=$(<"$probe_dir/preparation-mode")
+          if [[ "$preparation_mode" == official_image_gallery ]]; then
+            [[ "$(find "$probe_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')" == 3 ]]
+          else
+            [[ "$preparation_mode" == text || "$preparation_mode" == visual ]]
+            test -f "$probe_dir/rulebook.pdf" && test ! -L "$probe_dir/rulebook.pdf"
+            [[ "$(head -c 5 "$probe_dir/rulebook.pdf")" == '%PDF-' ]]
+            [[ "$(find "$probe_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')" == 4 ]]
+          fi
+
+      - name: Read exact active release and bounded player credentials
+        id: production_identity
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -Eeuo pipefail
+          credential_file="$RUNNER_TEMP/rulepilot-ordinary-user-credentials"
+          cleanup_authority() {
+            rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          }
+          trap cleanup_authority EXIT
+          for required_secret in DEPLOY_HOST DEPLOY_KNOWN_HOSTS DEPLOY_SSH_PRIVATE_KEY DEPLOY_USER; do
+            [[ -n "${!required_secret}" ]] || {
+              echo "Missing required production deployment secret: ${required_secret}" >&2
+              exit 1
+            }
+          done
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          chmod 644 "$HOME/.ssh/known_hosts"
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
-            -o ExitOnForwardFailure=yes
+            -o ConnectTimeout=20
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
             -o StrictHostKeyChecking=yes
             -p "$DEPLOY_SSH_PORT"
           )
 
-          expected_sha=$(git rev-parse HEAD)
-          active_release=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+          active_release_coordinates=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
           set -Eeuo pipefail
-          readlink -f "$1/current"
+          application_root=$(readlink -f "$1")
+          if [[ -e "$application_root/deployment-guards/active-transaction" ]]; then
+            echo "Production has an active deployment transaction" >&2
+            exit 1
+          fi
+          readlink -f "$application_root/current"
+          readlink -f "$application_root/releases"
           REMOTE
           )
-          case "${active_release##*/}" in
-            "$expected_sha"-*) ;;
-            *)
-              echo "Production is not running the checked-out main commit" >&2
-              exit 1
-              ;;
-          esac
+          mapfile -t release_lines <<< "$active_release_coordinates"
+          active_release=${release_lines[0]:-}
+          releases_root=${release_lines[1]:-}
+          active_release_id=${active_release##*/}
+          tested_sha="$RULEPILOT_SMOKE_TESTED_SHA"
+          if [[ -z "$active_release" || -z "$releases_root"
+            || "${active_release%/*}" != "$releases_root"
+            || ! "$active_release_id" =~ ^${tested_sha}-[0-9]+-[0-9]+$ ]]; then
+            echo "Production current does not resolve to the exact tested release" >&2
+            exit 1
+          fi
 
-          player_password=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+          credentials=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
           set -Eeuo pipefail
           env_file="$1/current/.env"
-          value=$(sed -n 's/^RULEPILOT_USER_PASSWORD=//p' "$env_file" | head -n 1)
-          value=${value#\"}
-          value=${value%\"}
-          value=${value#\'}
-          value=${value%\'}
-          test -n "$value"
-          printf '%s' "$value"
+          read_value() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$env_file" | head -n 1)
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+          read_value RULEPILOT_USER_USERNAME | base64 -w0
+          printf '\n'
+          read_value RULEPILOT_USER_PASSWORD | base64 -w0
+          printf '\n'
           REMOTE
           )
+          mapfile -t credential_lines <<< "$credentials"
+          player_username_b64=${credential_lines[0]:-}
+          player_password_b64=${credential_lines[1]:-}
+          player_username=$(printf '%s' "$player_username_b64" | base64 --decode)
+          player_password=$(printf '%s' "$player_password_b64" | base64 --decode)
+          test -n "$player_username"
+          test -n "$player_password"
+          echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
+          echo "::add-mask::$player_username_b64"
+          echo "::add-mask::$player_password_b64"
+          umask 077
+          printf '%s\n%s\n' "$player_username_b64" "$player_password_b64" > "$credential_file"
+          printf 'active_release_id=%s\n' "$active_release_id" >> "$GITHUB_OUTPUT"
+          unset player_username player_password player_username_b64 player_password_b64 credentials credential_lines
+          rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          test ! -e "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/known_hosts"
 
-          ssh "${ssh_options[@]}" -N -L 18080:127.0.0.1:8080 \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" &
-          tunnel_pid=$!
-          trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
+      - name: Replay the public ordinary-user journey with only player authority
+        shell: bash
+        env:
+          RULEPILOT_SMOKE_ACTIVE_RELEASE_ID: ${{ steps.production_identity.outputs.active_release_id }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test ! -e "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/known_hosts"
+          credential_file="$RUNNER_TEMP/rulepilot-ordinary-user-credentials"
+          probe_dir="$RUNNER_TEMP/production-ordinary-user-probe"
+          raw_dir="$RUNNER_TEMP/production-ordinary-user-smoke-raw"
+          public_status="$raw_dir/public-status.raw.json"
+          success_summary="$raw_dir/success-summary.raw.json"
+          raw_result="$raw_dir/result.raw.json"
+          raw_diagnostics="$raw_dir/diagnostics.raw.log"
+          raw_exit="$raw_dir/exit-code.raw"
+          runner_env_file="$GITHUB_ENV"
+          runner_path_file="$GITHUB_PATH"
+          case "$runner_env_file" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
+          case "$runner_path_file" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
+          reset_runner_command_file() {
+            local target=$1
+            /usr/bin/rm -f -- "$target"
+            /usr/bin/install -m 600 /dev/null "$target"
+          }
+          cleanup_authority() {
+            /usr/bin/rm -f -- \
+              "$credential_file" \
+              "$HOME/.ssh/id_ed25519" \
+              "$HOME/.ssh/known_hosts"
+            reset_runner_command_file "$runner_env_file"
+            reset_runner_command_file "$runner_path_file"
+          }
+          trap cleanup_authority EXIT
+          reset_runner_command_file "$runner_env_file"
+          reset_runner_command_file "$runner_path_file"
+          test -f "$credential_file" && test ! -L "$credential_file"
+          mapfile -t credential_lines < "$credential_file"
+          player_username=$(printf '%s' "${credential_lines[0]:-}" | base64 --decode)
+          player_password=$(printf '%s' "${credential_lines[1]:-}" | base64 --decode)
+          test -n "$player_username"
+          test -n "$player_password"
+          echo "::add-mask::$player_username"
+          echo "::add-mask::$player_password"
+          rm -f "$credential_file"
 
-          for attempt in {1..20}; do
-            if curl --fail --silent --output /dev/null http://127.0.0.1:18080/actuator/health; then
-              break
+          verify_public_release() {
+            local release_headers release_snapshot
+            release_headers=$(mktemp "$RUNNER_TEMP/rulepilot-smoke-release-headers.XXXXXX")
+            if ! release_snapshot=$(curl \
+                --proto '=https' --silent --show-error --fail --max-time 10 \
+                --dump-header "$release_headers" \
+                "$RULEPILOT_PUBLIC_URL/api/public/release"); then
+              rm -f "$release_headers"
+              return 1
             fi
-            if [[ "$attempt" == 20 ]]; then
-              echo "Production SSH tunnel did not become ready" >&2
-              exit 1
+            if ! jq -e \
+                --arg tested_sha "$RULEPILOT_SMOKE_TESTED_SHA" \
+                --arg active_release_id "$RULEPILOT_SMOKE_ACTIVE_RELEASE_ID" '
+                .commitSha == $tested_sha and .releaseId == $active_release_id
+              ' <<< "$release_snapshot" >/dev/null \
+              || ! tr -d '\r' < "$release_headers" | grep -Eiq '^cache-control:.*no-store'; then
+              rm -f "$release_headers"
+              return 1
             fi
-            sleep 1
-          done
+            rm -f "$release_headers"
+          }
+          verify_public_release
 
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
-          mkdir -p "$artifact_dir"
-          public_status="$artifact_dir/public-status.json"
-          success_summary="$artifact_dir/success-summary.tmp"
+          rm -rf "$raw_dir"
+          mkdir -p "$raw_dir"
+          chmod 700 "$raw_dir"
           printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED"}' > "$public_status"
           chmod 600 "$public_status"
-          smoke_args=(--base-url http://127.0.0.1:18080 --result-file "$artifact_dir/result.json")
-          preparation_mode=$(<"$RUNNER_TEMP/preparation-mode")
+          smoke_args=(
+            --base-url "$RULEPILOT_PUBLIC_URL"
+            --username "$player_username"
+            --result-file "$raw_result"
+          )
+          preparation_mode=$(<"$probe_dir/preparation-mode")
           if [[ "$preparation_mode" == official_image_gallery ]]; then
             smoke_args+=(
               --source-mode official_image_gallery
@@ -229,6 +422,7 @@ jobs:
               --official-source-url "$RULEBOOK_URL"
               --bgg-id "$RULEBOOK_BGG_ID"
               --expected-page-count "$RULEBOOK_EXPECTED_PAGE_COUNT"
+              --timeout-seconds 6600
               --language "$RULEBOOK_LANGUAGE"
               --canary-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
               --rights-confirmed
@@ -236,7 +430,7 @@ jobs:
               --question "$RULEBOOK_QUESTION"
             )
           else
-            smoke_args+=(--pdf "$RUNNER_TEMP/rulebook.pdf")
+            smoke_args+=(--pdf "$probe_dir/rulebook.pdf")
           fi
           if [[ "$preparation_mode" == visual ]]; then
             smoke_args+=(
@@ -250,113 +444,365 @@ jobs:
             )
           fi
           set +e
-          RULEPILOT_SMOKE_PASSWORD="$player_password" \
+          /usr/bin/env -i \
+            HOME="$HOME" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            PATH=/usr/bin:/bin \
+            RULEPILOT_SMOKE_PASSWORD="$player_password" \
             RULEPILOT_SMOKE_PUBLIC_STATUS_FILE="$public_status" \
-            bash scripts/smoke-production-ordinary-user.sh "${smoke_args[@]}" \
-              > "$success_summary" 2> "$artifact_dir/diagnostics.log"
+            /bin/bash "$probe_dir/smoke-production-ordinary-user.sh" "${smoke_args[@]}" \
+              > "$success_summary" 2> "$raw_diagnostics"
           smoke_exit=$?
           set -e
+          unset player_username player_password credential_lines
 
-          if ! bash scripts/smoke-production-ordinary-user.sh \
-              --validate-public-status "$public_status" "$smoke_exit"; then
-            if [[ "$smoke_exit" == 0 ]]; then smoke_exit=1; fi
-            jq -n --argjson exitCode "$smoke_exit" '
-              {outcome: "FAILED", exitCode: $exitCode, lastCompletedStage: "status-unavailable",
-               failureCode: "UNEXPECTED_SMOKE_FAILURE", failureCauseCode: null, cleanupOutcome: "FAILED"}
-            ' > "$public_status"
+          if ! verify_public_release; then
+            echo "The public release changed or became cacheable during the ordinary-user journey" \
+              >> "$raw_diagnostics"
+            smoke_exit=1
           fi
-
-          if [[ "$smoke_exit" == 0 ]] && jq -e --slurpfile execution "$public_status" '
-            select(type == "object")
-            | select(
-                (.title | type == "string" and length > 0)
-                and (.preparationState | type == "string" and length > 0)
-                and (.lessonState | type == "string" and length > 0)
-                and (.lessonStatus | type == "string" and length > 0)
-                and (.answerStatus | type == "string" and length > 0)
-                and (.sectionCount | type == "number" and . >= 0)
-                and (.answerCitationCount | type == "number" and . >= 0)
-                and (.visualStepCount | type == "number" and . >= 0)
-                and (.focusedVisualStepCount | type == "number" and . >= 0)
-                and (.visualAssemblyMode == "IN_TEACHING")
-                and (.cleanup == "scheduled")
-                and (.navigation | type == "object")
-                and (.navigation | keys | sort == ["averageMs", "failureCount", "maxMs", "requestCount"])
-                and (.navigation.requestCount | type == "number" and . >= 0)
-                and (.navigation.failureCount == 0)
-                and (.navigation.averageMs | type == "number" and . >= 0)
-                and (.navigation.maxMs | type == "number" and . >= 0)
-                and (if .sourceMode == "official_image_gallery" then
-                  (.sourceUrl | type == "string" and length > 0)
-                  and (.effectiveSourceUrl | type == "string" and length > 0)
-                  and (.pageCount | type == "number" and . > 0)
-                  and (.pageAttempts | type == "object" and .valid == true)
-                else .sourceMode == null end)
-              )
-            | . as $source
-            | {
-                sourceMode: $source.sourceMode,
-                title: $source.title,
-                sourceUrl: $source.sourceUrl,
-                effectiveSourceUrl: $source.effectiveSourceUrl,
-                pageCount: $source.pageCount,
-                pageAttempts: (if $source.pageAttempts == null then null else {
-                  pages: [$source.pageAttempts.pages[]? | {
-                    page, initialOutcome, recoveryKind, repairCode,
-                    recoveryOutcome, semanticAttempts, finalOutcome
-                  }],
-                  initialSucceeded: $source.pageAttempts.initialSucceeded,
-                  initialFailed: $source.pageAttempts.initialFailed,
-                  initialRejected: $source.pageAttempts.initialRejected,
-                  transientRetryAttempted: $source.pageAttempts.transientRetryAttempted,
-                  transientRetrySucceeded: $source.pageAttempts.transientRetrySucceeded,
-                  transientRetryFailed: $source.pageAttempts.transientRetryFailed,
-                  repairAttempted: $source.pageAttempts.repairAttempted,
-                  repairSucceeded: $source.pageAttempts.repairSucceeded,
-                  repairFailed: $source.pageAttempts.repairFailed,
-                  finalUnavailablePages: $source.pageAttempts.finalUnavailablePages,
-                  maximumSemanticAttemptsForAnyPage: $source.pageAttempts.maximumSemanticAttemptsForAnyPage,
-                  valid: $source.pageAttempts.valid
-                } end),
-                preparationState: $source.preparationState,
-                lessonState: $source.lessonState,
-                lessonStatus: $source.lessonStatus,
-                answerStatus: $source.answerStatus,
-                sectionCount: $source.sectionCount,
-                answerCitationCount: $source.answerCitationCount,
-                visualStepCount: $source.visualStepCount,
-                focusedVisualStepCount: $source.focusedVisualStepCount,
-                visualAssemblyMode: $source.visualAssemblyMode,
-                navigation: {
-                  requestCount: $source.navigation.requestCount,
-                  failureCount: $source.navigation.failureCount,
-                  averageMs: $source.navigation.averageMs,
-                  maxMs: $source.navigation.maxMs
-                },
-                cleanup: $source.cleanup,
-                execution: $execution[0]
-              }
-            | with_entries(select(.value != null))
-          ' "$success_summary" > "$artifact_dir/summary.tmp"; then
-            mv "$artifact_dir/summary.tmp" "$artifact_dir/summary.json"
-          else
-            if [[ "$smoke_exit" == 0 ]]; then
-              smoke_exit=1
-              jq '{outcome: "FAILED", exitCode: 1, lastCompletedStage: "summary-unavailable",
-                   failureCode: "UNEXPECTED_SMOKE_FAILURE", failureCauseCode: null, cleanupOutcome}' "$public_status" \
-                > "$artifact_dir/public-status.tmp"
-              mv "$artifact_dir/public-status.tmp" "$public_status"
-            fi
-            cp "$public_status" "$artifact_dir/summary.json"
-          fi
-          chmod -R go-rwx "$artifact_dir"
+          exit_tmp=$(mktemp "$RUNNER_TEMP/rulepilot-ordinary-user-exit.XXXXXX")
+          printf '%s\n' "$smoke_exit" > "$exit_tmp"
+          chmod 600 "$exit_tmp"
+          mv -f "$exit_tmp" "$raw_exit"
+          chmod 700 "$raw_dir"
           exit "$smoke_exit"
 
-      - name: Upload sanitized journey output
+      - name: Prove credentials are absent and rebuild the allowlisted journey artifact
+        id: cleanup_credentials
         if: always()
+        shell: /bin/bash --noprofile --norc -p {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          LC_ALL: C
+          LD_LIBRARY_PATH: ''
+          LD_PRELOAD: ''
+          PATH: /usr/bin:/bin
+          RULEPILOT_SMOKE_TESTED_SHA: ${{ inputs.tested_sha }}
+          RULEPILOT_SMOKE_ACTIVE_RELEASE_ID: ${{ steps.production_identity.outputs.active_release_id }}
+        run: |
+          set -Eeuo pipefail
+          raw_dir="$RUNNER_TEMP/production-ordinary-user-smoke-raw"
+          artifact_dir="$RUNNER_TEMP/production-ordinary-user-smoke"
+          raw_status="$raw_dir/public-status.raw.json"
+          raw_summary="$raw_dir/success-summary.raw.json"
+          raw_exit="$raw_dir/exit-code.raw"
+          sanitized_status=$(mktemp "$RUNNER_TEMP/rulepilot-ordinary-user-status.XXXXXX")
+          validated_summary=$(mktemp "$RUNNER_TEMP/rulepilot-ordinary-user-summary.XXXXXX")
+          temporary_artifact=$(mktemp "$RUNNER_TEMP/rulepilot-ordinary-user-artifact.XXXXXX")
+          cleanup_untrusted_outputs() {
+            rm -rf "$raw_dir"
+            rm -f "$sanitized_status" "$validated_summary" "$temporary_artifact"
+          }
+          trap cleanup_untrusted_outputs EXIT
+          rm -f \
+            "$HOME/.ssh/id_ed25519" \
+            "$HOME/.ssh/known_hosts" \
+            "$RUNNER_TEMP/rulepilot-ordinary-user-credentials"
+          test ! -e "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/known_hosts"
+          test ! -e "$RUNNER_TEMP/rulepilot-ordinary-user-credentials"
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
+          chmod 700 "$artifact_dir"
+
+          tested_sha="$RULEPILOT_SMOKE_TESTED_SHA"
+          active_release_id=${RULEPILOT_SMOKE_ACTIVE_RELEASE_ID:-not-observed}
+          [[ "$tested_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$active_release_id" != not-observed ]]; then
+            [[ "$active_release_id" =~ ^${tested_sha}-[0-9]+-[0-9]+$ ]]
+          fi
+
+          journey_exit=1
+          if [[ -f "$raw_exit" && ! -L "$raw_exit" ]]; then
+            raw_exit_size=$(wc -c < "$raw_exit" | tr -d ' ')
+            if (( raw_exit_size >= 2 && raw_exit_size <= 4 )); then
+              candidate_exit=$(<"$raw_exit")
+              if [[ "$candidate_exit" =~ ^(0|[1-9][0-9]{0,2})$ ]] \
+                  && (( candidate_exit <= 255 )); then
+                journey_exit=$candidate_exit
+              fi
+            fi
+          fi
+
+          status_valid=false
+          if [[ -f "$raw_status" && ! -L "$raw_status" ]]; then
+            raw_status_size=$(wc -c < "$raw_status" | tr -d ' ')
+            if (( raw_status_size > 0 && raw_status_size <= 4096 )) \
+                && jq --exit-status --compact-output \
+                  --argjson expectedExit "$journey_exit" '
+                def is_stage:
+                  IN("not-started", "csrf-ready", "login-completed", "bgg-binding-verified",
+                    "image-gallery-candidate-verified", "official-import-accepted",
+                    "official-import-completed", "image-gallery-pages-verified", "upload-completed",
+                    "document-ready", "teaching-preparation-completed", "teaching-plan-inspected",
+                    "teaching-plan-verified", "title-verified", "lesson-launch-visible",
+                    "lesson-generation-completed", "lesson-verified", "visual-expectation-verified",
+                    "answer-verified", "navigation-verified", "journey-completed");
+                def is_failure_code:
+                  IN("INPUT_INVALID", "AUTHENTICATION_FAILED", "SOURCE_DISCOVERY_FAILED",
+                    "SOURCE_UPLOAD_FAILED", "OFFICIAL_IMPORT_FAILED", "PAGE_SEQUENCE_INVALID",
+                    "TEACHING_PREPARATION_FAILED", "TEACHING_PLAN_INVALID",
+                    "LESSON_GENERATION_FAILED", "ANSWER_EVIDENCE_INVALID", "NAVIGATION_FAILED",
+                    "CLEANUP_FAILED", "UNEXPECTED_SMOKE_FAILURE");
+                def is_cause:
+                  . == null or (type == "string" and length >= 1 and length <= 80
+                    and test("^[A-Z][A-Z0-9_]*$"));
+                select(type == "object")
+                | select((keys | sort) == ["cleanupOutcome", "exitCode", "failureCauseCode",
+                    "failureCode", "lastCompletedStage", "outcome"])
+                | select(.exitCode == $expectedExit and (.lastCompletedStage | is_stage))
+                | select(.cleanupOutcome | IN("SUCCEEDED", "FAILED", "NOT_REQUIRED"))
+                | select(if $expectedExit == 0 then
+                    .outcome == "SUCCEEDED"
+                      and .failureCode == null
+                      and .failureCauseCode == null
+                      and .lastCompletedStage == "journey-completed"
+                      and .cleanupOutcome != "FAILED"
+                  else
+                    .outcome == "FAILED"
+                      and (.failureCode | is_failure_code)
+                      and (.failureCauseCode | is_cause)
+                      and (if .failureCode == "CLEANUP_FAILED" then
+                        .cleanupOutcome == "FAILED" and .lastCompletedStage == "journey-completed"
+                      else true end)
+                  end)
+                | {outcome, exitCode, lastCompletedStage, failureCode, failureCauseCode, cleanupOutcome}
+              ' "$raw_status" > "$sanitized_status"; then
+              status_valid=true
+            fi
+          fi
+          if [[ "$status_valid" != true ]]; then
+            jq -n \
+              '{outcome:"FAILED",exitCode:1,lastCompletedStage:"status-unavailable",
+               failureCode:"UNEXPECTED_SMOKE_FAILURE",failureCauseCode:null,
+               cleanupOutcome:"FAILED"}
+            ' > "$sanitized_status"
+            journey_exit=1
+          fi
+
+          status_outcome=$(jq -r '.outcome' "$sanitized_status")
+          summary_valid=false
+          if [[ "$journey_exit" == 0 && "$status_outcome" == SUCCEEDED \
+              && -f "$raw_summary" && ! -L "$raw_summary" ]]; then
+            raw_summary_size=$(wc -c < "$raw_summary" | tr -d ' ')
+            if (( raw_summary_size > 0 && raw_summary_size <= 1048576 )) \
+                && jq --exit-status --compact-output '
+                  def integer_between($minimum; $maximum):
+                    type == "number" and floor == . and . >= $minimum and . <= $maximum;
+                  def number_between($minimum; $maximum):
+                    type == "number" and . >= $minimum and . <= $maximum;
+                  def outcome_or_null:
+                    . == null or IN("SUCCEEDED", "FAILED", "REJECTED");
+                  def page_attempts_valid($pageCount):
+                    type == "object"
+                      and (keys | sort) == ["finalUnavailablePages", "initialFailed",
+                        "initialRejected", "initialSucceeded", "maximumSemanticAttemptsForAnyPage",
+                        "pages", "repairAttempted", "repairFailed", "repairSucceeded",
+                        "transientRetryAttempted", "transientRetryFailed",
+                        "transientRetrySucceeded", "valid"]
+                      and .valid == true
+                      and (.pages | type == "array" and length == $pageCount)
+                      and ([.pages[].page] == [range(1; $pageCount + 1)])
+                      and all(.pages[];
+                        type == "object"
+                          and (keys | sort) == ["finalOutcome", "initialOutcome", "page",
+                            "recoveryKind", "recoveryOutcome", "repairCode", "semanticAttempts"]
+                          and (.page | integer_between(1; $pageCount))
+                          and (.initialOutcome | IN("SUCCEEDED", "FAILED", "REJECTED"))
+                          and (.recoveryKind == null
+                            or (.recoveryKind | IN("TRANSIENT_RETRY", "CONTRACT_REPAIR")))
+                          and (.repairCode == null or (.repairCode | IN("MALFORMED_JSON",
+                            "SCHEMA_MISMATCH", "DUPLICATE_RULE_GROUP", "PAGE_BINDING_MISMATCH")))
+                          and (.recoveryOutcome | outcome_or_null)
+                          and (.semanticAttempts | integer_between(1; 2))
+                          and (.finalOutcome | IN("SUCCEEDED", "FAILED", "REJECTED")))
+                      and (.initialSucceeded | integer_between(0; $pageCount))
+                      and (.initialFailed | integer_between(0; $pageCount))
+                      and (.initialRejected | integer_between(0; $pageCount))
+                      and (.initialSucceeded + .initialFailed + .initialRejected == $pageCount)
+                      and (.transientRetryAttempted | integer_between(0; $pageCount))
+                      and (.transientRetrySucceeded | integer_between(0; $pageCount))
+                      and (.transientRetryFailed | integer_between(0; $pageCount))
+                      and (.transientRetrySucceeded + .transientRetryFailed
+                        == .transientRetryAttempted)
+                      and (.repairAttempted | integer_between(0; $pageCount))
+                      and (.repairSucceeded | integer_between(0; $pageCount))
+                      and (.repairFailed | integer_between(0; $pageCount))
+                      and (.repairSucceeded + .repairFailed == .repairAttempted)
+                      and (.transientRetryAttempted + .repairAttempted <= $pageCount)
+                      and (.maximumSemanticAttemptsForAnyPage | integer_between(1; 2))
+                      and (.finalUnavailablePages | type == "array"
+                        and length < $pageCount
+                        and unique == .
+                        and all(.[]; integer_between(1; $pageCount)));
+                  def common_valid:
+                    (.title | type == "string" and length >= 1 and length <= 160)
+                      and .preparationState == "COMPLETED"
+                      and .lessonState == "COMPLETED"
+                      and (.lessonStatus | IN("COMPLETE", "DRAFT_READY"))
+                      and (.answerStatus | IN("ANSWERED", "ANSWERED_WITH_WARNING"))
+                      and (.sectionCount | integer_between(1; 10000))
+                      and (.answerCitationCount | integer_between(1; 10000))
+                      and (.visualStepCount | integer_between(0; 100000))
+                      and (.focusedVisualStepCount | integer_between(0; 100000))
+                      and .focusedVisualStepCount <= .visualStepCount
+                      and .visualAssemblyMode == "IN_TEACHING"
+                      and .cleanup == "scheduled"
+                      and (.navigation | type == "object"
+                        and (keys | sort) == ["averageMs", "failureCount", "maxMs", "requestCount"])
+                      and (.navigation.requestCount | integer_between(0; 100000))
+                      and .navigation.failureCount == 0
+                      and (.navigation.averageMs | number_between(0; 1000000000))
+                      and (.navigation.maxMs | number_between(0; 1000000000));
+                  . as $raw
+                  | if has("sourceMode") then
+                      select((keys | sort) == ["answerCitationCount", "answerStatus", "cleanup",
+                        "effectiveSourceUrl", "focusedVisualStepCount", "lessonState", "lessonStatus",
+                        "navigation", "pageAttempts", "pageCount", "preparationState", "sectionCount",
+                        "sourceMode", "sourceUrl", "title", "visualAssemblyMode", "visualStepCount"])
+                      | select(common_valid)
+                      | select(.sourceMode == "official_image_gallery")
+                      | select(.sourceUrl | type == "string" and length >= 1 and length <= 2048
+                          and startswith("https://"))
+                      | select(.effectiveSourceUrl | type == "string" and length >= 1 and length <= 2200
+                          and startswith("https://"))
+                      | select(.pageCount | integer_between(1; 500))
+                      | select(.pageAttempts | page_attempts_valid($raw.pageCount))
+                    else
+                      select((keys | sort) == ["answerCitationCount", "answerStatus", "cleanup",
+                        "focusedVisualStepCount", "lessonState", "lessonStatus", "navigation",
+                        "preparationState", "sectionCount", "title", "visualAssemblyMode", "visualStepCount"])
+                      | select(common_valid)
+                    end
+                  | {
+                      sourceMode: .sourceMode,
+                      title,
+                      sourceUrl: .sourceUrl,
+                      effectiveSourceUrl: .effectiveSourceUrl,
+                      pageCount: .pageCount,
+                      pageAttempts: (if .pageAttempts == null then null else {
+                        pages: [.pageAttempts.pages[] | {page, initialOutcome, recoveryKind, repairCode,
+                          recoveryOutcome, semanticAttempts, finalOutcome}],
+                        initialSucceeded: .pageAttempts.initialSucceeded,
+                        initialFailed: .pageAttempts.initialFailed,
+                        initialRejected: .pageAttempts.initialRejected,
+                        transientRetryAttempted: .pageAttempts.transientRetryAttempted,
+                        transientRetrySucceeded: .pageAttempts.transientRetrySucceeded,
+                        transientRetryFailed: .pageAttempts.transientRetryFailed,
+                        repairAttempted: .pageAttempts.repairAttempted,
+                        repairSucceeded: .pageAttempts.repairSucceeded,
+                        repairFailed: .pageAttempts.repairFailed,
+                        finalUnavailablePages: .pageAttempts.finalUnavailablePages,
+                        maximumSemanticAttemptsForAnyPage: .pageAttempts.maximumSemanticAttemptsForAnyPage,
+                        valid: .pageAttempts.valid
+                      } end),
+                      preparationState,
+                      lessonState,
+                      lessonStatus,
+                      answerStatus,
+                      sectionCount,
+                      answerCitationCount,
+                      visualStepCount,
+                      focusedVisualStepCount,
+                      visualAssemblyMode,
+                      navigation: {
+                        requestCount: .navigation.requestCount,
+                        failureCount: .navigation.failureCount,
+                        averageMs: .navigation.averageMs,
+                        maxMs: .navigation.maxMs
+                      },
+                      cleanup
+                    }
+                  | with_entries(select(.value != null))
+                ' "$raw_summary" > "$validated_summary"; then
+              summary_valid=true
+            fi
+          fi
+
+          if [[ "$summary_valid" == true ]]; then
+            source_url_sha256=""
+            effective_source_url_sha256=""
+            source_url=$(jq -r '.sourceUrl // empty' "$validated_summary")
+            effective_source_url=$(jq -r '.effectiveSourceUrl // empty' "$validated_summary")
+            if [[ -n "$source_url" ]]; then
+              source_url_sha256=$(printf '%s' "$source_url" | sha256sum | awk '{print $1}')
+            fi
+            if [[ -n "$effective_source_url" ]]; then
+              effective_source_url_sha256=$(printf '%s' "$effective_source_url" | sha256sum | awk '{print $1}')
+            fi
+            jq --exit-status --compact-output \
+              --arg releaseId "$active_release_id" \
+              --arg commitSha "$tested_sha" \
+              --arg sourceUrlSha256 "$source_url_sha256" \
+              --arg effectiveSourceUrlSha256 "$effective_source_url_sha256" \
+              --slurpfile execution "$sanitized_status" '
+                del(.sourceUrl, .effectiveSourceUrl)
+                | . + {
+                    sourceUrlSha256: (if .sourceMode == null then null else $sourceUrlSha256 end),
+                    effectiveSourceUrlSha256: (if .sourceMode == null then null
+                      else $effectiveSourceUrlSha256 end),
+                    execution: $execution[0],
+                    releaseId: $releaseId,
+                    commitSha: $commitSha
+                  }
+                | with_entries(select(.value != null))
+              ' "$validated_summary" > "$temporary_artifact"
+          else
+            if [[ "$journey_exit" == 0 && "$status_outcome" == SUCCEEDED ]]; then
+              jq '{outcome:"FAILED",exitCode:1,lastCompletedStage:"summary-unavailable",
+                   failureCode:"UNEXPECTED_SMOKE_FAILURE",failureCauseCode:null,
+                   cleanupOutcome}' "$sanitized_status" > "$temporary_artifact"
+            else
+              cp "$sanitized_status" "$temporary_artifact"
+            fi
+            jq --exit-status --compact-output \
+              --arg releaseId "$active_release_id" \
+              --arg commitSha "$tested_sha" \
+              '. + {releaseId:$releaseId,commitSha:$commitSha}' \
+              "$temporary_artifact" > "$artifact_dir/summary.pending.json"
+            mv "$artifact_dir/summary.pending.json" "$temporary_artifact"
+          fi
+          chmod 600 "$temporary_artifact"
+          mv "$temporary_artifact" "$artifact_dir/summary.json"
+          rm -rf "$raw_dir"
+          test -f "$artifact_dir/summary.json" && test ! -L "$artifact_dir/summary.json"
+          artifact_size=$(wc -c < "$artifact_dir/summary.json" | tr -d ' ')
+          (( artifact_size > 0 && artifact_size <= 1048576 ))
+          [[ "$(find "$artifact_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" == 1 ]]
+          chmod -R go-rwx "$artifact_dir"
+          trap - EXIT
+
+      - name: Upload sanitized journey output
+        if: always() && steps.cleanup_credentials.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: production-ordinary-user-smoke-${{ github.run_id }}
-          path: .artifacts/production-ordinary-user-smoke/summary.json
+          path: ${{ runner.temp }}/production-ordinary-user-smoke/summary.json
           if-no-files-found: error
           retention-days: 1
+
+      - name: Require a successful ordinary-user journey
+        if: always() && steps.cleanup_credentials.outcome == 'success'
+        shell: /bin/bash --noprofile --norc -p {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          GITHUB_ENV: /dev/null
+          GITHUB_PATH: /dev/null
+          LD_PRELOAD: ''
+          PATH: /usr/bin:/bin
+        run: |
+          set -Eeuo pipefail
+          report="$RUNNER_TEMP/production-ordinary-user-smoke/summary.json"
+          test -f "$report" && test ! -L "$report"
+          jq --exit-status '
+            .execution.outcome == "SUCCEEDED"
+              and .execution.exitCode == 0
+              and .preparationState == "COMPLETED"
+              and .lessonState == "COMPLETED"
+              and (.lessonStatus == "COMPLETE" or .lessonStatus == "DRAFT_READY")
+              and (.answerStatus == "ANSWERED" or .answerStatus == "ANSWERED_WITH_WARNING")
+          ' "$report" > /dev/null
