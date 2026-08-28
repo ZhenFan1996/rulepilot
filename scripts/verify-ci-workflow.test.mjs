@@ -1257,9 +1257,9 @@ test('deployment seals control-plane code before build and keeps it isolated thr
   assert.match(buildJob,
     /actual_control_plane_sha256=.*?[\s\S]*?"\$actual_control_plane_sha256" == "\$CONTROL_PLANE_SHA256"/)
   assert.match(buildJob,
-    /git get-tar-commit-id\)[\s\S]*?"\$archive_commit" == "\$DEPLOY_SHA"/)
+    /gzip -dc "\$control_plane_dir\/\$release_bundle" > "\$release_tar"[\s\S]*?git get-tar-commit-id < "\$release_tar"\)[\s\S]*?"\$archive_commit" == "\$DEPLOY_SHA"/)
   assert.match(buildJob,
-    /tar -xzf "\$control_plane_dir\/\$release_bundle" -C "\$source_root"/)
+    /tar -xf "\$release_tar" -C "\$source_root"/)
   assert.match(buildJob,
     /working-directory: \$\{\{ runner\.temp \}\}\/rulepilot-build-source\/backend/)
   assert.match(buildJob,
@@ -1279,7 +1279,9 @@ test('deployment seals control-plane code before build and keeps it isolated thr
   assert.match(deployJob,
     /sha256sum --check "\$control_plane_manifest"[\s\S]*?sha256sum --check release-artifacts\.sha256/)
   assert.match(deployJob,
-    /actual_control_plane_sha256=.*?[\s\S]*?"\$actual_control_plane_sha256" == "\$CONTROL_PLANE_SHA256"[\s\S]*?git get-tar-commit-id\)[\s\S]*?"\$archive_commit" == "\$DEPLOY_SHA"/)
+    /actual_control_plane_sha256=.*?[\s\S]*?"\$actual_control_plane_sha256" == "\$CONTROL_PLANE_SHA256"[\s\S]*?gzip -dc "\$control_plane_dir\/\$release_bundle" > "\$release_tar"[\s\S]*?git get-tar-commit-id < "\$release_tar"\)[\s\S]*?"\$archive_commit" == "\$DEPLOY_SHA"/)
+  assert.doesNotMatch(deploymentWorkflow,
+    /gzip -dc [^\n]*\| git get-tar-commit-id/)
   assert.match(deployJob,
     /rulepilot-sealed-control-plane\/rulepilot-release-\$\{DEPLOY_RELEASE_ID\}\.tar\.gz[\s\S]*?\/tmp\/rulepilot-\$\{DEPLOY_RELEASE_ID\}\.tar\.gz/)
   assert.doesNotMatch(deployJob,
