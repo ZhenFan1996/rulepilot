@@ -125,28 +125,52 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void rejectsUnknownOrRepeatedCandidateIdsWithoutSemanticRetry() throws IOException {
+    void returnsStructuredScopeRejectionToTheSameAgentForOneCompleteReplacement() throws IOException {
         Candidate candidate = candidate("known_1", 4, new Rectangle(100, 100, 300, 300));
-        Runtime unknown = runtime("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"unknown_9",
-                "label":"棋盘","visibleDescription":"中央棋盘区域","supportedClaimRefs":["C1"]}]}
-                """);
-        Runtime repeated = runtime("""
+        String unknownId = """
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
+                "candidateId":"unknown_9","label":"棋盘","visibleDescription":"中央棋盘区域",
+                "supportedClaimRefs":["C1"]}]}
+                """;
+        String acceptedReplacement = """
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
+                "candidateId":"known_1","label":"棋盘","visibleDescription":"中央棋盘区域",
+                "supportedClaimRefs":["C1"]}]}
+                """;
+        String repeatedId = """
                 {"batchAction":"STOP","reviews":[
                 {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1",
                 "label":"棋盘","visibleDescription":"中央棋盘区域","supportedClaimRefs":["C1"]},
                 {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1",
                 "label":"棋盘","visibleDescription":"同一中央棋盘区域","supportedClaimRefs":["C1"]}]}
-                """);
+                """;
+        Runtime recovered = runtime(unknownId, acceptedReplacement);
+        Runtime exhausted = runtime(repeatedId, repeatedId);
         VisualLocationRequest request = request(
                 List.of(claim(1, 4)), List.of(candidate), List.of(page(4, solidPng(Color.WHITE))), 2);
 
-        assertThat(unknown.locator().locateGuideWithResult(request).diagnostic())
+        assertThat(recovered.locator().locateGuideWithResult(request).diagnostic())
+                .isEqualTo(Diagnostic.FOUND);
+        assertThat(exhausted.locator().locateGuideWithResult(request).diagnostic())
                 .isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
-        assertThat(repeated.locator().locateGuideWithResult(request).diagnostic())
-                .isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
-        verify(unknown.model(), times(1)).call(any(Prompt.class));
-        verify(repeated.model(), times(1)).call(any(Prompt.class));
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(recovered.model(), times(2)).call(prompts.capture());
+        String replacementPrompt = prompts.getAllValues().getLast().getInstructions().stream()
+                .filter(UserMessage.class::isInstance)
+                .map(message -> message.getText())
+                .findFirst()
+                .orElseThrow();
+        assertThat(replacementPrompt)
+                .contains(
+                        "\"status\":\"PREVIOUS_COMPLETE_SELECTION_REJECTED\"",
+                        "\"reasonCode\":\"UNSUPPORTED_SCOPE\"",
+                        "\"remainingCompleteReplacements\":1",
+                        "\"requiredAction\":\"RETURN_COMPLETE_REPLACEMENT\"",
+                        "\"allowedDecisions\":[\"ACCEPT_CANDIDATE\",\"NO_VISUAL\"]",
+                        "\"PATCH_PREVIOUS_FIELDS\"",
+                        "\"EDIT_PIXELS\"")
+                .doesNotContain("unknown_9");
+        verify(exhausted.model(), times(2)).call(any(Prompt.class));
     }
 
     @Test
@@ -155,14 +179,16 @@ class SpringAiVisualRegionLocatorTest {
         List<VisualRegionLocator.Claim> claims = List.of(claim(1, 1), claim(2, 2));
         VisualLocationRequest request = request(
                 claims, List.of(pageTwo), List.of(page(2, solidPng(Color.WHITE))), 1);
-        Runtime crossPage = runtime("""
+        String crossPageResponse = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"page_two",
                 "label":"组件","visibleDescription":"一组组件","supportedClaimRefs":["C1"]}]}
-                """);
-        Runtime crossStep = runtime("""
+                """;
+        String crossStepResponse = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"page_two",
                 "label":"组件","visibleDescription":"一组组件","supportedClaimRefs":["C2"]}]}
-                """);
+                """;
+        Runtime crossPage = runtime(crossPageResponse, crossPageResponse);
+        Runtime crossStep = runtime(crossStepResponse, crossStepResponse);
 
         assertThat(crossPage.locator().locateGuideWithResult(request).diagnostic())
                 .isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
@@ -188,7 +214,7 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void retriesMalformedStructureAtMostOnceButDoesNotChangeCandidateAttachments() throws IOException {
+    void requestsOneCompleteReplacementForMalformedStructureWithoutChangingCandidateAttachments() throws IOException {
         Runtime runtime = runtime(
                 "not-json",
                 """
@@ -205,7 +231,9 @@ class SpringAiVisualRegionLocatorTest {
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(runtime.model(), times(2)).call(prompts.capture());
         assertThat(prompts.getAllValues().getLast().getInstructions().stream().map(message -> message.getText()))
-                .anySatisfy(text -> assertThat(text).contains("batchAction plus six-field review contract"));
+                .anySatisfy(text -> assertThat(text).contains(
+                        "\"reasonCode\":\"MALFORMED_JSON\"",
+                        "\"requiredAction\":\"RETURN_COMPLETE_REPLACEMENT\""));
         assertThat(prompts.getAllValues()).allSatisfy(prompt -> assertThat(prompt.getInstructions().stream()
                         .filter(UserMessage.class::isInstance)
                         .map(UserMessage.class::cast)
@@ -227,6 +255,70 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(runtime.locator().locateGuideWithResult(request).diagnostic())
                 .isEqualTo(Diagnostic.MALFORMED_RESPONSE);
         verify(runtime.model(), times(2)).call(any(Prompt.class));
+    }
+
+    @Test
+    void retriesOneProviderFailureAndReturnsACompleteSelectionWithoutPatching() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel model = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("visual-test").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("visual-test");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(model);
+        when(model.getDefaultOptions()).thenReturn(defaults);
+        when(model.getOptions()).thenReturn(defaults);
+        when(model.call(any(Prompt.class)))
+                .thenThrow(new IllegalStateException("temporary provider failure"))
+                .thenReturn(response("""
+                        {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
+                        "candidateId":"candidate_1","label":"图例","visibleDescription":"三个图标由箭头连接",
+                        "supportedClaimRefs":["C1"]}]}
+                        """));
+        var locator = new SpringAiVisualRegionLocator(configuration);
+        VisualLocationRequest request = request(
+                List.of(claim(1, 3)),
+                List.of(candidate("candidate_1", 3, new Rectangle(0, 0, 550, 550))),
+                List.of(page(3, solidPng(Color.GREEN))),
+                1);
+
+        assertThat(locator.locateGuideWithResult(request).diagnostic()).isEqualTo(Diagnostic.FOUND);
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(model, times(2)).call(prompts.capture());
+        assertThat(prompts.getAllValues().getLast().getInstructions().stream().map(message -> message.getText()))
+                .anySatisfy(text -> assertThat(text).contains(
+                        "\"reasonCode\":\"PROVIDER_FAILURE\"",
+                        "\"requiredAction\":\"RETURN_COMPLETE_REPLACEMENT\""));
+    }
+
+    @Test
+    void reportsCandidateCropPreparationAsLocalUnavailabilityWithoutCallingTheModel() {
+        UUID runId = UUID.randomUUID();
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        Runtime runtime = runtime(new BudgetedAgentInvocations(execution), "unused");
+        VisualLocationRequest request = request(
+                List.of(claim(1, 3)),
+                List.of(candidate("candidate_1", 3, new Rectangle(0, 0, 550, 550))),
+                List.of(page(3, new byte[] {1, 2, 3})),
+                1,
+                false,
+                runId);
+
+        assertThat(runtime.locator().locateGuideWithResult(request).diagnostic())
+                .isEqualTo(Diagnostic.CANDIDATE_PREPARATION_FAILED);
+        verify(runtime.model(), times(0)).call(any(Prompt.class));
+        verify(execution).record(
+                eq(runId),
+                eq(AgentExecutionControl.ActivityType.VALIDATION),
+                eq("settleVisualCandidateSelection|1|1|CANDIDATE_PREPARATION_FAILED"),
+                eq(AgentExecutionControl.ActivityOutcome.FAILED),
+                anyString());
+        verify(execution, times(0)).reserve(
+                any(),
+                eq(AgentExecutionControl.ActivityType.MODEL),
+                anyString(),
+                anyInt());
     }
 
     @Test
@@ -270,6 +362,21 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(operations.getAllValues()).containsExactly(
                 "visualCandidateBatch|1|1",
                 "visualCandidateBatch|1|2");
+        ArgumentCaptor<String> selectionOperations = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<AgentExecutionControl.ActivityOutcome> selectionOutcomes =
+                ArgumentCaptor.forClass(AgentExecutionControl.ActivityOutcome.class);
+        verify(execution, times(2)).record(
+                eq(runId),
+                eq(AgentExecutionControl.ActivityType.VALIDATION),
+                selectionOperations.capture(),
+                selectionOutcomes.capture(),
+                anyString());
+        assertThat(selectionOperations.getAllValues()).containsExactly(
+                "settleVisualCandidateSelection|1|1|MALFORMED_JSON",
+                "settleVisualCandidateSelection|1|2|NONE");
+        assertThat(selectionOutcomes.getAllValues()).containsExactly(
+                AgentExecutionControl.ActivityOutcome.REJECTED,
+                AgentExecutionControl.ActivityOutcome.SUCCEEDED);
         verify(execution, times(2)).complete(
                 any(AgentExecutionControl.InvocationReservation.class),
                 eq(AgentExecutionControl.ActivityOutcome.SUCCEEDED),

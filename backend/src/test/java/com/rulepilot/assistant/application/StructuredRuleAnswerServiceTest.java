@@ -645,7 +645,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void appliesOneCriticCorrectionWithoutRepeatingTheCritic() {
+    void reportsOneCriticFindingWithoutRevisingOrErasingTheValidatedAnswer() {
         RuleEvidenceHit source = source("The active player may move one space.");
         AtomicInteger revisions = new AtomicInteger();
         RuleAnswerModel model = new RuleAnswerModel() {
@@ -657,8 +657,7 @@ class StructuredRuleAnswerServiceTest {
             @Override
             public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
                 revisions.incrementAndGet();
-                assertThat(feedback).containsExactly("CONTRADICTION: The distance must be one space.");
-                return draft(source, "Move one space.", "The cited rule permits one space.");
+                throw new AssertionError("the evaluation-only critic must not reopen answer composition");
             }
         };
         AtomicInteger reviews = new AtomicInteger();
@@ -673,9 +672,13 @@ class StructuredRuleAnswerServiceTest {
         StructuredRuleAnswer answer = service(search(source), model, critic).answer(
                 "How far may the active player move?", new QuestionContext(versionId));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.shortVerdict()).isEqualTo("Move one space.");
-        assertThat(revisions).hasValue(1);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
+        assertThat(answer.shortVerdict()).isEqualTo("Move two spaces.");
+        assertThat(answer.explanation()).isEqualTo("The draft overstates the distance.");
+        assertThat(answer.warnings())
+                .extracting(AnswerWarning::type)
+                .containsExactly(AnswerWarning.Type.REVIEW_UNRESOLVED);
+        assertThat(revisions).hasValue(0);
         assertThat(reviews).hasValue(1);
     }
 
@@ -699,7 +702,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void returnsInsufficientEvidenceWithCandidateSourcesWhenOwnCitationsDoNotEntailTheConclusion() {
+    void keepsAnUnsupportedCriticFindingDiagnosticAfterDeterministicPublication() {
         RuleEvidenceHit source = source("An opaque descriptive panel names the cobalt spindle.");
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
@@ -722,11 +725,13 @@ class StructuredRuleAnswerServiceTest {
                 "Does the cobalt spindle return now?",
                 new QuestionContext(versionId, null, null, PlayerLocale.EN));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
-        assertThat(answer.shortVerdict()).contains("generated conclusion could not be verified by its own citations");
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
+        assertThat(answer.shortVerdict()).isEqualTo("The spindle returns now.");
         assertThat(answer.citations()).extracting(citation -> citation.chunkId())
                 .containsExactly(source.chunkId());
-        assertThat(answer.shortVerdict()).doesNotContain("spindle returns");
+        assertThat(answer.warnings())
+                .extracting(AnswerWarning::type)
+                .containsExactly(AnswerWarning.Type.REVIEW_UNRESOLVED);
     }
 
     @Test

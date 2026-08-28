@@ -88,11 +88,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             assertThat(response.games()).hasSize(2).allSatisfy(game -> {
                 assertThat(game.game().ranking().sourceName()).containsIgnoringCase("Harbor");
-                assertThat(game.replyParts()).isNotEmpty();
+                assertThat(game.replyParts()).isNotEmpty().allSatisfy(part ->
+                        assertThat(part.claim().text().strip().codePointCount(
+                                        0, part.claim().text().strip().length()))
+                                .isGreaterThanOrEqualTo(12));
             });
-            assertThat(response.assistantMessage()).isNotBlank();
+            String reply = response.assistantMessage().strip();
+            assertThat(reply.codePointCount(0, reply.length())).isGreaterThanOrEqualTo(80);
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().modelCalls()).isEqualTo(1);
+            assertThat(response.harness().modelCalls()).isEqualTo(2);
             assertThat(response.harness().catalogCalls()).isEqualTo(1);
             assertThat(response.harness().webResearchCalls()).isZero();
             assertThat(response.harness().actions())
@@ -100,6 +104,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             || action.startsWith("FALLBACK_")
                             || action.equals("RUN_DEADLINE_EXCEEDED"));
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.BROWSE_TOOL)).hasSize(1);
+            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)).hasSize(1);
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL)).isEmpty();
             assertThat(totalMs).isLessThan(20_000L);
 
@@ -169,7 +174,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
             @Override
             public Optional<Research> research(Request request) {
-                throw new AssertionError("a useful selectable slate must publish before optional research");
+                throw new AssertionError("a useful selectable slate must proceed directly to its terminal model action");
             }
         };
     }
@@ -198,11 +203,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         if (response != null) {
             report.put("published", Map.of(
                     "outcome", response.outcome().name(),
+                    "assistantMessageCharacters", codePoints(response.assistantMessage()),
                     "games", response.games().stream()
                             .map(game -> Map.of(
                                     "bggId", game.game().ranking().bggId(),
                                     "name", game.game().ranking().sourceName(),
-                                    "replyPartCount", game.replyParts().size()))
+                                    "replyPartCount", game.replyParts().size(),
+                                    "replyPartCharacters", game.replyParts().stream()
+                                            .map(part -> codePoints(part.claim().text()))
+                                            .toList()))
                             .toList(),
                     "modelCalls", response.harness().modelCalls(),
                     "catalogCalls", response.harness().catalogCalls(),
@@ -248,6 +257,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             call.put("messageCharacters", request.messages().stream()
                     .mapToInt(message -> message.content().codePointCount(0, message.content().length()))
                     .sum());
+            call.put("toolDefinitionCharacters", request.tools().stream()
+                    .mapToInt(tool -> codePoints(tool.name())
+                            + codePoints(tool.description())
+                            + codePoints(tool.inputSchema()))
+                    .sum());
             call.put("toolNames", request.tools().stream()
                     .map(BoardGameRecommendationModel.ToolSpec::name)
                     .toList());
@@ -286,6 +300,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private synchronized List<ToolCall> toolCalls(String toolName) {
             return toolCalls.stream().filter(call -> toolName.equals(call.name())).toList();
         }
+    }
+
+    private static int codePoints(String value) {
+        return value == null ? 0 : value.codePointCount(0, value.length());
     }
 
     private static final class CanaryCatalog implements BoardGameRecommendationCatalog {

@@ -95,8 +95,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let insufficientLesson = false
   let lessonRunReads = 0
   let lessonReads = 0
-  let visualRunEnabled = false
-  let visualRunReads = 0
+  let synchronousVisualEnabled = false
   let preparationFailureCode = null
   let lessonFailureCode = null
   let answerHasCitations = true
@@ -232,31 +231,6 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/active?mode=TEACHING') {
       return json(response, 200, [{ id: '55555555-5555-5555-5555-555555555555', subjectId: '44444444-4444-4444-4444-444444444444' }])
     }
-    if (request.method === 'GET'
-      && request.url === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=44444444-4444-4444-4444-444444444444') {
-      if (!visualRunEnabled) return json(response, 404, { error: 'not started' })
-      visualRunReads += 1
-      const state = visualRunReads > 1 ? 'COMPLETED' : 'RETRIEVING'
-      return json(response, 200, {
-        run: {
-          id: '66666666-6666-6666-6666-666666666666', state,
-          createdAt: '2026-08-02T00:00:20Z', completedAt: state === 'COMPLETED' ? '2026-08-02T00:00:22Z' : null,
-        },
-        steps: [],
-        activities: state === 'COMPLETED' ? [{
-          sequence: 1, type: 'VALIDATION', operation: 'visualSection|1', outcome: 'SUCCEEDED',
-          latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
-          occurredAt: '2026-08-02T00:00:22Z',
-        }] : [],
-        budget: { usedModelCalls: state === 'COMPLETED' ? 1 : 0, usedToolCalls: 1, usedTokens: 800 },
-      })
-    }
-    if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/66666666-6666-6666-6666-666666666666') {
-      return json(response, 200, {
-        run: { id: '66666666-6666-6666-6666-666666666666', state: 'COMPLETED' },
-        steps: [], activities: [], budget: {},
-      })
-    }
     if (request.method === 'GET' && request.url?.endsWith('/illustrated-lessons/latest')) {
       lessonReads += 1
       return json(response, 200, {
@@ -265,7 +239,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
           : lessonReads === 1 ? 'DRAFT_READY' : 'COMPLETE',
         sections: [{
           position: 1,
-          steps: visualRunEnabled && visualRunReads > 1 ? [{
+          steps: synchronousVisualEnabled ? [{
             position: 1, kind: 'VISUAL', visualFocus: {
               pageNumber: 1, label: 'board', x: 100, y: 100, width: 400, height: 300,
             },
@@ -355,7 +329,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       answerCitationCount: 1,
       visualStepCount: 0,
       focusedVisualStepCount: 0,
-      visualEnrichmentState: 'NOT_STARTED',
+      visualAssemblyMode: 'IN_TEACHING',
       navigation: undefined,
       cleanup: 'scheduled',
     })
@@ -376,7 +350,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(retained.sourceUrl, 'https://example.com/lantern-relay-rules.pdf')
     assert.equal(retained.plan.gameTitle, 'Lantern Relay')
     assert.equal(retained.lesson.status, 'COMPLETE')
-    assert.equal(retained.visualRun, null)
+    assert.equal(retained.visualRun, undefined)
     assert.equal((await readFile(navigation, 'utf8')).trim().split('\n').length,
       summary.navigation.requestCount)
     assert.ok((await readFile(navigation, 'utf8')).trim().split('\n')
@@ -520,8 +494,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(checkpoint.lesson, undefined)
     assert.equal(deleted, true)
 
-    visualRunEnabled = true
-    visualRunReads = 0
+    synchronousVisualEnabled = true
     deleted = false
     planStarted = false
     const requiredVisual = await spawnResult(
@@ -536,11 +509,11 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(requiredVisual.code, 0, requiredVisual.stderr)
     assert.equal(JSON.parse(requiredVisual.stdout).visualStepCount, 1)
     assert.equal(JSON.parse(requiredVisual.stdout).focusedVisualStepCount, 1)
-    assert.equal(JSON.parse(requiredVisual.stdout).visualEnrichmentState, 'COMPLETED')
-    assert.match(requiredVisual.stderr, /SMOKE_STAGE visual-enrichment-completed/)
+    assert.equal(JSON.parse(requiredVisual.stdout).visualAssemblyMode, 'IN_TEACHING')
+    assert.equal(calls.some(call => call.url?.includes('mode=VISUAL_ENRICHMENT')), false)
     assert.match(requiredVisual.stderr, /SMOKE_STAGE visual-expectation-verified expectation=required visualSteps=1 focusedVisualSteps=1/)
     assert.equal(deleted, true)
-    visualRunEnabled = false
+    synchronousVisualEnabled = false
 
     deleted = false
     planStarted = false
@@ -555,7 +528,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     )
     assert.equal(textOnly.code, 0, textOnly.stderr)
     assert.equal(JSON.parse(textOnly.stdout).visualStepCount, 0)
-    assert.equal(JSON.parse(textOnly.stdout).visualEnrichmentState, 'NOT_STARTED')
+    assert.equal(JSON.parse(textOnly.stdout).visualAssemblyMode, 'IN_TEACHING')
     assert.match(textOnly.stderr, /SMOKE_STAGE visual-expectation-verified expectation=forbidden visualSteps=0 focusedVisualSteps=0/)
     assert.equal(deleted, true)
 
@@ -758,7 +731,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
       latencyMs: 900, occurredAt: '2026-08-25T00:00:04Z' },
     { sequence: 4, type: 'MODEL', operation: 'inspectTeachingVisualRepair|1|3|DUPLICATE_RULE_GROUP', outcome: 'SUCCEEDED',
       latencyMs: 1100, occurredAt: '2026-08-25T00:00:05Z' },
-    { sequence: 5, type: 'MODEL', operation: 'inspectTeachingVisualRetry|2|3', outcome: 'SUCCEEDED',
+    { sequence: 5, type: 'MODEL', operation: 'inspectTeachingVisualRetry|2|3', outcome: 'FAILED',
       latencyMs: 1050, occurredAt: '2026-08-25T00:00:05Z' },
   ])
   const lessonRun = run(lessonRunId, 'COMPLETED', '2026-08-25T00:00:10Z', '2026-08-25T00:00:18Z', [
@@ -899,7 +872,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
         answer: {
           language: 'zh-CN', status: 'ANSWERED', shortVerdict: '达到结束条件后比较胜利点。',
           explanation: '平手时按规则书列出的资源顺序决胜。',
-          citations: [{ pageFrom: 2, pageTo: 2, excerpt: '游戏结束与平手规则。' }],
+          citations: [{ pageFrom: 3, pageTo: 3, excerpt: '游戏结束与平手规则。' }],
         },
         rulingReference: { citationIds: ['99999999-0000-4111-8222-333333333333'],
           confirmedRulingId: null, confirmedRulingVersion: null },
@@ -953,7 +926,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
           recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2,
           finalOutcome: 'SUCCEEDED' },
         { page: 2, initialOutcome: 'FAILED', recoveryKind: 'TRANSIENT_RETRY',
-          repairCode: null, recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2, finalOutcome: 'SUCCEEDED' },
+          repairCode: null, recoveryOutcome: 'FAILED', semanticAttempts: 2, finalOutcome: 'FAILED' },
         { page: 3, initialOutcome: 'SUCCEEDED', recoveryKind: null,
           repairCode: null, recoveryOutcome: null, semanticAttempts: 1, finalOutcome: 'SUCCEEDED' },
       ],
@@ -961,12 +934,12 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
       initialFailed: 2,
       initialRejected: 0,
       transientRetryAttempted: 1,
-      transientRetrySucceeded: 1,
-      transientRetryFailed: 0,
+      transientRetrySucceeded: 0,
+      transientRetryFailed: 1,
       repairAttempted: 1,
       repairSucceeded: 1,
       repairFailed: 0,
-      finalUnavailablePages: [],
+      finalUnavailablePages: [2],
       maximumSemanticAttemptsForAnyPage: 2,
       valid: true,
     })
@@ -974,6 +947,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
     assert.equal(summary.lessonState, 'COMPLETED')
     assert.equal(summary.lessonStatus, 'COMPLETE')
     assert.equal(summary.answerStatus, 'ANSWERED')
+    assert.equal(summary.visualAssemblyMode, 'IN_TEACHING')
     assert.equal(deleted, true)
     assert.match(result.stderr, /SMOKE_STAGE image-gallery-candidate-verified/)
     assert.match(result.stderr, /SMOKE_STAGE official-import-completed/)

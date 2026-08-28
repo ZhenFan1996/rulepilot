@@ -4,9 +4,11 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -81,13 +83,23 @@ public interface RecommendationConversationStore {
             List<DialogueMessage> transcript,
             List<KnownGame> knownGames,
             List<Integer> shownBggIds,
-            List<Game> verifiedGames) {
+            List<Game> verifiedGames,
+            PublishedTurn latestPublishedTurn) {
         public ConversationState(
                 RecommendationProfile profile,
                 List<DialogueMessage> transcript,
                 List<KnownGame> knownGames,
                 List<Integer> shownBggIds) {
-            this(profile, transcript, knownGames, shownBggIds, List.of());
+            this(profile, transcript, knownGames, shownBggIds, List.of(), null);
+        }
+
+        public ConversationState(
+                RecommendationProfile profile,
+                List<DialogueMessage> transcript,
+                List<KnownGame> knownGames,
+                List<Integer> shownBggIds,
+                List<Game> verifiedGames) {
+            this(profile, transcript, knownGames, shownBggIds, verifiedGames, null);
         }
 
         public ConversationState {
@@ -96,6 +108,20 @@ public interface RecommendationConversationStore {
             knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
             shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
             verifiedGames = verifiedGames == null ? List.of() : List.copyOf(verifiedGames);
+        }
+    }
+
+    /** The latest response committed to conversation semantics, separate from the latest idempotency result. */
+    record PublishedTurn(UUID clientTurnId, String responseLocale, ConversationResponse response) {
+        public PublishedTurn {
+            Objects.requireNonNull(clientTurnId, "published recommendation client turn is required");
+            if (responseLocale == null || responseLocale.isBlank()) {
+                throw new IllegalArgumentException("published recommendation locale is required");
+            }
+            Objects.requireNonNull(response, "published recommendation response is required");
+            if (response.outcome() == Outcome.UNAVAILABLE) {
+                throw new IllegalArgumentException("unavailable recommendation cannot be published conversation state");
+            }
         }
     }
 

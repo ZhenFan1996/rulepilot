@@ -201,13 +201,9 @@ final class TeachingSectionDraftComposer {
                     }
                     throw visualRepairFailure;
                 }
-                draft = candidateValidator.mergeRepairPreservingValidatedFields(
-                        plan,
-                        planned,
-                        evidence,
-                        modelRequest,
-                        draftToRevise,
-                        normalizeDraft(draft, modelRequest, evidence));
+                // A repaired chapter is one complete Agent-authored replacement. Combining prose fields from two
+                // independent model responses can produce a chapter that neither response actually asserted.
+                draft = normalizeDraft(draft, modelRequest, evidence);
             }
         }
     }
@@ -256,24 +252,17 @@ final class TeachingSectionDraftComposer {
                 String diagnostic = rejectedFallback.getMessage() == null
                         ? "The previous text fallback failed lesson validation."
                         : candidateValidator.repairDiagnostic(rejectedFallback, textOnlyDraft, evidence);
-                SectionDraft previousDraft = textOnlyDraft;
                 textOnlyDraft = reviseModelDraft(
                         assistantRunId,
                         planned,
                         textOnlyRequest,
-                        previousDraft,
+                        textOnlyDraft,
                         List.of(diagnostic),
                         "reviseTextTeachingSection",
                         "repairTextTeachingSectionRevisionContract",
                         "Text fallback revised from validation feedback",
                         modelCallBudget);
-                textOnlyDraft = candidateValidator.mergeRepairPreservingValidatedFields(
-                        plan,
-                        planned,
-                        evidence,
-                        textOnlyRequest,
-                        previousDraft,
-                        normalizeDraft(textOnlyDraft, textOnlyRequest, evidence));
+                textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
             }
         }
     }

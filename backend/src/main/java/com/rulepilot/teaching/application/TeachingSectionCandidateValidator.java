@@ -8,21 +8,16 @@ import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
-import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Converts one normalized, untrusted model draft into a fully cited lesson section.
@@ -31,8 +26,6 @@ import org.slf4j.LoggerFactory;
  * together. It performs no retrieval, model call, or publication.</p>
  */
 final class TeachingSectionCandidateValidator {
-
-    private static final Logger log = LoggerFactory.getLogger(TeachingSectionCandidateValidator.class);
 
     private final EvidenceVerifier evidenceVerifier;
 
@@ -102,136 +95,6 @@ final class TeachingSectionCandidateValidator {
             SectionDraft draft,
             List<RuleEvidence> availableEvidence) {
         return rejection.getMessage();
-    }
-
-    /**
-     * Merges one Agent repair without allowing it to rewrite fields that already passed the deterministic boundary.
-     * Every retained string is an exact field from either the original structured response or the repaired structured
-     * response; this method never edits, truncates, filters sentences, or synthesizes player-facing prose.
-     */
-    SectionDraft mergeRepairPreservingValidatedFields(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence,
-            TeachingLessonModel.SectionRequest request,
-            SectionDraft original,
-            SectionDraft repaired) {
-        if (original == null || repaired == null || original.steps().isEmpty() || !request.pageImages().isEmpty()) {
-            return repaired;
-        }
-        List<Boolean> validOriginalSteps = new java.util.ArrayList<>();
-        for (StepDraft step : original.steps()) {
-            Set<String> stepUnitIds = new LinkedHashSet<>(step.teachingUnitIds());
-            List<TeachingLessonModel.TeachingUnitInput> stepUnits = request.teachingUnits().stream()
-                    .filter(unit -> stepUnitIds.contains(unit.unitId()))
-                    .toList();
-            try {
-                validate(
-                        plan,
-                        planned,
-                        evidence,
-                        withTeachingUnits(request, stepUnits),
-                        withSteps(original, List.of(step)),
-                        EvidenceStatus.CITED_DRAFT);
-                validOriginalSteps.add(true);
-            } catch (IllegalArgumentException localFailure) {
-                validOriginalSteps.add(false);
-            }
-        }
-        if (validOriginalSteps.stream().noneMatch(Boolean.TRUE::equals)) return repaired;
-
-        boolean[] usedRepairedSteps = new boolean[repaired.steps().size()];
-        List<StepDraft> merged = new java.util.ArrayList<>();
-        for (int index = 0; index < original.steps().size(); index++) {
-            StepDraft originalStep = original.steps().get(index);
-            int repairedIndex = matchingRepairedStep(
-                    originalStep, index, original.steps(), repaired.steps(), usedRepairedSteps);
-            if (validOriginalSteps.get(index)) {
-                merged.add(originalStep);
-                if (repairedIndex >= 0) usedRepairedSteps[repairedIndex] = true;
-            } else if (repairedIndex >= 0) {
-                merged.add(repaired.steps().get(repairedIndex));
-                usedRepairedSteps[repairedIndex] = true;
-            }
-        }
-        for (int index = 0; index < repaired.steps().size(); index++) {
-            if (!usedRepairedSteps[index]) merged.add(repaired.steps().get(index));
-        }
-        log.info(
-                "Teaching topic {} repair preserved {} already validated player-facing steps byte-for-byte",
-                planned.topicKey(),
-                validOriginalSteps.stream().filter(Boolean.TRUE::equals).count());
-        return new SectionDraft(
-                original.title(),
-                original.visualKind(),
-                original.visualCaption(),
-                original.visualCitationIds(),
-                merged);
-    }
-
-    private int matchingRepairedStep(
-            StepDraft original,
-            int originalIndex,
-            List<StepDraft> originalSteps,
-            List<StepDraft> repaired,
-            boolean[] used) {
-        Set<String> originalUnits = new LinkedHashSet<>(original.teachingUnitIds());
-        for (int index = 0; index < repaired.size(); index++) {
-            if (!used[index]
-                    && repaired.get(index).heading().equals(original.heading())
-                    && new LinkedHashSet<>(repaired.get(index).teachingUnitIds()).equals(originalUnits)) {
-                return index;
-            }
-        }
-        if (!original.teachingUnitIds().isEmpty()) {
-            long originalUnitOccurrences = originalSteps.stream()
-                    .filter(step -> new LinkedHashSet<>(step.teachingUnitIds()).equals(originalUnits))
-                    .count();
-            long repairedUnitOccurrences = repaired.stream()
-                    .filter(step -> new LinkedHashSet<>(step.teachingUnitIds()).equals(originalUnits))
-                    .count();
-            if (originalUnitOccurrences == 1 && repairedUnitOccurrences == 1) {
-                for (int index = 0; index < repaired.size(); index++) {
-                    if (!used[index]
-                            && new LinkedHashSet<>(repaired.get(index).teachingUnitIds()).equals(originalUnits)) {
-                        return index;
-                    }
-                }
-            }
-        }
-        return original.teachingUnitIds().isEmpty()
-                        && originalIndex < repaired.size()
-                        && !used[originalIndex]
-                        && repaired.get(originalIndex).teachingUnitIds().isEmpty()
-                ? originalIndex
-                : -1;
-    }
-
-    private SectionDraft withSteps(SectionDraft original, List<StepDraft> steps) {
-        return new SectionDraft(
-                original.title(),
-                original.visualKind(),
-                original.visualCaption(),
-                original.visualCitationIds(),
-                steps);
-    }
-
-    private TeachingLessonModel.SectionRequest withTeachingUnits(
-            TeachingLessonModel.SectionRequest request,
-            List<TeachingLessonModel.TeachingUnitInput> teachingUnits) {
-        return new TeachingLessonModel.SectionRequest(
-                request.topicKey(),
-                request.title(),
-                request.objective(),
-                request.coverageTags(),
-                request.priorSections(),
-                request.evidence(),
-                request.pageImages(),
-                request.requiredRuleIntents(),
-                teachingUnits,
-                request.modelConfigurationOwner(),
-                request.chapterScope(),
-                request.wholeGameContext());
     }
 
     private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {

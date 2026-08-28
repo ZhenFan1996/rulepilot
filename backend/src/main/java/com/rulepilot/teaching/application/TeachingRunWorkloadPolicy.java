@@ -28,8 +28,10 @@ final class TeachingRunWorkloadPolicy {
         long modelCalls = Math.addExact(
                 Math.multiplyExact((long) plan.sections().size(), TeachingModelCallBudget.maximumSectionCalls()),
                 Math.addExact(
-                        (long) TeachingPublishedLessonReviewer.maximumModelCalls(),
-                        TeachingVisualEvidenceResolver.maximumModelCalls(plan)));
+                        (long) TeachingPublishedLessonReviewer.maximumModelCalls(plan.sections().size()),
+                        Math.addExact(
+                                (long) TeachingVisualEvidenceResolver.maximumModelCalls(plan),
+                                VisualLessonEnricher.maximumTeachingRunModelCalls(plan))));
         if (toolCalls > Integer.MAX_VALUE || modelCalls > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("teaching workload is too large");
         }

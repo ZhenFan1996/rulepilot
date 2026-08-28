@@ -12,6 +12,7 @@ import {
   teachingActivityText,
   teachingChapterFailureText,
   teachingRemainingTimeText,
+  teachingRunStopReasonText,
   type TeachingActivity,
   type TeachingRunProgress,
 } from './teachingProgress'
@@ -401,6 +402,68 @@ describe('teaching progress', () => {
       '第 2 章“走完第一轮”需要局部修正后再发布',
       '校验发现局部问题，正在修正第 2 章“走完第一轮”',
     ])
+  })
+
+  it('distinguishes a rejected visual attempt, one complete replacement, and final local unavailability', () => {
+    const activities = [
+      activity(1, 'settleVisualCandidateSelection|1|1|UNSUPPORTED_SCOPE', 'REJECTED'),
+      activity(2, 'settleVisualCandidateSelection|1|2|UNSUPPORTED_SCOPE', 'REJECTED'),
+      activity(3, 'enrichTeachingSectionVisual|1', 'REJECTED'),
+    ]
+
+    expect(recentTeachingActivitySteps(plan, activities).map(step => step.text)).toEqual([
+      '所选候选或依据归属超出了本次提供范围；同一个视觉 Agent 正在进行一次有限的完整重选或重试，这还不是最终配图失败。',
+      '经过一次有限的完整重选或重试后，所选候选或依据归属超出了本次提供范围；仅省略这张可选配图，已校验正文仍可阅读。',
+      '第 1 章“完成开局设置”经过有限选择后仍没有可用配图；仅省略图片，已校验正文仍可阅读',
+    ])
+    expect(recentTeachingActivitySteps(plan, activities, 'en').map(step => step.text)).toEqual([
+      'The selected candidate or evidence binding was outside the offered scope; the same visual Agent is making one bounded complete replacement or retry. This is not a final visual failure.',
+      'The selected candidate or evidence binding was outside the offered scope after the one bounded complete replacement or retry; only this optional visual is omitted and the cited text remains readable.',
+      'chapter 1 “完成开局设置”\'s bounded visual selection is unavailable; only the visual is omitted and its cited text remains readable',
+    ])
+  })
+
+  it('treats typed NO_VISUAL as a valid result rather than a retry or failure', () => {
+    const steps = recentTeachingActivitySteps(plan, [
+      activity(1, 'settleVisualCandidateSelection|1|1|EXPLICIT_NO_REGION', 'SUCCEEDED'),
+      activity(2, 'enrichTeachingSectionVisual|1', 'REJECTED'),
+    ])
+
+    expect(steps).toEqual([
+      expect.objectContaining({
+        outcome: 'SUCCEEDED',
+        text: '视觉 Agent 明确选择 NO_VISUAL；这是有效的局部结果，引用正文保持不变',
+      }),
+      expect.objectContaining({
+        outcome: 'REJECTED',
+        text: '视觉 Agent 为第 1 章“完成开局设置”选择了 NO_VISUAL；这是有效的局部结果，已校验正文仍可阅读',
+      }),
+    ])
+  })
+
+  it.each([
+    ['AGENT_TIMEOUT', '本轮在有限恢复后到达总时限'],
+    ['AGENT_MODEL_BUDGET', '本轮用完了预先限定的步骤、工具、模型调用或令牌预算'],
+    ['TEACHING_COMPLETION_FAILED', '讲解在有限持久化恢复后仍无法标记完成'],
+    ['APPLICATION_RESTARTED', '服务重启后无法安全续跑本轮任务'],
+    ['TEACHING_QUEUE_FULL', '服务未能调度下一个有限工作单元'],
+    ['TEACHING_WORKFLOW_FAILED', '讲解服务或持久化步骤在有限恢复后仍失败'],
+  ])('explains authoritative whole-run stop %s without calling a local visual omission fatal', (errorCode, expected) => {
+    const failed = run('run-failed', [])
+    failed.run.state = 'FAILED'
+    failed.run.lastErrorCode = errorCode
+
+    expect(teachingRunStopReasonText(failed)).toContain(expected)
+    expect(teachingRunStopReasonText(failed)).toContain('保留')
+  })
+
+  it('explains cancellation separately from service failure', () => {
+    const cancelled = run('run-cancelled', [])
+    cancelled.run.state = 'FAILED'
+    cancelled.run.lastErrorCode = 'AGENT_CANCELLED'
+
+    expect(teachingRunStopReasonText(cancelled)).toBe('本轮由用户取消；已经发布的章节仍然保留。')
+    expect(teachingRunStopReasonText(cancelled, 'en')).toContain('player cancelled')
   })
 
 })

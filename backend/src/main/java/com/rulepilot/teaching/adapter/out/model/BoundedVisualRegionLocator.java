@@ -22,9 +22,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Component;
 
-/**
- * Bounds optional visual enrichment so a slow vision provider can never delay an already published text lesson.
- */
+/** Bounds optional visual selection so a slow provider cannot hold a cited chapter indefinitely. */
 @Component("boundedVisualRegionLocator")
 @Profile("!test")
 public class BoundedVisualRegionLocator implements VisualRegionLocator {

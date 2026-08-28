@@ -418,16 +418,16 @@ public class BggRecommendationAgentController {
         static RecommendationSessionResponse from(
                 SessionSnapshot snapshot,
                 BggRecommendationPresentation presentation) {
-            String responseLocale = snapshot.lastResponseLocale() == null ? "en" : snapshot.lastResponseLocale();
-            RecommendationConversationResponse latestResponse = snapshot.lastResponse() == null
+            var publishedTurn = snapshot.latestPublishedTurn();
+            RecommendationConversationResponse latestResponse = publishedTurn == null
                     ? null
                     : present(
-                            snapshot.lastResponse(),
-                            responseLocale,
+                            publishedTurn.response(),
+                            publishedTurn.responseLocale(),
                             presentation,
                             snapshot.conversationId(),
                             snapshot.revision(),
-                            snapshot.lastClientTurnId(),
+                            publishedTurn.clientTurnId(),
                             true);
             return new RecommendationSessionResponse(
                     snapshot.conversationId(),

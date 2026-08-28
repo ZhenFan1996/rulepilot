@@ -160,19 +160,12 @@ rulepilot:
       # One lane covers outline preparation and the first cited section. Remaining chapters and review use the
       # background pool, preventing their long tail from occupying every path to a new player's first useful content.
       queue-capacity: ${TEACHING_STARTUP_QUEUE_CAPACITY:8}
-    # Local image crops improve an already published lesson. Their queue is deliberately independent so they can
-    # never make a new text-first lesson wait behind optional vision work.
     visual-enrichment:
-      core-pool-size: ${VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE:1}
-      max-pool-size: ${VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE:1}
-      queue-capacity: ${VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY:2}
-      # Section visual enrichment runs after publication and keeps its own bounded budget so optional crop work cannot
-      # consume the shorter text-lesson run.
+      # Retained only to read historical VISUAL_ENRICHMENT runs. New crops are bounded chapter work inside TEACHING.
       agent:
         max-model-calls: ${VISUAL_ENRICHMENT_AGENT_MAX_MODEL_CALLS:192}
         max-tokens: ${VISUAL_ENRICHMENT_AGENT_MAX_TOKENS:600000}
         timeout: ${VISUAL_ENRICHMENT_AGENT_TIMEOUT:PT30M}
-    base-section-parallelism: ${TEACHING_BASE_SECTION_PARALLELISM:3}
     # First-pass chapters use the planner's rulebook-language terms. Supplemental searches belong to
     # post-publication review instead of delaying the first complete, cited lesson.
     base-max-retrieval-queries-per-section: ${TEACHING_BASE_MAX_RETRIEVAL_QUERIES_PER_SECTION:3}

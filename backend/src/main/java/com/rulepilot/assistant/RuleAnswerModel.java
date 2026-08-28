@@ -50,32 +50,6 @@ public interface RuleAnswerModel {
     }
 
     /**
-     * Repairs only the player-facing core fields while preserving already validated structured details.
-     * Implementations may use a smaller structured response contract than a full answer regeneration.
-     */
-    default ModelDraft revisePlayerFacing(
-            ModelRequest request,
-            ModelDraft previousDraft,
-            List<String> feedback,
-            String ownerUsername) {
-        return revisePlayerFacing(
-                request,
-                previousDraft,
-                feedback,
-                Set.of(PlayerFacingField.SHORT_VERDICT, PlayerFacingField.EXPLANATION, PlayerFacingField.EXCEPTIONS),
-                ownerUsername);
-    }
-
-    default ModelDraft revisePlayerFacing(
-            ModelRequest request,
-            ModelDraft previousDraft,
-            List<String> feedback,
-            Set<PlayerFacingField> editableFields,
-            String ownerUsername) {
-        return revise(request, previousDraft, feedback, ownerUsername);
-    }
-
-    /**
      * Selects a bounded semantic interpretation from application-defined choices. The result is untrusted dialogue
      * control data, never rule evidence; unsupported models preserve deterministic question understanding.
      */
@@ -164,14 +138,6 @@ public interface RuleAnswerModel {
         COMPLETE_LIST,
         ADVICE,
         PRIOR_TURN
-    }
-
-    /** Player prose fields that one bounded repair call is explicitly allowed to replace. */
-    enum PlayerFacingField {
-        SHORT_VERDICT,
-        EXPLANATION,
-        EXCEPTIONS,
-        CITATION_IDS
     }
 
     /** One bounded player-facing shape selected by the semantic planning stage. */

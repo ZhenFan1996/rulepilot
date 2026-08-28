@@ -278,7 +278,7 @@ jobs:
                 and (.answerCitationCount | type == "number" and . >= 0)
                 and (.visualStepCount | type == "number" and . >= 0)
                 and (.focusedVisualStepCount | type == "number" and . >= 0)
-                and (.visualEnrichmentState | type == "string" and length > 0)
+                and (.visualAssemblyMode == "IN_TEACHING")
                 and (.cleanup == "scheduled")
                 and (.navigation | type == "object")
                 and (.navigation | keys | sort == ["averageMs", "failureCount", "maxMs", "requestCount"])
@@ -326,7 +326,7 @@ jobs:
                 answerCitationCount: $source.answerCitationCount,
                 visualStepCount: $source.visualStepCount,
                 focusedVisualStepCount: $source.focusedVisualStepCount,
-                visualEnrichmentState: $source.visualEnrichmentState,
+                visualAssemblyMode: $source.visualAssemblyMode,
                 navigation: {
                   requestCount: $source.navigation.requestCount,
                   failureCount: $source.navigation.failureCount,

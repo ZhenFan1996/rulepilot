@@ -12,6 +12,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
 import com.rulepilot.recommendation.application.RecommendationConversationException.Code;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
+import com.rulepilot.recommendation.application.RecommendationConversationStore.PublishedTurn;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.StoredConversation;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -112,18 +113,19 @@ public class RecommendationConversationCoordinator {
         if (completedWhileClaiming.isPresent()) return completedWhileClaiming.get();
         UUID claimAttemptId = Objects.requireNonNull(
                 claim.claimAttemptId(), "claimed recommendation turn has no claim attempt id");
-        ConversationRequest effectiveRequest = requestFrom(claimed.state(), validatedRequest);
+        ConversationState initialState = withLegacyPublishedTurn(claimed);
+        ConversationRequest effectiveRequest = requestFrom(initialState, validatedRequest);
 
         ConversationResponse response;
         try {
-            AtomicReference<ConversationState> settledState = new AtomicReference<>(claimed.state());
+            AtomicReference<ConversationState> settledState = new AtomicReference<>(initialState);
             response = agent.conversePersisted(
                     effectiveRequest,
                     locale,
                     owner,
                     progressListener,
                     checkpoint -> {
-                        ConversationState value = checkpointState(claimed.state(), checkpoint);
+                        ConversationState value = checkpointState(initialState, checkpoint);
                         if (!conversations.checkpointTurn(
                                 claimed.id(),
                                 owner,
@@ -139,7 +141,12 @@ public class RecommendationConversationCoordinator {
                         }
                         settledState.set(value);
                     });
-            ConversationState nextState = nextState(settledState.get(), effectiveRequest, response);
+            ConversationState nextState = nextState(
+                    settledState.get(),
+                    effectiveRequest,
+                    response,
+                    validatedTurn.clientTurnId(),
+                    locale);
             Instant completedAt = clock.instant();
             boolean completed = conversations.completeTurn(
                     claimed.id(),
@@ -382,7 +389,9 @@ public class RecommendationConversationCoordinator {
     private static ConversationState nextState(
             ConversationState previous,
             ConversationRequest request,
-            ConversationResponse response) {
+            ConversationResponse response,
+            UUID clientTurnId,
+            String responseLocale) {
         if (response.outcome() == Outcome.UNAVAILABLE) return previous;
 
         List<DialogueMessage> transcript = new ArrayList<>(previous.transcript());
@@ -422,7 +431,8 @@ public class RecommendationConversationCoordinator {
                 boundedTranscript(transcript),
                 boundedKnownGames(new ArrayList<>(games.values())),
                 boundedIds(new ArrayList<>(shown)),
-                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList());
+                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList(),
+                new PublishedTurn(clientTurnId, responseLocale, response));
     }
 
     private static ConversationState checkpointState(
@@ -442,7 +452,29 @@ public class RecommendationConversationCoordinator {
                 previous.transcript(),
                 boundedKnownGames(new ArrayList<>(games.values())),
                 previous.shownBggIds(),
-                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList());
+                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList(),
+                previous.latestPublishedTurn());
+    }
+
+    private static ConversationState withLegacyPublishedTurn(StoredConversation conversation) {
+        ConversationState state = conversation.state();
+        if (state.latestPublishedTurn() != null
+                || conversation.lastResponse() == null
+                || conversation.lastResponse().outcome() == Outcome.UNAVAILABLE
+                || conversation.lastClientTurnId() == null
+                || conversation.lastResponseLocale() == null) {
+            return state;
+        }
+        return new ConversationState(
+                state.profile(),
+                state.transcript(),
+                state.knownGames(),
+                state.shownBggIds(),
+                state.verifiedGames(),
+                new PublishedTurn(
+                        conversation.lastClientTurnId(),
+                        conversation.lastResponseLocale(),
+                        conversation.lastResponse()));
     }
 
     private static KnownGame knownGame(Game game) {
@@ -603,6 +635,17 @@ public class RecommendationConversationCoordinator {
             Instant activeStartedAt,
             ConversationResponse lastResponse,
             String lastResponseLocale) {
+        public PublishedTurn latestPublishedTurn() {
+            if (state.latestPublishedTurn() != null) return state.latestPublishedTurn();
+            if (lastResponse == null
+                    || lastResponse.outcome() == Outcome.UNAVAILABLE
+                    || lastClientTurnId == null
+                    || lastResponseLocale == null) {
+                return null;
+            }
+            return new PublishedTurn(lastClientTurnId, lastResponseLocale, lastResponse);
+        }
+
         static SessionSnapshot from(StoredConversation conversation) {
             return new SessionSnapshot(
                     conversation.id(),

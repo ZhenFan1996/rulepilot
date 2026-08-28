@@ -38,7 +38,6 @@ describe('LessonView progressive reading', () => {
       if (path === '/api/v1/teaching-plans/plan-1/catalog-presentation') {
         return Response.json(catalogPresentationFixture('目录桌游'))
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('/api/v1/assistant-runs/latest')) {
         runReads++
         if (runReads === 1) throw new TypeError('temporary run status failure')
@@ -116,6 +115,10 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('正在确认后台生成状态')
     expect(wrapper.text()).toContain('先摆主板')
     expect(wrapper.text()).toContain('我的图文讲解')
+    expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
+      .toContain('一次返回被拒或一次服务调用失败')
+    expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
+      .toContain('总时限或调用预算')
     expect(wrapper.text()).toContain('目录桌游')
     expect(wrapper.text()).toContain('SETI')
     expect(wrapper.text()).toContain('1–5 人')
@@ -181,7 +184,6 @@ describe('LessonView progressive reading', () => {
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json(planFixture('plan-1', 'Empty terminal guide'))
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('mode=TEACHING')) {
         teachingReads += 1
         return Response.json(runFixture('plan-1', teachingReads > 1 ? 'COMPLETED' : 'RETRIEVING'))
@@ -213,7 +215,7 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
-  it('does not present or poll an authoritative CANCELLED teaching run as active generation', async () => {
+  it('presents the persisted cancellation failure code as cancelled rather than failed', async () => {
     let teachingRunReads = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
@@ -225,7 +227,7 @@ describe('LessonView progressive reading', () => {
       }
       if (path.includes('mode=TEACHING')) {
         teachingRunReads += 1
-        const snapshot = runFixture('plan-1', 'CANCELLED')
+        const snapshot = runFixture('plan-1', 'FAILED')
         return Response.json({
           ...snapshot,
           run: { ...snapshot.run, lastErrorCode: 'AGENT_CANCELLED' },
@@ -275,7 +277,6 @@ describe('LessonView progressive reading', () => {
           sections: [{ position: 1, title: '先摆主板', visualEvidenceRecommended: true }],
         })
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('/api/v1/assistant-runs/latest')) {
         return Response.json({
           run: {
@@ -331,7 +332,6 @@ describe('LessonView progressive reading', () => {
           sections: [{ position: 1, title: 'Readable draft', visualEvidenceRecommended: false }],
         })
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'COMPLETED'))
       if (path.endsWith('/illustrated-lessons/latest')) {
         return Response.json({
@@ -370,7 +370,6 @@ describe('LessonView progressive reading', () => {
           sections: [{ position: 1, title: '证据不足', visualEvidenceRecommended: false }],
         })
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'INSUFFICIENT_EVIDENCE'))
       if (path.endsWith('/illustrated-lessons/latest')) {
         return Response.json({
@@ -409,7 +408,6 @@ describe('LessonView progressive reading', () => {
           ],
         })
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', terminalState))
       if (path.endsWith('/illustrated-lessons/latest')) {
         return Response.json({
@@ -451,10 +449,13 @@ describe('LessonView progressive reading', () => {
           sections: [{ position: 1, title: '可读草稿', visualEvidenceRecommended: false }],
         })
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('mode=TEACHING')) {
         runReads += 1
-        return Response.json(runFixture('plan-1', runReads > 1 ? 'FAILED' : 'VERIFYING_EVIDENCE'))
+        const failed = runReads > 1
+        const snapshot = runFixture('plan-1', failed ? 'FAILED' : 'VERIFYING_EVIDENCE')
+        return Response.json(failed
+          ? { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'AGENT_TIMEOUT' } }
+          : snapshot)
       }
       if (path.endsWith('/illustrated-lessons/latest')) {
         return Response.json({
@@ -482,6 +483,7 @@ describe('LessonView progressive reading', () => {
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(wrapper.text()).toContain('本轮讲解生成失败')
     expect(wrapper.text()).toContain('已保留 1 章可读讲解草稿')
+    expect(wrapper.text()).toContain('本轮在有限恢复后到达总时限')
     expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
     wrapper.unmount()
   })
@@ -625,7 +627,6 @@ describe('LessonView progressive reading', () => {
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Promise.resolve(Response.json(planFixture('plan-1', '联网恢复')))
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return Promise.resolve(new Response(null, { status: 404 }))
       if (path.includes('mode=TEACHING')) {
         teachingReads++
         if (teachingReads === 1) return Promise.resolve(Response.json(runFixture('plan-1', 'RETRIEVING')))
@@ -679,39 +680,35 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     expect(teachingReads).toBe(3)
-    expect(lessonReads).toBe(4)
+    expect(lessonReads).toBe(3)
     expect(wrapper.text()).toContain('恢复后的完整讲解')
     expect(wrapper.text()).not.toContain('迟到讲解')
     wrapper.unmount()
   })
 
-  it('aborts an active visual-enrichment round on unmount and never schedules another read', async () => {
-    let visualReads = 0
+  it('publishes synchronized chapter visuals from the main teaching snapshots without a visual-enrichment run', async () => {
+    let runReads = 0
     let lessonReads = 0
-    let resolveRun!: (response: Response) => void
-    let resolveLesson!: (response: Response) => void
-    const pollSignals: AbortSignal[] = []
-    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Promise.resolve(Response.json(planFixture('plan-1', '视觉补全')))
-      }
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', '同步配图'))
       if (path.includes('mode=TEACHING')) {
-        return Promise.resolve(Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run')))
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualReads++
-        if (visualReads === 1) return Promise.resolve(Response.json(runFixture('plan-1', 'RETRIEVING', 'visual-run')))
-        pollSignals.push(init!.signal!)
-        return new Promise<Response>((resolve) => { resolveRun = resolve })
+        runReads += 1
+        return Response.json(runFixture('plan-1', runReads === 1 ? 'RETRIEVING' : 'COMPLETED'))
       }
       if (path.endsWith('/illustrated-lessons/latest')) {
-        lessonReads++
-        if (lessonReads === 1) return Promise.resolve(Response.json(lessonFixture('plan-1', '已有讲解', 'COMPLETE')))
-        pollSignals.push(init!.signal!)
-        return new Promise<Response>((resolve) => { resolveLesson = resolve })
+        lessonReads += 1
+        const published = section(1, '第一章')
+        return Response.json({
+          id: 'lesson-plan-1',
+          teachingPlanId: 'plan-1',
+          status: lessonReads === 1 ? 'INCOMPLETE' : 'COMPLETE',
+          sections: lessonReads === 1
+            ? [{ ...published, steps: published.steps.map(step => ({ ...step, visualFocus: null })) }]
+            : [published],
+        })
       }
-      return Promise.resolve(new Response(null, { status: 404 }))
+      return new Response(null, { status: 404 })
     })
     vi.stubGlobal('fetch', fetchMock)
     const router = createMemoryRouter()
@@ -722,18 +719,17 @@ describe('LessonView progressive reading', () => {
     })
     await flushPromises()
 
-    await vi.advanceTimersByTimeAsync(2_500)
-    await flushPromises()
-    expect(pollSignals).toHaveLength(2)
-    wrapper.unmount()
-    expect(pollSignals.every(signal => signal.aborted)).toBe(true)
+    expect(wrapper.find('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').exists()).toBe(false)
 
-    resolveRun(Response.json(runFixture('plan-1', 'COMPLETED', 'visual-run')))
-    resolveLesson(Response.json(lessonFixture('plan-1', '迟到视觉讲解', 'COMPLETE')))
+    await vi.advanceTimersByTimeAsync(1_500)
     await flushPromises()
-    await vi.advanceTimersByTimeAsync(5_000)
-    expect(visualReads).toBe(2)
+
+    expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
+      .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(path => path.includes('mode=VISUAL_ENRICHMENT'))).toBe(false)
+    expect(runReads).toBe(2)
     expect(lessonReads).toBe(2)
+    wrapper.unmount()
   })
 
   it('keeps the focused English reader separate from the English Q&A entry', async () => {
@@ -762,548 +758,11 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('My illustrated guide')
+    expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
+      .toContain('One rejected response or service call starts a bounded correction or retry')
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('Rule Q&A')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.text()).toContain('Source: page 1')
-    wrapper.unmount()
-  })
-
-  it('shows visual crops that finish while the player keeps reading the lesson', async () => {
-    let visualRunReads = 0
-    let lessonReads = 0
-    let comprehensionReads = 0
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json(planFixture('plan-1', 'Live Visuals'))
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json({
-          run: {
-            id: 'teaching-run', subjectId: 'plan-1', state: 'COMPLETED',
-            createdAt: '2026-07-21T00:00:00Z', completedAt: '2026-07-21T00:00:10Z',
-          },
-          budget: { usedModelCalls: 1, maxModelCalls: 48 }, activities: [],
-        })
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads++
-        const completed = visualRunReads > 1
-        return Response.json({
-          run: {
-            id: 'visual-run', subjectId: 'plan-1', state: completed ? 'COMPLETED' : 'RETRIEVING',
-            createdAt: '2026-07-21T00:00:10Z', completedAt: completed ? '2026-07-21T00:00:20Z' : null,
-          },
-          budget: { usedModelCalls: completed ? 1 : 0, maxModelCalls: 48 },
-          activities: completed ? [{
-            sequence: 1, type: 'VALIDATION', operation: 'visualSection|1', summary: '已加入局部规则书截图',
-            outcome: 'SUCCEEDED', latencyMs: 0, occurredAt: '2026-07-21T00:00:20Z',
-          }] : [],
-        })
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        lessonReads++
-        const enriched = section(1, '第一节')
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
-          sections: lessonReads < 3
-            ? [{ ...enriched, steps: enriched.steps.filter((step) => step.kind !== 'VISUAL') }]
-            : [enriched],
-        })
-      }
-      if (path.endsWith('/comprehension')) {
-        comprehensionReads += 1
-        return Response.json({ lessonId: 'lesson-1', tasks: [], visualAids: [] })
-      }
-      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
-      return new Response(null, { status: 404 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: {
-        plugins: [router],
-        stubs: { AppShell: { template: '<div><slot /></div>' } },
-      },
-    })
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').exists()).toBe(false)
-
-    await vi.advanceTimersByTimeAsync(2500)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(2)
-    expect(wrapper.find('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').exists()).toBe(false)
-
-    await vi.advanceTimersByTimeAsync(2500)
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
-      .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
-    expect(comprehensionReads).toBe(2)
-
-    await vi.advanceTimersByTimeAsync(2500)
-    await flushPromises()
-    expect(fetchMock.mock.calls.map(([input]) => String(input))
-      .filter((path) => path.endsWith('/illustrated-lessons/latest'))).toHaveLength(4)
-    expect(visualRunReads).toBe(2)
-    expect(vi.getTimerCount()).toBe(1)
-    wrapper.unmount()
-  })
-
-  it('keeps a ready English lesson displayed when a visual crop arrives after localization', async () => {
-    setLocale('en')
-    let visualRunReads = 0
-    let lessonReads = 0
-    let localizationReads = 0
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json(planFixture('plan-1', 'Localized Visuals'))
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return Response.json(runFixture(
-          'plan-1',
-          visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
-          'visual-run',
-        ))
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        lessonReads += 1
-        const source = section(1, '中文第一节')
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
-          sections: lessonReads < 3
-            ? [{ ...source, steps: source.steps.filter(step => step.kind !== 'VISUAL') }]
-            : [source],
-        })
-      }
-      if (path.endsWith('/illustrated-lessons/latest/localizations/en')) {
-        localizationReads += 1
-        const localized = section(1, 'English first chapter')
-        const translatedSteps = localized.steps
-          .filter(step => lessonReads >= 3 || step.kind !== 'VISUAL')
-          .map(step => step.kind === 'VISUAL'
-            ? {
-                ...step,
-                heading: 'Compare the board',
-                text: 'Find the joined board area.',
-                visualFocus: step.visualFocus
-                  ? {
-                      ...step.visualFocus,
-                      label: 'Recovered board region',
-                      visibleDescription: 'Three connected action tracks cross the centre of the board.',
-                    }
-                  : null,
-              }
-            : { ...step, heading: `English ${step.heading}`, text: `English ${step.text}` })
-        return Response.json({
-          language: 'EN',
-          status: 'READY',
-          lesson: {
-            id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
-            sections: [{ ...localized, title: 'English first chapter', steps: translatedSteps }],
-          },
-          failureCode: null,
-        })
-      }
-      if (path.endsWith('/comprehension')) {
-        return Response.json({ lessonId: 'lesson-1', tasks: [], visualAids: [] })
-      }
-      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
-      return new Response(null, { status: 404 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: {
-        plugins: [router],
-        stubs: { AppShell: { template: '<div><slot /></div>' } },
-      },
-    })
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('English first chapter')
-    expect(wrapper.text()).not.toContain('中文第一节')
-    expect(wrapper.find('[data-testid="lesson-visual-detail"]').exists()).toBe(false)
-
-    await vi.advanceTimersByTimeAsync(2_500)
-    await flushPromises()
-    expect(visualRunReads).toBe(2)
-    expect(wrapper.find('[data-testid="lesson-visual-detail"]').exists()).toBe(false)
-
-    await vi.advanceTimersByTimeAsync(2_500)
-    await flushPromises()
-
-    expect(localizationReads).toBe(3)
-    expect(wrapper.text()).toContain('English first chapter')
-    expect(wrapper.text()).toContain('Three connected action tracks cross the centre of the board.')
-    expect(wrapper.text()).not.toContain('中文第一节')
-    expect(wrapper.text()).not.toContain('The English guide could not be prepared')
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src'))
-      .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
-    wrapper.unmount()
-  })
-
-  it('keeps the completed text lesson readable when visual enrichment fails', async () => {
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json(planFixture('plan-1', 'Text Survives'))
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return Response.json({
-          ...runFixture('plan-1', 'FAILED', 'visual-run'),
-          run: {
-            ...runFixture('plan-1', 'FAILED', 'visual-run').run,
-            lastErrorCode: 'VISUAL_ENRICHMENT_FAILED',
-          },
-          activities: [],
-        })
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        const readable = section(1, '文字讲解仍可读')
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
-          sections: [{
-            ...readable,
-            steps: readable.steps.filter((step) => step.kind !== 'VISUAL'),
-          }],
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
-    })
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('文字讲解仍可读')
-    expect(wrapper.text()).toContain('局部配图没有完成')
-    expect(wrapper.text()).toContain('已发布的文字讲解仍可完整阅读')
-    expect(wrapper.find('[data-testid="private-lesson-reader"]').exists()).toBe(true)
-    await vi.advanceTimersByTimeAsync(10_000)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    wrapper.unmount()
-  })
-
-  it('bounds visual transport failures, keeps the lesson readable, and resumes only after an explicit retry', async () => {
-    let visualRunReads = 0
-    let recovered = false
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Bounded Visuals'))
-      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        if (!recovered) return new Response(null, { status: 503 })
-        return Response.json(runFixture('plan-1', 'COMPLETED', 'visual-run'))
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        return Response.json(lessonFixture('plan-1', '始终可读的文字'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
-    })
-    await flushPromises()
-
-    expect(visualRunReads).toBe(1)
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(visualRunReads).toBe(2)
-    await vi.advanceTimersByTimeAsync(6_000)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(3)
-    expect(wrapper.text()).toContain('始终可读的文字')
-    expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
-    const readsAtStop = visualRunReads
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(visualRunReads).toBe(readsAtStop)
-
-    recovered = true
-    await wrapper.findAll('button').find(button => button.text() === '重试配图状态')!.trigger('click')
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(visualRunReads).toBe(4)
-    expect(wrapper.text()).not.toContain('暂时无法确认最新配图状态')
-    wrapper.unmount()
-  })
-
-  it('makes exhausted visual discovery visible and recovers a visual run that appears after retry', async () => {
-    let visualRunReads = 0
-    let visualReady = false
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Late Visual Run'))
-      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return visualReady
-          ? Response.json(runFixture('plan-1', 'COMPLETED', 'visual-run'))
-          : new Response(null, { status: 404 })
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        return Response.json(lessonFixture('plan-1', '文字讲解不等待配图'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
-    })
-    await flushPromises()
-
-    expect(visualRunReads).toBe(1)
-    expect(wrapper.text()).toContain('文字讲解不等待配图')
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(2)
-    expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
-    const retry = wrapper.findAll('button').find(button => button.text() === '重试配图状态')
-    expect(retry).toBeDefined()
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(visualRunReads).toBe(2)
-
-    visualReady = true
-    await retry!.trigger('click')
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(3)
-    expect(wrapper.text()).toContain('这次没有找到可靠的局部图示')
-    expect(wrapper.text()).not.toContain('暂时无法确认最新配图状态')
-    wrapper.unmount()
-  })
-
-  it('does not keep readable text loading behind a visual status request that never settles', async () => {
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Visual Deadline'))
-      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return await new Promise<Response>(() => undefined)
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        return Response.json(lessonFixture('plan-1', '先读文字再等配图'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
-    })
-    await flushPromises()
-
-    expect(visualRunReads).toBe(1)
-    expect(wrapper.find('[data-testid="private-lesson-reader"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('先读文字再等配图')
-    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('规则答疑')
-
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushPromises()
-    expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
-    expect(wrapper.findAll('button').some(button => button.text() === '重试配图状态')).toBe(false)
-
-    await vi.advanceTimersByTimeAsync(3_000)
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(6_000)
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(3)
-    expect(wrapper.findAll('button').some(button => button.text() === '重试配图状态')).toBe(true)
-    expect(wrapper.text()).toContain('先读文字再等配图')
-    wrapper.unmount()
-  })
-
-  it('bounds a visual terminal settlement whose lesson snapshot never settles and recovers manually', async () => {
-    let visualRunReads = 0
-    let lessonReads = 0
-    let recovered = false
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json(planFixture('plan-1', 'Pending Visual Settlement'))
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return Response.json(runFixture(
-          'plan-1',
-          visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
-          'visual-run',
-        ))
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        lessonReads += 1
-        if (lessonReads > 1 && !recovered) {
-          return await new Promise<Response>(() => undefined)
-        }
-        return Response.json(lessonFixture(
-          'plan-1',
-          recovered ? '手动恢复后的文字终态' : '视觉对账前的可读文字',
-        ))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
-    })
-    await flushPromises()
-
-    expect(visualRunReads).toBe(1)
-    expect(wrapper.text()).toContain('视觉对账前的可读文字')
-    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('规则答疑')
-
-    await vi.advanceTimersByTimeAsync(2_500)
-    await flushPromises()
-    expect(visualRunReads).toBe(2)
-    expect(lessonReads).toBe(2)
-    expect(wrapper.text()).toContain('视觉对账前的可读文字')
-
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushPromises()
-    expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
-
-    await vi.advanceTimersByTimeAsync(4_000)
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(8_000)
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(4)
-    expect(lessonReads).toBe(4)
-    expect(wrapper.text()).toContain('视觉对账前的可读文字')
-    expect(wrapper.findAll('button').some(button => button.text() === '重试配图状态')).toBe(true)
-    const readsAtStop = lessonReads
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(lessonReads).toBe(readsAtStop)
-
-    recovered = true
-    await wrapper.findAll('button').find(button => button.text() === '重试配图状态')!.trigger('click')
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(5)
-    expect(lessonReads).toBe(5)
-    expect(wrapper.text()).toContain('手动恢复后的文字终态')
-    expect(wrapper.text()).not.toContain('暂时无法确认最新配图状态')
-    wrapper.unmount()
-  })
-
-  it('bounds terminal visual lesson-settling failures instead of polling a stale terminal snapshot forever', async () => {
-    let lessonReads = 0
-    let visualRunReads = 0
-    let recovered = false
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Settling Budget'))
-      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return Response.json(runFixture('plan-1', 'COMPLETED', 'visual-run'))
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        lessonReads += 1
-        if (lessonReads > 1 && !recovered) return new Response(null, { status: 503 })
-        return Response.json(lessonFixture('plan-1', recovered ? '对账恢复' : '终态文字'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
-    })
-    await flushPromises()
-
-    expect(visualRunReads).toBe(1)
-    await vi.advanceTimersByTimeAsync(250 + 4_000 + 8_000)
-    await flushPromises()
-    expect(lessonReads).toBe(4)
-    const readsAtStop = lessonReads
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(lessonReads).toBe(readsAtStop)
-
-    recovered = true
-    await wrapper.findAll('button').find(button => button.text() === '重试配图状态')!.trigger('click')
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(wrapper.text()).toContain('对账恢复')
-    expect(visualRunReads).toBe(1)
-    wrapper.unmount()
-  })
-
-  it('preserves the authentication boundary when visual status returns 401', async () => {
-    const loginRequired = vi.fn()
-    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Private Visuals'))
-      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return new Response(null, { status: 401 })
-      }
-      if (path.endsWith('/illustrated-lessons/latest')) {
-        return Response.json(lessonFixture('plan-1', '身份边界内的文字'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
-    })
-    await flushPromises()
-
-    expect(loginRequired).toHaveBeenCalledOnce()
-    expect(wrapper.text()).toContain('身份边界内的文字')
-    expect(wrapper.text()).toContain('请先登录')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(visualRunReads).toBe(1)
-    window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
     wrapper.unmount()
   })
 
@@ -1321,7 +780,6 @@ describe('LessonView progressive reading', () => {
         if (!recovered) return new Response(null, { status })
         return Response.json(runFixture('plan-1', 'COMPLETED', 'teaching-run'))
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.endsWith('/illustrated-lessons/latest')) {
         return Response.json(lessonFixture(
           'plan-1',

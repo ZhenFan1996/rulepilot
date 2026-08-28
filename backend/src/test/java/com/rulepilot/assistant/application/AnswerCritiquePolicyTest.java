@@ -3,13 +3,9 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.GeneratedContentCritic;
-import com.rulepilot.assistant.GeneratedContentCritic.Issue;
-import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
-import com.rulepilot.assistant.GeneratedContentCritic.Review;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
-import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
@@ -85,13 +81,6 @@ class AnswerCritiquePolicyTest {
     }
 
     @Test
-    void allowsOneBoundedCorrectionOnlyWithACompleteQuestionContext() {
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(question(), context())).isTrue();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(null, context())).isFalse();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(question(), null)).isFalse();
-    }
-
-    @Test
     void buildsOneEvidenceBoundSemanticReviewAcrossProseAndStructuredClaims() {
         GeneratedContentCritic.ReviewRequest request = AnswerCritiquePolicy.request(
                 UUID.randomUUID(), question(), context(), answer(), List.of(evidence()));
@@ -118,42 +107,6 @@ class AnswerCritiquePolicyTest {
                 assertThat(claim.citationIds()).containsExactly(chunkId));
         assertThat(request.evidence()).containsExactly(
                 new GeneratedContentCritic.Evidence(chunkId, "Pay first, then resolve; eight divided by two is four."));
-    }
-
-    @Test
-    void convertsConcreteCriticIssuesIntoBoundedRevisionFeedback() {
-        Review review = new Review(true, List.of(
-                new Issue(IssueType.CONTRADICTION, 1, List.of(chunkId), "Reverse the claimed order."),
-                new Issue(IssueType.MISSING_EXCEPTION, 2, List.of(chunkId), "Add the cited exception.")));
-
-        assertThat(AnswerCritiquePolicy.revisionFeedback(review)).containsExactly(
-                "CONTRADICTION: Reverse the claimed order.",
-                "MISSING_EXCEPTION: Add the cited exception.");
-    }
-
-    @Test
-    void mapsCriticClaimsToOnlyThePlayerFieldsThatMayBeRepaired() {
-        Review playerFacing = new Review(true, List.of(
-                new Issue(IssueType.CONTRADICTION, 1, List.of(chunkId), "Correct the core conclusion."),
-                new Issue(IssueType.OVERREACH, 2, List.of(chunkId), "Correct the detailed explanation."),
-                new Issue(IssueType.MISSING_EXCEPTION, 3, List.of(chunkId), "Correct the cited exception.")));
-        Review structuredOnly = new Review(true, List.of(
-                new Issue(IssueType.OVERREACH, 4, List.of(chunkId), "The calculation is not supported.")));
-
-        assertThat(AnswerCritiquePolicy.editablePlayerFacingFields(answer(), playerFacing))
-                .containsExactlyInAnyOrder(
-                        PlayerFacingField.SHORT_VERDICT,
-                        PlayerFacingField.EXPLANATION,
-                        PlayerFacingField.EXCEPTIONS);
-        assertThat(AnswerCritiquePolicy.hasStructuredClaimIssues(answer(), playerFacing)).isFalse();
-        assertThat(AnswerCritiquePolicy.playerFacingRevisionFeedback(answer(), playerFacing))
-                .containsExactly(
-                        "CONTRADICTION: Correct the core conclusion.",
-                        "OVERREACH: Correct the detailed explanation.",
-                        "MISSING_EXCEPTION: Correct the cited exception.");
-        assertThat(AnswerCritiquePolicy.editablePlayerFacingFields(answer(), structuredOnly)).isEmpty();
-        assertThat(AnswerCritiquePolicy.hasStructuredClaimIssues(answer(), structuredOnly)).isTrue();
-        assertThat(AnswerCritiquePolicy.playerFacingRevisionFeedback(answer(), structuredOnly)).isEmpty();
     }
 
     @Test

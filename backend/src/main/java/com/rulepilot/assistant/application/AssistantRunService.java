@@ -251,7 +251,7 @@ public class AssistantRunService implements AssistantRuns {
     private BudgetLimits limitsFor(AssistantRunMode mode, WorkloadDemand workloadDemand) {
         BudgetLimits configured = limitsFor(mode);
         if (workloadDemand == null) return configured;
-        if (mode != AssistantRunMode.TEACHING) {
+        if (mode != AssistantRunMode.TEACHING && mode != AssistantRunMode.TEACHING_PREPARATION) {
             throw new IllegalArgumentException("a workload demand is only available to teaching runs");
         }
         return new BudgetLimits(

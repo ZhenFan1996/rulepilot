@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class AnswerDraftComposerTest {
@@ -132,6 +133,56 @@ class AnswerDraftComposerTest {
         assertThat(result.draft().confidence()).isEqualTo(AnswerConfidence.HIGH);
         assertThat(result.modelRepairs()).isZero();
         assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void finalValidatorFailureProducesOneCompleteModelReplacementWithoutFieldSplicing() {
+        UUID chunkId = UUID.randomUUID();
+        ModelDraft rejected = answerableDraft(
+                "旧结论",
+                "旧解释",
+                List.of(chunkId),
+                List.of("旧例外"),
+                "LOW");
+        ModelDraft replacement = answerableDraft(
+                "修正后的完整结论",
+                "修正后的完整解释直接由同一条证据支持。",
+                List.of(chunkId),
+                List.of(),
+                "HIGH");
+        AtomicReference<List<String>> feedbackReceived = new AtomicReference<>();
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return rejected;
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                assertThat(previousDraft).isEqualTo(rejected);
+                revisions.incrementAndGet();
+                feedbackReceived.set(List.copyOf(feedback));
+                return replacement;
+            }
+        };
+        AnswerDraftComposer composer = new AnswerDraftComposer(new AnswerModelGateway(
+                model, new PermissiveRateLimiter(), new ImmediateAuditedAgentInvocations()));
+
+        AnswerDraftComposer.Result result = composer.repairAfterPublicationFailure(
+                UUID.randomUUID(),
+                "player",
+                null,
+                request(chunkId),
+                rejected,
+                new IllegalArgumentException("CITATION_OWNERSHIP: citation belongs to another source"));
+
+        assertThat(result.ready()).isTrue();
+        assertThat(result.draft()).isEqualTo(replacement);
+        assertThat(result.modelRepairs()).isEqualTo(1);
+        assertThat(revisions).hasValue(1);
+        assertThat(String.join(" ", feedbackReceived.get()))
+                .contains("CITATION_OWNERSHIP", "COMPLETE replacement", "field patch");
     }
 
     private ModelRequest request(UUID chunkId) {

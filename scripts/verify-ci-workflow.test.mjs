@@ -91,6 +91,18 @@ test('production recommendation verifies one deployed main release without ownin
     /testMatch:\s*'production-recommendation-journey\.spec\.ts'/)
   assert.match(productionRecommendationSpec,
     /production returns one persisted player-visible recommendation slate/)
+  assert.match(productionRecommendationSpec,
+    /expect\(report\.recommendationModelCalls,[\s\S]{0,240}?\.toBe\(2\)/)
+  assert.match(productionRecommendationSpec,
+    /expect\(report\.recommendationCatalogCalls,[\s\S]{0,240}?\.toBe\(1\)/)
+  assert.match(productionRecommendationSpec,
+    /expect\(report\.recommendationWebResearchCalls,[\s\S]{0,240}?\.toBe\(0\)/)
+  assert.match(productionRecommendationSpec,
+    /expect\(report\.recommendationSloMet,[\s\S]{0,240}?\.toBe\(true\)/)
+  assert.match(productionRecommendationSpec,
+    /report\.recommendationPersistedTerminalMs = terminal\.elapsedMs/)
+  assert.match(productionRecommendationSpec,
+    /report\.recommendationRenderedSlateMs = slate\.elapsedMs/)
   assert.doesNotMatch(productionRecommendationSpec,
     /readyTeaching|RulebookCandidate|Teaching|Lesson|Answer|official-imports|teaching-plans|answers\/stream/)
   assert.doesNotMatch(productionRecommendationSpec,

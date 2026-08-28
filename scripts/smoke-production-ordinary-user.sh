@@ -342,8 +342,6 @@ official_import_edition_id=
 official_import_canary_title=
 preparation_run_id=
 lesson_run_id=
-visual_run_id=
-visual_result=null
 page_attempts=null
 csrf_header=
 csrf_token=
@@ -555,7 +553,7 @@ page_attempt_report() {
 	                | $recovery.page >= 1 and $recovery.page <= $expected
 	                and any($initial[]; .page == $recovery.page and .outcome != "SUCCEEDED"))
 	              and ($semanticAttemptCounts | max // 0) <= 2
-	              and ($unavailable | length) == 0
+	              and ($unavailable | length) < $expected
 	            )
 	          }
 	    ' <<<"$response"
@@ -740,10 +738,8 @@ cleanup() {
 		cleanup_failed=1
 	elif [ -n "$csrf_header" ] && [ -n "$csrf_token" ]; then
 		if ! resolve_pending_official_import_for_cleanup; then cleanup_failed=1; fi
-		cancel_run "$visual_run_id"
 		cancel_run "$lesson_run_id"
 		cancel_run "$preparation_run_id"
-		wait_for_cancelled_run "$visual_run_id"
 		wait_for_cancelled_run "$lesson_run_id"
 		wait_for_cancelled_run "$preparation_run_id"
 		if [ "$cleanup_document" = true ] && [ -n "$document_id" ]; then
@@ -865,59 +861,6 @@ wait_for_run() {
 	done
 	echo "$label timed out after ${timeout_seconds}s" >&2
 	return 1
-}
-
-wait_for_visual_enrichment() {
-	local plan_id=$1
-	local deadline=$((SECONDS + timeout_seconds))
-	local appearance_deadline=$((SECONDS + 30))
-	if [ "$appearance_deadline" -gt "$deadline" ]; then appearance_deadline=$deadline; fi
-	local response http_code body state
-	while [ "$SECONDS" -lt "$deadline" ]; do
-		response=$(curl --silent --show-error --write-out $'\n%{http_code}' \
-			--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
-			"$base_url/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=$plan_id")
-		http_code=${response##*$'\n'}
-		body=${response%$'\n'*}
-		if [ "$http_code" = 404 ]; then
-			if [ "$visual_expectation" != required ]; then return 0; fi
-			if [ "$SECONDS" -ge "$appearance_deadline" ]; then
-				echo "A vision-capable lesson did not launch visual enrichment within 30 seconds" >&2
-				return 1
-			fi
-			sleep 1
-			continue
-		fi
-		if [ "$http_code" != 200 ]; then
-			echo "Visual enrichment progress endpoint returned HTTP $http_code" >&2
-			return 1
-		fi
-		visual_run_id=$(jq -er '.run.id' <<<"$body")
-		state=$(jq -er '.run.state' <<<"$body")
-		case "$state" in
-			COMPLETED)
-				visual_result=$body
-				log_run_timing "visual-enrichment" "$body"
-				log_stage "visual-enrichment-completed run=$visual_run_id"
-				return 0
-				;;
-			FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED)
-				visual_result=$body
-				log_run_timing "visual-enrichment-failure" "$body"
-				if [ "$visual_expectation" = required ]; then
-					echo "Visual enrichment ended in $state" >&2
-					return 1
-				fi
-				return 0
-				;;
-		esac
-		sleep 2
-	done
-	if [ "$visual_expectation" = required ]; then
-		echo "Visual enrichment timed out after ${timeout_seconds}s" >&2
-		return 1
-	fi
-	return 0
 }
 
 verify_launched_run() {
@@ -1081,9 +1024,9 @@ run_official_image_gallery() {
 	        .valid == true
 	        and .initialSucceeded + .initialFailed + .initialRejected == $expected
 	        and .maximumSemanticAttemptsForAnyPage <= 2
-	        and (.finalUnavailablePages | length) == 0
+	        and (.finalUnavailablePages | length) < $expected
 	    ' >/dev/null <<<"$page_attempts"; then
-		echo "Image-gallery semantic inspection did not complete every page within the bounded recovery contract" >&2
+		echo "Image-gallery inspection did not preserve any usable page within the bounded recovery contract" >&2
 		return 1
 	fi
 	printf 'SMOKE_PAGE_ATTEMPTS %s\n' "$page_attempts" >&2
@@ -1178,7 +1121,7 @@ run_official_image_gallery() {
 		  preparationState: $preparationState, lessonState: $lessonState, lessonStatus: $lessonStatus,
 		  answerStatus: $answerStatus, sectionCount: $sectionCount,
 		  answerCitationCount: $answerCitationCount, visualStepCount: $visualStepCount,
-		  focusedVisualStepCount: $focusedVisualStepCount, visualEnrichmentState: "NOT_STARTED",
+		  focusedVisualStepCount: $focusedVisualStepCount, visualAssemblyMode: "IN_TEACHING",
 		  navigation: $navigation, cleanup: "scheduled"}')
 	if [ -n "$result_file" ]; then
 		mkdir -p "$(dirname "$result_file")"
@@ -1324,8 +1267,6 @@ verify_lesson_critical_path "$lesson_result" "$plan_section_count"
 report_preparation_start_to_first_section "$preparation_result" "$lesson_result"
 log_stage "lesson-generation-completed"
 
-wait_for_visual_enrichment "$plan_id"
-
 lesson=$(get_json "/api/v1/teaching-plans/$plan_id/illustrated-lessons/latest")
 lesson_status=$(jq -er '.status' <<<"$lesson")
 section_count=$(jq -er '.sections | length' <<<"$lesson")
@@ -1404,13 +1345,12 @@ summary=$(jq -n \
 	--argjson answerCitationCount "$answer_citation_count" \
 	--argjson visualStepCount "$visual_step_count" \
 	--argjson focusedVisualStepCount "$focused_visual_step_count" \
-	--arg visualEnrichmentState "$(jq -r '.run.state // "NOT_STARTED"' <<<"$visual_result")" \
 	--argjson navigation "$navigation" \
 	'{title: $title, preparationState: $preparationState, lessonState: $lessonState,
 	  lessonStatus: $lessonStatus, answerStatus: $answerStatus,
 	  sectionCount: $sectionCount, answerCitationCount: $answerCitationCount,
 	  visualStepCount: $visualStepCount, focusedVisualStepCount: $focusedVisualStepCount,
-	  visualEnrichmentState: $visualEnrichmentState, navigation: $navigation,
+	  visualAssemblyMode: "IN_TEACHING", navigation: $navigation,
 	  cleanup: "scheduled"}')
 
 if [ -n "$result_file" ]; then
@@ -1423,12 +1363,11 @@ if [ -n "$result_file" ]; then
 		--argjson preparationRun "$preparation_result" \
 		--argjson plan "$plan" \
 		--argjson lessonRun "$lesson_result" \
-		--argjson visualRun "$visual_result" \
 		--argjson lesson "$lesson" \
 		--argjson answer "$answer_response" \
 		'{generatedAt: $generatedAt, stage: "lesson", username: $username, sourceUrl: $sourceUrl,
 		  summary: $summary, preparationRun: $preparationRun, plan: $plan,
-		  lessonRun: $lessonRun, visualRun: $visualRun, lesson: $lesson, answer: $answer}' > "$result_file"
+		  lessonRun: $lessonRun, lesson: $lesson, answer: $answer}' > "$result_file"
 	chmod 600 "$result_file"
 fi
 

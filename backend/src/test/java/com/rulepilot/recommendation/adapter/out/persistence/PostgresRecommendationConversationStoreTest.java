@@ -17,6 +17,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import java.math.BigDecimal;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
+import com.rulepilot.recommendation.application.RecommendationConversationStore.PublishedTurn;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -294,7 +295,8 @@ class PostgresRecommendationConversationStoreTest {
                         new DialogueMessage("assistant", "我记住了这组条件。")),
                 List.of(),
                 List.of(301),
-                List.of(response.games().getFirst().game()));
+                List.of(response.games().getFirst().game()),
+                new PublishedTurn(clientTurnId, "zh-CN", response));
         assertThat(store.completeTurn(
                         conversationId,
                         "alice",

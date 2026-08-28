@@ -29,8 +29,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
@@ -40,7 +39,7 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentWorkloadTest {
 
     @Test
-    void completesNineteenConcurrentSectionsWithinTheAdmittedCallDemand() {
+    void completesNineteenCheckpointedSectionsWithinTheAdmittedCallDemand() {
         UUID versionId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         Map<Integer, UUID> searchEvidenceIds = IntStream.rangeClosed(1, 19)
@@ -68,7 +67,6 @@ class GroundedTeachingAgentWorkloadTest {
                 invocations,
                 visualFacts,
                 3,
-                3,
                 refiner,
                 VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
         TeachingPlan plan = plan(versionId);
@@ -79,7 +77,12 @@ class GroundedTeachingAgentWorkloadTest {
 
         assertThat(lesson.sections()).hasSize(19).allSatisfy(section ->
                 assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED));
-        assertThat(model.maximumConcurrentCalls()).isGreaterThanOrEqualTo(3);
+        assertThat(model.maximumConcurrentCalls()).isOne();
+        List<String> expectedCallOrder = new java.util.ArrayList<>(IntStream.rangeClosed(1, 19)
+                .mapToObj(position -> "topic-" + position)
+                .toList());
+        expectedCallOrder.add(7, "topic-7");
+        assertThat(model.callOrder()).containsExactlyElementsOf(expectedCallOrder);
         assertThat(model.attempts("topic-7")).isEqualTo(2);
         assertThat(tools.searches()).isEqualTo(57);
         assertThat(tools.visualPageReads()).isEqualTo(19);
@@ -88,7 +91,7 @@ class GroundedTeachingAgentWorkloadTest {
         assertThat(invocations.usedModelCalls()).isEqualTo(21).isLessThanOrEqualTo(demand.requiredModelCalls());
         // Admission reserves the initial image interpretation plus one contract repair or transient replay per page.
         // Runtime availability and cached facts reduce work.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 115));
+        assertThat(demand).isEqualTo(new WorkloadDemand(95, 441));
     }
 
     static TeachingPlan plan(UUID versionId) {
@@ -198,21 +201,19 @@ class GroundedTeachingAgentWorkloadTest {
 
     static final class WorkflowModel implements TeachingLessonModel {
         private final Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
+        private final List<String> callOrder = new CopyOnWriteArrayList<>();
         private final AtomicInteger active = new AtomicInteger();
         private final AtomicInteger maximumActive = new AtomicInteger();
-        private final CountDownLatch concurrentStart = new CountDownLatch(3);
 
         @Override
         public SectionDraft compose(SectionRequest request) {
             int running = active.incrementAndGet();
             maximumActive.accumulateAndGet(running, Math::max);
             try {
-                if (Set.of("topic-2", "topic-3", "topic-4").contains(request.topicKey())) {
-                    concurrentStart.countDown();
-                    if (!concurrentStart.await(2, TimeUnit.SECONDS)) {
-                        throw new IllegalStateException("section calls did not execute concurrently");
-                    }
-                }
+                // Checkpointed publication and synchronous visual enrichment deliberately compose one section at a
+                // time. Preserve the actual call order instead of manufacturing a failure while waiting for an
+                // obsolete concurrent batch.
+                callOrder.add(request.topicKey());
                 int attempt = attempts.computeIfAbsent(request.topicKey(), ignored -> new AtomicInteger())
                         .incrementAndGet();
                 if (request.topicKey().equals("topic-7") && attempt == 1) {
@@ -229,9 +230,6 @@ class GroundedTeachingAgentWorkloadTest {
                                 TeachingMove.DO,
                                 "Perform the bounded action described by the cited source.",
                                 List.of(evidenceId))));
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("concurrent section fixture was interrupted", interrupted);
             } finally {
                 active.decrementAndGet();
             }
@@ -243,6 +241,10 @@ class GroundedTeachingAgentWorkloadTest {
 
         int maximumConcurrentCalls() {
             return maximumActive.get();
+        }
+
+        List<String> callOrder() {
+            return List.copyOf(callOrder);
         }
     }
 

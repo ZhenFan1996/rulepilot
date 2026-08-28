@@ -65,25 +65,6 @@ class TeachingGenerationConfiguration {
     }
 
     /**
-     * Keeps optional crop discovery from occupying the only lesson-generation worker on a small host. A player can
-     * start the next text-first lesson while previously published chapters continue to gain verified illustrations.
-     */
-    @Bean(name = "visualEnrichmentExecutor")
-    ThreadPoolTaskExecutor visualEnrichmentExecutor(
-            @Value("${rulepilot.teaching.visual-enrichment.core-pool-size:1}") int corePoolSize,
-            @Value("${rulepilot.teaching.visual-enrichment.max-pool-size:1}") int maxPoolSize,
-            @Value("${rulepilot.teaching.visual-enrichment.queue-capacity:2}") int queueCapacity) {
-        var executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(corePoolSize);
-        executor.setMaxPoolSize(maxPoolSize);
-        executor.setQueueCapacity(queueCapacity);
-        executor.setThreadNamePrefix("visual-enrichment-");
-        executor.setWaitForTasksToCompleteOnShutdown(false);
-        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
-        return executor;
-    }
-
-    /**
      * Vision calls are deliberately isolated from base lesson generation. Each page request owns its source image,
      * provider response, validation, and persistence boundary. This pool serves post-publication positioning and
      * complete visual audits; Teaching page catalog calls own their bounded lane in the cataloger.

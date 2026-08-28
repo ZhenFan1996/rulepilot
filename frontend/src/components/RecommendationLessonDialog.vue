@@ -10,15 +10,13 @@ import {
 } from '@/lib/liveLesson'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
-import { mergeTeachingRunProgress, teachingActivityText, type TeachingRunProgress } from '@/lib/teachingProgress'
 import {
-  fetchVisualStatusWithDeadline,
-  VISUAL_LESSON_SETTLING_READS,
-  VISUAL_REFRESH_FAILURE_LIMIT,
-  VISUAL_RUN_DISCOVERY_LIMIT,
-  visualEnrichmentResult,
-  visualRunIsTerminal,
-} from '@/lib/visualEnrichment'
+  mergeTeachingRunProgress,
+  teachingActivityText,
+  teachingRunPresentationState,
+  teachingRunStopReasonText,
+  type TeachingRunProgress,
+} from '@/lib/teachingProgress'
 
 interface TeachingPlan {
   id: string
@@ -88,42 +86,25 @@ const { locale } = useLocale()
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const run = ref<TeachingRunProgress | null>(null)
-const visualRun = ref<TeachingRunProgress | null>(null)
 const loading = ref(false)
 const error = ref(false)
 const refreshWarning = ref(false)
 const refreshStopped = ref(false)
-const visualRefreshStopped = ref(false)
+const refreshStopReason = ref<'identity' | 'response-identity' | 'service' | null>(null)
 const dialog = ref<HTMLElement | null>(null)
 let requestSequence = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 let disposed = false
 let activeController: AbortController | null = null
-let activeVisualController: AbortController | null = null
 let missingRunRefreshes = 0
-let missingVisualRunRefreshes = 0
 let refreshFailures = 0
-let visualRefreshFailures = 0
-let visualRefreshDelay = 1_500
-let visualLessonSettlingReads = 0
-let visualLessonUnacceptedSnapshots = 0
-let visualDiscoveryScope: string | null = null
-let observedTerminalVisualRunId: string | null = null
-let visualIdentityBlocked = false
 
 const MIN_REFRESH_DELAY_MS = 250
 const REFRESH_FAILURE_LIMIT = 3
 const MISSING_RUN_REFRESH_LIMIT = 2
-const VISUAL_LESSON_UNACCEPTED_LIMIT = 4
 
 class IdentityBoundaryError extends Error {}
 class ResponseIdentityError extends Error {}
-
-type VisualRunRead =
-  | { outcome: 'PRESENT'; value: TeachingRunProgress }
-  | { outcome: 'ABSENT' }
-  | { outcome: 'IDENTITY' }
-  | { outcome: 'FAILED' }
 
 useModalFocus({
   dialog,
@@ -143,8 +124,12 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   cancelledReadable: (count: number) => `本轮讲解生成已取消；已发布的 ${count} 章可读草稿仍然保留。`, cancelledEmpty: '本轮讲解生成已取消，目前还没有可读章节。',
   noReadable: '本轮生成已经结束，但还没有具备可用规则依据的章节。',
   progressAria: (done: number, total: number) => `${done} / ${total} 章已通过独立规则依据核对`,
-  refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。', ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
-  visualActive: '正在从规则书中挑选能帮助上桌的局部图示。', visualAdded: (count: number) => `已有 ${count} 节具备图示。`, visualNone: '这次没有找到可靠的局部图示；文字讲解仍可完整阅读。', visualFailed: '局部配图没有完成；已发布的文字讲解仍可完整阅读。', visualPartial: (count: number) => `已有 ${count} 节具备图示；后续配图没有完成，文字讲解仍可完整阅读。`, visualRefresh: '暂时无法确认最新配图状态；文字讲解仍可阅读。',
+  refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。',
+  refreshIdentity: '登录会话已失效，已停止刷新；已显示章节仍然保留。重新登录后可以直接重试。',
+  refreshResponseIdentity: '服务器返回了另一个讲解任务的状态，已停止合并；当前已显示章节仍然保留。',
+  refreshService: '有限刷新重试已用完，已停止自动刷新；已显示章节仍然保留，可以手动重试。',
+  ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
+  failureBoundary: '一次返回被拒或一次服务调用失败，只表示正在进行有限修正或重试，不等于本轮失败。修正用尽后，单页不可读、单章证据不足或单章配图不可用只会让对应内容缺失；已发布正文继续保留。只有来源整体不可用、没有任何可验证规则锚点、最终无章可发布、用户取消或会话失效、到达总时限或调用预算，以及持久化/服务在有限恢复后仍失败时，本轮才会停止。',
 } : {
   dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', updates: 'Guide updates', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
   draft: '{done} / {total} chapters passed citation-ownership, rulebook-version, and structure checks; the remaining chapters are still being generated.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only chapters with usable rulebook support.',
@@ -156,31 +141,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   cancelledReadable: (count: number) => `This guide generation run was cancelled. ${count} readable ${count === 1 ? 'chapter draft remains' : 'chapter drafts remain'} available.`, cancelledEmpty: 'This guide generation run was cancelled before a readable chapter was ready.',
   noReadable: 'This generation run finished without a chapter backed by usable rulebook evidence.',
   progressAria: (done: number, total: number) => `${done} of ${total} chapters independently supported by rulebook evidence`,
-  refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.', ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
-  visualActive: 'Selecting focused rulebook visuals that help at the table.', visualAdded: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals.`, visualNone: 'No reliable focused visual was found; the text guide remains fully readable.', visualFailed: 'Focused visual enrichment did not finish. The published text guide remains fully readable.', visualPartial: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals; later visual enrichment did not finish, and the text guide remains fully readable.`, visualRefresh: 'The latest visual status is unavailable. The text guide remains readable.',
+  refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.',
+  refreshIdentity: 'The signed-in session expired, so refreshing stopped. Displayed chapters remain available; sign in and retry.',
+  refreshResponseIdentity: 'The server returned status for a different guide, so merging stopped. Displayed chapters remain available.',
+  refreshService: 'The bounded refresh retries were exhausted, so automatic refresh stopped. Displayed chapters remain available; retry manually.',
+  ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
+  failureBoundary: 'One rejected response or service call starts a bounded correction or retry; it is not a failed run. After that recovery is exhausted, an unreadable page, unsupported chapter, or unavailable chapter visual omits only that local content and preserves published text. The run stops only when the whole source is unavailable, no verifiable rule anchor exists, no chapter is publishable, the player cancels or the session expires, the wall-time or call budget is exhausted, or persistence/service recovery is exhausted.',
 })
 
 const active = computed(() => teachingRunIsActive(run.value?.run.state))
-const visualState = computed(() => visualEnrichmentResult(
-  visualRun.value,
-  teachingRunIsActive(visualRun.value?.run.state),
-))
-const visualActive = computed(() => visualState.value.outcome === 'ACTIVE')
-const visualFailed = computed(() => ['FAILED', 'PARTIAL'].includes(visualState.value.outcome))
-const visualStatusText = computed(() => {
-  if (visualRefreshStopped.value) return copy.value.visualRefresh
-  const current = visualState.value
-  if (current.outcome === 'ABSENT') return ''
-  if (current.outcome === 'ACTIVE') return copy.value.visualActive
-  if (current.outcome === 'FAILED') return copy.value.visualFailed
-  if (current.outcome === 'PARTIAL') return copy.value.visualPartial(current.addedSectionCount)
-  if (current.outcome === 'EMPTY') return copy.value.visualNone
-  return copy.value.visualAdded(current.addedSectionCount)
-})
-const visualEvidenceExpected = computed(() => plan.value?.sections.some(
-  section => section.visualEvidenceRecommended,
-) === true)
-const teachingRunTerminal = computed(() => visualRunIsTerminal(run.value?.run.state))
 const supportedChapterCount = computed(() => lesson.value?.sections
   .filter(section => section.evidenceStatus === 'SUPPORTED').length ?? 0)
 const citedDraftChapterCount = computed(() => lesson.value?.sections
@@ -188,25 +157,27 @@ const citedDraftChapterCount = computed(() => lesson.value?.sections
 const readableChapterCount = computed(() => supportedChapterCount.value + citedDraftChapterCount.value)
 const teachingStatusPresentation = computed(() => {
   if (!plan.value || !lesson.value) return { text: '', tone: 'active' as const }
-  const state = run.value?.run.state
+  const state = teachingRunPresentationState(run.value)
   const interpolate = (template: string) => template
     .replace('{done}', String(supportedChapterCount.value))
     .replace('{total}', String(plan.value!.sections.length))
 
   if (!run.value) return { text: interpolate(copy.value.syncing), tone: 'active' as const }
   if (state === 'FAILED') {
+    const reason = teachingRunStopReasonText(run.value, locale.value)
     return {
-      text: readableChapterCount.value
+      text: `${readableChapterCount.value
         ? copy.value.failedReadable(readableChapterCount.value)
-        : copy.value.failedEmpty,
+        : copy.value.failedEmpty}${reason ? ` ${reason}` : ''}`,
       tone: 'failed' as const,
     }
   }
   if (state === 'CANCELLED') {
+    const reason = teachingRunStopReasonText(run.value, locale.value)
     return {
-      text: readableChapterCount.value
+      text: `${readableChapterCount.value
         ? copy.value.cancelledReadable(readableChapterCount.value)
-        : copy.value.cancelledEmpty,
+        : copy.value.cancelledEmpty}${reason ? ` ${reason}` : ''}`,
       tone: 'cancelled' as const,
     }
   }
@@ -243,6 +214,13 @@ const activityText = computed(() => {
   if (!plan.value || !run.value?.activities.length) return ''
   return teachingActivityText(plan.value, run.value.activities, run.value.activities.at(-1), locale.value)
 })
+const refreshMessage = computed(() => refreshStopReason.value === 'identity'
+  ? copy.value.refreshIdentity
+  : refreshStopReason.value === 'response-identity'
+    ? copy.value.refreshResponseIdentity
+    : refreshStopReason.value === 'service'
+      ? copy.value.refreshService
+      : copy.value.refresh)
 
 function pageImageUrl(page: number) {
   return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image` : ''
@@ -316,186 +294,16 @@ async function optionalJson<T>(path: string, signal: AbortSignal): Promise<T | n
   return await response.json() as T
 }
 
-async function readVisualRun(path: string, signal: AbortSignal): Promise<VisualRunRead> {
-  try {
-    const response = await fetchVisualStatusWithDeadline(path, { credentials: 'include', signal })
-    if (response.status === 401 || response.status === 403) return { outcome: 'IDENTITY' }
-    if (response.status === 404) return { outcome: 'ABSENT' }
-    if (!response.ok) return { outcome: 'FAILED' }
-    return { outcome: 'PRESENT', value: await response.json() as TeachingRunProgress }
-  } catch (caught) {
-    if (isAbortError(caught)) throw caught
-    return { outcome: 'FAILED' }
-  }
-}
-
-function resetVisualLifecycle(clearRun = true) {
-  activeVisualController?.abort()
-  activeVisualController = null
-  if (clearRun) visualRun.value = null
-  missingVisualRunRefreshes = 0
-  visualRefreshFailures = 0
-  visualRefreshDelay = 1_500
-  visualLessonSettlingReads = 0
-  visualLessonUnacceptedSnapshots = 0
-  visualDiscoveryScope = null
-  observedTerminalVisualRunId = null
-  visualIdentityBlocked = false
-  visualRefreshStopped.value = false
-}
-
-function syncVisualDiscoveryScope(planId: string) {
-  const nextScope = run.value ? `${planId}:${run.value.run.id}` : null
-  if (visualDiscoveryScope === nextScope) return
-  activeVisualController?.abort()
-  activeVisualController = null
-  const replacingRun = visualDiscoveryScope !== null && visualDiscoveryScope !== nextScope
-  visualDiscoveryScope = nextScope
-  missingVisualRunRefreshes = 0
-  visualRefreshFailures = 0
-  visualRefreshDelay = 1_500
-  visualLessonSettlingReads = 0
-  visualLessonUnacceptedSnapshots = 0
-  observedTerminalVisualRunId = null
-  visualIdentityBlocked = false
-  visualRefreshStopped.value = false
-  if (replacingRun) visualRun.value = null
-}
-
-function acceptVisualRun(incoming: TeachingRunProgress) {
-  visualRun.value = mergeTeachingRunProgress(visualRun.value, incoming)
-  missingVisualRunRefreshes = 0
-  visualRefreshFailures = 0
-  visualRefreshDelay = 1_500
-  if (visualRunIsTerminal(visualRun.value?.run.state)
-    && observedTerminalVisualRunId !== visualRun.value?.run.id) {
-    observedTerminalVisualRunId = visualRun.value!.run.id
-    visualLessonSettlingReads = VISUAL_LESSON_SETTLING_READS
-    visualLessonUnacceptedSnapshots = 0
-  }
-}
-
-function visualDiscoveryPending() {
-  return teachingRunTerminal.value
-    && visualEvidenceExpected.value
-    && !visualRun.value
-    && missingVisualRunRefreshes < VISUAL_RUN_DISCOVERY_LIMIT
-}
-
-function visualRunReadPending() {
-  if (visualRefreshStopped.value
-    || visualIdentityBlocked
-    || visualRefreshFailures >= VISUAL_REFRESH_FAILURE_LIMIT) return false
-  if (visualRun.value) {
-    return visualActive.value && missingVisualRunRefreshes < VISUAL_RUN_DISCOVERY_LIMIT
-  }
-  return visualDiscoveryPending()
-}
-
-function isCurrentVisualRequest(
-  request: number,
-  planId: string,
-  scope: string,
-  controller: AbortController,
-) {
-  return isCurrentGeneration(request, planId)
-    && activeVisualController === controller
-    && visualDiscoveryScope === scope
-    && teachingRunTerminal.value
-}
-
-async function refreshVisualRun(
-  request: number,
-  planId: string,
-  scope: string,
-  coreSnapshotAccepted: Promise<boolean>,
-) {
-  const controller = new AbortController()
-  activeVisualController = controller
-  let nextDelay = 1_500
-  try {
-    const visualRunRead = await readVisualRun(
-      `/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(planId)}`,
-      controller.signal,
-    )
-    if (!await coreSnapshotAccepted) return
-    if (!isCurrentVisualRequest(request, planId, scope, controller)) return
-
-    if (visualRunRead.outcome === 'PRESENT' && visualRunRead.value.run.subjectId !== planId) {
-      visualIdentityBlocked = true
-      visualRefreshStopped.value = true
-      return
-    }
-    if (visualRunRead.outcome === 'IDENTITY') {
-      visualIdentityBlocked = true
-      visualRefreshStopped.value = true
-      notifyLoginRequired()
-      return
-    }
-    if (visualRunRead.outcome === 'PRESENT') {
-      acceptVisualRun(visualRunRead.value)
-      return
-    }
-    if (visualRunRead.outcome === 'ABSENT') {
-      missingVisualRunRefreshes += 1
-      visualRefreshFailures = 0
-      visualRefreshDelay = 1_500
-      if (missingVisualRunRefreshes >= VISUAL_RUN_DISCOVERY_LIMIT) {
-        visualRefreshStopped.value = true
-      }
-      return
-    }
-
-    visualRefreshFailures += 1
-    const bodySnapshotPending = active.value || teachingLessonNeedsFinalSnapshot(
-      run.value?.run.state,
-      lesson.value?.status,
-    )
-    nextDelay = bodySnapshotPending
-      ? 1_500
-      : Math.min(12_000, 3_000 * 2 ** (visualRefreshFailures - 1))
-    visualRefreshDelay = nextDelay
-    if (visualRefreshFailures >= VISUAL_REFRESH_FAILURE_LIMIT) {
-      visualRefreshStopped.value = true
-    }
-  } catch (caught) {
-    if (!isAbortError(caught) && isCurrentVisualRequest(request, planId, scope, controller)) {
-      visualRefreshFailures += 1
-      if (visualRefreshFailures >= VISUAL_REFRESH_FAILURE_LIMIT) {
-        visualRefreshStopped.value = true
-      }
-    }
-  } finally {
-    if (activeVisualController === controller) activeVisualController = null
-    if (isCurrentGeneration(request, planId)
-      && visualDiscoveryScope === scope
-      && activeController === null
-      && timer === null) {
-      scheduleRefresh(request, planId, nextDelay)
-    }
-  }
-}
-
-function startVisualRefresh(request: number, planId: string, coreSnapshotAccepted: Promise<boolean>) {
-  if (activeVisualController || !visualRunReadPending() || !visualDiscoveryScope) return
-  void refreshVisualRun(request, planId, visualDiscoveryScope, coreSnapshotAccepted)
-}
-
 function resetRefreshBudgets() {
   refreshFailures = 0
   refreshStopped.value = false
+  refreshStopReason.value = null
 }
 
 function retryRefresh() {
   if (!props.open || !props.planId) return
   resetRefreshBudgets()
   missingRunRefreshes = 0
-  missingVisualRunRefreshes = 0
-  visualRefreshFailures = 0
-  visualRefreshDelay = MIN_REFRESH_DELAY_MS
-  visualLessonUnacceptedSnapshots = 0
-  visualIdentityBlocked = false
-  visualRefreshStopped.value = false
   refreshWarning.value = false
   scheduleRefresh(requestSequence, props.planId, MIN_REFRESH_DELAY_MS)
 }
@@ -509,7 +317,6 @@ async function load() {
     lesson.value = null
     run.value = null
     missingRunRefreshes = 0
-    resetVisualLifecycle()
   }
   resetRefreshBudgets()
   const readableSnapshot = acceptInitialSnapshot(planId)
@@ -536,7 +343,6 @@ async function load() {
     run.value = incomingRun
       ? mergeTeachingRunProgress(run.value?.run.id === incomingRun.run.id ? run.value : null, incomingRun)
       : null
-    syncVisualDiscoveryScope(planId)
     if (incomingRun) missingRunRefreshes = 0
     loaded = true
   } catch (caught) {
@@ -545,6 +351,9 @@ async function load() {
       if (readableSnapshot) refreshWarning.value = true
       else error.value = true
       refreshStopped.value = caught instanceof IdentityBoundaryError || caught instanceof ResponseIdentityError
+      refreshStopReason.value = caught instanceof IdentityBoundaryError
+        ? 'identity'
+        : caught instanceof ResponseIdentityError ? 'response-identity' : null
       controller.abort()
     }
   } finally {
@@ -552,8 +361,7 @@ async function load() {
       activeController = null
       loading.value = false
       if (loaded || readableSnapshot) {
-        if (visualDiscoveryPending()) visualRefreshDelay = MIN_REFRESH_DELAY_MS
-        scheduleRefresh(request, planId, refreshWarning.value ? 4_000 : visualDiscoveryPending() ? MIN_REFRESH_DELAY_MS : 1_500)
+        scheduleRefresh(request, planId, refreshWarning.value ? 4_000 : 1_500)
       }
     }
   }
@@ -563,19 +371,8 @@ async function refresh(request: number, planId: string) {
   if (!isCurrentGeneration(request, planId)) return
   const controller = new AbortController()
   activeController = controller
-  const settlingLessonRead = visualLessonSettlingReads > 0
-  let acceptedSettlingLesson = false
   let nextDelay = 1_500
-  let resolveCoreSnapshot!: (accepted: boolean) => void
-  let coreSnapshotResolved = false
-  const coreSnapshotAccepted = new Promise<boolean>((resolve) => { resolveCoreSnapshot = resolve })
-  const settleCoreSnapshot = (accepted: boolean) => {
-    if (coreSnapshotResolved) return
-    coreSnapshotResolved = true
-    resolveCoreSnapshot(accepted)
-  }
   try {
-    startVisualRefresh(request, planId, coreSnapshotAccepted)
     const [incomingLesson, incomingRun] = await Promise.all([
       optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(planId)}/illustrated-lessons/latest`, controller.signal),
       optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`, controller.signal),
@@ -586,46 +383,29 @@ async function refresh(request: number, planId: string) {
     }
     if (incomingLesson) {
       lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
-      if (settlingLessonRead && visualLessonSettlingReads > 0) {
-        visualLessonSettlingReads -= 1
-        visualLessonUnacceptedSnapshots = 0
-        acceptedSettlingLesson = true
-      }
-    } else if (settlingLessonRead) {
-      visualLessonUnacceptedSnapshots += 1
-      if (visualLessonUnacceptedSnapshots >= VISUAL_LESSON_UNACCEPTED_LIMIT) {
-        visualRefreshStopped.value = true
-      }
     }
     run.value = mergeTeachingRunProgress(run.value, incomingRun)
-    syncVisualDiscoveryScope(planId)
     if (incomingRun) missingRunRefreshes = 0
-    settleCoreSnapshot(true)
     refreshFailures = 0
-    refreshWarning.value = settlingLessonRead && !acceptedSettlingLesson
+    refreshWarning.value = false
   } catch (caught) {
-    settleCoreSnapshot(false)
-    activeVisualController?.abort()
     if (!isAbortError(caught) && isCurrentRequest(request, planId, controller)) {
       if (caught instanceof IdentityBoundaryError || caught instanceof ResponseIdentityError) {
         if (caught instanceof IdentityBoundaryError) notifyLoginRequired()
         refreshStopped.value = true
-      } else if (settlingLessonRead && !acceptedSettlingLesson) {
-        visualLessonUnacceptedSnapshots += 1
-        nextDelay = Math.min(16_000, 4_000 * 2 ** (visualLessonUnacceptedSnapshots - 1))
-        if (visualLessonUnacceptedSnapshots >= VISUAL_LESSON_UNACCEPTED_LIMIT) {
-          visualRefreshStopped.value = true
-        }
+        refreshStopReason.value = caught instanceof IdentityBoundaryError ? 'identity' : 'response-identity'
       } else {
         refreshFailures += 1
         nextDelay = Math.min(16_000, 4_000 * 2 ** (refreshFailures - 1))
-        if (refreshFailures >= REFRESH_FAILURE_LIMIT) refreshStopped.value = true
+        if (refreshFailures >= REFRESH_FAILURE_LIMIT) {
+          refreshStopped.value = true
+          refreshStopReason.value = 'service'
+        }
       }
       refreshWarning.value = true
       controller.abort()
     }
   } finally {
-    settleCoreSnapshot(false)
     if (isCurrentRequest(request, planId, controller)) {
       activeController = null
       scheduleRefresh(request, planId, nextDelay)
@@ -643,22 +423,19 @@ function scheduleRefresh(request: number, planId: string, delay = 1_500) {
   if (!run.value && missingRunRefreshes >= MISSING_RUN_REFRESH_LIMIT) {
     refreshWarning.value = true
     refreshStopped.value = true
+    refreshStopReason.value = 'service'
   }
   const bodyWorkPending = retryMissingRun || active.value || finalSnapshotPending
-  const visualWorkPending = activeVisualController === null
-    && !visualRefreshStopped.value
-    && (visualLessonSettlingReads > 0 || visualRunReadPending())
-  const effectiveDelay = bodyWorkPending ? delay : visualRefreshDelay
   if (isCurrentGeneration(request, planId)
     && !refreshStopped.value
     && refreshFailures < REFRESH_FAILURE_LIMIT
     && document.visibilityState !== 'hidden'
-    && (bodyWorkPending || visualWorkPending)) {
+    && bodyWorkPending) {
     if (retryMissingRun) missingRunRefreshes += 1
     timer = setTimeout(() => {
       timer = null
       void refresh(request, planId)
-    }, Math.max(MIN_REFRESH_DELAY_MS, effectiveDelay))
+    }, Math.max(MIN_REFRESH_DELAY_MS, delay))
   }
 }
 
@@ -672,12 +449,9 @@ function cancelRequests() {
   clearTimer()
   activeController?.abort()
   activeController = null
-  activeVisualController?.abort()
-  activeVisualController = null
   loading.value = false
   missingRunRefreshes = 0
   resetRefreshBudgets()
-  resetVisualLifecycle()
 }
 
 watch(() => [props.open, props.planId] as const, ([open]) => {
@@ -706,28 +480,19 @@ onBeforeUnmount(() => {
             </div>
             <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="supportedChapterCount" :aria-label="copy.progressAria(supportedChapterCount, plan.sections.length)"><div data-testid="recommendation-lesson-progress" class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
             <p v-if="activityText" class="mt-2 text-xs text-ink/50">{{ activityText }}</p>
+            <p data-testid="recommendation-lesson-failure-boundary" class="mt-2 text-xs leading-5 text-ink/50">{{ copy.failureBoundary }}</p>
           </div>
         </header>
 
         <section
-          v-if="visualStatusText || refreshWarning"
+          v-if="refreshWarning"
           data-testid="recommendation-lesson-runtime-notices"
           class="border-b border-ink/10 bg-canvas px-4 py-3 sm:px-6"
           :aria-label="copy.updates"
         >
           <div class="mx-auto flex max-w-7xl min-w-0 flex-col gap-2">
-            <div
-              v-if="visualStatusText"
-              data-testid="recommendation-lesson-visual-status"
-              class="flex min-w-0 flex-wrap items-center justify-between gap-2 break-words rounded-lg px-3 py-2 text-xs font-semibold leading-5"
-              :class="visualFailed || visualRefreshStopped ? 'bg-amber-50 text-amber-900' : 'bg-indigo/5 text-indigo'"
-              role="status"
-            >
-              <p class="min-w-0 flex-1 break-words">{{ visualStatusText }}</p>
-              <button v-if="visualRefreshStopped" type="button" class="min-h-10 shrink-0 rounded-lg border border-current/30 px-3" @click="retryRefresh">{{ copy.retry }}</button>
-            </div>
-            <div v-if="refreshWarning" class="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900" role="status">
-              <p class="min-w-0 flex-1 break-words text-xs font-semibold">{{ copy.refresh }}</p>
+            <div class="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900" role="status">
+              <p class="min-w-0 flex-1 break-words text-xs font-semibold">{{ refreshMessage }}</p>
               <button v-if="refreshStopped" type="button" class="min-h-10 shrink-0 rounded-lg border border-amber-300 px-3 text-xs font-semibold" @click="retryRefresh">{{ copy.retry }}</button>
             </div>
           </div>

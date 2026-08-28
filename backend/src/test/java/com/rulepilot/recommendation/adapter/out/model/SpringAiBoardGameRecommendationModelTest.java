@@ -81,7 +81,7 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void requiresATypedQwenActionWithoutEnablingThinking() {
+    void usesQwenAutoWireModeWhileTheApplicationStillRequiresATypedAction() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
         when(chatModel.call(any(Prompt.class))).thenReturn(response(
@@ -94,7 +94,7 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
     }

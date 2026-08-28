@@ -9,6 +9,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
+import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,11 +28,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-/** Adds a verified visual reference without changing an already published text lesson. */
+/** Adds an optional verified visual without changing the validated cited text that will be published with it. */
 @Service
 @Profile("!test")
 public class VisualLessonEnricher {
 
+    private static final int MAX_TEACHING_RUN_PASSES_PER_SECTION = 2;
     private final RulebookUnderstandingCatalog understanding;
     private final VisualSectionPrioritizer prioritizer;
     private final VisualLessonSectionEnricher sectionEnricher;
@@ -141,6 +143,17 @@ public class VisualLessonEnricher {
         return enrich(documentVersionId, lesson, null);
     }
 
+    static int maximumTeachingRunModelCalls(TeachingPlan plan) {
+        if (plan == null || plan.sections().isEmpty()) return 0;
+        // Every cited chapter can be inspected once after its deterministic draft and once more only when the
+        // whole-lesson reviewer accepts a complete replacement. This is a structural ceiling, not eager visual work.
+        return Math.multiplyExact(
+                plan.sections().size(),
+                Math.multiplyExact(
+                        MAX_TEACHING_RUN_PASSES_PER_SECTION,
+                        VisualLessonStepLocator.maximumModelCallsPerSectionPass()));
+    }
+
     boolean supportsVisualEvidence(String modelConfigurationOwner) {
         return sectionEnricher.supportsVisualEvidence(modelConfigurationOwner);
     }
@@ -235,6 +248,48 @@ public class VisualLessonEnricher {
                 sectionResults.stream().map(SectionResult::outcome).filter(java.util.Objects::nonNull).toList());
     }
 
+    /**
+     * Runs the optional visual boundary for one newly validated chapter. The caller owns publication, so the returned
+     * section can be stored in the same durable snapshot as its cited text instead of starting a second lesson-wide
+     * workflow after every chapter has finished.
+     */
+    public SectionEnrichment enrichSection(
+            UUID documentVersionId,
+            LessonSection section,
+            List<LessonSection> alreadyPublished,
+            String modelConfigurationOwner,
+            UUID runId,
+            VisualProgressListener progress) {
+        if (documentVersionId == null || section == null || alreadyPublished == null || progress == null) {
+            throw new IllegalArgumentException("section visual enrichment input is invalid");
+        }
+        var map = understanding.understanding(documentVersionId);
+        List<VisualFocus> acceptedVisuals = alreadyPublished.stream()
+                .flatMap(published -> published.steps().stream())
+                .flatMap(step -> step.visualFoci().stream())
+                .collect(Collectors.toCollection(ArrayList::new));
+        section.steps().stream()
+                .flatMap(step -> step.visualFoci().stream())
+                .forEach(acceptedVisuals::add);
+        VisualLessonSectionEnricher.Result result = sectionEnricher.enrich(
+                map,
+                documentVersionId,
+                section,
+                modelConfigurationOwner,
+                runId,
+                clock.instant().plus(compatibilityWorkflowTimeout),
+                sectionEnricher.beginProposalWorkflow(),
+                progress,
+                acceptedVisuals,
+                explicitVisualStepPositions(section));
+        SectionResult reported = sectionResult(result);
+        if (reported.outcome() != null) {
+            progress.sectionFinished(new SectionProgress(
+                    section.position(), section.title(), reported.outcome()));
+        }
+        return new SectionEnrichment(reported.section(), reported.outcome());
+    }
+
     private Map<Integer, Set<Integer>> explicitVisualStepPositions(IllustratedLesson lesson) {
         Map<Integer, Set<Integer>> positions = new LinkedHashMap<>();
         for (LessonSection section : lesson.sections()) {
@@ -246,6 +301,14 @@ public class VisualLessonEnricher {
             if (!sectionPositions.isEmpty()) positions.put(section.position(), Set.copyOf(sectionPositions));
         }
         return Map.copyOf(positions);
+    }
+
+    private Set<Integer> explicitVisualStepPositions(LessonSection section) {
+        return section.steps().stream()
+                .filter(step -> step.kind() == IllustratedLesson.TeachingMove.VISUAL)
+                .filter(step -> step.visualFoci().isEmpty())
+                .map(LessonStep::position)
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private IllustratedLesson lessonWithSections(IllustratedLesson original, List<LessonSection> sections) {
@@ -274,26 +337,27 @@ public class VisualLessonEnricher {
             case ADDED -> "第 " + sectionPosition + " 节已加入可核对的局部规则书截图";
             case ADDED_WITH_CLAIM_CONFLICT -> "第 " + sectionPosition + " 节已加入无冲突图示；冲突截图已跳过，正文保持不变";
             case ALREADY_PRESENT -> "第 " + sectionPosition + " 节已有局部规则书截图，无需重复处理";
-            case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选区域";
-            case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片";
-            case LOCATOR_RETURNED_NONE -> "第 " + sectionPosition + " 节的视觉模型未找到可靠局部图示";
-            case MODEL_SEMANTIC_REJECTED -> "第 " + sectionPosition + " 节的局部图示未通过当前规则步骤的二次核对";
-            case MODEL_UNAVAILABLE -> "第 " + sectionPosition + " 节没有可用的视觉模型";
-            case MODEL_EXPLICIT_NO_REGION -> "第 " + sectionPosition + " 节的视觉模型确认没有合适局部图示";
-            case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉模型没有返回合规的候选选择";
-            case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节的视觉模型引用了未提供的页面或依据";
-            case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的候选图边界未通过校验";
-            case MODEL_TIMEOUT -> "第 " + sectionPosition + " 节的视觉模型响应超时";
-            case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的视觉模型工作被安全中断";
-            case MODEL_BUSY -> "第 " + sectionPosition + " 节的视觉模型正在处理其他任务";
-            case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉模型调用失败，已保留正文";
-            case REJECTED_TOO_SMALL -> "第 " + sectionPosition + " 节的截图太小，无法辅助玩家理解，已跳过";
-            case REJECTED_MISSING_OBSERVATION -> "第 " + sectionPosition + " 节的截图没有可核对的图中说明，已跳过";
-            case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节返回的区域只有文字或标题，已跳过";
-            case REJECTED_OUTSIDE_CANDIDATE -> "第 " + sectionPosition + " 节返回区域不在可引用范围内，已跳过";
-            case REJECTED_UNKNOWN_EVIDENCE -> "第 " + sectionPosition + " 节的截图没有对应规则依据，已跳过";
-            case REJECTED_DUPLICATE -> "第 " + sectionPosition + " 节的截图与前文高度重复，已保留原规则步骤";
-            case REJECTED_STEP_MISMATCH -> "第 " + sectionPosition + " 节的截图没有直接对应当前步骤，已保留原规则步骤";
+            case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选；仅省略配图，已校验正文保持不变";
+            case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片；仅省略配图，已校验正文保持不变";
+            case LOCATOR_RETURNED_NONE -> "第 " + sectionPosition + " 节未找到可靠局部图示；仅省略配图，已校验正文保持不变";
+            case MODEL_SEMANTIC_REJECTED -> "第 " + sectionPosition + " 节的局部图示未通过当前规则步骤校验；仅省略配图，已校验正文保持不变";
+            case MODEL_UNAVAILABLE -> "第 " + sectionPosition + " 节没有可用的视觉模型；仅省略配图，已校验正文保持不变";
+            case MODEL_EXPLICIT_NO_REGION -> "第 " + sectionPosition + " 节的视觉 Agent 选择了 NO_VISUAL；这是有效的局部结果，正文保持不变";
+            case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节经一次完整重选仍未返回合规选择；仅省略配图，已校验正文保持不变";
+            case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节经一次完整重选仍引用了未提供的候选或依据；仅省略配图，正文保持不变";
+            case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的候选图边界未通过校验；仅省略配图，已校验正文保持不变";
+            case MODEL_TIMEOUT -> "第 " + sectionPosition + " 节的配图在有限时间内未完成；仅省略配图，已校验正文保持不变";
+            case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的配图工作被安全中断；仅省略配图，已校验正文保持不变";
+            case MODEL_BUSY -> "第 " + sectionPosition + " 节的配图容量已满；仅省略配图，已校验正文保持不变";
+            case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉服务在有限重试后仍失败；仅省略配图，已校验正文保持不变";
+            case CANDIDATE_PREPARATION_FAILED -> "第 " + sectionPosition + " 节的候选截图无法生成；仅省略配图，已校验正文保持不变";
+            case REJECTED_TOO_SMALL -> "第 " + sectionPosition + " 节的截图太小，无法辅助理解；仅省略配图，已校验正文保持不变";
+            case REJECTED_MISSING_OBSERVATION -> "第 " + sectionPosition + " 节的截图没有可核对的图中说明；仅省略配图，已校验正文保持不变";
+            case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节的候选只有文字或标题；仅省略配图，已校验正文保持不变";
+            case REJECTED_OUTSIDE_CANDIDATE -> "第 " + sectionPosition + " 节的返回区域不在可引用范围内；仅省略配图，已校验正文保持不变";
+            case REJECTED_UNKNOWN_EVIDENCE -> "第 " + sectionPosition + " 节的截图没有对应规则依据；仅省略配图，已校验正文保持不变";
+            case REJECTED_DUPLICATE -> "第 " + sectionPosition + " 节的截图与前文高度重复；仅省略配图，已校验正文保持不变";
+            case REJECTED_STEP_MISMATCH -> "第 " + sectionPosition + " 节的截图没有直接对应当前步骤；仅省略配图，已校验正文保持不变";
             case REJECTED_CLAIM_CONFLICT -> "第 " + sectionPosition + " 节的截图与已验证正文冲突，已跳过截图并保留正文";
         };
     }
@@ -302,6 +366,14 @@ public class VisualLessonEnricher {
         public EnrichmentResult {
             if (lesson == null || outcomes == null) throw new IllegalArgumentException("visual enrichment result is invalid");
             outcomes = List.copyOf(outcomes);
+        }
+    }
+
+    public record SectionEnrichment(LessonSection section, SectionOutcome outcome) {
+        public SectionEnrichment {
+            if (section == null || outcome == null) {
+                throw new IllegalArgumentException("section visual enrichment result is invalid");
+            }
         }
     }
 
@@ -362,6 +434,7 @@ public class VisualLessonEnricher {
         MODEL_INTERRUPTED,
         MODEL_BUSY,
         MODEL_PROVIDER_FAILURE,
+        CANDIDATE_PREPARATION_FAILED,
         REJECTED_TOO_SMALL,
         REJECTED_MISSING_OBSERVATION,
         REJECTED_NON_VISUAL,

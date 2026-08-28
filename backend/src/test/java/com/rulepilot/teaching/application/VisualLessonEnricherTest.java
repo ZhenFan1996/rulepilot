@@ -6,6 +6,10 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
+import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
+import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
+import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import com.rulepilot.teaching.VisualRegionProposer;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Clock;
@@ -779,6 +783,41 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void aCandidateCropFailureOmitsOnlyTheVisualAndPreservesTheCitedSection() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson source = lesson(chunk);
+        VisualRegionLocator cropFailed = new VisualRegionLocator() {
+            @Override
+            public java.util.Optional<LocatedRegion> locate(VisualLocationRequest request) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+                return LocateGuideResult.unavailable(Diagnostic.CANDIDATE_PREPARATION_FAILED);
+            }
+        };
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        cropFailed)
+                .enrichSection(
+                        UUID.randomUUID(),
+                        source.sections().getFirst(),
+                        List.of(),
+                        "owner",
+                        null,
+                        new VisualLessonEnricher.VisualProgressListener() {});
+
+        assertThat(result.section()).isEqualTo(source.sections().getFirst());
+        assertThat(result.outcome().outcome())
+                .isEqualTo(VisualLessonEnricher.Outcome.CANDIDATE_PREPARATION_FAILED);
+        assertThat(result.outcome().summary()).contains("仅省略配图", "正文保持不变");
+    }
+
+    @Test
     void reports_when_a_visual_model_cannot_find_a_reliable_region() {
         UUID chunk = UUID.randomUUID();
         var result = new VisualLessonEnricher(
@@ -792,7 +831,8 @@ class VisualLessonEnricherTest {
         assertThat(result.outcomes()).singleElement().satisfies(outcome -> {
             assertThat(outcome.sectionPosition()).isEqualTo(1);
             assertThat(outcome.outcome()).isEqualTo(VisualLessonEnricher.Outcome.LOCATOR_RETURNED_NONE);
-            assertThat(outcome.summary()).contains("视觉模型未找到可靠局部图示");
+            assertThat(outcome.summary())
+                    .contains("未找到可靠局部图示", "仅省略配图", "已校验正文保持不变");
         });
     }
 

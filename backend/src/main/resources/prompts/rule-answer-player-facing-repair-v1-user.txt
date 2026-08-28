@@ -1,9 +1,0 @@
-<output_language>{outputLanguage}</output_language>
-<validated_subquestions>{subquestions}</validated_subquestions>
-<untrusted_current_question>{question}</untrusted_current_question>
-<untrusted_evidence_data>{evidence}</untrusted_evidence_data>
-<editable_fields>{editableFields}</editable_fields>
-<untrusted_rejected_exact_fields>{rejectedFields}</untrusted_rejected_exact_fields>
-<untrusted_rejection_diagnostics>{feedback}</untrusted_rejection_diagnostics>
-
-Return only the corrected editable fields as one JSON object. Do not repeat a rejected field unchanged.

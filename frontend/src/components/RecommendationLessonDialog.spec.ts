@@ -2,9 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
 import { setLocale } from '@/lib/locale'
-import { VISUAL_REQUEST_TIMEOUT_MS } from '@/lib/visualEnrichment'
 
 import RecommendationLessonDialog from './RecommendationLessonDialog.vue'
 
@@ -142,6 +140,29 @@ describe('RecommendationLessonDialog', () => {
     wrapper.unmount()
   })
 
+  it('names an expired session, preserves the readable seed, and stops automatic refresh', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 401 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: {
+        open: true,
+        planId: 'plan-1',
+        initialPlan: plan,
+        initialLesson: lesson('登录前已发布章节'),
+      },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('登录会话已失效，已停止刷新')
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('登录前已发布章节')
+    const requestsAtStop = fetchMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(requestsAtStop)
+    wrapper.unmount()
+  })
+
   it('rejects a readable seed whose lesson belongs to another plan', async () => {
     const pending = new Promise<Response>(() => undefined)
     vi.stubGlobal('fetch', vi.fn(() => pending))
@@ -190,6 +211,8 @@ describe('RecommendationLessonDialog', () => {
     expect(wrapper.get('[data-testid="recommendation-lesson-surface"]').attributes('style'))
       .toContain('background-color: var(--color-canvas); opacity: 1')
     expect(wrapper.text()).toContain('已有 1 / 3 章完成引用归属、规则书版本与结构校验')
+    expect(wrapper.get('[data-testid="recommendation-lesson-failure-boundary"]').text())
+      .toContain('一次返回被拒或一次服务调用失败')
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
 
     await vi.advanceTimersByTimeAsync(1_500)
@@ -258,883 +281,54 @@ describe('RecommendationLessonDialog', () => {
     wrapper.unmount()
   })
 
-  it('keeps tracking visual enrichment after the text lesson completes and paints a late focused crop', async () => {
-    let visualRunReads = 0
+  it('publishes synchronized chapter visuals from the main teaching snapshots without a visual-enrichment run', async () => {
     let lessonReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    let runReads = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: plan.sections.map((item, index) => ({
-            ...item,
-            visualEvidenceRecommended: index === 0,
-          })),
-        })
-      }
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
       if (path.includes('/illustrated-lessons/latest')) {
         lessonReads += 1
-        const first = section(1, '目标')
-        if (lessonReads >= 4) {
-          first.steps[0]!.visualFocus = {
+        const published = section(1, '目标')
+        if (lessonReads > 1) {
+          published.steps[0]!.visualFocus = {
             pageNumber: 1,
-            label: '主棋盘区域',
+            label: '同步局部图',
             x: 100,
             y: 200,
-            width: 500,
+            width: 300,
             height: 400,
           }
         }
         return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [first],
-        })
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        const snapshot = run(
-          visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
-          `2026-08-10T00:0${visualRunReads}:00Z`,
-        )
-        return Response.json({
-          ...snapshot,
-          activities: visualRunReads === 1 ? [] : [{
-            sequence: 1,
-            type: 'VALIDATION',
-            operation: 'visualSection|1',
-            summary: 'focused crop published',
-            outcome: 'SUCCEEDED',
-            latencyMs: 20,
-            occurredAt: '2026-08-10T00:02:00Z',
-          }],
-        })
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
-    await vi.advanceTimersByTimeAsync(249)
-    await flushPromises()
-    expect(visualRunReads).toBe(0)
-    await vi.advanceTimersByTimeAsync(1)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(2)
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).not.toContain('主棋盘区域')
-    expect(wrapper.text()).toContain('已有 1 节具备图示')
-
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('主棋盘区域')
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-    expect(vi.getTimerCount()).toBe(0)
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(visualRunReads).toBe(2)
-    wrapper.unmount()
-  })
-
-  it('spends terminal visual settling reads only on accepted lesson snapshots and recovers a late crop', async () => {
-    let visualRunReads = 0
-    let lessonReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        lessonReads += 1
-        if (lessonReads === 4) return new Response(null, { status: 404 })
-        if (lessonReads === 5) return new Response(null, { status: 503 })
-        if (lessonReads === 6) {
-          return new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } })
-        }
-        const first = section(1, '目标')
-        if (lessonReads >= 7) {
-          first.steps[0]!.visualFocus = {
-            pageNumber: 1,
-            label: '失败恢复后的主棋盘',
-            x: 100,
-            y: 200,
-            width: 500,
-            height: 400,
-          }
-        }
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [first],
-        })
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        const snapshot = run(
-          visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
-          `2026-08-10T00:0${visualRunReads}:00Z`,
-        )
-        return Response.json({ ...snapshot, run: { ...snapshot.run, id: 'visual-run' } })
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    for (let refresh = 0; refresh < 6; refresh += 1) {
-      await vi.runOnlyPendingTimersAsync()
-      await flushPromises()
-    }
-
-    expect(visualRunReads).toBe(2)
-    expect(lessonReads).toBe(7)
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('失败恢复后的主棋盘')
-    expect(wrapper.text()).not.toContain('暂时无法刷新最新章节')
-
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-
-    expect(lessonReads).toBe(8)
-    expect(vi.getTimerCount()).toBe(0)
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(lessonReads).toBe(8)
-    wrapper.unmount()
-  })
-
-  it.each([
-    ['missing', () => new Response(null, { status: 404 })],
-    ['unavailable', () => new Response(null, { status: 503 })],
-    ['invalid', () => new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } })],
-  ])('stops repeated %s settling snapshots and resumes late crop publication only after retry', async (_kind, failedResponse) => {
-    let visualRunReads = 0
-    let lessonReads = 0
-    let recovered = false
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        lessonReads += 1
-        if (lessonReads >= 4 && !recovered) return failedResponse()
-        const first = section(1, '目标')
-        if (recovered) {
-          first.steps[0]!.visualFocus = {
-            pageNumber: 1,
-            label: '手动恢复后的主棋盘',
-            x: 100,
-            y: 200,
-            width: 500,
-            height: 400,
-          }
-        }
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [first],
-        })
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        const snapshot = run(
-          visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
-          `2026-08-10T00:0${visualRunReads}:00Z`,
-        )
-        return Response.json({ ...snapshot, run: { ...snapshot.run, id: 'visual-run' } })
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-    for (let failure = 0; failure < 4; failure += 1) {
-      await vi.runOnlyPendingTimersAsync()
-      await flushPromises()
-    }
-
-    expect(lessonReads).toBe(7)
-    expect(wrapper.get('[data-testid="recommendation-lesson-visual-status"]').text())
-      .toContain('暂时无法确认最新配图状态')
-    expect(vi.getTimerCount()).toBe(0)
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(lessonReads).toBe(7)
-
-    recovered = true
-    await wrapper.get('[data-testid="recommendation-lesson-visual-status"] button').trigger('click')
-    await vi.runOnlyPendingTimersAsync()
-    await flushPromises()
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('手动恢复后的主棋盘')
-
-    await vi.runOnlyPendingTimersAsync()
-    await flushPromises()
-    expect(lessonReads).toBe(9)
-    expect(vi.getTimerCount()).toBe(0)
-    wrapper.unmount()
-  })
-
-  it('stops missing visual discovery visibly and recovers a late completed run after retry', async () => {
-    let visualRunReads = 0
-    let recovered = false
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: plan.sections.map((item, index) => ({
-            ...item,
-            visualEvidenceRecommended: index === 0,
-          })),
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
-          sections: [section(1, '文字讲解已完成')],
-        })
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        if (!recovered) return new Response(null, { status: 404 })
-        const lateRun = run('COMPLETED', '2026-08-10T00:04:00Z')
-        return Response.json({
-          ...lateRun,
-          run: { ...lateRun.run, id: 'late-visual-run' },
-          activities: [{
-            sequence: 1,
-            type: 'VALIDATION',
-            operation: 'visualSection|1',
-            summary: 'late visual published',
-            outcome: 'SUCCEEDED',
-            latencyMs: 1,
-            occurredAt: '2026-08-10T00:04:00Z',
-          }],
-        })
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    expect(wrapper.find('[data-testid="recommendation-lesson-visual-status"]').exists()).toBe(false)
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(2)
-    expect(vi.getTimerCount()).toBe(0)
-    expect(wrapper.get('[data-testid="recommendation-lesson-visual-status"]').text())
-      .toContain('暂时无法确认最新配图状态')
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('文字讲解已完成')
-
-    recovered = true
-    await wrapper.get('[data-testid="recommendation-lesson-visual-status"] button').trigger('click')
-    await vi.advanceTimersByTimeAsync(249)
-    await flushPromises()
-    expect(visualRunReads).toBe(2)
-    await vi.advanceTimersByTimeAsync(1)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(3)
-    expect(wrapper.get('[data-testid="recommendation-lesson-visual-status"]').text())
-      .toContain('已有 1 节具备图示')
-    wrapper.unmount()
-  })
-
-  it('waits for the current teaching run to become explicitly terminal before discovering visuals', async () => {
-    let teachingRunReads = 0
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: plan.sections.map((item, index) => ({
-            ...item,
-            visualEvidenceRecommended: index === 0,
-          })),
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
-          sections: [section(1, '文字先到')],
-        })
-      }
-      if (path.includes('mode=TEACHING')) {
-        teachingRunReads += 1
-        return teachingRunReads === 1
-          ? new Response(null, { status: 404 })
-          : Response.json(run('COMPLETED', '2026-08-10T00:02:00Z'))
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return Response.json({
-          ...run('COMPLETED', '2026-08-10T00:03:00Z'),
-          run: {
-            ...run('COMPLETED', '2026-08-10T00:03:00Z').run,
-            id: 'visual-run-1',
-          },
-          activities: [{
-            sequence: 1, type: 'VALIDATION', operation: 'visualSection|1', summary: 'opaque',
-            outcome: 'SUCCEEDED', latencyMs: 1, occurredAt: '2026-08-10T00:03:00Z',
-          }],
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    expect(teachingRunReads).toBe(1)
-    expect(visualRunReads).toBe(0)
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-    expect(teachingRunReads).toBe(2)
-    expect(visualRunReads).toBe(0)
-
-    await vi.advanceTimersByTimeAsync(1_499)
-    await flushPromises()
-    expect(visualRunReads).toBe(0)
-    await vi.advanceTimersByTimeAsync(1)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    expect(wrapper.text()).toContain('已有 1 节具备图示')
-    wrapper.unmount()
-  })
-
-  it('settles a cancelled visual run as unfinished without continuing visual polling', async () => {
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [section(1, '文字讲解已保留')],
-        })
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(run('COMPLETED', '2026-08-10T00:02:00Z'))
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return Response.json({
-          ...runFor('plan-1', 'CANCELLED'),
-          run: { ...runFor('plan-1', 'CANCELLED').run, id: 'visual-run-1' },
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(4_000)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(1)
-    const status = wrapper.get('[data-testid="recommendation-lesson-visual-status"]')
-    expect(status.text()).toContain('局部配图没有完成')
-    expect(status.text()).not.toContain('正在从规则书中挑选')
-
-    await vi.advanceTimersByTimeAsync(5_000)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    wrapper.unmount()
-  })
-
-  it('drops a visual discovery response when a newer teaching run becomes current and resets the new run budget', async () => {
-    let teachingRunReads = 0
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [section(1, '当前文字')],
-        })
-      }
-      if (path.includes('mode=TEACHING')) {
-        teachingRunReads += 1
-        const current = run(
-          teachingRunReads === 2 ? 'RETRIEVING' : 'COMPLETED',
-          `2026-08-10T00:0${teachingRunReads}:00Z`,
-        )
-        return Response.json({
-          ...current,
-          run: {
-            ...current.run,
-            id: teachingRunReads === 1 ? 'teaching-run-1' : 'teaching-run-2',
-          },
-        })
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        const candidate = run('COMPLETED', `2026-08-10T00:1${visualRunReads}:00Z`)
-        return Response.json({
-          ...candidate,
-          run: { ...candidate.run, id: `visual-run-${visualRunReads}` },
-          activities: [{
-            sequence: 1,
-            type: 'VALIDATION',
-            operation: `visualSection|${visualRunReads}`,
-            summary: 'opaque',
-            outcome: 'SUCCEEDED',
-            latencyMs: 1,
-            occurredAt: '2026-08-10T00:10:00Z',
-          }],
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    expect(wrapper.text()).not.toContain('已有 1 节具备图示')
-
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-    expect(teachingRunReads).toBe(3)
-    expect(visualRunReads).toBe(1)
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(2)
-    expect(wrapper.text()).toContain('已有 1 节具备图示')
-    wrapper.unmount()
-  })
-
-  it('keeps 503 and network failures separate from absence and recovers within a finite budget', async () => {
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
-          sections: [section(1, '文字讲解')],
-        })
-      }
-      if (path.includes('mode=TEACHING')) return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        if (visualRunReads === 1) return new Response(null, { status: 503 })
-        if (visualRunReads === 2) throw new TypeError('network unavailable')
-        return Response.json({
-          ...run('COMPLETED', '2026-08-10T00:04:00Z'),
-          run: { ...run('COMPLETED', '2026-08-10T00:04:00Z').run, id: 'visual-run' },
-          activities: [{
-            sequence: 1, type: 'VALIDATION', operation: 'visualSection|1', summary: 'opaque',
-            outcome: 'SUCCEEDED', latencyMs: 1, occurredAt: '2026-08-10T00:04:00Z',
-          }],
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    await vi.advanceTimersByTimeAsync(3_000)
-    await flushPromises()
-    expect(visualRunReads).toBe(2)
-    await vi.advanceTimersByTimeAsync(6_000)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(3)
-    expect(wrapper.text()).toContain('已有 1 节具备图示')
-    wrapper.unmount()
-  })
-
-  it('publishes a late core snapshot while a visual request is pending and enforces its own deadline', async () => {
-    let lessonReads = 0
-    let visualRunReads = 0
-    let visualSignal: AbortSignal | undefined
-    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, options?: RequestInit) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Promise.resolve(Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        }))
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        lessonReads += 1
-        return Promise.resolve(Response.json({
           id: 'lesson-1',
           teachingPlanId: 'plan-1',
-          status: lessonReads >= 2 ? 'COMPLETE' : 'DRAFT_READY',
-          sections: lessonReads >= 2
-            ? [section(1, '目标'), section(2, '视觉请求未阻塞的迟到章节')]
-            : [section(1, '目标')],
-        }))
+          status: lessonReads === 1 ? 'DRAFT_READY' : 'COMPLETE',
+          sections: [published],
+        })
       }
       if (path.includes('mode=TEACHING')) {
-        return Promise.resolve(Response.json(run('COMPLETED', '2026-08-10T00:01:00Z')))
+        runReads += 1
+        return Response.json(run(runReads === 1 ? 'RETRIEVING' : 'COMPLETED', '2026-08-10T00:03:00Z'))
       }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        visualSignal = options?.signal ?? undefined
-        return new Promise<Response>(() => undefined)
-      }
-      return Promise.resolve(new Response(null, { status: 404 }))
-    }))
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const wrapper = mount(RecommendationLessonDialog, {
       props: { open: true, planId: 'plan-1' },
       global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
     })
     await flushPromises()
 
-    await vi.advanceTimersByTimeAsync(250)
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).not.toContain('同步局部图')
+
+    await vi.advanceTimersByTimeAsync(1_500)
     await flushPromises()
 
-    expect(visualRunReads).toBe(1)
-    expect(visualSignal?.aborted).toBe(false)
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('同步局部图')
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(path => path.includes('mode=VISUAL_ENRICHMENT'))).toBe(false)
+    expect(runReads).toBe(2)
     expect(lessonReads).toBe(2)
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text())
-      .toContain('视觉请求未阻塞的迟到章节')
-    expect(wrapper.text()).toContain('完整讲解已经生成')
-
-    await vi.advanceTimersByTimeAsync(VISUAL_REQUEST_TIMEOUT_MS - 1)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    expect(visualSignal?.aborted).toBe(false)
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text())
-      .toContain('视觉请求未阻塞的迟到章节')
-
-    await vi.advanceTimersByTimeAsync(1)
-    await flushPromises()
-    expect(visualSignal?.aborted).toBe(true)
-    expect(visualRunReads).toBe(1)
-
-    await vi.advanceTimersByTimeAsync(2_999)
-    await flushPromises()
-    expect(visualRunReads).toBe(1)
-    wrapper.unmount()
-  })
-
-  it('finishes the text lesson snapshot after visual refresh failures exhaust their own budget', async () => {
-    let lessonReads = 0
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        lessonReads += 1
-        return Response.json({
-          id: 'lesson-1',
-          teachingPlanId: 'plan-1',
-          status: lessonReads >= 5 ? 'COMPLETE' : 'DRAFT_READY',
-          sections: lessonReads >= 5
-            ? [section(1, '目标'), section(2, '最终章节')]
-            : [section(1, '目标')],
-        })
-      }
-      if (path.includes('mode=TEACHING')) {
-        return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return new Response(null, { status: 503 })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(250 + 1_500 + 1_500)
-    await flushPromises()
-    expect(visualRunReads).toBe(3)
-    expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
-    expect(wrapper.text()).not.toContain('完整讲解已经生成')
-
-    await vi.advanceTimersByTimeAsync(1_500)
-    await flushPromises()
-
-    expect(visualRunReads).toBe(3)
-    expect(lessonReads).toBe(5)
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('最终章节')
-    expect(wrapper.text()).toContain('完整讲解已经生成')
-    expect(vi.getTimerCount()).toBe(0)
-    wrapper.unmount()
-  })
-
-  it('stops stale active visual polling after bounded transport failures and permits an explicit retry', async () => {
-    let visualRunReads = 0
-    let recovered = false
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [section(1, '可读文字')],
-        })
-      }
-      if (path.includes('mode=TEACHING')) return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        if (visualRunReads === 1) {
-          return Response.json({
-            ...run('RETRIEVING', '2026-08-10T00:02:00Z'),
-            run: { ...run('RETRIEVING', '2026-08-10T00:02:00Z').run, id: 'visual-run' },
-          })
-        }
-        if (!recovered) return new Response(null, { status: 503 })
-        return Response.json({
-          ...run('COMPLETED', '2026-08-10T00:05:00Z'),
-          run: { ...run('COMPLETED', '2026-08-10T00:05:00Z').run, id: 'visual-run' },
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(250 + 1_500 + 3_000 + 6_000)
-    await flushPromises()
-    expect(visualRunReads).toBe(4)
-    expect(vi.getTimerCount()).toBe(0)
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(visualRunReads).toBe(4)
-
-    recovered = true
-    await wrapper.findAll('button').find(button => button.text() === '重试')!.trigger('click')
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(visualRunReads).toBe(5)
-    expect(wrapper.text()).toContain('这次没有找到可靠的局部图示')
-    wrapper.unmount()
-  })
-
-  it('keeps a visual 401 at the authentication boundary and never treats it as absence', async () => {
-    const loginRequired = vi.fn()
-    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({ ...plan, sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }] })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({ id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [section(1, '可读文字')] })
-      }
-      if (path.includes('mode=TEACHING')) return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        return new Response(null, { status: 401 })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-
-    expect(loginRequired).toHaveBeenCalledOnce()
-    expect(visualRunReads).toBe(1)
-    expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(visualRunReads).toBe(1)
-    window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
-    wrapper.unmount()
-  })
-
-  it.each([
-    ['missing', undefined],
-    ['cross-plan', 'plan-other'],
-  ])('rejects a %s visual subject identity without publishing its status', async (_label, subjectId) => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({ ...plan, sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }] })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({ id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [section(1, '可信文字')] })
-      }
-      if (path.includes('mode=TEACHING')) return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        const candidate = run('COMPLETED', '2026-08-10T00:02:00Z')
-        return Response.json({
-          ...candidate,
-          run: { ...candidate.run, id: 'visual-run', subjectId },
-          activities: [{
-            sequence: 1, type: 'VALIDATION', operation: 'visualSection|1', summary: 'opaque',
-            outcome: 'SUCCEEDED', latencyMs: 1, occurredAt: '2026-08-10T00:02:00Z',
-          }],
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('可信文字')
-    expect(wrapper.text()).not.toContain('已有 1 节具备图示')
-    expect(vi.getTimerCount()).toBe(0)
-    wrapper.unmount()
-  })
-
-  it('resets visual discovery for a newly selected plan after the previous plan exhausted its budget', async () => {
-    const visualReads = new Map<string, number>()
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      const targetPlanId = path.includes('plan-2') ? 'plan-2' : 'plan-1'
-      if (path === `/api/v1/teaching-plans/${targetPlanId}`) {
-        return Response.json({
-          ...planFor(targetPlanId, targetPlanId),
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: `lesson-${targetPlanId}`, teachingPlanId: targetPlanId, status: 'COMPLETE',
-          sections: [section(1, targetPlanId)],
-        })
-      }
-      if (path.includes('mode=TEACHING')) return Response.json(runFor(targetPlanId, 'COMPLETED'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualReads.set(targetPlanId, (visualReads.get(targetPlanId) ?? 0) + 1)
-        return new Response(null, { status: 404 })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(250 + 1_500)
-    await flushPromises()
-    expect(visualReads.get('plan-1')).toBe(2)
-
-    await wrapper.setProps({ planId: 'plan-2' })
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(visualReads.get('plan-2')).toBe(1)
-    expect(wrapper.text()).toContain('plan-2')
-    wrapper.unmount()
-  })
-
-  it('renders visual lifecycle notices outside the sticky header in a narrow-width-safe structure', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({ ...plan, sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }] })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({ id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [section(1, '移动端')] })
-      }
-      if (path.includes('mode=TEACHING')) return Response.json(run('COMPLETED', '2026-08-10T00:01:00Z'))
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        return Response.json({ ...run('RETRIEVING', '2026-08-10T00:02:00Z'), run: { ...run('RETRIEVING', '2026-08-10T00:02:00Z').run, id: 'visual-run' } })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-
-    const header = wrapper.get('header')
-    const notices = wrapper.get('[data-testid="recommendation-lesson-runtime-notices"]')
-    expect(header.classes()).toContain('sticky')
-    expect(header.find('[data-testid="recommendation-lesson-visual-status"]').exists()).toBe(false)
-    expect(notices.element.previousElementSibling).toBe(header.element)
-    expect(notices.get('[data-testid="recommendation-lesson-visual-status"]').classes()).toContain('break-words')
     wrapper.unmount()
   })
 
@@ -1167,13 +361,13 @@ describe('RecommendationLessonDialog', () => {
     await flushPromises()
     expect(runReads).toBe(2)
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
-    expect(wrapper.text()).not.toContain('暂时无法刷新最新章节')
+    expect(wrapper.text()).not.toContain('有限刷新重试已用完')
 
     await vi.advanceTimersByTimeAsync(1_500)
     await flushPromises()
 
     expect(runReads).toBe(3)
-    expect(wrapper.text()).toContain('暂时无法刷新最新章节')
+    expect(wrapper.text()).toContain('有限刷新重试已用完，已停止自动刷新')
     expect(vi.getTimerCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(30_000)
     expect(runReads).toBe(3)
@@ -1189,7 +383,7 @@ describe('RecommendationLessonDialog', () => {
     expect(runReads).toBe(4)
     expect(wrapper.text()).toContain('完整讲解已经生成')
     expect(wrapper.text()).not.toContain('正在确认后台任务状态')
-    expect(wrapper.text()).not.toContain('暂时无法刷新最新章节')
+    expect(wrapper.text()).not.toContain('有限刷新重试已用完')
     expect(vi.getTimerCount()).toBe(0)
     wrapper.unmount()
   })
@@ -1238,13 +432,14 @@ describe('RecommendationLessonDialog', () => {
   })
 
   it.each([
-    ['zh-CN', 'FAILED', '本轮讲解生成失败', '失败'],
-    ['zh-CN', 'CANCELLED', '本轮讲解生成已取消', '已取消'],
-    ['en', 'FAILED', 'This guide generation run failed', 'failed'],
-    ['en', 'CANCELLED', 'This guide generation run was cancelled', 'cancelled'],
+    ['zh-CN', 'FAILED', null, '本轮讲解生成失败', '失败'],
+    ['zh-CN', 'FAILED', 'AGENT_CANCELLED', '本轮讲解生成已取消', '已取消'],
+    ['en', 'FAILED', null, 'This guide generation run failed', 'failed'],
+    ['en', 'FAILED', 'AGENT_CANCELLED', 'This guide generation run was cancelled', 'cancelled'],
   ] as const)('prioritizes an authoritative %s %s outcome over a retained cited draft', async (
     appLocale,
     state,
+    lastErrorCode,
     expectedStatus,
     expectedOutcomeWord,
   ) => {
@@ -1258,7 +453,13 @@ describe('RecommendationLessonDialog', () => {
           sections: [section(1, '可读草稿', 'CITED_DRAFT')],
         })
       }
-      if (path.includes('/assistant-runs/latest')) return Response.json(runFor('plan-1', state))
+      if (path.includes('/assistant-runs/latest')) {
+        const snapshot = runFor('plan-1', state)
+        return Response.json({
+          ...snapshot,
+          run: { ...snapshot.run, lastErrorCode },
+        })
+      }
       return new Response(null, { status: 404 })
     }))
     const wrapper = mount(RecommendationLessonDialog, {
@@ -1277,6 +478,10 @@ describe('RecommendationLessonDialog', () => {
     expect(citedDraftStatus.text()).not.toContain('not a generation failure')
     expect(wrapper.get('[data-testid="recommendation-lesson-teaching-status"]').text())
       .toContain(appLocale === 'en' ? 'readable chapter draft' : '可读草稿')
+    expect(wrapper.get('[data-testid="recommendation-lesson-failure-boundary"]').text())
+      .toContain(appLocale === 'en'
+        ? 'One rejected response or service call starts a bounded correction or retry'
+        : '一次返回被拒或一次服务调用失败')
     wrapper.unmount()
   })
 
@@ -1373,73 +578,6 @@ describe('RecommendationLessonDialog', () => {
     closed[2]!.resolve(Response.json(runFor('plan-1')))
     await flushPromises()
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('重新打开')
-    wrapper.unmount()
-  })
-
-  it('clears the previous visual run when reopening the same plan for a new teaching run', async () => {
-    let generation = 1
-    let visualRunReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...plan,
-          sections: [{ ...plan.sections[0]!, visualEvidenceRecommended: true }],
-        })
-      }
-      if (path.includes('/illustrated-lessons/latest')) {
-        return Response.json({
-          id: `lesson-${generation}`,
-          teachingPlanId: 'plan-1',
-          status: 'COMPLETE',
-          sections: [section(1, `正文-${generation}`)],
-        })
-      }
-      if (path.includes('mode=TEACHING')) {
-        const snapshot = run('COMPLETED', `2026-08-10T00:0${generation}:00Z`)
-        return Response.json({
-          ...snapshot,
-          run: { ...snapshot.run, id: `teaching-${generation}` },
-        })
-      }
-      if (path.includes('mode=VISUAL_ENRICHMENT')) {
-        visualRunReads += 1
-        if (generation === 2) return new Response(null, { status: 404 })
-        const snapshot = run('COMPLETED', '2026-08-10T00:03:00Z')
-        return Response.json({
-          ...snapshot,
-          run: { ...snapshot.run, id: 'visual-1' },
-          activities: [{
-            sequence: 1,
-            type: 'VALIDATION',
-            operation: 'visualSection|1',
-            summary: 'opaque',
-            outcome: 'SUCCEEDED',
-            latencyMs: 1,
-            occurredAt: '2026-08-10T00:03:00Z',
-          }],
-        })
-      }
-      return new Response(null, { status: 404 })
-    }))
-    const wrapper = mount(RecommendationLessonDialog, {
-      props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
-    })
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(250)
-    await flushPromises()
-    expect(wrapper.text()).toContain('已有 1 节具备图示')
-
-    await wrapper.setProps({ open: false })
-    generation = 2
-    await wrapper.setProps({ open: true })
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toContain('正文-2')
-    expect(wrapper.find('[data-testid="recommendation-lesson-visual-status"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('已有 1 节具备图示')
-    expect(visualRunReads).toBe(1)
     wrapper.unmount()
   })
 

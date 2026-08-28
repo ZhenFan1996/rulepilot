@@ -13,6 +13,8 @@ import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.GlobalConceptDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
+import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
@@ -37,6 +39,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
@@ -63,10 +66,43 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final int MAX_OUTLINE_COMPLETION_TOKENS = 16_000;
-    private static final long OUTLINE_DEADLINE_SECONDS = 120;
     private static final long OUTLINE_ATTEMPT_DEADLINE_SECONDS = 60;
     private static final int MAX_TRANSIENT_OUTLINE_ATTEMPTS = 2;
     static final int MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS = 32_000;
+    static final int CANONICAL_SHARD_EVIDENCE_CHARACTERS = 12_000;
+    private static final String LOCAL_OWNERSHIP_SYSTEM_PROMPT = """
+            You assign immutable canonical source slots to bounded teaching units.
+            Return JSON only: {"teachingUnits":[{"teachingUnitId":"kebab-case","role":"SETUP|CORE_LOOP|LEGAL_ACTION|ENDING|SCORING|NECESSARY_EXCEPTION|SUPPORTING_RULE","sourceSlotIds":["exact-slot-id"]}]}.
+            Every supplied slot must appear exactly once. Do not write player-facing rule prose, topics, examples, or facts.
+            A unit may group only closely related slots with the same availability. Copy slot IDs exactly.
+            """;
+    private static final String LOCAL_OWNERSHIP_USER_PROMPT = """
+            Learning goal: {learningGoal}
+
+            Canonical ledger shard:
+            {sourceLedger}
+
+            {repair}
+            """;
+    private static final String GLOBAL_ORDERING_SYSTEM_PROMPT = """
+            You organize already source-owned teaching units into a coherent whole-game lesson.
+            Return JSON only with gameTitle, premise, topics, and wholeGameUnderstanding.
+            Each topic has key, objective, required, visualEvidenceRecommended, and teachingUnitIds.
+            Every supplied teachingUnitId must appear in exactly one topic. Do not change units, slot ownership, roles,
+            identifiers, or page bindings. The input contains typed unit summaries, not rulebook prose; do not invent
+            omitted rules. Whole-game concepts must cite exact supplied sourceSlotIds and related topic keys.
+            Player-facing fields are Simplified Chinese; machine IDs remain kebab-case.
+            """;
+    private static final String GLOBAL_ORDERING_USER_PROMPT = """
+            Learning goal: {learningGoal}
+
+            Source-owned teaching units:
+            {teachingUnits}
+
+            Source catalog state: {sourceCatalogState}
+
+            {repair}
+            """;
 
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
@@ -154,6 +190,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     @Override
     public OutlineDraft organize(OutlineRequest request) {
+        return organize(request, ModelCallExecutor.direct());
+    }
+
+    @Override
+    public OutlineDraft organize(OutlineRequest request, ModelCallExecutor calls) {
         if (VisualSourceRuleGroupLedger.usesTypedVisualPageProtocol(request.pages())
                 && !VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(request.pages())) {
             throw new OutlineGenerationException(
@@ -168,64 +209,15 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     "teaching outline model is not configured",
                     new IllegalStateException("a real teaching model is required to organize a rulebook"));
         }
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(OUTLINE_DEADLINE_SECONDS);
-        Throwable firstTransientFailure = null;
-        for (int attempt = 1; attempt <= MAX_TRANSIENT_OUTLINE_ATTEMPTS; attempt++) {
-            long remainingNanos = deadline - System.nanoTime();
-            if (remainingNanos <= 0) {
-                throw outlineTimeout(new TimeoutException("teaching outline total deadline elapsed"), firstTransientFailure);
-            }
-            long attemptNanos = Math.min(
-                    remainingNanos,
-                    TimeUnit.SECONDS.toNanos(OUTLINE_ATTEMPT_DEADLINE_SECONDS));
-            var call = outlineCalls.submit(() -> organizeWithRepair(request, role, owner));
-            try {
-                return call.get(attemptNanos, TimeUnit.NANOSECONDS);
-            } catch (TimeoutException timeout) {
-                call.cancel(true);
-                if (attempt < MAX_TRANSIENT_OUTLINE_ATTEMPTS && deadline - System.nanoTime() > 0) {
-                    firstTransientFailure = planningTimeout(timeout);
-                    log.warn(
-                            "Teaching-outline model attempt {} exceeded {} seconds; retrying once inside the {}-second total budget",
-                            attempt,
-                            OUTLINE_ATTEMPT_DEADLINE_SECONDS,
-                            OUTLINE_DEADLINE_SECONDS);
-                    continue;
-                }
-                throw outlineTimeout(timeout, firstTransientFailure);
-            } catch (InterruptedException interrupted) {
-                call.cancel(true);
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("teaching outline interrupted", interrupted);
-            } catch (ExecutionException failed) {
-                if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
-                if (attempt < MAX_TRANSIENT_OUTLINE_ATTEMPTS && isTimeout(failed.getCause())) {
-                    firstTransientFailure = failed.getCause();
-                    log.warn(
-                            "Teaching-outline provider attempt {} timed out; retrying once inside the {}-second total budget",
-                            attempt,
-                            OUTLINE_DEADLINE_SECONDS);
-                    continue;
-                }
-                OutlineGenerationException generationFailure = new OutlineGenerationException(
-                        "teaching outline generation returned no valid outline",
-                        failed.getCause());
-                if (firstTransientFailure != null) generationFailure.addSuppressed(firstTransientFailure);
-                throw generationFailure;
-            }
+        try {
+            return organizeWithRepair(request, role, owner, calls, "organizeTeachingOutline");
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException failure) {
+            throw new OutlineGenerationException(
+                    "teaching outline generation returned no valid outline",
+                    failure);
         }
-        throw new IllegalStateException("teaching outline retry budget ended without a result");
-    }
-
-    private OutlineGenerationException outlineTimeout(TimeoutException timeout, Throwable firstTransientFailure) {
-        log.warn(
-                "Teaching-outline model exceeded the {}-second total budget; reporting the bounded generation failure",
-                OUTLINE_DEADLINE_SECONDS);
-        OutlineGenerationException failure = new OutlineGenerationException(
-                "teaching outline generation did not complete",
-                planningTimeout(timeout));
-        if (firstTransientFailure != null) failure.addSuppressed(firstTransientFailure);
-        return failure;
     }
 
     static IllegalStateException planningTimeout(TimeoutException timeout) {
@@ -236,27 +228,41 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     @Override
     public OutlineDraft refineChapterOwnership(OutlineRequest request, OutlineDraft current, String feedback) {
+        return refineChapterOwnership(request, current, feedback, ModelCallExecutor.direct());
+    }
+
+    @Override
+    public OutlineDraft refineChapterOwnership(
+            OutlineRequest request,
+            OutlineDraft current,
+            String feedback,
+            ModelCallExecutor calls) {
         if (current == null || feedback == null || feedback.isBlank()) return current;
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         if (usesFake(role, owner)) return current;
-        var call = outlineCalls.submit(() -> organizeWithRepair(
-                request, role, owner, ownershipRefinementInstruction(current, feedback.strip())));
         try {
-            return call.get(OUTLINE_DEADLINE_SECONDS, TimeUnit.SECONDS);
-        } catch (TimeoutException timeout) {
-            call.cancel(true);
-            log.warn(
-                    "Teaching-outline ownership refinement exceeded {} seconds; retaining the original plan",
-                    OUTLINE_DEADLINE_SECONDS);
-            return current;
-        } catch (InterruptedException interrupted) {
-            call.cancel(true);
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("teaching outline ownership refinement interrupted", interrupted);
-        } catch (ExecutionException failed) {
-            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
-            log.warn("Teaching-outline ownership refinement failed; retaining the original plan", failed.getCause());
+            if (hasCanonicalVisualLedger(request) && requiresHierarchicalPlanning(request)) {
+                return organizeHierarchicalGlobal(
+                        request,
+                        role,
+                        owner,
+                        calls,
+                        "refineTeachingOutlineOwnership",
+                        unitsFromOutline(request, current),
+                        ownershipRefinementInstruction(current, feedback.strip()));
+            }
+            return organizeWithRepair(
+                    request,
+                    role,
+                    owner,
+                    calls,
+                    "refineTeachingOutlineOwnership",
+                    ownershipRefinementInstruction(current, feedback.strip()));
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException failed) {
+            log.warn("Teaching-outline ownership refinement failed; retaining the original plan", failed);
             return current;
         }
     }
@@ -284,20 +290,36 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 + "coverage and evidence. Do not invent a new action, alternative, or rule relationship while separating chapters.";
     }
 
-    private OutlineDraft organizeWithRepair(OutlineRequest request, Role role, String owner) {
-        return organizeWithRepair(request, role, owner, "");
+    private OutlineDraft organizeWithRepair(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix) {
+        return organizeWithRepair(request, role, owner, calls, operationPrefix, "");
     }
 
-    private OutlineDraft organizeWithRepair(OutlineRequest request, Role role, String owner, String initialInstruction) {
+    private OutlineDraft organizeWithRepair(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix,
+            String initialInstruction) {
+        if (hasCanonicalVisualLedger(request) && requiresHierarchicalPlanning(request)) {
+            return organizeHierarchicalOutline(
+                    request, role, owner, calls, operationPrefix, initialInstruction);
+        }
         RuntimeException firstFailure;
         try {
-            return organizeOnce(request, role, owner, initialInstruction);
+            return organizeOnce(request, role, owner, initialInstruction, calls, operationPrefix);
         } catch (IncompleteCanonicalSlotOwnership incompleteOwnership) {
-            return repairMissingCanonicalSlotOwners(request, role, owner, incompleteOwnership);
+            return repairMissingCanonicalSlotOwners(
+                    request, role, owner, incompleteOwnership, calls, operationPrefix);
         } catch (InvalidSourceCoverage invalidSource) {
-            return repairSourceIdentifiers(request, role, owner, invalidSource);
+            return repairSourceIdentifiers(request, role, owner, invalidSource, calls, operationPrefix);
         } catch (InvalidWholeGameUnderstanding invalidContext) {
-            return repairWholeGameUnderstanding(request, role, owner, invalidContext);
+            return repairWholeGameUnderstanding(request, role, owner, invalidContext, calls, operationPrefix);
         } catch (RuntimeException failure) {
             if (isTimeout(failure)) throw failure;
             firstFailure = failure;
@@ -309,7 +331,13 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     + "Rebuild the complete outline. Source identifiers must copy exact terms from the rulebook's "
                     + "source language; retrievalQueries are optional hints; player-facing fields remain Simplified Chinese.\n"
                     + prompts.structuredOutputRepair();
-            return organizeOnce(request, role, owner, correction);
+            return organizeOnce(
+                    request,
+                    role,
+                    owner,
+                    correction,
+                    calls,
+                    operationPrefix + "|complete-replacement");
         } catch (RuntimeException failure) {
             log.warn("Repaired teaching-outline model response failed: {}", failure.getMessage());
             failure.addSuppressed(firstFailure);
@@ -321,7 +349,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             OutlineRequest request,
             Role role,
             String owner,
-            IncompleteCanonicalSlotOwnership failure) {
+            IncompleteCanonicalSlotOwnership failure,
+            ModelCallExecutor calls,
+            String operationPrefix) {
         CompactOutlineDraft current = failure.compact;
         Map<String, CompactTeachingUnitDraft> units = current.topics().stream()
                 .flatMap(topic -> topic.teachingUnits().stream())
@@ -380,27 +410,34 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
         ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
-        MissingSlotOwnershipPatch patch = requireExactJson(
-                "missing source-slot ownership repair",
-                () -> parseMissingSlotOwnershipPatch(configuredPrompt.system("""
+        String repairRequest = """
+                Frozen teaching units:
+                %s
+
+                Missing source slots:
+                %s
+
+                Evidence for the missing slots:
+                %s
+                """.formatted(frozenUnits, missingSlots, pageEvidence);
+        String patchContent = callProvider(
+                calls,
+                operationPrefix + "|missing-slot-complete-replacement",
+                repairRequest,
+                "Missing source-slot ownership replaced",
+                () -> configuredPrompt.system("""
                         You assign only source slots omitted from an otherwise frozen teaching plan. Return one JSON
                         object with exactly assignments. Each assignment has exactly sourceSlotId and teachingUnitId.
                         Return every supplied missing sourceSlotId exactly once and no other slot. Select one existing
                         teachingUnitId whose objective and role can teach that source fact. Do not create, rename,
                         reorder, or rewrite a topic, teaching unit, concept, objective, source slot, or rule fact.
                         """)
-                .user("""
-                        Frozen teaching units:
-                        %s
-
-                        Missing source slots:
-                        %s
-
-                        Evidence for the missing slots:
-                        %s
-                        """.formatted(frozenUnits, missingSlots, pageEvidence))
+                .user(repairRequest)
                         .call()
-                        .content()));
+                        .content());
+        MissingSlotOwnershipPatch patch = requireExactJson(
+                "missing source-slot ownership repair",
+                () -> parseMissingSlotOwnershipPatch(patchContent));
         CompactOutlineDraft repaired = applyMissingSlotOwnershipPatch(current, units, failure.missingSlotIds, patch);
         OutlineDraft outline = expandCanonicalOutline(request, repaired);
         TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
@@ -457,7 +494,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             OutlineRequest request,
             Role role,
             String owner,
-            InvalidWholeGameUnderstanding failure) {
+            InvalidWholeGameUnderstanding failure,
+            ModelCallExecutor calls,
+            String operationPrefix) {
         OutlineDraft current = failure.outline;
         String topicContracts = current.topics().stream()
                 .map(topic -> topic.key() + " | " + topic.title() + " | " + topic.objective()
@@ -485,9 +524,33 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
         ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
-        WholeGameContextPatch patch = requireExactJson(
-                "whole-game context repair",
-                () -> parseWholeGameContextPatch(configuredPrompt.system("""
+        String repairRequest = """
+                Whole-game summary:
+                %s
+
+                Current mental-model validation issue:
+                %s
+
+                Existing concepts to preserve or correct:
+                %s
+
+                Topic contracts in final teaching order:
+                %s
+
+                Exact owned source slots:
+                %s
+                """.formatted(
+                current.wholeGameUnderstanding().summary(),
+                failure.getCause() == null ? failure.getMessage() : failure.getCause().getMessage(),
+                existingConcepts,
+                topicContracts,
+                sourceSlots);
+        String patchContent = callProvider(
+                calls,
+                operationPrefix + "|whole-game-complete-replacement",
+                repairRequest,
+                "Whole-game context replaced",
+                () -> configuredPrompt.system("""
                         You repair only the shared source-bound mental model of an otherwise valid teaching outline.
                         Return one JSON object with exactly concepts and topicDependencies. Return the complete
                         replacement concept list, not a delta. Each concept has exactly conceptId, label, explanation,
@@ -501,29 +564,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         fixing the stated validation issue. Prefer shared concepts over mirroring every slot. Do not
                         rewrite topics, objectives, source slots, chapter order, or the whole-game summary.
                         """)
-                .user("""
-                        Whole-game summary:
-                        %s
-
-                        Current mental-model validation issue:
-                        %s
-
-                        Existing concepts to preserve or correct:
-                        %s
-
-                        Topic contracts in final teaching order:
-                        %s
-
-                        Exact owned source slots:
-                        %s
-                        """.formatted(
-                        current.wholeGameUnderstanding().summary(),
-                        failure.getCause() == null ? failure.getMessage() : failure.getCause().getMessage(),
-                        existingConcepts,
-                        topicContracts,
-                        sourceSlots))
+                .user(repairRequest)
                         .call()
-                        .content()));
+                        .content());
+        WholeGameContextPatch patch = requireExactJson(
+                "whole-game context repair",
+                () -> parseWholeGameContextPatch(patchContent));
         if (patch == null || patch.concepts().isEmpty()) {
             throw new IllegalArgumentException("whole-game context repair returned no concepts", failure);
         }
@@ -547,7 +593,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             OutlineRequest request,
             Role role,
             String owner,
-            InvalidSourceCoverage failure) {
+            InvalidSourceCoverage failure,
+            ModelCallExecutor calls,
+            String operationPrefix) {
         OutlineDraft current = failure.outline;
         List<SourceCoverageSlotDraft> invalidSlots =
                 TeachingSourceCoverageContract.missingExactSourceSlots(request, current);
@@ -573,9 +621,19 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
         ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
-        SourceIdentifierPatches patch = requireExactJson(
-                "source-identifier repair",
-                () -> parseSourceIdentifierPatches(configuredPrompt.system("""
+        String repairRequest = """
+                Invalid source slots:
+                %s
+
+                Exact active rulebook page text:
+                %s
+                """.formatted(slots, pages);
+        String patchContent = callProvider(
+                calls,
+                operationPrefix + "|source-identifier-complete-replacement",
+                repairRequest,
+                "Source identifiers replaced",
+                () -> configuredPrompt.system("""
                         You repair only invalid internal source anchors in an otherwise valid teaching outline.
                         Return one JSON object with exactly replacements. Each replacement has exactly slotId and
                         sourceIdentifier. Return exactly one replacement for every supplied invalid slotId and no
@@ -584,15 +642,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         maximum 160 characters. Do not translate, paraphrase, shorten a word, add prose, or rewrite
                         chapters, teaching units, objectives, dependencies, or the whole-game model.
                         """)
-                .user("""
-                        Invalid source slots:
-                        %s
-
-                        Exact active rulebook page text:
-                        %s
-                        """.formatted(slots, pages))
+                .user(repairRequest)
                         .call()
-                        .content()));
+                        .content());
+        SourceIdentifierPatches patch = requireExactJson(
+                "source-identifier repair",
+                () -> parseSourceIdentifierPatches(patchContent));
         OutlineDraft repaired = applySourceIdentifierPatches(current, invalidSlots, patch);
         TeachingSourceCoverageContract.requireCompleteModelContract(request, repaired);
         SourceLanguageRetrievalPolicy.validate(request, repaired);
@@ -706,11 +761,17 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         outlineCalls.shutdownNow();
     }
 
-    private OutlineDraft organizeOnce(OutlineRequest request, Role role, String owner, String repair) {
+    private OutlineDraft organizeOnce(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            String repair,
+            ModelCallExecutor calls,
+            String operation) {
         if (hasCanonicalVisualLedger(request)) {
-            return organizeCanonicalLedgerOnce(request, role, owner, repair);
+            return organizeCanonicalLedgerOnce(request, role, owner, repair, calls, operation);
         }
-        return organizeLegacyOutlineOnce(request, role, owner, repair);
+        return organizeLegacyOutlineOnce(request, role, owner, repair, calls, operation);
     }
 
     /**
@@ -720,7 +781,13 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
      * completion and makes source fidelity an application invariant rather than a copying task for the provider.
      */
     private OutlineDraft organizeCanonicalLedgerOnce(
-            OutlineRequest request, Role role, String owner, String repair) {
+            OutlineRequest request,
+            Role role,
+            String owner,
+            String repair,
+            ModelCallExecutor calls,
+            String operation) {
+        String sourceLedger = canonicalSourceLedger(request);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
         OpenAiChatOptions.Builder options = providerOptions(role, owner);
         if (options != null) {
@@ -730,22 +797,42 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
         ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        String callInput = canonicalLedgerSystemPrompt
+                + "\n"
+                + canonicalLedgerUserPrompt
+                + "\n"
+                + request.learningGoalForPrompt()
+                + "\n"
+                + sourceLedger
+                + "\n"
+                + repair;
+        String content = callProvider(
+                calls,
+                operation,
+                callInput,
+                "Rulebook lesson topics organized",
+                () -> configuredPrompt.system(canonicalLedgerSystemPrompt)
+                        .user(user -> user.text(canonicalLedgerUserPrompt)
+                                .param("learningGoal", request.learningGoalForPrompt())
+                                .param("sourceLedger", sourceLedger)
+                                .param("repair", repair))
+                        .call()
+                        .content());
         CompactOutlineDraft compact = requireExactJson(
                 "canonical-ledger teaching outline",
-                () -> parseCompactOutlineDraft(configuredPrompt.system(canonicalLedgerSystemPrompt)
-                .user(user -> user.text(canonicalLedgerUserPrompt)
-                        .param("learningGoal", request.learningGoalForPrompt())
-                        .param("sourceLedger", canonicalSourceLedger(request))
-                        .param("repair", repair))
-                        .call()
-                        .content()));
+                () -> parseCompactOutlineDraft(content));
         OutlineDraft outline = expandCanonicalOutline(request, compact);
         TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
         return outline;
     }
 
     private OutlineDraft organizeLegacyOutlineOnce(
-            OutlineRequest request, Role role, String owner, String repair) {
+            OutlineRequest request,
+            Role role,
+            String owner,
+            String repair,
+            ModelCallExecutor calls,
+            String operation) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
         OpenAiChatOptions.Builder options = providerOptions(role, owner);
         if (options != null) {
@@ -756,24 +843,40 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     .temperature(temperature));
         }
         ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        String callInput = outlineSystemPrompt
+                + "\n"
+                + outlineUserPrompt
+                + "\n"
+                + request.learningGoalForPrompt()
+                + "\n"
+                + request.pages()
+                + "\n"
+                + repair;
+        String content = callProvider(
+                calls,
+                operation,
+                callInput,
+                "Rulebook lesson topics organized",
+                () -> configuredPrompt.system(outlineSystemPrompt)
+                        .user(user -> {
+                            user.text(outlineUserPrompt)
+                                    .param("learningGoal", request.learningGoalForPrompt())
+                                    .param("pages", request.pages())
+                                    .param("visualPages", request.pageImages().stream()
+                                            .map(TeachingOutlineModel.PageImageInput::pageNumber)
+                                            .toList())
+                                    .param("repair", repair);
+                            if (role == Role.VISUAL) {
+                                request.pageImages().stream().map(images::prepare).forEach(image -> user.media(
+                                        MimeTypeUtils.parseMimeType(image.mediaType()),
+                                        new ByteArrayResource(image.content())));
+                            }
+                        })
+                        .call()
+                        .content());
         OutlineDraft outline = requireExactJson(
                 "teaching outline",
-                () -> parseOutlineDraft(configuredPrompt.system(outlineSystemPrompt)
-                .user(user -> {
-                    user.text(outlineUserPrompt)
-                            .param("learningGoal", request.learningGoalForPrompt())
-                            .param("pages", request.pages())
-                            .param("visualPages", request.pageImages().stream()
-                                    .map(TeachingOutlineModel.PageImageInput::pageNumber)
-                                    .toList())
-                            .param("repair", repair);
-                    if (role == Role.VISUAL) {
-                        request.pageImages().stream().map(images::prepare).forEach(image -> user.media(
-                                MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content())));
-                    }
-                })
-                        .call()
-                        .content()));
+                () -> parseOutlineDraft(content));
         if (outline == null) throw new IllegalArgumentException("teaching outline model returned no draft");
         outline = bindLegacySourceOwnership(outline);
         try {
@@ -792,6 +895,491 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
         SourceLanguageRetrievalPolicy.validate(request, outline);
         return outline;
+    }
+
+    /**
+     * Dense typed ledgers are planned as bounded source-ownership shards followed by one global ordering call. The
+     * global call receives identifiers, roles, pages, and immutable slot ownership only; page facts never re-enter
+     * the prompt after their local unit has been formed.
+     */
+    private OutlineDraft organizeHierarchicalOutline(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix,
+            String globalInstruction) {
+        List<CanonicalSlotRecord> records = canonicalSlotRecords(request);
+        if (records.isEmpty()) {
+            throw new IllegalArgumentException("canonical teaching ledger has no admitted source anchor");
+        }
+        List<CompactTeachingUnitDraft> units = new ArrayList<>();
+        List<List<CanonicalSlotRecord>> shards = canonicalShards(records);
+        for (int index = 0; index < shards.size(); index++) {
+            units.addAll(organizeLocalShard(
+                    request,
+                    role,
+                    owner,
+                    calls,
+                    operationPrefix,
+                    index + 1,
+                    shards.get(index)));
+        }
+        return organizeHierarchicalGlobal(
+                request,
+                role,
+                owner,
+                calls,
+                operationPrefix,
+                List.copyOf(units),
+                globalInstruction);
+    }
+
+    private List<CompactTeachingUnitDraft> organizeLocalShard(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix,
+            int shardNumber,
+            List<CanonicalSlotRecord> shard) {
+        RuntimeException firstFailure;
+        try {
+            return organizeLocalShardOnce(
+                    request, role, owner, calls, operationPrefix, shardNumber, shard, "");
+        } catch (RuntimeException failure) {
+            if (failure instanceof AgentExecutionStoppedException || isTimeout(failure)) throw failure;
+            firstFailure = failure;
+        }
+        try {
+            return organizeLocalShardOnce(
+                    request,
+                    role,
+                    owner,
+                    calls,
+                    operationPrefix + "|complete-replacement",
+                    shardNumber,
+                    shard,
+                    "The previous response failed the exact slot-ownership contract. Return a complete replacement. "
+                            + structuredOutputRepair());
+        } catch (RuntimeException failure) {
+            failure.addSuppressed(firstFailure);
+            throw failure;
+        }
+    }
+
+    private List<CompactTeachingUnitDraft> organizeLocalShardOnce(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix,
+            int shardNumber,
+            List<CanonicalSlotRecord> shard,
+            String repair) {
+        String sourceLedger = shard.stream()
+                .map(CanonicalSlotRecord::promptRecord)
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
+        OpenAiChatOptions.Builder options = providerOptions(role, owner);
+        if (options != null) {
+            options.model(models.modelNameFor(role, owner)).maxTokens(4_000);
+            prompt = prompt.options(options);
+        } else {
+            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
+        }
+        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        String operation = operationPrefix + "|canonical-shard-" + shardNumber;
+        String callInput = LOCAL_OWNERSHIP_SYSTEM_PROMPT
+                + "\n"
+                + LOCAL_OWNERSHIP_USER_PROMPT
+                + "\n"
+                + request.learningGoalForPrompt()
+                + "\n"
+                + sourceLedger
+                + "\n"
+                + repair;
+        String content = callProvider(
+                calls,
+                operation,
+                callInput,
+                "Canonical source shard " + shardNumber + " assigned to teaching units",
+                () -> configuredPrompt.system(LOCAL_OWNERSHIP_SYSTEM_PROMPT)
+                        .user(user -> user.text(LOCAL_OWNERSHIP_USER_PROMPT)
+                                .param("learningGoal", request.learningGoalForPrompt())
+                                .param("sourceLedger", sourceLedger)
+                                .param("repair", repair))
+                        .call()
+                        .content());
+        LocalOwnershipDraft draft = requireExactJson(
+                "canonical source-shard ownership",
+                () -> parseLocalOwnershipDraft(content));
+        return validateAndNamespaceLocalOwnership(shardNumber, shard, draft);
+    }
+
+    private OutlineDraft organizeHierarchicalGlobal(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix,
+            List<CompactTeachingUnitDraft> units,
+            String instruction) {
+        RuntimeException firstFailure;
+        try {
+            return organizeHierarchicalGlobalOnce(
+                    request, role, owner, calls, operationPrefix, units, instruction);
+        } catch (RuntimeException failure) {
+            if (failure instanceof AgentExecutionStoppedException || isTimeout(failure)) throw failure;
+            firstFailure = failure;
+        }
+        try {
+            String repair = (instruction == null || instruction.isBlank() ? "" : instruction.strip() + "\n")
+                    + "The previous global response failed exact unit coverage or whole-game validation. "
+                    + "Return a complete replacement without changing any supplied unit or source slot. "
+                    + structuredOutputRepair();
+            return organizeHierarchicalGlobalOnce(
+                    request,
+                    role,
+                    owner,
+                    calls,
+                    operationPrefix + "|complete-replacement",
+                    units,
+                    repair);
+        } catch (RuntimeException failure) {
+            failure.addSuppressed(firstFailure);
+            throw failure;
+        }
+    }
+
+    private OutlineDraft organizeHierarchicalGlobalOnce(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix,
+            List<CompactTeachingUnitDraft> units,
+            String instruction) {
+        String unitSummaries = globalUnitSummaries(request, units);
+        String sourceCatalogState = sourceCatalogState(request);
+        String repair = instruction == null ? "" : instruction;
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
+        OpenAiChatOptions.Builder options = providerOptions(role, owner);
+        if (options != null) {
+            options.model(models.modelNameFor(role, owner));
+            prompt = prompt.options(options);
+        } else {
+            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
+        }
+        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        String callInput = GLOBAL_ORDERING_SYSTEM_PROMPT
+                + "\n"
+                + GLOBAL_ORDERING_USER_PROMPT
+                + "\n"
+                + request.learningGoalForPrompt()
+                + "\n"
+                + unitSummaries
+                + "\n"
+                + sourceCatalogState
+                + "\n"
+                + repair;
+        String content = callProvider(
+                calls,
+                operationPrefix + "|canonical-global-ordering",
+                callInput,
+                "Source-owned teaching units ordered into a whole-game lesson",
+                () -> configuredPrompt.system(GLOBAL_ORDERING_SYSTEM_PROMPT)
+                        .user(user -> user.text(GLOBAL_ORDERING_USER_PROMPT)
+                                .param("learningGoal", request.learningGoalForPrompt())
+                                .param("teachingUnits", unitSummaries)
+                                .param("sourceCatalogState", sourceCatalogState)
+                                .param("repair", repair))
+                        .call()
+                        .content());
+        GlobalOrderingDraft global = requireExactJson(
+                "canonical global lesson ordering",
+                () -> parseGlobalOrderingDraft(content));
+        CompactOutlineDraft compact = assembleGlobalOutline(units, global);
+        OutlineDraft outline = expandCanonicalOutline(request, compact);
+        TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
+        return outline;
+    }
+
+    private String callProvider(
+            ModelCallExecutor calls,
+            String operation,
+            String input,
+            String successSummary,
+            Supplier<String> providerCall) {
+        RuntimeException firstTransientFailure = null;
+        for (int attempt = 1; attempt <= MAX_TRANSIENT_OUTLINE_ATTEMPTS; attempt++) {
+            String attemptOperation = attempt == 1 ? operation : operation + "|transient-retry";
+            try {
+                return calls.invoke(
+                        new ModelCall(
+                                attemptOperation,
+                                estimateTextTokens(input),
+                                successSummary),
+                        () -> awaitProviderCall(providerCall),
+                        SpringAiTeachingOutlineModel::estimateTextTokens);
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException failure) {
+                if (attempt == MAX_TRANSIENT_OUTLINE_ATTEMPTS || !isTimeout(failure)) {
+                    if (firstTransientFailure != null) failure.addSuppressed(firstTransientFailure);
+                    throw failure;
+                }
+                firstTransientFailure = failure;
+                log.warn("Teaching-outline provider call {} timed out; retrying once", operation);
+            }
+        }
+        throw new IllegalStateException("teaching outline retry budget ended without a result");
+    }
+
+    private String awaitProviderCall(Supplier<String> providerCall) {
+        var task = outlineCalls.submit(providerCall::get);
+        try {
+            return task.get(OUTLINE_ATTEMPT_DEADLINE_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException timeout) {
+            task.cancel(true);
+            throw planningTimeout(timeout);
+        } catch (InterruptedException interrupted) {
+            task.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("teaching outline interrupted", interrupted);
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
+            if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
+            if (failed.getCause() instanceof Error error) throw error;
+            throw new IllegalStateException("teaching outline provider call failed", failed.getCause());
+        }
+    }
+
+    private static int estimateTextTokens(String value) {
+        return Math.max(1, value == null ? 1 : (value.length() + 3) / 4);
+    }
+
+    private String structuredOutputRepair() {
+        String repair = prompts.structuredOutputRepair();
+        return repair == null ? "Return exact JSON matching the supplied schema." : repair;
+    }
+
+    static boolean requiresHierarchicalPlanning(OutlineRequest request) {
+        if (!hasCanonicalVisualLedger(request)) return false;
+        long typedEvidenceCharacters = request.pages().stream()
+                .filter(SpringAiTeachingOutlineModel::hasCanonicalPlanningEvidence)
+                .mapToLong(page -> canonicalTypedFactEvidence(page).length())
+                .sum();
+        return typedEvidenceCharacters > MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS;
+    }
+
+    private static List<List<CanonicalSlotRecord>> canonicalShards(List<CanonicalSlotRecord> records) {
+        if (records == null || records.isEmpty()) return List.of();
+        List<List<CanonicalSlotRecord>> shards = new ArrayList<>();
+        List<CanonicalSlotRecord> current = new ArrayList<>();
+        int characters = 0;
+        for (CanonicalSlotRecord record : records) {
+            int additional = record.promptRecord().length() + (current.isEmpty() ? 0 : 2);
+            if (!current.isEmpty() && characters + additional > CANONICAL_SHARD_EVIDENCE_CHARACTERS) {
+                shards.add(List.copyOf(current));
+                current.clear();
+                characters = 0;
+                additional = record.promptRecord().length();
+            }
+            current.add(record);
+            characters += additional;
+        }
+        if (!current.isEmpty()) shards.add(List.copyOf(current));
+        return List.copyOf(shards);
+    }
+
+    private static List<CompactTeachingUnitDraft> validateAndNamespaceLocalOwnership(
+            int shardNumber,
+            List<CanonicalSlotRecord> shard,
+            LocalOwnershipDraft draft) {
+        if (draft == null || draft.teachingUnits() == null || draft.teachingUnits().isEmpty()
+                || draft.teachingUnits().stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("canonical source shard returned no teaching units");
+        }
+        Map<String, CanonicalSourceSlot> expectedById = shard.stream()
+                .map(CanonicalSlotRecord::slot)
+                .collect(java.util.stream.Collectors.toMap(
+                        CanonicalSourceSlot::slotId,
+                        slot -> slot,
+                        (first, duplicate) -> {
+                            throw new IllegalArgumentException("canonical source shard duplicated a slot");
+                        },
+                        LinkedHashMap::new));
+        LinkedHashSet<String> assigned = new LinkedHashSet<>();
+        LinkedHashSet<String> localUnitIds = new LinkedHashSet<>();
+        List<CompactTeachingUnitDraft> normalized = new ArrayList<>();
+        for (CompactTeachingUnitDraft unit : draft.teachingUnits()) {
+            if (unit.teachingUnitId() == null
+                    || !unit.teachingUnitId().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || !localUnitIds.add(unit.teachingUnitId())
+                    || unit.role() == null
+                    || unit.sourceSlotIds() == null
+                    || unit.sourceSlotIds().isEmpty()) {
+                throw new IllegalArgumentException("canonical source shard returned an invalid teaching unit");
+            }
+            List<CanonicalSourceSlot> selected = unit.sourceSlotIds().stream()
+                    .map(expectedById::get)
+                    .toList();
+            if (selected.contains(null)
+                    || selected.stream().map(CanonicalSourceSlot::availability).distinct().count() != 1
+                    || selected.stream().anyMatch(slot -> slot.fixedRole() != null && slot.fixedRole() != unit.role())) {
+                throw new IllegalArgumentException("canonical source shard changed a slot boundary");
+            }
+            for (CanonicalSourceSlot slot : selected) {
+                if (!assigned.add(slot.slotId())) {
+                    throw new IllegalArgumentException("canonical source shard assigned a slot more than once");
+                }
+            }
+            normalized.add(new CompactTeachingUnitDraft(
+                    "shard-" + shardNumber + "-" + unit.teachingUnitId(),
+                    unit.role(),
+                    List.copyOf(unit.sourceSlotIds())));
+        }
+        if (!assigned.equals(expectedById.keySet())) {
+            throw new IllegalArgumentException("canonical source shard did not assign every supplied slot exactly once");
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static CompactOutlineDraft assembleGlobalOutline(
+            List<CompactTeachingUnitDraft> units,
+            GlobalOrderingDraft global) {
+        if (global == null
+                || global.gameTitle() == null || global.gameTitle().isBlank()
+                || global.premise() == null || global.premise().isBlank()
+                || global.topics() == null || global.topics().isEmpty()
+                || global.wholeGameUnderstanding() == null) {
+            throw new IllegalArgumentException("canonical global ordering is incomplete");
+        }
+        Map<String, CompactTeachingUnitDraft> unitById = units.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CompactTeachingUnitDraft::teachingUnitId,
+                        unit -> unit,
+                        (first, duplicate) -> {
+                            throw new IllegalArgumentException("canonical teaching unit IDs are not unique");
+                        },
+                        LinkedHashMap::new));
+        LinkedHashSet<String> assignedUnits = new LinkedHashSet<>();
+        LinkedHashSet<String> topicKeys = new LinkedHashSet<>();
+        List<CompactTopicDraft> topics = new ArrayList<>();
+        for (GlobalTopicDraft topic : global.topics()) {
+            if (topic == null
+                    || topic.key() == null
+                    || !topic.key().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || !topicKeys.add(topic.key())
+                    || topic.objective() == null || topic.objective().isBlank()
+                    || topic.teachingUnitIds() == null || topic.teachingUnitIds().isEmpty()) {
+                throw new IllegalArgumentException("canonical global ordering returned an invalid topic");
+            }
+            List<CompactTeachingUnitDraft> selected = topic.teachingUnitIds().stream()
+                    .map(unitById::get)
+                    .toList();
+            if (selected.contains(null)) {
+                throw new IllegalArgumentException("canonical global ordering selected an unknown teaching unit");
+            }
+            for (CompactTeachingUnitDraft unit : selected) {
+                if (!assignedUnits.add(unit.teachingUnitId())) {
+                    throw new IllegalArgumentException("canonical global ordering assigned a teaching unit more than once");
+                }
+            }
+            topics.add(new CompactTopicDraft(
+                    topic.key(),
+                    topic.objective(),
+                    topic.required(),
+                    topic.visualEvidenceRecommended(),
+                    List.copyOf(selected)));
+        }
+        if (!assignedUnits.equals(unitById.keySet())) {
+            throw new IllegalArgumentException("canonical global ordering did not assign every teaching unit exactly once");
+        }
+        return new CompactOutlineDraft(
+                global.gameTitle(),
+                global.premise(),
+                List.copyOf(topics),
+                global.wholeGameUnderstanding());
+    }
+
+    private static List<CompactTeachingUnitDraft> unitsFromOutline(
+            OutlineRequest request,
+            OutlineDraft current) {
+        Map<String, CanonicalSourceSlot> canonicalById = canonicalSourceSlots(request).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CanonicalSourceSlot::slotId,
+                        slot -> slot,
+                        (first, duplicate) -> first,
+                        LinkedHashMap::new));
+        LinkedHashMap<String, List<SourceCoverageSlotDraft>> byUnit = current.sourceCoverageSlots().stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        SourceCoverageSlotDraft::teachingUnitId,
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.toList()));
+        LinkedHashSet<String> suppliedSlotIds = current.sourceCoverageSlots().stream()
+                .map(SourceCoverageSlotDraft::slotId)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (!suppliedSlotIds.equals(canonicalById.keySet())) {
+            throw new IllegalArgumentException("existing outline no longer matches the canonical source ledger");
+        }
+        List<CompactTeachingUnitDraft> units = new ArrayList<>();
+        byUnit.forEach((unitId, slots) -> {
+            SourceCoverageRole role = slots.getFirst().role();
+            if (slots.stream().anyMatch(slot -> slot.role() != role)
+                    || slots.stream().map(SourceCoverageSlotDraft::availability).distinct().count() != 1) {
+                throw new IllegalArgumentException("existing teaching unit crossed a canonical source boundary");
+            }
+            units.add(new CompactTeachingUnitDraft(
+                    unitId,
+                    role,
+                    slots.stream().map(SourceCoverageSlotDraft::slotId).toList()));
+        });
+        return List.copyOf(units);
+    }
+
+    private static String globalUnitSummaries(
+            OutlineRequest request,
+            List<CompactTeachingUnitDraft> units) {
+        Map<String, CanonicalSourceSlot> slots = canonicalSourceSlots(request).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CanonicalSourceSlot::slotId,
+                        slot -> slot,
+                        (first, duplicate) -> first,
+                        LinkedHashMap::new));
+        return units.stream().map(unit -> {
+            List<CanonicalSourceSlot> selected = unit.sourceSlotIds().stream().map(slots::get).toList();
+            if (selected.contains(null)) {
+                throw new IllegalArgumentException("teaching unit summary selected an unknown source slot");
+            }
+            return "TEACHING_UNIT_ID: " + unit.teachingUnitId()
+                    + " | ROLE: " + unit.role()
+                    + " | AVAILABILITY: " + selected.getFirst().availability()
+                    + " | PAGES: " + selected.stream().map(CanonicalSourceSlot::pageNumber).distinct().toList()
+                    + " | SOURCE_SLOT_IDS: " + unit.sourceSlotIds()
+                    + " | SOURCE_IDENTIFIERS: "
+                    + selected.stream().map(CanonicalSourceSlot::sourceIdentifier).toList();
+        }).collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    private static String sourceCatalogState(OutlineRequest request) {
+        GlobalSourceCatalogState state = new GlobalSourceCatalogState(
+                canonicalSourceSlots(request).size(),
+                partialSourcePages(request),
+                request.pages().stream()
+                        .filter(page -> page.pageLedgerState()
+                                == TeachingOutlineModel.PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE)
+                        .map(page -> new UnavailablePageSlot(
+                                "unavailable-page-" + page.pageNumber(),
+                                page.pageNumber(),
+                                page.pageLedgerState()))
+                        .toList());
+        try {
+            return JSON.writeValueAsString(state);
+        } catch (JsonProcessingException impossible) {
+            throw new IllegalStateException("cannot serialize typed source catalog state", impossible);
+        }
     }
 
     /**
@@ -1003,6 +1591,48 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         return List.copyOf(slots);
     }
 
+    private static List<CanonicalSlotRecord> canonicalSlotRecords(OutlineRequest request) {
+        Map<Integer, PageInput> pagesByNumber = request.pages().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        PageInput::pageNumber,
+                        page -> page,
+                        (first, duplicate) -> {
+                            throw new IllegalArgumentException("canonical teaching page numbers are not unique");
+                        },
+                        LinkedHashMap::new));
+        List<CanonicalSlotRecord> records = new ArrayList<>();
+        for (CanonicalSourceSlot slot : canonicalSourceSlots(request)) {
+            PageInput page = pagesByNumber.get(slot.pageNumber());
+            if (page == null) {
+                throw new IllegalArgumentException("canonical teaching slot references an unknown page");
+            }
+            StringBuilder record = new StringBuilder()
+                    .append("SOURCE_SLOT_ID: ").append(slot.slotId()).append('\n')
+                    .append("PAGE_NUMBER: ").append(slot.pageNumber()).append('\n')
+                    .append("PAGE_LEDGER_STATE: ").append(page.pageLedgerState()).append('\n')
+                    .append("SOURCE_INVENTORY: ")
+                    .append(page.sourceRuleGroupInventoryComplete() ? "complete" : "incomplete")
+                    .append('\n')
+                    .append("AVAILABILITY: ").append(slot.availability()).append('\n')
+                    .append("FIXED_ROLE: ").append(slot.fixedRole() == null ? "NONE" : slot.fixedRole()).append('\n')
+                    .append("SOURCE_IDENTIFIER: ").append(slot.sourceIdentifier());
+            if (slot.availability() == SourceCoverageAvailability.SOURCED) {
+                var fact = page.sourceRuleGroupFacts().stream()
+                        .filter(candidate -> slot.sourceIdentifier().equals(candidate.identifier()))
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "canonical source slot has no exact typed fact"));
+                record.append('\n')
+                        .append("RULE_GROUP_LABEL: ").append(fact.label()).append('\n')
+                        .append("RULE_GROUP_FACT: ").append(fact.fact());
+            } else {
+                record.append('\n').append("RULE_GROUP_FACT: unavailable in the active source");
+            }
+            records.add(new CanonicalSlotRecord(slot, record.toString()));
+        }
+        return List.copyOf(records);
+    }
+
     private OutlineDraft expandCanonicalOutline(OutlineRequest request, CompactOutlineDraft compact) {
         if (compact == null || compact.topics() == null || compact.topics().isEmpty()
                 || compact.wholeGameUnderstanding() == null) {
@@ -1024,8 +1654,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         List<Integer> partialSourcePages = partialSourcePages(request);
         List<Integer> unavailableSourcePages = unavailableSourcePages(request);
         boolean partialSourcePageCatalog = !partialSourcePages.isEmpty() || !unavailableSourcePages.isEmpty();
-        String premise = premiseWithIncompleteSourceNotice(
-                compact.premise(), partialSourcePages, unavailableSourcePages);
+        String premise = compact.premise();
 
         for (CompactTopicDraft topic : compact.topics()) {
             if (topic == null || topic.key() == null || !topic.key().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -1172,27 +1801,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 .toList();
     }
 
-    private static String premiseWithIncompleteSourceNotice(
-            String premise, List<Integer> partialPages, List<Integer> unavailablePages) {
-        if (partialPages.isEmpty() && unavailablePages.isEmpty()) return premise;
-        List<String> notices = new ArrayList<>();
-        if (!partialPages.isEmpty()) {
-            String pageNumbers = partialPages.stream()
-                    .map(String::valueOf)
-                    .collect(java.util.stream.Collectors.joining("、"));
-            notices.add("规则书第" + pageNumbers
-                    + "页仅纳入了已精确绑定的视觉规则，未列出的来源义务仍未知");
-        }
-        if (!unavailablePages.isEmpty()) {
-            String pageNumbers = unavailablePages.stream()
-                    .map(String::valueOf)
-                    .collect(java.util.stream.Collectors.joining("、"));
-            notices.add("规则书第" + pageNumbers + "页本轮没有获得可验证的视觉证据");
-        }
-        return premise + " 来源范围提示：" + String.join("；", notices)
-                + "；当前讲解仅涵盖已核验并纳入的规则，不会推断这些页面未纳入的规则。";
-    }
-
     private static List<GlobalConceptDraft> canonicalConcepts(
             List<CompactGlobalConceptDraft> drafts,
             Map<String, SourceCoverageSlotDraft> slotsById,
@@ -1265,6 +1873,34 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         for (JsonNode concept : concepts) requireConceptArrays(concept, "compact whole-game concept");
         rejectDuplicateArrayItems(root, "compact outline");
         return JSON.readValue(content, CompactOutlineDraft.class);
+    }
+
+    static LocalOwnershipDraft parseLocalOwnershipDraft(String content) throws JsonProcessingException {
+        JsonNode root = JSON.readTree(content);
+        JsonNode units = requireArray(root, "teachingUnits", "canonical source-shard ownership");
+        for (JsonNode unit : units) {
+            requireArray(unit, "sourceSlotIds", "canonical source-shard teaching unit");
+        }
+        rejectDuplicateArrayItems(root, "canonical source-shard ownership");
+        return JSON.readValue(content, LocalOwnershipDraft.class);
+    }
+
+    static GlobalOrderingDraft parseGlobalOrderingDraft(String content) throws JsonProcessingException {
+        JsonNode root = JSON.readTree(content);
+        JsonNode topics = requireArray(root, "topics", "canonical global ordering");
+        for (JsonNode topic : topics) {
+            requireArray(topic, "teachingUnitIds", "canonical global topic");
+        }
+        JsonNode understanding = requireObject(root, "wholeGameUnderstanding", "canonical global ordering");
+        JsonNode concepts = requireArray(
+                understanding, "concepts", "canonical global whole-game understanding");
+        requireArray(
+                understanding, "topicDependencies", "canonical global whole-game understanding");
+        for (JsonNode concept : concepts) {
+            requireConceptArrays(concept, "canonical global whole-game concept");
+        }
+        rejectDuplicateArrayItems(root, "canonical global ordering");
+        return JSON.readValue(content, GlobalOrderingDraft.class);
     }
 
     static OutlineDraft parseOutlineDraft(String content) throws JsonProcessingException {
@@ -1379,6 +2015,33 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             int pageNumber,
             SourceCoverageAvailability availability,
             SourceCoverageRole fixedRole) {}
+
+    private record CanonicalSlotRecord(CanonicalSourceSlot slot, String promptRecord) {}
+
+    record LocalOwnershipDraft(List<CompactTeachingUnitDraft> teachingUnits) {}
+
+    record GlobalOrderingDraft(
+            String gameTitle,
+            String premise,
+            List<GlobalTopicDraft> topics,
+            CompactWholeGameUnderstandingDraft wholeGameUnderstanding) {}
+
+    record GlobalTopicDraft(
+            String key,
+            String objective,
+            boolean required,
+            boolean visualEvidenceRecommended,
+            List<String> teachingUnitIds) {}
+
+    private record GlobalSourceCatalogState(
+            int admittedSourceSlotCount,
+            List<Integer> partialPageNumbers,
+            List<UnavailablePageSlot> unavailablePageSlots) {}
+
+    private record UnavailablePageSlot(
+            String slotId,
+            int pageNumber,
+            TeachingOutlineModel.PageLedgerState state) {}
 
     record CompactOutlineDraft(
             String gameTitle,

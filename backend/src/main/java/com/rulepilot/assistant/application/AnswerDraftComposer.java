@@ -62,7 +62,8 @@ final class AnswerDraftComposer {
             String username,
             UUID gameSessionId,
             ModelRequest modelRequest,
-            ModelDraft rejectedDraft) {
+            ModelDraft rejectedDraft,
+            RuntimeException rejection) {
         ModelDraft revised;
         try {
             revised = modelGateway.revise(
@@ -72,18 +73,13 @@ final class AnswerDraftComposer {
                     modelRequest,
                     rejectedDraft,
                     List.of(
-                            "The draft failed the final schema or citation validation.",
-                            "Return a complete answer using only citationIds present in supplied evidence.",
-                            "Keep shortVerdict and explanation nonblank, natural, and detailed enough to apply at the table; keep citationIds nonempty.",
-                            "Preserve structured fields that already satisfy their schema and evidence contract unless they caused the stated validation failure.",
-                            "For a SOURCE request or a question asking where the rule appears, use one or two direct citationIds, keep the most direct clause first, answer the question in shortVerdict, and explain that clause in plain player language instead of redirecting to a page.",
-                            "For a SOURCE request, do not add ownership or hand location, and do not change 'during a turn or phase' into 'at the end or completion of' that turn or phase unless the cited clause says so.",
-                            "For a SOURCE request, preserve the exact grammatical number of every capitalized official term from the cited clause; do not invent a singular or plural form.",
-                            "For a SOURCE request, do not claim that the rule or excerpt has no other restriction, condition, exception, limit, or exact timing; explain only what it affirmatively states.",
-                            "For a can/may/allowed question, answer can or cannot directly in shortVerdict and preserve the cited permission or prohibition direction, including every stated condition and exception.",
-                            "Remove every claim that the cited excerpts do not directly support."),
+                            "The final schema or citation validator rejected the previous answer: "
+                                    + boundedDiagnostic(rejection),
+                            "Return one COMPLETE replacement answer using only the supplied evidence and its typed citationIds.",
+                            "Correct the stated validation failure, keep every player-facing rule claim directly supported, and preserve independently valid meaning where the evidence allows it.",
+                            "Do not return a field patch and do not rely on the application to combine this response with the rejected answer."),
                     "repairPublicationValidation",
-                    "Final citation validation failure repaired");
+                    "Final citation validation returned as one complete replacement");
         } catch (RuleAnswerModelTimeoutException exception) {
             return Result.failure(
                     AnswerStatus.MODEL_TIMEOUT,
@@ -103,6 +99,14 @@ final class AnswerDraftComposer {
         return preparation.ready()
                 ? Result.ready(preparation.draft(), preparation.warnings())
                 : Result.failure(preparation.failureStatus(), preparation.failureMessage());
+    }
+
+    private String boundedDiagnostic(RuntimeException rejection) {
+        if (rejection == null) return "validation rejected the answer without a diagnostic";
+        String message = rejection.getMessage();
+        String diagnostic = rejection.getClass().getSimpleName()
+                + (message == null || message.isBlank() ? "" : ": " + message.strip());
+        return diagnostic.length() <= 600 ? diagnostic : diagnostic.substring(0, 600);
     }
 
     Result repairAfterCalculationFailure(
@@ -139,7 +143,6 @@ final class AnswerDraftComposer {
                 ? Result.ready(preparation.draft(), preparation.warnings())
                 : Result.failure(preparation.failureStatus(), preparation.failureMessage());
     }
-
 
     record Result(
             ModelDraft draft,
