@@ -143,6 +143,7 @@ jobs:
           frontend_history_dir="$RUNNER_TEMP/rulepilot-frontend-history"
           source_root="$RUNNER_TEMP/rulepilot-build-source"
           release_bundle="rulepilot-release-${DEPLOY_RELEASE_ID}.tar.gz"
+          release_tar="$RUNNER_TEMP/rulepilot-release-${DEPLOY_RELEASE_ID}.tar"
           control_plane_identity="rulepilot-control-plane-${DEPLOY_RELEASE_ID}.identity"
           control_plane_manifest="rulepilot-control-plane-${DEPLOY_RELEASE_ID}.sha256"
           [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -160,7 +161,9 @@ jobs:
           )
           actual_control_plane_sha256=$(sha256sum "$control_plane_dir/$release_bundle" | awk '{print $1}')
           [[ "$actual_control_plane_sha256" == "$CONTROL_PLANE_SHA256" ]]
-          archive_commit=$(gzip -dc "$control_plane_dir/$release_bundle" | git get-tar-commit-id)
+          test ! -e "$release_tar" && test ! -L "$release_tar"
+          gzip -dc "$control_plane_dir/$release_bundle" > "$release_tar"
+          archive_commit=$(git get-tar-commit-id < "$release_tar")
           [[ "$archive_commit" == "$DEPLOY_SHA" ]]
           expected_identity=$(printf 'deploy_sha=%s\ndeploy_tree=%s\nrelease_id=%s\nbuild_attempt=%s' \
             "$DEPLOY_SHA" "$DEPLOY_TREE" "$DEPLOY_RELEASE_ID" "$DEPLOY_BUILD_ATTEMPT")
@@ -174,7 +177,7 @@ jobs:
           )
           test ! -e "$source_root"
           mkdir -p "$source_root"
-          tar -xzf "$control_plane_dir/$release_bundle" -C "$source_root"
+          tar -xf "$release_tar" -C "$source_root"
           printf 'RULEPILOT_BUILD_SOURCE=%s\n' "$source_root" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v5
@@ -324,6 +327,7 @@ jobs:
           control_plane_dir="$RUNNER_TEMP/rulepilot-sealed-control-plane"
           runtime_artifact_dir="$RUNNER_TEMP/rulepilot-runtime-artifacts"
           release_bundle="rulepilot-release-${DEPLOY_RELEASE_ID}.tar.gz"
+          release_tar="$RUNNER_TEMP/rulepilot-release-${DEPLOY_RELEASE_ID}.tar"
           control_plane_identity="rulepilot-control-plane-${DEPLOY_RELEASE_ID}.identity"
           control_plane_manifest="rulepilot-control-plane-${DEPLOY_RELEASE_ID}.sha256"
           backend_image_archive="rulepilot-backend-${DEPLOY_RELEASE_ID}.tar.gz"
@@ -365,7 +369,9 @@ jobs:
           )
           actual_control_plane_sha256=$(sha256sum "$control_plane_dir/$release_bundle" | awk '{print $1}')
           [[ "$actual_control_plane_sha256" == "$CONTROL_PLANE_SHA256" ]]
-          archive_commit=$(gzip -dc "$control_plane_dir/$release_bundle" | git get-tar-commit-id)
+          test ! -e "$release_tar" && test ! -L "$release_tar"
+          gzip -dc "$control_plane_dir/$release_bundle" > "$release_tar"
+          archive_commit=$(git get-tar-commit-id < "$release_tar")
           [[ "$archive_commit" == "$DEPLOY_SHA" ]]
           expected_identity=$(printf 'deploy_sha=%s\ndeploy_tree=%s\nrelease_id=%s\nbuild_attempt=%s' \
             "$DEPLOY_SHA" "$DEPLOY_TREE" "$DEPLOY_RELEASE_ID" "$DEPLOY_BUILD_ATTEMPT")
