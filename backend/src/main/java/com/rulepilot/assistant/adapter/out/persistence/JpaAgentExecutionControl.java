@@ -53,8 +53,9 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
         }
         int updated = entityManager.createNativeQuery("""
                         update assistant_run_budget budget
-                        set deadline_at = :activatedAt + (budget.deadline_at - run.created_at),
-                            activated_at = :activatedAt,
+                        set deadline_at = cast(:activatedAt as timestamptz)
+                                + (budget.deadline_at - run.created_at),
+                            activated_at = cast(:activatedAt as timestamptz),
                             activation_id = :activationId
                         from assistant_run run
                         where budget.assistant_run_id = :runId
