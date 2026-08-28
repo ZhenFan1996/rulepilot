@@ -759,7 +759,7 @@ const messages = {
     'documents.error': '暂时无法处理规则书，请稍后重试。',
     'documents.titleFallback': '规则书',
     'documents.prepare.outline': '页面要点已经读完，正在安排讲解顺序。',
-    'documents.prepare.received': '已经收到，马上开始整理讲解。',
+    'documents.prepare.received': '已进入有限队列：普通任务最多等待 2 分钟，图片规则书最多等待 30 分钟；超时会明确结束并可直接重试。',
     'documents.prepare.readiness': '正在确认规则书页面和图片。',
     'documents.prepare.planning': '正在阅读图文并组织讲解顺序。',
     'documents.prepare.completed': '讲解目录已准备好，正在打开可读内容。',

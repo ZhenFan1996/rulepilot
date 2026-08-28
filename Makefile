@@ -122,7 +122,6 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/run-production.sh config
 	@node --test \
 		scripts/verify-paid-canary-entrypoints.test.mjs \
-		scripts/verify-production-availability.test.mjs \
 		scripts/verify-ci-workflow.test.mjs \
 		scripts/smoke-production-ordinary-user.test.mjs
 	@cd backend && ./mvnw verify

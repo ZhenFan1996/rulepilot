@@ -9,6 +9,8 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.ModelProviderProperties.Provider;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
+import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -112,6 +114,165 @@ class RuntimeModelConfigurationTest {
         assertThat(configuration.usesFake(RuntimeModelConfiguration.Role.ANSWER)).isTrue();
         assertThat(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).isEqualTo("qwen");
         assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).isSameAs(qwenModel);
+    }
+
+    @Test
+    void overridesOnlyTheStartupRecommendationModelForItsSelectedProvider() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        ChatModel sharedQwen = mock(ChatModel.class);
+        ChatModel recommendationQwen = mock(ChatModel.class);
+        Provider disabled = new Provider(false, "", "", "", false);
+        Provider qwen = new Provider(
+                true,
+                "qwen-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.7-plus",
+                true);
+        when(factory.create(
+                        "qwen",
+                        "qwen-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3.7-plus"))
+                .thenReturn(sharedQwen);
+        when(factory.create(
+                        "qwen",
+                        "qwen-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3.8-flash"))
+                .thenReturn(recommendationQwen);
+
+        RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
+                factory,
+                new ModelProviderProperties(disabled, disabled, disabled, qwen, disabled),
+                "fake", "gemini", "spring-ai", "qwen", "spring-ai", "qwen", "fake", "gemini",
+                "spring-ai", "qwen", "qwen3.8-flash", false, "service-user");
+
+        assertThat(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .isEqualTo("qwen");
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .isSameAs(recommendationQwen);
+        assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .isEqualTo("qwen3.8-flash");
+        assertThat(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .satisfies(resolved -> {
+                    assertThat(resolved.model()).isSameAs(recommendationQwen);
+                    assertThat(resolved.provider()).isEqualTo("qwen");
+                    assertThat(resolved.modelName()).isEqualTo("qwen3.8-flash");
+                    assertThat(resolved.deepSeekNonThinkingGeneration()).isFalse();
+                });
+        assertThat(configuration.effectiveModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .isEqualTo(new RuntimeModelConfiguration.EffectiveModel("qwen", "qwen3.8-flash"));
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.VISUAL)).isSameAs(sharedQwen);
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.ANSWER)).isSameAs(sharedQwen);
+        assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.VISUAL))
+                .isEqualTo("qwen3.7-plus");
+        assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.ANSWER))
+                .isEqualTo("qwen3.7-plus");
+        assertThat(configuration.snapshot("service-user").providers())
+                .filteredOn(provider -> provider.id().equals("qwen"))
+                .extracting(RuntimeModelConfiguration.ProviderView::model)
+                .containsExactly("qwen3.7-plus");
+        assertThat(configuration.snapshot("service-user").recommendationModel())
+                .isEqualTo(new RuntimeModelConfiguration.EffectiveModel("qwen", "qwen3.8-flash"));
+    }
+
+    @Test
+    void durablePlatformAndPersonalProviderModelsTakePriorityOverTheStartupRecommendationOverride() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        ChatModel startupQwen = mock(ChatModel.class);
+        ChatModel recommendationQwen = mock(ChatModel.class);
+        ChatModel platformQwen = mock(ChatModel.class);
+        ChatModel personalQwen = mock(ChatModel.class);
+        Provider disabled = new Provider(false, "", "", "", false);
+        Provider qwen = new Provider(
+                true,
+                "startup-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.7-plus",
+                true);
+        ModelConfigurationStore store = mock(ModelConfigurationStore.class);
+        ModelCredentialCipher cipher = mock(ModelCredentialCipher.class);
+        var platformSecret = new ModelCredentialCipher.EncryptedSecret(new byte[16], new byte[12], (short) 1);
+        var personalSecret = new ModelCredentialCipher.EncryptedSecret(new byte[16], new byte[12], (short) 1);
+        var platformProvider = new ModelConfigurationStore.StoredProvider(
+                "qwen",
+                platformSecret,
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen-platform",
+                true,
+                3);
+        var personalProvider = new ModelConfigurationStore.StoredProvider(
+                "qwen",
+                personalSecret,
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen-personal",
+                true,
+                5);
+        when(cipher.available()).thenReturn(true);
+        when(cipher.decrypt("PLATFORM|qwen", platformSecret)).thenReturn("platform-secret");
+        when(cipher.decrypt("PERSONAL|alice|qwen", personalSecret)).thenReturn("personal-secret");
+        when(store.platform()).thenReturn(Optional.of(
+                new ModelConfigurationStore.StoredConfiguration(List.of(platformProvider), null, 3)));
+        when(store.personal("platform-user")).thenReturn(Optional.empty());
+        when(store.personal("alice")).thenReturn(Optional.of(
+                new ModelConfigurationStore.StoredConfiguration(List.of(personalProvider), null, 5)));
+        when(factory.create(
+                        "qwen",
+                        "startup-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3.7-plus"))
+                .thenReturn(startupQwen);
+        when(factory.create(
+                        "qwen",
+                        "startup-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3.8-flash"))
+                .thenReturn(recommendationQwen);
+        when(factory.create(
+                        "qwen",
+                        "platform-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen-platform"))
+                .thenReturn(platformQwen);
+        when(factory.create(
+                        "qwen",
+                        "personal-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen-personal"))
+                .thenReturn(personalQwen);
+
+        RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
+                factory,
+                new ModelProviderProperties(disabled, disabled, disabled, qwen, disabled),
+                "fake", "gemini", "spring-ai", "qwen", "spring-ai", "qwen", "fake", "gemini",
+                "spring-ai", "qwen", "qwen3.8-flash", false, "",
+                store, cipher, null, 16_000);
+
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "platform-user"))
+                .isSameAs(platformQwen);
+        assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "platform-user"))
+                .isEqualTo("qwen-platform");
+        assertThat(configuration.snapshot("platform-user").recommendationModel())
+                .isEqualTo(new RuntimeModelConfiguration.EffectiveModel("qwen", "qwen-platform"));
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "alice"))
+                .isSameAs(personalQwen);
+        assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "alice"))
+                .isEqualTo("qwen-personal");
+        assertThat(configuration.snapshot("alice").recommendationModel())
+                .isEqualTo(new RuntimeModelConfiguration.EffectiveModel("qwen", "qwen-personal"));
+    }
+
+    @Test
+    void rejectsARecommendationModelWithoutAnActiveSpringAiRecommendationProvider() {
+        Provider disabled = new Provider(false, "", "", "", false);
+
+        assertThatThrownBy(() -> new RuntimeModelConfiguration(
+                        mock(ChatModelFactory.class),
+                        new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
+                        "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
+                        "fake", "qwen", "qwen3.8-flash", false, ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("requires a configured Spring AI recommendation provider");
     }
 
     @Test

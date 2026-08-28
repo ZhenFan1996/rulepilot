@@ -33,6 +33,18 @@ class TeachingGenerationConfiguration {
         return scheduler("teaching-handoff-", poolSize);
     }
 
+    /** Expires accepted Teaching work that never acquires a worker; callbacks only persist one terminal reason. */
+    @Bean(name = "teachingAdmissionScheduler")
+    ThreadPoolTaskScheduler teachingAdmissionScheduler() {
+        return scheduler("teaching-admission-", 1);
+    }
+
+    /** Keeps slow terminal persistence recovery from delaying fresh queue-deadline callbacks. */
+    @Bean(name = "teachingTerminalRecoveryScheduler")
+    ThreadPoolTaskScheduler teachingTerminalRecoveryScheduler() {
+        return scheduler("teaching-terminal-recovery-", 1);
+    }
+
     @Bean(name = "teachingStartupExecutor")
     ThreadPoolTaskExecutor teachingStartupExecutor(
             @Value("${rulepilot.teaching.startup.queue-capacity:8}") int queueCapacity) {
@@ -44,6 +56,23 @@ class TeachingGenerationConfiguration {
         executor.setMaxPoolSize(1);
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("teaching-startup-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
+        return executor;
+    }
+
+    /** Keeps page-sharded, extended-budget preparation from occupying every ordinary first-use startup lane. */
+    @Bean(name = "teachingLongPreparationExecutor")
+    ThreadPoolTaskExecutor teachingLongPreparationExecutor(
+            @Value("${rulepilot.teaching.long-preparation.queue-capacity:8}") int queueCapacity) {
+        if (queueCapacity < 1 || queueCapacity > 8) {
+            throw new IllegalArgumentException("long teaching preparation queue capacity must be between one and eight");
+        }
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(queueCapacity);
+        executor.setThreadNamePrefix("teaching-long-preparation-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
         executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;

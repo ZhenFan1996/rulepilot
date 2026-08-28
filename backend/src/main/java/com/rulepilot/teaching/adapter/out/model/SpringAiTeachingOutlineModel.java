@@ -16,6 +16,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.GlobalConceptDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineCapacityExceededException;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
@@ -35,8 +36,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
@@ -68,8 +71,13 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private static final int MAX_OUTLINE_COMPLETION_TOKENS = 16_000;
     private static final long OUTLINE_ATTEMPT_DEADLINE_SECONDS = 60;
     private static final int MAX_TRANSIENT_OUTLINE_ATTEMPTS = 2;
+    private static final int DEFAULT_OUTLINE_SHARD_PARALLELISM = 10;
+    static final int MAX_HIERARCHICAL_INPUT_TOKENS = 64_000;
+    private static final int LOCAL_OWNERSHIP_OUTPUT_TOKENS = 4_000;
+    private static final int LOCAL_OWNERSHIP_OUTPUT_RESERVE_TOKENS = 512;
+    private static final int GLOBAL_ORDERING_OUTPUT_RESERVE_TOKENS = 4_096;
+    private static final int MAX_LOCAL_TEACHING_UNIT_ID_CHARACTERS = 80;
     static final int MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS = 32_000;
-    static final int CANONICAL_SHARD_EVIDENCE_CHARACTERS = 12_000;
     private static final String LOCAL_OWNERSHIP_SYSTEM_PROMPT = """
             You assign immutable canonical source slots to bounded teaching units.
             Return JSON only: {"teachingUnits":[{"teachingUnitId":"kebab-case","role":"SETUP|CORE_LOOP|LEGAL_ACTION|ENDING|SCORING|NECESSARY_EXCEPTION|SUPPORTING_RULE","sourceSlotIds":["exact-slot-id"]}]}.
@@ -111,9 +119,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private final String canonicalLedgerSystemPrompt;
     private final String canonicalLedgerUserPrompt;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
-    private final ExecutorService outlineCalls =
-            AsyncContextPropagation.executorService(Executors.newVirtualThreadPerTaskExecutor());
+    private final ExecutorService outlineCalls;
     private final double temperature;
+    private final int outlineShardParallelism;
 
     public SpringAiTeachingOutlineModel(RuntimeModelConfiguration models, VersionedAgentPrompts prompts) {
         this(models, prompts, 0.1);
@@ -130,7 +138,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 read(new ClassPathResource("prompts/teaching-outline-v19-autonomous-units-system.txt")),
                 read(new ClassPathResource("prompts/teaching-outline-v19-user.txt")),
                 read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-system.txt")),
-                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-user.txt")));
+                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-user.txt")),
+                DEFAULT_OUTLINE_SHARD_PARALLELISM);
     }
 
     @Autowired
@@ -138,6 +147,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             RuntimeModelConfiguration models,
             VersionedAgentPrompts prompts,
             @Value("${rulepilot.teaching.outline-temperature:0.1}") double temperature,
+            @Value("${rulepilot.teaching.outline-shard-parallelism:10}") int outlineShardParallelism,
             @Value("classpath:prompts/teaching-outline-v19-autonomous-units-system.txt") Resource outlineSystemPrompt,
             @Value("classpath:prompts/teaching-outline-v19-user.txt") Resource outlineUserPrompt,
             @Value("classpath:prompts/teaching-outline-v20-canonical-ledger-system.txt") Resource canonicalLedgerSystemPrompt,
@@ -149,7 +159,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 read(outlineSystemPrompt),
                 read(outlineUserPrompt),
                 read(canonicalLedgerSystemPrompt),
-                read(canonicalLedgerUserPrompt));
+                read(canonicalLedgerUserPrompt),
+                outlineShardParallelism);
     }
 
     SpringAiTeachingOutlineModel(
@@ -165,7 +176,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 outlineSystemPrompt,
                 outlineUserPrompt,
                 read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-system.txt")),
-                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-user.txt")));
+                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-user.txt")),
+                DEFAULT_OUTLINE_SHARD_PARALLELISM);
     }
 
     SpringAiTeachingOutlineModel(
@@ -176,8 +188,31 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             String outlineUserPrompt,
             String canonicalLedgerSystemPrompt,
             String canonicalLedgerUserPrompt) {
+        this(
+                models,
+                prompts,
+                temperature,
+                outlineSystemPrompt,
+                outlineUserPrompt,
+                canonicalLedgerSystemPrompt,
+                canonicalLedgerUserPrompt,
+                DEFAULT_OUTLINE_SHARD_PARALLELISM);
+    }
+
+    SpringAiTeachingOutlineModel(
+            RuntimeModelConfiguration models,
+            VersionedAgentPrompts prompts,
+            double temperature,
+            String outlineSystemPrompt,
+            String outlineUserPrompt,
+            String canonicalLedgerSystemPrompt,
+            String canonicalLedgerUserPrompt,
+            int outlineShardParallelism) {
         if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
             throw new IllegalArgumentException("teaching outline model temperature must be between 0 and 2");
+        }
+        if (outlineShardParallelism < 1 || outlineShardParallelism > 10) {
+            throw new IllegalArgumentException("teaching outline shard parallelism must be between one and ten");
         }
         this.models = models;
         this.prompts = prompts;
@@ -186,6 +221,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         this.outlineUserPrompt = outlineUserPrompt;
         this.canonicalLedgerSystemPrompt = canonicalLedgerSystemPrompt;
         this.canonicalLedgerUserPrompt = canonicalLedgerUserPrompt;
+        this.outlineShardParallelism = outlineShardParallelism;
+        this.outlineCalls = AsyncContextPropagation.executorService(Executors.newVirtualThreadPerTaskExecutor());
     }
 
     @Override
@@ -401,15 +438,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 })
                 .collect(java.util.stream.Collectors.joining("\n\n"));
 
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
-        OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) {
-            options.model(models.modelNameFor(role, owner)).maxTokens(1_200);
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
-        }
-        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        ChatClient.ChatClientRequestSpec configuredPrompt = configuredPrompt(role, owner, 1_200);
         String repairRequest = """
                 Frozen teaching units:
                 %s
@@ -515,15 +544,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         + " | prerequisites=" + concept.prerequisiteConceptIds())
                 .collect(java.util.stream.Collectors.joining("\n"));
 
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
-        OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) {
-            options.model(models.modelNameFor(role, owner));
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
-        }
-        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        ChatClient.ChatClientRequestSpec configuredPrompt = configuredPrompt(role, owner, 0);
         String repairRequest = """
                 Whole-game summary:
                 %s
@@ -612,15 +633,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 .map(page -> "PAGE " + page.pageNumber() + "\n" + page.text())
                 .collect(java.util.stream.Collectors.joining("\n\n"));
 
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
-        OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) {
-            options.model(models.modelNameFor(role, owner)).maxTokens(1_600);
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
-        }
-        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        ChatClient.ChatClientRequestSpec configuredPrompt = configuredPrompt(role, owner, 1_600);
         String repairRequest = """
                 Invalid source slots:
                 %s
@@ -788,15 +801,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             ModelCallExecutor calls,
             String operation) {
         String sourceLedger = canonicalSourceLedger(request);
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
-        OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) {
-            options.model(models.modelNameFor(role, owner));
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
-        }
-        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        ChatClient.ChatClientRequestSpec configuredPrompt = configuredPrompt(role, owner, 0);
         String callInput = canonicalLedgerSystemPrompt
                 + "\n"
                 + canonicalLedgerUserPrompt
@@ -833,16 +838,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             String repair,
             ModelCallExecutor calls,
             String operation) {
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
-        OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) {
-            options.model(models.modelNameFor(role, owner));
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder()
-                    .temperature(temperature));
-        }
-        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        ChatClient.ChatClientRequestSpec configuredPrompt = configuredPrompt(role, owner, 0);
         String callInput = outlineSystemPrompt
                 + "\n"
                 + outlineUserPrompt
@@ -898,9 +894,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     /**
-     * Dense typed ledgers are planned as bounded source-ownership shards followed by one global ordering call. The
-     * global call receives identifiers, roles, pages, and immutable slot ownership only; page facts never re-enter
-     * the prompt after their local unit has been formed.
+     * Dense typed ledgers are planned as page-owned source shards followed by one global ordering call. Every page's
+     * slots stay together so related rules are classified with their shared page context. Independent page shards run
+     * in bounded parallel windows; the global call still receives identifiers, roles, pages, and immutable slot
+     * ownership only, so page facts never re-enter the prompt after their local unit has been formed.
      */
     private OutlineDraft organizeHierarchicalOutline(
             OutlineRequest request,
@@ -913,18 +910,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         if (records.isEmpty()) {
             throw new IllegalArgumentException("canonical teaching ledger has no admitted source anchor");
         }
-        List<CompactTeachingUnitDraft> units = new ArrayList<>();
         List<List<CanonicalSlotRecord>> shards = canonicalShards(records);
-        for (int index = 0; index < shards.size(); index++) {
-            units.addAll(organizeLocalShard(
-                    request,
-                    role,
-                    owner,
-                    calls,
-                    operationPrefix,
-                    index + 1,
-                    shards.get(index)));
-        }
+        requireHierarchicalCapacity(request, shards);
+        List<CompactTeachingUnitDraft> units = organizeLocalShards(
+                request, role, owner, calls, operationPrefix, shards);
         return organizeHierarchicalGlobal(
                 request,
                 role,
@@ -933,6 +922,155 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 operationPrefix,
                 List.copyOf(units),
                 globalInstruction);
+    }
+
+    private List<CompactTeachingUnitDraft> organizeLocalShards(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            ModelCallExecutor calls,
+            String operationPrefix,
+            List<List<CanonicalSlotRecord>> shards) {
+        List<CompactTeachingUnitDraft> units = new ArrayList<>();
+        for (int windowStart = 0; windowStart < shards.size(); windowStart += outlineShardParallelism) {
+            int windowEnd = Math.min(windowStart + outlineShardParallelism, shards.size());
+            var completed = new ExecutorCompletionService<LocalShardResult>(outlineCalls);
+            List<Future<LocalShardResult>> pending = new ArrayList<>();
+            for (int index = windowStart; index < windowEnd; index++) {
+                int shardIndex = index;
+                int shardNumber = index + 1;
+                List<CanonicalSlotRecord> shard = shards.get(index);
+                pending.add(completed.submit(() -> new LocalShardResult(
+                        shardIndex,
+                        organizeLocalShard(
+                                request,
+                                role,
+                                owner,
+                                calls,
+                                operationPrefix,
+                                shardNumber,
+                                shard))));
+            }
+            Map<Integer, List<CompactTeachingUnitDraft>> unitsByShard = new LinkedHashMap<>();
+            try {
+                for (int completedCount = 0; completedCount < pending.size(); completedCount++) {
+                    LocalShardResult shard = completed.take().get();
+                    unitsByShard.put(shard.index(), shard.units());
+                }
+            } catch (InterruptedException interrupted) {
+                pending.forEach(task -> task.cancel(true));
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("teaching outline shard planning was interrupted", interrupted);
+            } catch (ExecutionException failed) {
+                pending.forEach(task -> task.cancel(true));
+                if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
+                if (failed.getCause() instanceof Error error) throw error;
+                throw new IllegalStateException("teaching outline shard planning failed", failed.getCause());
+            }
+            for (int index = windowStart; index < windowEnd; index++) {
+                units.addAll(unitsByShard.get(index));
+            }
+        }
+        return List.copyOf(units);
+    }
+
+    /**
+     * A page shard may legitimately yield more than one teaching unit, so capacity is checked against the most
+     * expensive valid ownership shape: one maximum-length unit ID per canonical slot. Doing this before the first
+     * shard starts avoids spending a partial paid call graph that can never reach the required exact global output.
+     */
+    private static void requireHierarchicalCapacity(
+            OutlineRequest request,
+            List<List<CanonicalSlotRecord>> shards) {
+        List<CompactTeachingUnitDraft> maximumUnits = new ArrayList<>();
+        for (int shardIndex = 0; shardIndex < shards.size(); shardIndex++) {
+            List<CanonicalSlotRecord> shard = shards.get(shardIndex);
+            String sourceLedger = shard.stream()
+                    .map(CanonicalSlotRecord::promptRecord)
+                    .collect(java.util.stream.Collectors.joining("\n\n"));
+            String localInput = LOCAL_OWNERSHIP_SYSTEM_PROMPT
+                    + "\n"
+                    + LOCAL_OWNERSHIP_USER_PROMPT
+                    + "\n"
+                    + request.learningGoalForPrompt()
+                    + "\n"
+                    + sourceLedger;
+            List<CompactTeachingUnitDraft> localUnits = maximumLocalUnits(shard);
+            int localInputTokens = estimateTextTokens(localInput);
+            int localOutputTokens = estimateJsonTokens(new LocalOwnershipDraft(localUnits));
+            if (localInputTokens > MAX_HIERARCHICAL_INPUT_TOKENS
+                    || localOutputTokens + LOCAL_OWNERSHIP_OUTPUT_RESERVE_TOKENS
+                            > LOCAL_OWNERSHIP_OUTPUT_TOKENS) {
+                throw new OutlineCapacityExceededException(
+                        "canonical source page shard exceeds the bounded ownership context");
+            }
+            int shardNumber = shardIndex + 1;
+            localUnits.forEach(unit -> maximumUnits.add(new CompactTeachingUnitDraft(
+                    "shard-" + shardNumber + "-" + unit.teachingUnitId(),
+                    unit.role(),
+                    unit.sourceSlotIds())));
+        }
+
+        String unitSummaries = globalUnitSummaries(request, maximumUnits);
+        String sourceCatalogState = sourceCatalogState(request);
+        String globalInput = GLOBAL_ORDERING_SYSTEM_PROMPT
+                + "\n"
+                + GLOBAL_ORDERING_USER_PROMPT
+                + "\n"
+                + request.learningGoalForPrompt()
+                + "\n"
+                + unitSummaries
+                + "\n"
+                + sourceCatalogState;
+        int globalInputTokens = estimateTextTokens(globalInput);
+        int minimumGlobalOutputTokens = estimateJsonTokens(minimumGlobalOrdering(maximumUnits));
+        if (globalInputTokens > MAX_HIERARCHICAL_INPUT_TOKENS
+                || minimumGlobalOutputTokens + GLOBAL_ORDERING_OUTPUT_RESERVE_TOKENS
+                        > MAX_OUTLINE_COMPLETION_TOKENS) {
+            throw new OutlineCapacityExceededException(
+                    "canonical teaching units exceed the bounded global ordering context");
+        }
+    }
+
+    private static List<CompactTeachingUnitDraft> maximumLocalUnits(List<CanonicalSlotRecord> shard) {
+        List<CompactTeachingUnitDraft> units = new ArrayList<>();
+        for (int index = 0; index < shard.size(); index++) {
+            String ordinal = Integer.toString(index + 1);
+            String localId = "u".repeat(MAX_LOCAL_TEACHING_UNIT_ID_CHARACTERS - ordinal.length()) + ordinal;
+            CanonicalSourceSlot slot = shard.get(index).slot();
+            units.add(new CompactTeachingUnitDraft(
+                    localId,
+                    slot.fixedRole() == null ? SourceCoverageRole.SUPPORTING_RULE : slot.fixedRole(),
+                    List.of(slot.slotId())));
+        }
+        return List.copyOf(units);
+    }
+
+    private static GlobalOrderingDraft minimumGlobalOrdering(List<CompactTeachingUnitDraft> units) {
+        List<String> unitIds = units.stream().map(CompactTeachingUnitDraft::teachingUnitId).toList();
+        List<String> sourceSlotIds = units.isEmpty() ? List.of("source-slot") : units.getFirst().sourceSlotIds();
+        return new GlobalOrderingDraft(
+                "game",
+                "premise",
+                List.of(new GlobalTopicDraft("lesson", "objective", true, false, unitIds)),
+                new CompactWholeGameUnderstandingDraft(
+                        "summary",
+                        List.of(new CompactGlobalConceptDraft(
+                                "concept",
+                                "label",
+                                "explanation",
+                                sourceSlotIds,
+                                List.of("lesson"),
+                                List.of())),
+                        List.of()));
+    }
+
+    private static int estimateJsonTokens(Object value) {
+        try {
+            return estimateTextTokens(JSON.writeValueAsString(value));
+        } catch (JsonProcessingException impossible) {
+            throw new IllegalStateException("cannot estimate hierarchical outline capacity", impossible);
+        }
     }
 
     private List<CompactTeachingUnitDraft> organizeLocalShard(
@@ -980,15 +1118,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         String sourceLedger = shard.stream()
                 .map(CanonicalSlotRecord::promptRecord)
                 .collect(java.util.stream.Collectors.joining("\n\n"));
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
-        OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) {
-            options.model(models.modelNameFor(role, owner)).maxTokens(4_000);
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
-        }
-        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        ChatClient.ChatClientRequestSpec configuredPrompt = configuredPrompt(role, owner, 4_000);
         String operation = operationPrefix + "|canonical-shard-" + shardNumber;
         String callInput = LOCAL_OWNERSHIP_SYSTEM_PROMPT
                 + "\n"
@@ -1063,15 +1193,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         String unitSummaries = globalUnitSummaries(request, units);
         String sourceCatalogState = sourceCatalogState(request);
         String repair = instruction == null ? "" : instruction;
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
-        OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) {
-            options.model(models.modelNameFor(role, owner));
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
-        }
-        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        ChatClient.ChatClientRequestSpec configuredPrompt = configuredPrompt(role, owner, 0);
         String callInput = GLOBAL_ORDERING_SYSTEM_PROMPT
                 + "\n"
                 + GLOBAL_ORDERING_USER_PROMPT
@@ -1155,8 +1277,26 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
     }
 
-    private static int estimateTextTokens(String value) {
-        return Math.max(1, value == null ? 1 : (value.length() + 3) / 4);
+    static int estimateTextTokens(String value) {
+        if (value == null || value.isEmpty()) return 1;
+        long tokens = 0;
+        int asciiRun = 0;
+        for (int offset = 0; offset < value.length(); ) {
+            int codePoint = value.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (codePoint <= 0x7f) {
+                asciiRun++;
+                continue;
+            }
+            tokens += (asciiRun + 3L) / 4L;
+            asciiRun = 0;
+            // CJK and other BMP text commonly consume about one token per code point; supplementary symbols can
+            // consume two. This is deliberately conservative when the provider tokenizer is not locally available.
+            tokens += codePoint <= 0xffff ? 1 : 2;
+            if (tokens >= Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        }
+        tokens += (asciiRun + 3L) / 4L;
+        return (int) Math.max(1L, Math.min(tokens, Integer.MAX_VALUE));
     }
 
     private String structuredOutputRepair() {
@@ -1175,19 +1315,20 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     private static List<List<CanonicalSlotRecord>> canonicalShards(List<CanonicalSlotRecord> records) {
         if (records == null || records.isEmpty()) return List.of();
+        // The durable typed catalog creates one page from one bounded model completion. Keep that source boundary
+        // intact here: a shard can never accumulate facts from several pages, and one dense page can never expand
+        // into dozens of serial ownership calls merely because it contains many canonical slots.
         List<List<CanonicalSlotRecord>> shards = new ArrayList<>();
         List<CanonicalSlotRecord> current = new ArrayList<>();
-        int characters = 0;
+        int currentPage = records.getFirst().slot().pageNumber();
         for (CanonicalSlotRecord record : records) {
-            int additional = record.promptRecord().length() + (current.isEmpty() ? 0 : 2);
-            if (!current.isEmpty() && characters + additional > CANONICAL_SHARD_EVIDENCE_CHARACTERS) {
+            boolean pageChanged = !current.isEmpty() && record.slot().pageNumber() != currentPage;
+            if (pageChanged) {
                 shards.add(List.copyOf(current));
                 current.clear();
-                characters = 0;
-                additional = record.promptRecord().length();
+                currentPage = record.slot().pageNumber();
             }
             current.add(record);
-            characters += additional;
         }
         if (!current.isEmpty()) shards.add(List.copyOf(current));
         return List.copyOf(shards);
@@ -1216,6 +1357,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         for (CompactTeachingUnitDraft unit : draft.teachingUnits()) {
             if (unit.teachingUnitId() == null
                     || !unit.teachingUnitId().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || unit.teachingUnitId().length() > MAX_LOCAL_TEACHING_UNIT_ID_CHARACTERS
                     || !localUnitIds.add(unit.teachingUnitId())
                     || unit.role() == null
                     || unit.sourceSlotIds() == null
@@ -2018,6 +2160,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     private record CanonicalSlotRecord(CanonicalSourceSlot slot, String promptRecord) {}
 
+    private record LocalShardResult(int index, List<CompactTeachingUnitDraft> units) {}
+
     record LocalOwnershipDraft(List<CompactTeachingUnitDraft> teachingUnits) {}
 
     record GlobalOrderingDraft(
@@ -2172,15 +2316,27 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
     }
 
-    OpenAiChatOptions.Builder providerOptions(Role role, String owner) {
-        if (models.usesDeepSeekNonThinkingGeneration(role, owner)) {
+    private ChatClient.ChatClientRequestSpec configuredPrompt(Role role, String owner, int maxTokens) {
+        RuntimeModelConfiguration.ResolvedModel selected = models.resolvedModelFor(role, owner);
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(selected.model()).prompt();
+        OpenAiChatOptions.Builder options = providerOptions(selected);
+        if (options == null) {
+            return prompt.options(ChatOptions.builder().temperature(temperature));
+        }
+        options.model(selected.modelName());
+        if (maxTokens > 0) options.maxTokens(maxTokens);
+        return prompt.options(options);
+    }
+
+    private OpenAiChatOptions.Builder providerOptions(RuntimeModelConfiguration.ResolvedModel selected) {
+        if (selected.deepSeekNonThinkingGeneration()) {
             return OpenAiChatOptions.builder()
                     .temperature(temperature)
                     .maxTokens(MAX_OUTLINE_COMPLETION_TOKENS)
                     .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
                     .extraBody(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
         }
-        if (usesQwen(role, owner)) {
+        if ("qwen".equals(selected.provider())) {
             return OpenAiChatOptions.builder()
                     .temperature(temperature)
                     .maxTokens(MAX_OUTLINE_COMPLETION_TOKENS)
@@ -2188,13 +2344,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     .extraBody(java.util.Map.of("enable_thinking", false));
         }
         return null;
-    }
-
-    private boolean usesQwen(Role role, String owner) {
-        String provider = owner == null || owner.isBlank()
-                ? models.providerFor(role)
-                : models.providerFor(role, owner);
-        return "qwen".equals(provider);
     }
 
     static boolean isTimeout(Throwable failure) {

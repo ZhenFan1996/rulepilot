@@ -54,6 +54,39 @@ public interface AgentExecutionControl {
 
     void initialize(UUID runId, BudgetLimits limits, Instant startedAt);
 
+    /**
+     * Starts the wall-clock budget when previously queued work actually acquires its worker lane.
+     * The immutable active-work duration was already persisted when the run was enqueued.
+     */
+    default void activate(UUID runId, Instant startedAt) {}
+
+    /**
+     * Idempotently claims queued work for one delivery. Repeating the same activation ID after an ambiguous
+     * transaction response must succeed; a different activation ID must lose the claim.
+     */
+    default void activate(UUID runId, UUID activationId, Instant startedAt) {
+        activate(runId, startedAt);
+    }
+
+    /**
+     * Locks the queued-work admission row and returns true only while no worker or cancellation has claimed it.
+     * The caller must keep the surrounding transaction open until the matching run terminal state is persisted.
+     */
+    default boolean lockUnactivated(UUID runId) {
+        return true;
+    }
+
+    /** Locks admission when it is still unclaimed or was claimed by this exact delivery. */
+    default boolean lockUnactivatedOrOwned(UUID runId, UUID activationId) {
+        return lockUnactivated(runId);
+    }
+
+    /** Excludes time spent waiting between bounded teaching work units from the active-work deadline. */
+    default void excludeQueueWait(UUID runId, Duration queueWait) {}
+
+    /** Allows post-work publication after timeout/token exhaustion, but never after owner cancellation won the lock. */
+    default void assertFinalizationAllowed(UUID runId) {}
+
     void assertStepAllowed(UUID runId, long nextStep);
 
     InvocationReservation reserve(UUID runId, ActivityType type, String operation, int estimatedInputTokens);
@@ -74,6 +107,15 @@ public interface AgentExecutionControl {
     }
 
     void requestCancellation(UUID runId, String ownerUsername);
+
+    /**
+     * Linearizes cancellation against final publication. A false result means the run became terminal before the
+     * owner acquired the cancellation boundary, so repeating cancellation is already satisfied.
+     */
+    default boolean requestCancellationIfActive(UUID runId, String ownerUsername) {
+        requestCancellation(runId, ownerUsername);
+        return true;
+    }
 
     BudgetSnapshot budget(UUID runId);
 

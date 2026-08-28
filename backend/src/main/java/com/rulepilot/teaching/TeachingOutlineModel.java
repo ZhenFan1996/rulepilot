@@ -86,6 +86,17 @@ public interface TeachingOutlineModel {
         }
     }
 
+    /**
+     * The immutable source ledger cannot fit the bounded hierarchical planning contract. This is known before any
+     * provider call and therefore must not be treated as a transient model or structured-output failure.
+     */
+    final class OutlineCapacityExceededException extends RuntimeException {
+
+        public OutlineCapacityExceededException(String message) {
+            super(message);
+        }
+    }
+
     record OutlineRequest(
             List<PageInput> pages,
             List<PageImageInput> pageImages,

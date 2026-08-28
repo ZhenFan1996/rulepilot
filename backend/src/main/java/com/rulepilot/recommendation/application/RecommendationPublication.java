@@ -140,7 +140,8 @@ final class RecommendationPublication {
                         state.webResearchCalls,
                         fallbackUsed,
                         responseActions,
-                        state.elapsedMs()),
+                        state.elapsedMs(),
+                        state.modelCallElapsedMs),
                 games,
                 state.comparison,
                 permit.shortfall());

@@ -281,9 +281,7 @@ final class VisualLessonStepLocator {
                                     hasMoreCandidates),
                             boundary.remaining());
                 } catch (AgentExecutionStoppedException modelStopped) {
-                    if (firstRejection == null) firstRejection = outcomeFor(modelStopped);
-                    stopped = true;
-                    break;
+                    throw modelStopped;
                 }
                 if (guide.regions().isEmpty()) {
                     if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
@@ -338,24 +336,27 @@ final class VisualLessonStepLocator {
         if (runId != null && execution != null) {
             AgentExecutionControl.BudgetSnapshot budget = execution.budget(runId);
             if (budget.cancellationRequestedAt() != null) {
-                return Boundary.stopped(VisualLessonEnricher.Outcome.MODEL_INTERRUPTED);
+                throw new AgentExecutionStoppedException(
+                        AgentExecutionStoppedException.StopReason.CANCELLED);
             }
-            if (budget.usedModelCalls() >= budget.maxModelCalls()
-                    || budget.usedTokens() >= budget.maxTokens()) {
-                return Boundary.stopped(VisualLessonEnricher.Outcome.MODEL_INTERRUPTED);
+            if (budget.usedModelCalls() >= budget.maxModelCalls()) {
+                throw new AgentExecutionStoppedException(
+                        AgentExecutionStoppedException.StopReason.MODEL_BUDGET);
+            }
+            if (budget.usedTokens() >= budget.maxTokens()) {
+                throw new AgentExecutionStoppedException(
+                        AgentExecutionStoppedException.StopReason.TOKEN_BUDGET);
             }
             deadline = budget.deadlineAt();
+            if (!now.isBefore(deadline)) {
+                throw new AgentExecutionStoppedException(
+                        AgentExecutionStoppedException.StopReason.TIMEOUT);
+            }
         }
         if (!now.isBefore(deadline)) {
             return Boundary.stopped(VisualLessonEnricher.Outcome.MODEL_TIMEOUT);
         }
         return Boundary.active(Duration.between(now, deadline));
-    }
-
-    private VisualLessonEnricher.Outcome outcomeFor(AgentExecutionStoppedException stopped) {
-        return stopped.reason() == AgentExecutionStoppedException.StopReason.TIMEOUT
-                ? VisualLessonEnricher.Outcome.MODEL_TIMEOUT
-                : VisualLessonEnricher.Outcome.MODEL_INTERRUPTED;
     }
 
     private List<String> terms(LessonSection section, List<LessonStep> steps) {

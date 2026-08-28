@@ -243,6 +243,29 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
+    void treatsNonPositiveDurationFactsAsUnknownInsteadOfSatisfyingAHardMaximum() {
+        RecommendationProfile profile = new RecommendationProfile(
+                null,
+                ConstraintRange.hardAtMost(90),
+                null,
+                BggGameType.ALL,
+                InteractionPreference.ANY);
+        Game zeroDuration = gameWithRanges(23, 2, 5, 0, 0, new BigDecimal("2.2"));
+        Game negativeDuration = gameWithRanges(24, 2, 5, -30, -1, new BigDecimal("2.2"));
+
+        assertThat(selector.eligible(zeroDuration, profile)).isFalse();
+        assertThat(selector.eligible(negativeDuration, profile)).isFalse();
+        assertThat(selector.observations(zeroDuration))
+                .noneMatch(observation -> observation.attribute().equals("durationMinutes"));
+        assertThat(selector.fitClaims(zeroDuration, profile, false))
+                .singleElement()
+                .satisfies(claim -> {
+                    assertThat(claim.subject()).isEqualTo("durationMinutes");
+                    assertThat(claim.relation()).isEqualTo(CandidateClaim.Relation.UNKNOWN);
+                });
+    }
+
+    @Test
     void appliesTheRequestedBggRankingTypeToEveryCandidateRegardlessOfItsDiscoveryPath() {
         RecommendationProfile partyProfile = new RecommendationProfile(
                 ConstraintRange.hardExact(2),

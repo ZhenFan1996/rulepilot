@@ -9,9 +9,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineCapacityExceededException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
@@ -20,10 +23,14 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
-import java.util.List;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
+import java.util.stream.IntStream;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -366,16 +373,25 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
     void plansALargeLedgerInBoundedShardsAndKeepsUnavailablePagesOutOfSourceOwnership() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                response("""
+        CountDownLatch localShardsStarted = new CountDownLatch(2);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            String prompt = promptText(invocation.getArgument(0));
+            if (prompt.contains("FIRST_LONG_FACT_MARKER")) {
+                awaitConcurrentLocalShards(localShardsStarted);
+                return response("""
                         {"teachingUnits":[{"teachingUnitId":"first","role":"LEGAL_ACTION",\
                         "sourceSlotIds":["page-1-rule-1"]}]}
-                        """),
-                response("""
+                        """);
+            }
+            if (prompt.contains("SECOND_LONG_FACT_MARKER")) {
+                awaitConcurrentLocalShards(localShardsStarted);
+                return response("""
                         {"teachingUnits":[{"teachingUnitId":"second","role":"LEGAL_ACTION",\
                         "sourceSlotIds":["page-2-rule-1"]}]}
-                        """),
-                response("""
+                        """);
+            }
+            if (prompt.contains("shard-1-first") && prompt.contains("shard-2-second")) {
+                return response("""
                         {
                           "gameTitle":"长规则示例",
                           "premise":"先建立两个来源单元之间的关系。",
@@ -399,7 +415,10 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                             "topicDependencies":[]
                           }
                         }
-                        """));
+                        """);
+            }
+            throw new AssertionError("unexpected outline prompt");
+        });
         SpringAiTeachingOutlineModel model = model(configuration);
         var request = new OutlineRequest(
                 List.of(
@@ -420,18 +439,28 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                     .containsExactly("page-1-rule-1", "page-2-rule-1");
             assertThat(outline.topics()).singleElement().satisfies(topic -> assertThat(topic.coverageTags())
                     .contains(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG));
-            assertThat(calls.calls)
-                    .extracting(ModelCall::operation)
-                    .containsExactly(
+            List<String> operations = calls.calls.stream().map(ModelCall::operation).toList();
+            assertThat(operations.subList(0, 2))
+                    .containsExactlyInAnyOrder(
                             "organizeTeachingOutline|canonical-shard-1",
-                            "organizeTeachingOutline|canonical-shard-2",
-                            "organizeTeachingOutline|canonical-global-ordering");
+                            "organizeTeachingOutline|canonical-shard-2");
+            assertThat(operations.getLast()).isEqualTo("organizeTeachingOutline|canonical-global-ordering");
 
             ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
             verify(chatModel, times(3)).call(prompts.capture());
-            String firstShardPrompt = promptText(prompts.getAllValues().get(0));
-            String secondShardPrompt = promptText(prompts.getAllValues().get(1));
-            String globalPrompt = promptText(prompts.getAllValues().get(2));
+            List<String> promptTexts = prompts.getAllValues().stream().map(this::promptText).toList();
+            String firstShardPrompt = promptTexts.stream()
+                    .filter(prompt -> prompt.contains("FIRST_LONG_FACT_MARKER"))
+                    .findFirst()
+                    .orElseThrow();
+            String secondShardPrompt = promptTexts.stream()
+                    .filter(prompt -> prompt.contains("SECOND_LONG_FACT_MARKER"))
+                    .findFirst()
+                    .orElseThrow();
+            String globalPrompt = promptTexts.stream()
+                    .filter(prompt -> prompt.contains("shard-1-first") && prompt.contains("shard-2-second"))
+                    .findFirst()
+                    .orElseThrow();
             assertThat(firstShardPrompt).contains("FIRST_LONG_FACT_MARKER").doesNotContain("SECOND_LONG_FACT_MARKER");
             assertThat(secondShardPrompt).contains("SECOND_LONG_FACT_MARKER").doesNotContain("FIRST_LONG_FACT_MARKER");
             assertThat(globalPrompt)
@@ -444,6 +473,296 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
         } finally {
             model.close();
         }
+    }
+
+    @Test
+    void keepsEveryCanonicalSlotFromOneDensePageInOneOwnershipShard() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            String prompt = promptText(invocation.getArgument(0));
+            if (prompt.contains("FIRST_DENSE_FACT") && prompt.contains("SECOND_DENSE_FACT")) {
+                return response("""
+                        {"teachingUnits":[{"teachingUnitId":"page-flow","role":"LEGAL_ACTION",\
+                        "sourceSlotIds":["page-1-rule-1","page-1-rule-2"]}]}
+                        """);
+            }
+            if (prompt.contains("THIRD_DENSE_FACT")) {
+                return response("""
+                        {"teachingUnits":[{"teachingUnitId":"page-ending","role":"ENDING",\
+                        "sourceSlotIds":["page-2-rule-1"]}]}
+                        """);
+            }
+            if (prompt.contains("shard-1-page-flow") && prompt.contains("shard-2-page-ending")) {
+                return response("""
+                        {
+                          "gameTitle":"密集页面示例",
+                          "premise":"页面内关系先形成单元，再组织整份规则流程。",
+                          "topics":[{
+                            "key":"page-flow",
+                            "objective":"理解各页规则之间的关系。",
+                            "required":true,
+                            "visualEvidenceRecommended":false,
+                            "teachingUnitIds":["shard-1-page-flow","shard-2-page-ending"]
+                          }],
+                          "wholeGameUnderstanding":{
+                            "summary":"页面内规则保持共同上下文并连接为完整流程。",
+                            "concepts":[{
+                              "conceptId":"page-flow",
+                              "label":"页面流程",
+                              "explanation":"同页槽位共同归组，再与后续页面连接。",
+                              "sourceSlotIds":["page-1-rule-1","page-1-rule-2","page-2-rule-1"],
+                              "relatedTopicKeys":["page-flow"],
+                              "prerequisiteConceptIds":[]
+                            }],
+                            "topicDependencies":[]
+                          }
+                        }
+                        """);
+            }
+            throw new AssertionError("unexpected dense-page outline prompt");
+        });
+        SpringAiTeachingOutlineModel model = model(configuration);
+        var request = new OutlineRequest(
+                List.of(
+                        new PageInput(
+                                1,
+                                "UNSAFE_DENSE_DISPLAY_TEXT",
+                                List.of(),
+                                List.of("R-1", "R-2"),
+                                true,
+                                List.of(
+                                        new RuleGroupFact(
+                                                "R-1", "First", "FIRST_DENSE_FACT " + "x".repeat(8_000)),
+                                        new RuleGroupFact(
+                                                "R-2", "Second", "SECOND_DENSE_FACT " + "y".repeat(8_000))),
+                                PageLedgerState.VISUAL_EXACT_COMPLETE),
+                        longExactPage(2, "R-3", "THIRD_DENSE_FACT")),
+                List.of(),
+                "player");
+        RecordingModelCalls calls = new RecordingModelCalls();
+
+        try {
+            assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
+
+            var outline = model.organize(request, calls);
+
+            assertThat(outline.sourceCoverageSlots())
+                    .extracting(slot -> slot.slotId())
+                    .containsExactly("page-1-rule-1", "page-1-rule-2", "page-2-rule-1");
+            List<String> operations = calls.calls.stream().map(ModelCall::operation).toList();
+            assertThat(operations.subList(0, 2)).containsExactlyInAnyOrder(
+                            "organizeTeachingOutline|canonical-shard-1",
+                            "organizeTeachingOutline|canonical-shard-2");
+            assertThat(operations.getLast()).isEqualTo("organizeTeachingOutline|canonical-global-ordering");
+            ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+            verify(chatModel, times(3)).call(prompts.capture());
+            List<String> promptTexts = prompts.getAllValues().stream().map(this::promptText).toList();
+            assertThat(promptTexts.stream()
+                            .filter(prompt -> prompt.contains("FIRST_DENSE_FACT"))
+                            .findFirst()
+                            .orElseThrow())
+                    .contains("FIRST_DENSE_FACT", "SECOND_DENSE_FACT");
+            assertThat(promptTexts.stream()
+                            .filter(prompt -> prompt.contains("shard-1-page-flow"))
+                            .findFirst()
+                            .orElseThrow())
+                    .contains("shard-1-page-flow", "shard-2-page-ending")
+                    .doesNotContain(
+                            "FIRST_DENSE_FACT", "SECOND_DENSE_FACT", "THIRD_DENSE_FACT", "RULE_GROUP_FACT:");
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void rejectsAnImpossibleHierarchicalContextBeforeAnyPaidShardCall() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        SpringAiTeachingOutlineModel model = model(configuration);
+        var request = new OutlineRequest(
+                List.of(new PageInput(
+                        1,
+                        "UNSAFE_OVERSIZED_DISPLAY_TEXT",
+                        List.of(),
+                        List.of("R-1"),
+                        true,
+                        List.of(new RuleGroupFact(
+                                "R-1",
+                                "Oversized",
+                                "x".repeat(SpringAiTeachingOutlineModel.MAX_HIERARCHICAL_INPUT_TOKENS * 4))),
+                        PageLedgerState.VISUAL_EXACT_COMPLETE)),
+                List.of(),
+                "player");
+        RecordingModelCalls calls = new RecordingModelCalls();
+
+        try {
+            assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
+            assertThatThrownBy(() -> model.organize(request, calls))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasRootCauseInstanceOf(OutlineCapacityExceededException.class)
+                    .hasRootCauseMessage("canonical source page shard exceeds the bounded ownership context");
+            assertThat(calls.calls).isEmpty();
+            verify(chatModel, times(0)).call(any(Prompt.class));
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void conservativelyCountsCjkCapacityInsteadOfTreatingFourCharactersAsOneToken() {
+        assertThat(SpringAiTeachingOutlineModel.estimateTextTokens("中".repeat(64_001)))
+                .isEqualTo(64_001);
+        assertThat(SpringAiTeachingOutlineModel.estimateTextTokens("rule".repeat(1_000)))
+                .isEqualTo(1_000);
+    }
+
+    @Test
+    void rejectsAnOversizedCjkShardBeforeAnyPaidCall() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        SpringAiTeachingOutlineModel model = model(configuration);
+        var request = new OutlineRequest(
+                List.of(new PageInput(
+                        1,
+                        "UNSAFE_OVERSIZED_CJK_DISPLAY_TEXT",
+                        List.of(),
+                        List.of("R-1"),
+                        true,
+                        List.of(new RuleGroupFact(
+                                "R-1",
+                                "超大规则",
+                                "中".repeat(SpringAiTeachingOutlineModel.MAX_HIERARCHICAL_INPUT_TOKENS + 1))),
+                        PageLedgerState.VISUAL_EXACT_COMPLETE)),
+                List.of(),
+                "player");
+        RecordingModelCalls calls = new RecordingModelCalls();
+
+        try {
+            assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
+            assertThatThrownBy(() -> model.organize(request, calls))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasRootCauseInstanceOf(OutlineCapacityExceededException.class)
+                    .hasRootCauseMessage("canonical source page shard exceeds the bounded ownership context");
+            assertThat(calls.calls).isEmpty();
+            verify(chatModel, times(0)).call(any(Prompt.class));
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void rejectsTooManyIndividuallyBoundedPageShardsBeforeAnyPaidCall() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        SpringAiTeachingOutlineModel model = model(configuration);
+        List<PageInput> pages = IntStream.rangeClosed(1, 500)
+                .mapToObj(page -> {
+                    List<String> identifiers = IntStream.rangeClosed(1, 12)
+                            .mapToObj(rule -> "R-" + page + "-" + rule)
+                            .toList();
+                    List<RuleGroupFact> pageFacts = IntStream.rangeClosed(1, 12)
+                            .mapToObj(rule -> new RuleGroupFact(
+                                    identifiers.get(rule - 1),
+                                    "Bounded rule " + page + "." + rule,
+                                    "A compact canonical fact that is safe in its own page shard. "
+                                            + "x".repeat(32)))
+                            .toList();
+                    return new PageInput(
+                            page,
+                            "UNSAFE_AGGREGATE_DISPLAY_TEXT_" + page,
+                            List.of(),
+                            identifiers,
+                            true,
+                            pageFacts,
+                            PageLedgerState.VISUAL_EXACT_COMPLETE);
+                })
+                .toList();
+        var request = new OutlineRequest(pages, List.of(), "player");
+        RecordingModelCalls calls = new RecordingModelCalls();
+
+        try {
+            assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
+            assertThatThrownBy(() -> model.organize(request, calls))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasRootCauseInstanceOf(OutlineCapacityExceededException.class)
+                    .hasRootCauseMessage("canonical teaching units exceed the bounded global ordering context");
+            assertThat(calls.calls).isEmpty();
+            verify(chatModel, times(0)).call(any(Prompt.class));
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void cancelsSiblingPageShardsWhenOneShardObservesAStoppedRun() throws InterruptedException {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        SpringAiTeachingOutlineModel model = model(configuration);
+        var request = new OutlineRequest(
+                List.of(
+                        longExactPage(1, "R-1", "FIRST_STOP_MARKER"),
+                        longExactPage(2, "R-2", "SECOND_STOP_MARKER")),
+                List.of(),
+                "player");
+        CountDownLatch firstShardStarted = new CountDownLatch(1);
+        CountDownLatch firstShardInterrupted = new CountDownLatch(1);
+        ModelCallExecutor stoppedCalls = new ModelCallExecutor() {
+            @Override
+            public <T> T invoke(
+                    ModelCall call,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokens) {
+                if (call.operation().endsWith("canonical-shard-1")) {
+                    firstShardStarted.countDown();
+                    try {
+                        new CountDownLatch(1).await();
+                        throw new AssertionError("the sibling shard was not cancelled");
+                    } catch (InterruptedException interrupted) {
+                        firstShardInterrupted.countDown();
+                        Thread.currentThread().interrupt();
+                        throw new AgentExecutionStoppedException(StopReason.CANCELLED);
+                    }
+                }
+                if (call.operation().endsWith("canonical-shard-2")) {
+                    try {
+                        if (!firstShardStarted.await(2, TimeUnit.SECONDS)) {
+                            throw new AssertionError("the sibling shard did not start");
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("the stop propagation check was interrupted", interrupted);
+                    }
+                    throw new AgentExecutionStoppedException(StopReason.CANCELLED);
+                }
+                throw new AssertionError("global ordering must not start after cancellation");
+            }
+        };
+
+        try {
+            assertThatThrownBy(() -> model.organize(request, stoppedCalls))
+                    .isInstanceOf(AgentExecutionStoppedException.class)
+                    .hasMessageContaining("CANCELLED");
+            assertThat(firstShardInterrupted.await(2, TimeUnit.SECONDS)).isTrue();
+            verify(chatModel, times(0)).call(any(Prompt.class));
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void rejectsOutlineShardParallelismOutsideTheBoundedProviderWindow() {
+        assertThatThrownBy(() -> new SpringAiTeachingOutlineModel(
+                        configuration(),
+                        mock(VersionedAgentPrompts.class),
+                        0.1,
+                        "outline system",
+                        "outline user",
+                        "canonical system",
+                        "canonical user",
+                        11))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("parallelism");
     }
 
     @Test
@@ -495,7 +814,9 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
     private ChatModel chatModel(RuntimeModelConfiguration configuration) {
         ChatModel chatModel = mock(ChatModel.class);
         ToolCallingChatOptions options = ToolCallingChatOptions.builder().build();
-        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(configuration.resolvedModelFor(Role.TEACHING, "player"))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "compatible", "teaching-test-model", false));
         when(chatModel.getDefaultOptions()).thenReturn(options);
         when(chatModel.getOptions()).thenReturn(options);
         return chatModel;
@@ -566,6 +887,18 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                 .collect(java.util.stream.Collectors.joining("\n"));
     }
 
+    private void awaitConcurrentLocalShards(CountDownLatch localShardsStarted) {
+        localShardsStarted.countDown();
+        try {
+            if (!localShardsStarted.await(2, TimeUnit.SECONDS)) {
+                throw new AssertionError("independent canonical page shards did not overlap");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("canonical page-shard concurrency check was interrupted", interrupted);
+        }
+    }
+
     private PageInput twoFactPartialPage(String secondFact) {
         return new PageInput(
                 1,
@@ -595,7 +928,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
     }
 
     private static final class RecordingModelCalls implements ModelCallExecutor {
-        private final List<ModelCall> calls = new ArrayList<>();
+        private final List<ModelCall> calls = Collections.synchronizedList(new ArrayList<>());
 
         @Override
         public <T> T invoke(

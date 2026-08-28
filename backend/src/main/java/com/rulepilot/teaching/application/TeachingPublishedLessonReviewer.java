@@ -65,7 +65,7 @@ final class TeachingPublishedLessonReviewer {
             review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, plan.createdBy());
         } catch (AgentExecutionStoppedException stopped) {
             retainCitedDrafts(candidates, assistantRunId, "POST_PUBLICATION_REVIEW_STOPPED_RETAINING_CITED_DRAFT");
-            return ReviewResult.none();
+            throw stopped;
         } catch (RuntimeException reviewFailure) {
             log.warn("Whole-lesson review failed; retaining cited drafts: {}", reviewFailure.getMessage());
             retainCitedDrafts(candidates, assistantRunId, "POST_PUBLICATION_REVIEW_FAILED_RETAINING_CITED_DRAFT");
@@ -206,7 +206,7 @@ final class TeachingPublishedLessonReviewer {
                     sections,
                     assistantRunId,
                     "POST_PUBLICATION_ACCEPTANCE_STOPPED_WITHHELD_UNVERIFIED_REPLACEMENT");
-            return List.of();
+            throw stopped;
         } catch (RuntimeException reviewFailure) {
             log.warn("Whole-lesson replacement acceptance failed: {}", reviewFailure.getMessage());
             withholdAll(

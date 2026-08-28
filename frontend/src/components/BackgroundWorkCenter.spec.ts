@@ -390,7 +390,7 @@ describe('BackgroundWorkCenter request lifecycle', () => {
   })
 
   it.each([
-    ['RECEIVED', '讲解任务已接收'],
+    ['RECEIVED', '正在等待讲解 worker'],
     ['DOCUMENT_READINESS', '正在确认规则书可以用于讲解'],
     ['LESSON_PLANNING', '正在整理讲解结构'],
     ['RETRIEVAL_PLANNING', '正在确定各章节需要核对的规则'],

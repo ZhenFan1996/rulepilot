@@ -76,6 +76,69 @@ class TeachingGenerationConfigurationTest {
     }
 
     @Test
+    void ordinaryStartupRunsWhileExtendedPreparationLaneIsOccupied() throws InterruptedException {
+        var configuration = new TeachingGenerationConfiguration();
+        var startup = configuration.teachingStartupExecutor(1);
+        var extended = configuration.teachingLongPreparationExecutor(1);
+        var extendedStarted = new CountDownLatch(1);
+        var releaseExtended = new CountDownLatch(1);
+        var startupCompleted = new CountDownLatch(1);
+        startup.initialize();
+        extended.initialize();
+
+        try {
+            extended.execute(() -> {
+                extendedStarted.countDown();
+                try {
+                    releaseExtended.await(3, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertThat(extendedStarted.await(3, TimeUnit.SECONDS)).isTrue();
+
+            startup.execute(startupCompleted::countDown);
+
+            assertThat(startupCompleted.await(1, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            releaseExtended.countDown();
+            startup.shutdown();
+            extended.shutdown();
+        }
+    }
+
+    @Test
+    void extendedLaneAdmitsTheTwoDefaultFourItemHandoffBatches() throws InterruptedException {
+        var extended = new TeachingGenerationConfiguration().teachingLongPreparationExecutor(8);
+        var workerStarted = new CountDownLatch(1);
+        var releaseWorker = new CountDownLatch(1);
+        var queuedCompleted = new CountDownLatch(8);
+        extended.initialize();
+
+        try {
+            extended.execute(() -> {
+                workerStarted.countDown();
+                try {
+                    releaseWorker.await(3, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertThat(workerStarted.await(3, TimeUnit.SECONDS)).isTrue();
+
+            for (int index = 0; index < 8; index++) {
+                extended.execute(queuedCompleted::countDown);
+            }
+
+            releaseWorker.countDown();
+            assertThat(queuedCompleted.await(3, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            releaseWorker.countDown();
+            extended.shutdown();
+        }
+    }
+
+    @Test
     void handoffDispatchRunsWhileTheDefaultInfrastructureSchedulerIsOccupied() throws InterruptedException {
         var configuration = new TeachingGenerationConfiguration();
         var infrastructure = configuration.taskScheduler();
@@ -141,6 +204,7 @@ class TeachingGenerationConfigurationTest {
                 .withPropertyValues("rulepilot.runtime.api-enabled=false")
                 .run(context -> {
                     assertThat(context).doesNotHaveBean("teachingStartupExecutor");
+                    assertThat(context).doesNotHaveBean("teachingLongPreparationExecutor");
                     assertThat(context).doesNotHaveBean("teachingGenerationExecutor");
                     assertThat(context).doesNotHaveBean("teachingHandoffScheduler");
                 });
@@ -152,11 +216,14 @@ class TeachingGenerationConfigurationTest {
                 .withPropertyValues("rulepilot.runtime.api-enabled=true")
                 .run(context -> {
                     assertThat(context).hasBean("teachingStartupExecutor");
+                    assertThat(context).hasBean("teachingLongPreparationExecutor");
                     assertThat(context).hasBean("teachingGenerationExecutor");
                     assertThat(context).hasBean("taskScheduler");
                     assertThat(context).hasBean("teachingHandoffScheduler");
                     assertThat(context.getBean("teachingStartupExecutor"))
                             .isNotSameAs(context.getBean("teachingGenerationExecutor"));
+                    assertThat(context.getBean("teachingStartupExecutor"))
+                            .isNotSameAs(context.getBean("teachingLongPreparationExecutor"));
                     assertThat(context.getBean("taskScheduler"))
                             .isNotSameAs(context.getBean("teachingHandoffScheduler"));
                 });

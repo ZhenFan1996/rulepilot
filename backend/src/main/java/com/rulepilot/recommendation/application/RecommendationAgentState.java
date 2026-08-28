@@ -66,6 +66,7 @@ final class RecommendationAgentState {
     boolean clarificationBlockedByExecutionFailure;
     String webResearchFailureCode = "";
     int modelCalls;
+    final List<Long> modelCallElapsedMs = new ArrayList<>();
     int actionCalls;
     int catalogCalls;
     int webResearchCalls;
@@ -176,6 +177,10 @@ final class RecommendationAgentState {
 
     long elapsedMs() {
         return Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000);
+    }
+
+    void recordModelCallElapsed(long startedAtNanos) {
+        modelCallElapsedMs.add(Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000));
     }
 
     boolean hasVerifiedIdentity() {

@@ -8,6 +8,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 /** Fails orphaned work instead of replaying incomplete model/tool calls after a process restart. */
@@ -24,6 +26,7 @@ class InterruptedAssistantRunRecovery {
     }
 
     @EventListener(ApplicationReadyEvent.class)
+    @Order(Ordered.HIGHEST_PRECEDENCE)
     void recover() {
         int recovered = 0;
         for (AssistantRunMode mode : AssistantRunMode.values()) {

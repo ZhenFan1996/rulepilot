@@ -86,6 +86,185 @@ test('public status validator rejects contradictory or expanded workflow artifac
   }
 })
 
+test('one absolute forward deadline bounds sequential HTTP stages and still permits cleanup', async () => {
+  let deleted = false
+  let teachingPlanRequested = false
+  const server = createServer(async (request, response) => {
+    const body = await readBody(request)
+    response.setHeader('Content-Type', 'application/json')
+    response.setHeader('Set-Cookie', 'RULEPILOT_TEST=authenticated; Path=/')
+    if (request.method === 'GET' && request.url === '/api/auth/csrf') {
+      return json(response, 200, { headerName: 'X-CSRF-TOKEN', token: 'csrf-token' })
+    }
+    if (request.method === 'POST' && request.url === '/api/auth/login') {
+      return json(response, 200, {})
+    }
+    if (request.method === 'GET' && request.url === '/api/auth/session') {
+      return json(response, 200, { username: 'player', roles: ['USER'] })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/documents') {
+      const title = body.toString('latin1').match(/name="title"\r\n\r\n([^\r\n]+)/)?.[1]
+      assert.ok(title)
+      // Complete the accepted write comfortably before the 5s total deadline so cleanup owns its exact ID.
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 1_000))
+      return json(response, 201, {
+        document: {
+          id: '11111111-1111-1111-1111-111111111111', title, officialSourceUrl: null,
+        },
+        version: { id: '22222222-2222-2222-2222-222222222222', status: 'UPLOADED' },
+        duplicate: false,
+      })
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/documents') {
+      // The next sequential read alone exceeds the remaining forward budget.
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 6_000))
+      return json(response, 200, [{
+        document: { id: '11111111-1111-1111-1111-111111111111', title: 'Lantern Relay' },
+        latestVersion: { id: '22222222-2222-2222-2222-222222222222', status: 'READY' },
+      }])
+    }
+    if (request.method === 'POST' && request.url?.endsWith('/teaching-plans')) {
+      teachingPlanRequested = true
+      return json(response, 500, { error: 'must not be reached' })
+    }
+    if (request.method === 'DELETE'
+      && request.url === '/api/v1/documents/11111111-1111-1111-1111-111111111111') {
+      deleted = true
+      response.statusCode = 204
+      return response.end()
+    }
+    return json(response, 404, { error: 'unexpected request' })
+  })
+
+  await new Promise(resolvePromise => server.listen(0, '127.0.0.1', resolvePromise))
+  const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-total-deadline-'))
+  const pdf = join(directory, 'Lantern_Relay_rulebook.pdf')
+  const publicStatus = join(directory, 'public-status.json')
+  await writeFile(pdf, '%PDF-1.4\n%%EOF\n')
+  try {
+    const address = server.address()
+    assert.equal(typeof address, 'object')
+    const startedAt = performance.now()
+    const result = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '5'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
+      },
+    )
+    const elapsedMs = performance.now() - startedAt
+    assert.equal(result.code, 28, result.stderr)
+    // Bash exposes SECONDS at whole-second precision. The 1s first stage therefore leaves
+    // 3-4s for the 6s second stage; without one shared deadline this would take at least 7s.
+    assert.ok(elapsedMs >= 3_800 && elapsedMs < 6_500, `elapsedMs=${elapsedMs}`)
+    assert.match(result.stderr, /HTTP request exhausted the remaining 5s total forward-work budget/)
+    assert.equal(teachingPlanRequested, false)
+    assert.equal(deleted, true)
+    assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 28,
+      lastCompletedStage: 'upload-completed',
+      failureCode: 'SOURCE_UPLOAD_FAILED',
+      failureCauseCode: null,
+      cleanupOutcome: 'SUCCEEDED',
+    })
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolvePromise => server.close(resolvePromise))
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('discovers and deletes only the uniquely titled upload when the accepted POST response is lost', async () => {
+  const documentId = 'a1111111-1111-4111-8111-111111111111'
+  const retainedDocumentId = 'a2222222-2222-4222-8222-222222222222'
+  let acceptedTitle = null
+  const deleted = []
+  const server = createServer(async (request, response) => {
+    const body = await readBody(request)
+    response.setHeader('Content-Type', 'application/json')
+    response.setHeader('Set-Cookie', 'RULEPILOT_TEST=authenticated; Path=/')
+    if (request.method === 'GET' && request.url === '/api/auth/csrf') {
+      return json(response, 200, { headerName: 'X-CSRF-TOKEN', token: 'csrf-token' })
+    }
+    if (request.method === 'POST' && request.url === '/api/auth/login') return json(response, 200, {})
+    if (request.method === 'GET' && request.url === '/api/auth/session') {
+      return json(response, 200, { username: 'player', roles: ['USER'] })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/documents') {
+      const titleMatch = body.toString('latin1').match(/name="title"\r\n\r\n([^\r\n]+)/)
+      assert.ok(titleMatch)
+      acceptedTitle = titleMatch[1]
+      assert.match(acceptedTitle, /^Lantern Relay rulebook EN v4 12pages - RulePilot canary upload-/)
+      response.destroy()
+      return
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/documents') {
+      return json(response, 200, [
+        {
+          document: { id: retainedDocumentId, title: 'Lantern Relay rulebook EN v4 12pages' },
+          latestVersion: { id: 'a3333333-3333-4333-8333-333333333333', status: 'READY' },
+        },
+        {
+          document: { id: documentId, title: acceptedTitle },
+          latestVersion: { id: 'a4444444-4444-4444-8444-444444444444', status: 'READY' },
+        },
+      ])
+    }
+    if (request.method === 'DELETE') {
+      deleted.push(request.url)
+      response.statusCode = 204
+      return response.end()
+    }
+    return json(response, 404, { error: 'unexpected request' })
+  })
+
+  await new Promise(resolvePromise => server.listen(0, '127.0.0.1', resolvePromise))
+  const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-upload-response-loss-'))
+  const pdf = join(directory, 'Lantern_Relay_rulebook.pdf')
+  const publicStatus = join(directory, 'public-status.json')
+  await writeFile(pdf, '%PDF-1.4\n%%EOF\n')
+  try {
+    const address = server.address()
+    assert.equal(typeof address, 'object')
+    const result = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '5'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_CLEANUP_TIMEOUT_SECONDS: '5',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
+      },
+    )
+
+    assert.notEqual(result.code, 0)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-upload-document-discovered/)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
+    assert.deepEqual(deleted, [`/api/v1/documents/${documentId}`])
+    assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: result.code,
+      lastCompletedStage: 'login-completed',
+      failureCode: 'SOURCE_UPLOAD_FAILED',
+      failureCauseCode: null,
+      cleanupOutcome: 'SUCCEEDED',
+    })
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolvePromise => server.close(resolvePromise))
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('replays the ordinary-user upload journey and cleans up the synthetic document', async () => {
   const calls = []
   let planStarted = false
@@ -134,8 +313,13 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       const multipart = body.toString('latin1')
       assert.match(multipart, /Lantern Relay rulebook EN v4 12pages/)
       assert.match(multipart, /BASE_RULEBOOK/)
+      const title = multipart.match(/name="title"\r\n\r\n([^\r\n]+)/)?.[1]
+      const source = multipart.match(/name="officialSourceUrl"\r\n\r\n([^\r\n]+)/)?.[1] ?? null
+      assert.ok(title)
       return json(response, 201, {
-        document: { id: '11111111-1111-1111-1111-111111111111' },
+        document: {
+          id: '11111111-1111-1111-1111-111111111111', title, officialSourceUrl: source,
+        },
         version: { id: '22222222-2222-2222-2222-222222222222', status: 'UPLOADED' },
         duplicate: false,
       })
@@ -700,6 +884,157 @@ test('refuses to assert image-gallery rights unless the operator passed the expl
   assert.match(result.stderr, /--rights-confirmed is required/)
 })
 
+test('recovers the exact official import identity and cleans only its document when the POST response is lost', async () => {
+  const editionId = 'b1111111-1111-4111-8111-111111111111'
+  const otherEditionId = 'b2222222-2222-4222-8222-222222222222'
+  const importJobId = 'b3333333-3333-4333-8333-333333333333'
+  const documentId = 'b4444444-4444-4444-8444-444444444444'
+  const retainedDocumentId = 'b5555555-5555-4555-8555-555555555555'
+  const versionId = 'b6666666-6666-4666-8666-666666666666'
+  const canonicalSource = 'https://www.gstonegames.com/game/doc-4417.html'
+  const effectiveSource = `${canonicalSource}?rulepilot_canary=response-lost`
+  const canaryTitle = 'Dune: Imperium · RulePilot canary response-lost'
+  const deleted = []
+  let acceptedPayload = null
+  let importListReads = 0
+  const server = createServer(async (request, response) => {
+    const body = await readBody(request)
+    response.setHeader('Content-Type', 'application/json')
+    response.setHeader('Set-Cookie', 'RULEPILOT_TEST=authenticated; Path=/')
+    if (request.method === 'GET' && request.url === '/api/auth/csrf') {
+      return json(response, 200, { headerName: 'X-CSRF-TOKEN', token: 'csrf-token' })
+    }
+    if (request.method === 'POST' && request.url === '/api/auth/login') return json(response, 200, {})
+    if (request.method === 'GET' && request.url === '/api/auth/session') {
+      return json(response, 200, { username: 'player', roles: ['USER'] })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/bgg/games/316554/import') {
+      return json(response, 200, {
+        game: { id: 'baaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Dune: Imperium' },
+        edition: { id: editionId, gameId: 'baaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'BGG version' },
+        bggId: 316554,
+      })
+    }
+    if (request.method === 'GET' && request.url
+      === `/api/v1/documents/rulebook-candidates?editionId=${editionId}&language=zh-CN`) {
+      return json(response, 200, {
+        configured: true,
+        identity: { editionId },
+        candidates: [{
+          title: '官方中文规则', url: canonicalSource, language: 'zh-CN', languageVerified: true,
+          edition: 'BGG version', acquisitionMode: 'IMAGE_GALLERY', capability: 'CONTIGUOUS_RULE_PAGES',
+          capabilityEvidence: ['ORDERED_PAGE_SEQUENCE_CONFIRMED'], nextAction: 'IMPORT_PAGE_SEQUENCE',
+        }],
+      })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/documents/official-imports') {
+      acceptedPayload = JSON.parse(body.toString())
+      assert.equal(acceptedPayload.editionId, editionId)
+      assert.equal(acceptedPayload.title, canaryTitle)
+      assert.equal(acceptedPayload.officialSourceUrl, effectiveSource)
+      response.destroy()
+      return
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/documents/official-imports') {
+      importListReads += 1
+      return json(response, 200, [
+        {
+          id: 'b7777777-7777-4777-8777-777777777777', editionId,
+          rulebookTitle: canaryTitle, officialSourceUrl: canonicalSource,
+        },
+        {
+          id: 'b8888888-8888-4888-8888-888888888888', editionId: otherEditionId,
+          rulebookTitle: canaryTitle, officialSourceUrl: effectiveSource,
+        },
+        {
+          id: importJobId, editionId, rulebookTitle: canaryTitle, officialSourceUrl: effectiveSource,
+        },
+      ])
+    }
+    if (request.method === 'GET' && request.url === `/api/v1/documents/official-imports/${importJobId}`) {
+      return json(response, 200, {
+        id: importJobId, editionId, rulebookTitle: canaryTitle, officialSourceUrl: effectiveSource,
+        stage: 'COMPLETED', duplicate: false, documentVersionId: versionId,
+        teachingPreparationRunId: null,
+      })
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/documents') {
+      return json(response, 200, [
+        {
+          document: {
+            id: retainedDocumentId, title: canaryTitle, gameEditionId: editionId,
+            officialSourceUrl: canonicalSource,
+          },
+          latestVersion: { id: 'b9999999-9999-4999-8999-999999999999', status: 'READY' },
+        },
+        {
+          document: {
+            id: documentId, title: canaryTitle, gameEditionId: editionId,
+            officialSourceUrl: effectiveSource,
+          },
+          latestVersion: { id: versionId, status: 'READY' },
+        },
+      ])
+    }
+    if (request.method === 'DELETE') {
+      deleted.push(request.url)
+      response.statusCode = 204
+      return response.end()
+    }
+    return json(response, 404, { error: 'unexpected request' })
+  })
+
+  await new Promise(resolvePromise => server.listen(0, '127.0.0.1', resolvePromise))
+  const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-import-response-loss-'))
+  const publicStatus = join(directory, 'public-status.json')
+  try {
+    const address = server.address()
+    assert.equal(typeof address, 'object')
+    const result = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--source-mode', 'official_image_gallery',
+        '--official-source-url', canonicalSource,
+        '--expected-title', 'dune: imperium',
+        '--uploaded-title', 'Dune: Imperium',
+        '--bgg-id', '316554',
+        '--expected-page-count', '20',
+        '--language', 'zh-CN',
+        '--canary-id', 'response-lost',
+        '--rights-confirmed',
+        '--question', '游戏什么时候结束？',
+        '--timeout-seconds', '5'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_CLEANUP_TIMEOUT_SECONDS: '5',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
+      },
+    )
+
+    assert.notEqual(result.code, 0)
+    assert.ok(acceptedPayload)
+    assert.ok(importListReads > 0)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-import-job-discovered/)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-import-resolved/)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
+    assert.deepEqual(deleted, [`/api/v1/documents/${documentId}`])
+    assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: result.code,
+      lastCompletedStage: 'image-gallery-candidate-verified',
+      failureCode: 'OFFICIAL_IMPORT_FAILED',
+      failureCauseCode: null,
+      cleanupOutcome: 'SUCCEEDED',
+    })
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolvePromise => server.close(resolvePromise))
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('imports one fresh ordered image gallery, reuses its automatic Teaching handoff, and cleans up only that document', async () => {
   const calls = []
   const editionId = '11111111-2222-4333-8444-555555555555'
@@ -828,11 +1163,17 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
     if (request.method === 'GET' && request.url === '/api/v1/documents') {
       return json(response, 200, [
         {
-          document: { id: retainedDocumentId, gameEditionId: editionId, title: 'Existing user rulebook' },
+          document: {
+            id: retainedDocumentId, gameEditionId: editionId, title: 'Existing user rulebook',
+            officialSourceUrl: canonicalSource,
+          },
           latestVersion: { id: '33333333-4444-4555-8666-888888888888', status: 'READY' },
         },
         ...deleted ? [] : [{
-          document: { id: documentId, gameEditionId: editionId, title: canaryTitle },
+          document: {
+            id: documentId, gameEditionId: editionId, title: canaryTitle,
+            officialSourceUrl: effectiveSource,
+          },
           latestVersion: { id: versionId, status: 'READY' },
         }],
       ])
@@ -1028,23 +1369,31 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
       importReads += 1
       if (importReads === 1) {
         return json(response, 200, {
-          id: importJobId, stage: 'QUEUED', duplicate: false, documentVersionId: null,
+          id: importJobId, editionId, rulebookTitle: canaryTitle, officialSourceUrl: effectiveSource,
+          stage: 'QUEUED', duplicate: false, documentVersionId: null,
           teachingHandoffState: 'WAITING_FOR_DOCUMENT',
         })
       }
       return json(response, 200, {
-        id: importJobId, stage: 'COMPLETED', duplicate: false, documentVersionId: versionId,
+        id: importJobId, editionId, rulebookTitle: canaryTitle, officialSourceUrl: effectiveSource,
+        stage: 'COMPLETED', duplicate: false, documentVersionId: versionId,
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: null,
       })
     }
     if (request.method === 'GET' && request.url === '/api/v1/documents') {
       return json(response, 200, [
         {
-          document: { id: retainedDocumentId, title: canaryTitle, gameEditionId: editionId },
+          document: {
+            id: retainedDocumentId, title: canaryTitle, gameEditionId: editionId,
+            officialSourceUrl: source,
+          },
           latestVersion: { id: '86666666-7777-4888-8999-000000000000', status: 'READY' },
         },
         {
-          document: { id: documentId, title: canaryTitle, gameEditionId: editionId },
+          document: {
+            id: documentId, title: canaryTitle, gameEditionId: editionId,
+            officialSourceUrl: effectiveSource,
+          },
           latestVersion: { id: versionId, status: 'READY' },
         },
       ])
@@ -1086,7 +1435,7 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
     )
 
     assert.equal(result.code, 1, result.stderr)
-    assert.match(result.stderr, /Official image-gallery import timed out/)
+    assert.match(result.stderr, /Official image-gallery import exhausted the 1s total forward-work budget/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-import-resolved/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
     assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {
@@ -1111,7 +1460,9 @@ test('production workflows never execute an operator-supplied Git ref with produ
   const candidates = await readFile(resolve('.github/workflows/public-lesson-candidate.yml'), 'utf8')
 
   assert.doesNotMatch(deployment, /inputs\.ref/)
-  assert.match(deployment, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/)
+  assert.match(deployment, /ref: \$\{\{ github\.sha \}\}/)
+  assert.match(deployment, /QUALIFIED_SHA: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/)
+  assert.match(deployment, /\[\[ "\$deploy_sha" == "\$QUALIFIED_SHA" \]\]/)
   assert.doesNotMatch(deployment, /workflow_run\.head_sha\s*\|\|/)
   assert.doesNotMatch(smoke, /inputs\.ref/)
   assert.match(smoke, /ref: main/)

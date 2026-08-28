@@ -233,7 +233,54 @@ class RecommendationNaturalFrontDoorTest {
     }
 
     @Test
-    void rejectsUnstructuredNativeReplyWithoutPublishingIt() {
+    void repairsOneMissingTypedActionWithoutPublishingTheUnstructuredReply() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        BoardGameRecommendationSelector selector = mock(BoardGameRecommendationSelector.class);
+        List<Request> captured = new ArrayList<>();
+        when(model.configured("player")).thenReturn(true);
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
+            captured.add(invocation.getArgument(0));
+            if (captured.size() == 1) {
+                return new Turn("这段没有 typed action，不能发布。", List.of(), CompletionStatus.COMPLETE);
+            }
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "remember-after-repair",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            "{\"playerReply\":\"记住了：以后默认按四个人玩；这次先不推荐。\","
+                                    + "\"preferenceUpdates\":[{\"field\":\"playerCount\",\"value\":4,"
+                                    + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}")),
+                    CompletionStatus.COMPLETE);
+        });
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                selector,
+                new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30)),
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "以后默认按四个人玩，先记住就好，不用推荐。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).doesNotContain("typed action");
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().actions()).contains("REJECTED_MISSING_ACTION");
+        assertThat(captured.get(1).messages().getFirst().content())
+                .contains("exactly one action", "do not return prose");
+        assertThat(captured.get(1).messages().getFirst().role())
+                .isEqualTo(BoardGameRecommendationModel.Role.SYSTEM);
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void failsAfterOneBoundedMissingActionRepairWithoutPublishingEitherReply() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         when(model.configured("player")).thenReturn(true);
@@ -255,9 +302,10 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
         assertThat(response.assistantMessage())
                 .doesNotContain("typed reply action");
-        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().actions()).containsExactly(
+                "REJECTED_MISSING_ACTION",
                 "UNSTRUCTURED_EVIDENCE_REPLY",
                 "UNAVAILABLE:UNSTRUCTURED_EVIDENCE_REPLY");
 

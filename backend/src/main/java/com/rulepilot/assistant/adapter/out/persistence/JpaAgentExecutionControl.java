@@ -3,8 +3,10 @@ package com.rulepilot.assistant.adapter.out.persistence;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
+import com.rulepilot.assistant.AgentWorkAlreadyClaimedException;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -35,6 +37,128 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                 .setParameter("maxTokens", limits.maxTokens())
                 .setParameter("deadline", startedAt.plus(limits.timeout()))
                 .executeUpdate();
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void activate(UUID runId, Instant startedAt) {
+        activate(runId, UUID.randomUUID(), startedAt);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void activate(UUID runId, UUID activationId, Instant startedAt) {
+        if (runId == null || activationId == null || startedAt == null) {
+            throw new IllegalArgumentException("queued agent activation is invalid");
+        }
+        int updated = entityManager.createNativeQuery("""
+                        update assistant_run_budget budget
+                        set deadline_at = cast(:activatedAt as timestamptz)
+                                + (budget.deadline_at - run.created_at),
+                            activated_at = cast(:activatedAt as timestamptz),
+                            activation_id = :activationId
+                        from assistant_run run
+                        where budget.assistant_run_id = :runId
+                          and run.id = budget.assistant_run_id
+                          and run.state = 'RECEIVED'
+                          and run.completed_at is null
+                          and budget.activated_at is null
+                          and budget.cancellation_requested_at is null
+                          and budget.used_tool_calls = 0
+                          and budget.used_model_calls = 0
+                          and budget.used_tokens = 0
+                        """)
+                .setParameter("activatedAt", startedAt)
+                .setParameter("activationId", activationId)
+                .setParameter("runId", runId)
+                .executeUpdate();
+        if (updated != 1) {
+            BudgetRow budget = lockBudget(runId);
+            if (budget.cancellationRequestedAt() != null) {
+                throw new AgentExecutionStoppedException(StopReason.CANCELLED);
+            }
+            if (activationId.equals(budget.activationId())) return;
+            if (budget.activatedAt() != null) {
+                throw new AgentWorkAlreadyClaimedException();
+            }
+            throw new IllegalStateException("queued agent budget has already been admitted or started work");
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean lockUnactivated(UUID runId) {
+        if (runId == null) throw new IllegalArgumentException("queued agent run is required");
+        try {
+            BudgetRow budget = lockBudget(runId);
+            return budget.activatedAt() == null
+                    && budget.cancellationRequestedAt() == null
+                    && budget.usedToolCalls() == 0
+                    && budget.usedModelCalls() == 0
+                    && budget.usedTokens() == 0;
+        } catch (jakarta.persistence.NoResultException missingBudget) {
+            return false;
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean lockUnactivatedOrOwned(UUID runId, UUID activationId) {
+        if (runId == null || activationId == null) {
+            throw new IllegalArgumentException("queued agent admission identity is required");
+        }
+        try {
+            BudgetRow budget = lockBudget(runId);
+            return budget.cancellationRequestedAt() == null
+                    && budget.usedToolCalls() == 0
+                    && budget.usedModelCalls() == 0
+                    && budget.usedTokens() == 0
+                    && (budget.activationId() == null || activationId.equals(budget.activationId()));
+        } catch (jakarta.persistence.NoResultException missingBudget) {
+            return false;
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void excludeQueueWait(UUID runId, Duration queueWait) {
+        if (runId == null || queueWait == null || queueWait.isNegative()) {
+            throw new IllegalArgumentException("queued agent resumption is invalid");
+        }
+        BudgetRow budget = lockBudget(runId);
+        if (budget.cancellationRequestedAt() != null) {
+            throw new AgentExecutionStoppedException(StopReason.CANCELLED);
+        }
+        if (budget.activatedAt() == null) {
+            throw new IllegalStateException("queued agent budget was not admitted before continuation work");
+        }
+        Instant shiftedDeadline;
+        try {
+            shiftedDeadline = budget.deadlineAt().plus(queueWait);
+        } catch (RuntimeException overflow) {
+            throw new IllegalArgumentException("queued agent resumption exceeds the supported deadline", overflow);
+        }
+        int updated = entityManager.createNativeQuery("""
+                        update assistant_run_budget
+                        set deadline_at = :deadline
+                        where assistant_run_id = :runId
+                        """)
+                .setParameter("deadline", shiftedDeadline)
+                .setParameter("runId", runId)
+                .executeUpdate();
+        if (updated != 1) {
+            throw new IllegalStateException("queued agent budget does not exist");
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void assertFinalizationAllowed(UUID runId) {
+        if (runId == null) throw new IllegalArgumentException("agent finalization run is required");
+        BudgetRow budget = lockBudget(runId);
+        if (budget.cancellationRequestedAt() != null) {
+            throw new AgentExecutionStoppedException(StopReason.CANCELLED);
+        }
     }
 
     @Override
@@ -229,22 +353,44 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.MANDATORY)
     public void requestCancellation(UUID runId, String ownerUsername) {
-        int updated = entityManager.createNativeQuery("""
-                        update assistant_run_budget budget
-                        set cancellation_requested_at = coalesce(cancellation_requested_at, :now)
-                        from assistant_run run
-                        where budget.assistant_run_id = run.id
-                          and run.id = :runId
-                          and run.owner_username = :owner
-                          and run.completed_at is null
-                        """)
-                .setParameter("now", Instant.now())
-                .setParameter("runId", runId)
-                .setParameter("owner", requiredOwner(ownerUsername))
-                .executeUpdate();
-        if (updated != 1) throw new IllegalArgumentException("active assistant run does not exist");
+        requestCancellationIfActive(runId, ownerUsername);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean requestCancellationIfActive(UUID runId, String ownerUsername) {
+        String owner = requiredOwner(ownerUsername);
+        try {
+            BudgetRow budget = lockBudget(runId);
+            List<?> runs = entityManager.createNativeQuery("""
+                            select owner_username, completed_at
+                            from assistant_run
+                            where id = :runId
+                            for update
+                            """)
+                    .setParameter("runId", runId)
+                    .getResultList();
+            if (runs.isEmpty()) throw new IllegalArgumentException("assistant run does not exist");
+            Object[] run = (Object[]) runs.getFirst();
+            if (!owner.equals(run[0])) throw new IllegalArgumentException("assistant run does not exist");
+            if (run[1] != null) return false;
+            if (budget.cancellationRequestedAt() != null) return true;
+            int updated = entityManager.createNativeQuery("""
+                            update assistant_run_budget
+                            set cancellation_requested_at = :now
+                            where assistant_run_id = :runId
+                              and cancellation_requested_at is null
+                            """)
+                    .setParameter("now", Instant.now())
+                    .setParameter("runId", runId)
+                    .executeUpdate();
+            if (updated != 1) throw new IllegalStateException("assistant run cancellation marker was not recorded");
+            return true;
+        } catch (jakarta.persistence.NoResultException missingBudget) {
+            throw new IllegalArgumentException("assistant run does not exist", missingBudget);
+        }
     }
 
     @Override
@@ -290,14 +436,15 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     private BudgetRow lockBudget(UUID runId) {
         Object[] row = (Object[]) entityManager.createNativeQuery("""
                         select max_steps, max_tool_calls, max_model_calls, max_tokens,
-                               used_tool_calls, used_model_calls, used_tokens, deadline_at, cancellation_requested_at
+                               used_tool_calls, used_model_calls, used_tokens, deadline_at,
+                               cancellation_requested_at, activated_at, activation_id
                         from assistant_run_budget where assistant_run_id = :runId for update
                         """)
                 .setParameter("runId", runId)
                 .getSingleResult();
         return new BudgetRow(
                 number(row[0]), number(row[1]), number(row[2]), number(row[3]), number(row[4]), number(row[5]),
-                number(row[6]), (Instant) row[7], (Instant) row[8]);
+                number(row[6]), (Instant) row[7], (Instant) row[8], (Instant) row[9], (UUID) row[10]);
     }
 
     private StopReason stopped(BudgetRow budget, Instant now) {
@@ -341,5 +488,5 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     private record BudgetRow(
             int maxSteps, int maxToolCalls, int maxModelCalls, int maxTokens,
             int usedToolCalls, int usedModelCalls, int usedTokens,
-            Instant deadlineAt, Instant cancellationRequestedAt) {}
+            Instant deadlineAt, Instant cancellationRequestedAt, Instant activatedAt, UUID activationId) {}
 }

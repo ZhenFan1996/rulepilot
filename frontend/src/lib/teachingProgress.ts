@@ -355,7 +355,30 @@ export function teachingRunStopReasonText(
       ? 'The service restarted and could not safely resume this run. Its last durable chapters remain available.'
       : '服务重启后无法安全续跑本轮任务；最后一次成功保存的章节仍然保留。'
   }
-  if (code === 'TEACHING_QUEUE_FULL' || code === 'TEACHING_CONTINUATION_QUEUE_FULL') {
+  if (code === 'TEACHING_PREPARATION_QUEUE_TIMEOUT' || code === 'TEACHING_QUEUE_TIMEOUT') {
+    return locale === 'en'
+      ? 'The guide did not acquire a worker within its bounded queue wait. No model work started; retrying creates a fresh attempt.'
+      : '讲解任务在限定排队时间内没有获得 worker；模型工作尚未开始，可以直接重试新任务。'
+  }
+  if (code === 'TEACHING_PREPARATION_QUEUE_FULL') {
+    return locale === 'en'
+      ? 'The guide-preparation queue was full. No model work started; retrying creates a fresh attempt.'
+      : '讲解准备队列已满；模型工作尚未开始，可以直接重试新任务。'
+  }
+  if (code === 'TEACHING_PREPARATION_WORKER_ADMISSION_FAILED'
+    || code === 'TEACHING_WORKER_ADMISSION_FAILED') {
+    return locale === 'en'
+      ? 'A worker was assigned but could not durably claim the run. No model work started; retrying creates a fresh attempt.'
+      : '任务获得 worker 后未能持久接管；模型工作尚未开始，可以直接重试新任务。'
+  }
+  if (code === 'TEACHING_CONTINUATION_QUEUE_FULL'
+    || code === 'TEACHING_CONTINUATION_QUEUE_TIMEOUT'
+    || code === 'TEACHING_CONTINUATION_ADMISSION_FAILED') {
+    return locale === 'en'
+      ? 'The first cited section remains readable. The remaining chapters did not acquire and durably claim a worker.'
+      : '第一段带引用讲解仍可阅读；其余章节没有获得并持久接管 worker。'
+  }
+  if (code === 'TEACHING_QUEUE_FULL') {
     return locale === 'en'
       ? 'The service could not schedule the next bounded work unit. Any chapter already published remains available.'
       : '服务未能调度下一个有限工作单元；已经发布的章节仍然保留。'

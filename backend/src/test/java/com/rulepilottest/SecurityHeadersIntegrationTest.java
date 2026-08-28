@@ -3,6 +3,7 @@ package com.rulepilottest;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -65,6 +66,15 @@ class SecurityHeadersIntegrationTest {
                         "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"))
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andExpect(header().string("X-Frame-Options", "DENY"));
+    }
+
+    @Test
+    void permitsAnonymousReleaseIdentityReadsWithoutCachingThem() throws Exception {
+        mockMvc.perform(get("/api/public/release"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.releaseId").value("local"))
+                .andExpect(jsonPath("$.commitSha").value("local"));
     }
 
     @Test

@@ -59,6 +59,30 @@ class BggRecommendationAgentControllerTest {
     private final Principal principal = () -> "player";
 
     @Test
+    void keepsPersistedRecommendationTurnsFromBeforePerCallTimingWasRecordedReadable() throws Exception {
+        String persistedHarnessJson = """
+                {
+                  "modelCalls": 2,
+                  "catalogCalls": 1,
+                  "webResearchCalls": 0,
+                  "fallbackUsed": false,
+                  "actions": ["RECOMMEND_GAMES"],
+                  "totalElapsedMs": 432
+                }
+                """;
+
+        var harness = new ObjectMapper()
+                .findAndRegisterModules()
+                .readValue(persistedHarnessJson, BoardGameRecommendationAgent.HarnessTrace.class);
+
+        assertThat(harness.modelCalls()).isEqualTo(2);
+        assertThat(harness.catalogCalls()).isEqualTo(1);
+        assertThat(harness.actions()).containsExactly("RECOMMEND_GAMES");
+        assertThat(harness.totalElapsedMs()).isEqualTo(432);
+        assertThat(harness.modelCallElapsedMs()).isEmpty();
+    }
+
+    @Test
     void exposesTypedVerifiedSetShortfallAlongsideTheUnchangedAgentExplanation() {
         String rawExplanation = "你要三款，但在五人和九十分钟这两个硬条件下，本轮核对到两款候选；我先把它们都给你。";
         var shortfall = new RecommendationShortfall(3, 2);
@@ -80,7 +104,9 @@ class BggRecommendationAgentControllerTest {
                         List.of(
                                 "SEARCH_BGG_CATALOG",
                                 "REJECTED_ACTION:bad",
-                                "RECOMMEND_GAMES")),
+                                "RECOMMEND_GAMES"),
+                        432,
+                        List.of(123L, 287L)),
                 List.of(),
                 null,
                 shortfall);
@@ -100,6 +126,8 @@ class BggRecommendationAgentControllerTest {
         assertThat(response.shortfall().requestedCount()).isEqualTo(3);
         assertThat(response.shortfall().availableCount()).isEqualTo(2);
         assertThat(response.modelCalls()).isEqualTo(2);
+        assertThat(response.modelCallElapsedMs()).containsExactly(123L, 287L);
+        assertThat(response.agentElapsedMs()).isEqualTo(432L);
         assertThat(response.catalogCalls()).isEqualTo(1);
         assertThat(response.webResearchCalls()).isZero();
         assertThat(response.completedWork()).containsExactly("browse_bgg_catalog", "recommend_games");
@@ -510,7 +538,8 @@ class BggRecommendationAgentControllerTest {
                 34,
                 new BigDecimal("7.79"),
                 new BigDecimal("8.09"),
-                102_030);
+                102_030,
+                List.of(BggGameType.STRATEGY));
         Details details = new Details(
                 "Wingspan",
                 "展翅翱翔",
@@ -582,6 +611,8 @@ class BggRecommendationAgentControllerTest {
             assertThat(game.game().name()).isEqualTo("展翅翱翔");
             assertThat(game.game().originalName()).isEqualTo("Wingspan");
             assertThat(game.game().nameLocalized()).isTrue();
+            assertThat(game.game().overallRank()).isEqualTo(34);
+            assertThat(game.game().bggTypes()).containsExactly("strategy");
             assertThat(game.game().categories()).containsExactly("动物");
             assertThat(game.game().mechanics()).containsExactly("卡牌轮抽");
             assertThat(game.game().minimumPlayTimeMinutes()).isEqualTo(40);
@@ -615,6 +646,51 @@ class BggRecommendationAgentControllerTest {
                 assertThat(claim.text()).contains("候选人数", "满足");
             });
         });
+    }
+
+    @Test
+    void doesNotInferBggRankingTypesFromCategoryLabels() {
+        Game categorizedWithoutRankingType = new Game(
+                new Ranking(
+                        91,
+                        "Category Only",
+                        2024,
+                        12,
+                        new BigDecimal("7.2"),
+                        new BigDecimal("7.4"),
+                        500,
+                        List.of()),
+                new Details(
+                        "Category Only",
+                        "",
+                        "",
+                        3,
+                        6,
+                        30,
+                        new BigDecimal("1.5"),
+                        List.of("Party Game"),
+                        List.of(),
+                        30,
+                        30,
+                        8,
+                        8,
+                        "",
+                        "",
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of()));
+
+        var response = BggRecommendationAgentController.CatalogGameResponse.from(
+                categorizedWithoutRankingType,
+                new LocalizedTaxonomy(Map.of(), Map.of()),
+                "en",
+                presentation);
+
+        assertThat(response.overallRank()).isEqualTo(12);
+        assertThat(response.categories()).containsExactly("Party Game");
+        assertThat(response.bggTypes()).isEmpty();
     }
 
     @Test

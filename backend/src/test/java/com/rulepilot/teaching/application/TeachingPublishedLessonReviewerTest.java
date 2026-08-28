@@ -95,6 +95,31 @@ class TeachingPublishedLessonReviewerTest {
         assertThat(progress).hasValue(0);
     }
 
+    @ParameterizedTest
+    @EnumSource(StopReason.class)
+    void propagatesAWholeRunStopFromTheFinalReviewerWhileRetainingTheCitedDraft(StopReason stopReason) {
+        Fixture fixture = fixture();
+        LessonSection cited = new TeachingBaseSectionPublicationPolicy().publish(fixture.candidate());
+        List<LessonSection> published = new ArrayList<>(List.of(cited));
+        GeneratedContentCritic stoppedReviewer = (request, risk) -> {
+            throw new AgentExecutionStoppedException(stopReason);
+        };
+
+        assertThatThrownBy(() -> new TeachingPublishedLessonReviewer(
+                                stoppedReviewer, fixture.invocations(), fixture.composer())
+                        .review(
+                                fixture.plan(),
+                                List.of(fixture.candidate()),
+                                published,
+                                fixture.runId(),
+                                () -> {}))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue("reason", stopReason);
+
+        assertThat(published).containsExactly(cited);
+        assertThat(published.getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+    }
+
     @Test
     void withholdsOnlyAnAtomicallyConfirmedDefectiveWholeChapter() {
         Fixture fixture = fixture();

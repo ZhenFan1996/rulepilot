@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -101,6 +102,11 @@ class SpringAiTeachingOutlineModelRetryTest {
                     .isInstanceOf(OutlineGenerationException.class)
                     .hasMessageContaining("no valid outline");
             verify(chatModel, times(2)).call(any(Prompt.class));
+            verify(configuration).resolvedModelFor(Role.TEACHING, "player");
+            verify(configuration, never()).modelFor(Role.TEACHING, "player");
+            verify(configuration, never()).providerFor(Role.TEACHING, "player");
+            verify(configuration, never()).modelNameFor(Role.TEACHING, "player");
+            verify(configuration, never()).usesDeepSeekNonThinkingGeneration(Role.TEACHING, "player");
         } finally {
             model.close();
         }
@@ -116,7 +122,9 @@ class SpringAiTeachingOutlineModelRetryTest {
     private ChatModel chatModel(RuntimeModelConfiguration configuration) {
         ChatModel model = mock(ChatModel.class);
         ToolCallingChatOptions options = ToolCallingChatOptions.builder().build();
-        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(model);
+        when(configuration.resolvedModelFor(Role.TEACHING, "player"))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        model, "compatible", "teaching-test-model", false));
         when(model.getDefaultOptions()).thenReturn(options);
         when(model.getOptions()).thenReturn(options);
         return model;

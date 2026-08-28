@@ -204,8 +204,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   failureCauseDetail: {
     TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED: '失败发生在整理讲解结构时；规则书页面已经保留，第一段讲解尚未开始。',
     TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED: '讲解结构已经形成；失败发生在生成并保存第一段带引用讲解时，规则书和结构都会保留。',
+    TEACHING_PREPARATION_QUEUE_FULL: '讲解准备队列已满；模型工作尚未开始，规则书不受影响。',
+    TEACHING_PREPARATION_QUEUE_TIMEOUT: '讲解准备任务在限定时间内没有获得 worker；模型工作尚未开始。',
+    TEACHING_PREPARATION_WORKER_ADMISSION_FAILED: '讲解准备任务获得 worker 后未能持久接管；模型工作尚未开始。',
     TEACHING_QUEUE_FULL: '正文生成任务尚未进入执行队列；已有规则书和讲解结构不受影响。',
+    TEACHING_QUEUE_TIMEOUT: '正文生成任务在限定时间内没有获得 worker；模型工作尚未开始，可以直接重试。',
+    TEACHING_WORKER_ADMISSION_FAILED: '正文生成任务获得 worker 后未能持久接管；模型工作尚未开始，可以直接重试。',
     TEACHING_CONTINUATION_QUEUE_FULL: '第一段带引用讲解已经可读；失败发生在其余章节进入后台队列时。',
+    TEACHING_CONTINUATION_QUEUE_TIMEOUT: '第一段带引用讲解已经可读；其余章节在限定时间内没有获得 worker。',
+    TEACHING_CONTINUATION_ADMISSION_FAILED: '第一段带引用讲解已经可读；其余章节获得 worker 后未能持久接管。',
     TEACHING_WORKFLOW_FAILED: '失败发生在读取章节证据、生成正文或核对引用期间；已经发布的章节会保留。',
     TEACHING_COMPLETION_FAILED: '讲解内容已经生成，但保存最终完成状态失败；已有可读章节会保留。',
     AGENT_STEP_BUDGET: '本轮在限定步骤内仍未完成；已确认内容会保留，系统不会无限继续。',
@@ -320,8 +327,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   failureCauseDetail: {
     TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED: 'The failure occurred while organizing the guide structure. Rulebook pages remain available, and first-section writing had not started.',
     TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED: 'The guide structure is ready. The failure occurred while generating and saving the first cited section; the rulebook and structure remain available.',
+    TEACHING_PREPARATION_QUEUE_FULL: 'The guide-preparation queue was full. No model work started, and the rulebook is unaffected.',
+    TEACHING_PREPARATION_QUEUE_TIMEOUT: 'Guide preparation did not acquire a worker within its bounded wait. No model work started.',
+    TEACHING_PREPARATION_WORKER_ADMISSION_FAILED: 'Guide preparation acquired a worker but could not durably claim the run. No model work started.',
     TEACHING_QUEUE_FULL: 'The writing run did not enter the execution queue. The rulebook and guide structure are unaffected.',
+    TEACHING_QUEUE_TIMEOUT: 'The writing run did not acquire a worker within its bounded wait. No model work started, so it is safe to retry.',
+    TEACHING_WORKER_ADMISSION_FAILED: 'The writing run acquired a worker but could not durably claim the run. No model work started, so it is safe to retry.',
     TEACHING_CONTINUATION_QUEUE_FULL: 'The first cited section is already readable. The failure occurred while queueing the remaining chapters.',
+    TEACHING_CONTINUATION_QUEUE_TIMEOUT: 'The first cited section is already readable. The remaining chapters did not acquire a worker within their bounded wait.',
+    TEACHING_CONTINUATION_ADMISSION_FAILED: 'The first cited section is already readable. The remaining chapters acquired a worker but could not durably claim the run.',
     TEACHING_WORKFLOW_FAILED: 'The failure occurred while retrieving chapter evidence, writing content, or checking citations. Published chapters remain available.',
     TEACHING_COMPLETION_FAILED: 'Guide content was generated, but its final completed state could not be saved. Readable chapters remain available.',
     AGENT_STEP_BUDGET: 'This run stopped at its step limit. Confirmed content remains available, and work will not continue indefinitely.',
@@ -1613,7 +1627,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <aside data-testid="player-journey-surface" class="isolate overflow-hidden rounded-2xl border border-copper/25 text-ink shadow-2xl" style="background-color: var(--color-paper); opacity: 1">
+  <aside data-testid="player-journey-surface" :data-state="state" class="isolate overflow-hidden rounded-2xl border border-copper/25 text-ink shadow-2xl" style="background-color: var(--color-paper); opacity: 1">
     <div class="flex items-start gap-4 border-b border-copper/15 p-4 sm:p-5">
       <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="game.name" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
       <div class="min-w-0 flex-1">
@@ -1659,7 +1673,7 @@ onBeforeUnmount(() => {
           </li>
         </ol>
         <ul class="mt-4 stack-y-md">
-          <li v-for="candidate in sourceCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-xl border bg-paper p-4" :class="selected?.url === candidate.url ? 'border-copper/60 ring-2 ring-copper/10' : 'border-ink/10'">
+          <li v-for="candidate in sourceCandidates" :key="candidate.url" :data-capability="candidate.capability" :data-acquisition-mode="candidate.acquisitionMode" class="rounded-xl border bg-paper p-4" :class="selected?.url === candidate.url ? 'border-copper/60 ring-2 ring-copper/10' : 'border-ink/10'">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div class="min-w-0">
                 <p class="font-semibold">{{ candidate.title }}</p>
@@ -1681,7 +1695,7 @@ onBeforeUnmount(() => {
           <h5 class="text-sm font-semibold text-ink/70">{{ copy.identityOnlyTitle }}</h5>
           <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.identityOnlyDetail }}</p>
           <ul class="mt-3 stack-y-sm">
-            <li v-for="candidate in identityCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-lg border border-ink/10 bg-paper p-3 text-xs">
+            <li v-for="candidate in identityCandidates" :key="candidate.url" :data-capability="candidate.capability" :data-acquisition-mode="candidate.acquisitionMode" class="rounded-lg border border-ink/10 bg-paper p-3 text-xs">
               <p class="font-semibold text-ink/70">{{ candidate.title }}</p>
               <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
               <p class="mt-1 text-ink/50">{{ copy.capabilities[candidate.capability] }}</p>

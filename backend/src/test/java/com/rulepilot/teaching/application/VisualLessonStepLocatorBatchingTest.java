@@ -1,10 +1,13 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.AgentExecutionControl;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
@@ -467,7 +470,7 @@ class VisualLessonStepLocatorBatchingTest {
     }
 
     @Test
-    void cancellationBetweenBatchesStopsBeforeReadingOrCallingTheNextBatch() {
+    void cancellationBetweenBatchesStopsTheWholeRunBeforeReadingOrCallingTheNextBatch() {
         UUID evidence = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         Instant now = Instant.parse("2026-08-26T00:00:00Z");
@@ -504,21 +507,22 @@ class VisualLessonStepLocatorBatchingTest {
                 Clock.fixed(now, ZoneId.of("UTC")),
                 Duration.ofMinutes(1));
 
-        var result = locator.locate(
-                understanding(),
-                UUID.randomUUID(),
-                section(evidence, List.of(1, 2, 3, 4)),
-                List.of(step(evidence, List.of(1, 2, 3, 4))),
-                "owner",
-                runId);
+        assertThatThrownBy(() -> locator.locate(
+                        understanding(),
+                        UUID.randomUUID(),
+                        section(evidence, List.of(1, 2, 3, 4)),
+                        List.of(step(evidence, List.of(1, 2, 3, 4))),
+                        "owner",
+                        runId))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue("reason", StopReason.CANCELLED);
 
         assertThat(calls).hasValue(1);
         assertThat(reads).hasValue(1);
-        assertThat(result.regions()).singleElement();
     }
 
     @Test
-    void exhaustedModelBudgetBetweenBatchesStopsBeforeReadingOrCallingTheNextBatch() {
+    void exhaustedModelBudgetBetweenBatchesStopsTheWholeRunBeforeReadingOrCallingTheNextBatch() {
         UUID evidence = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         Instant now = Instant.parse("2026-08-26T00:00:00Z");
@@ -541,17 +545,18 @@ class VisualLessonStepLocatorBatchingTest {
                 Clock.fixed(now, ZoneId.of("UTC")),
                 Duration.ofMinutes(1));
 
-        var result = locator.locate(
-                understanding(),
-                UUID.randomUUID(),
-                section(evidence, List.of(1, 2, 3, 4)),
-                List.of(step(evidence, List.of(1, 2, 3, 4))),
-                "owner",
-                runId);
+        assertThatThrownBy(() -> locator.locate(
+                        understanding(),
+                        UUID.randomUUID(),
+                        section(evidence, List.of(1, 2, 3, 4)),
+                        List.of(step(evidence, List.of(1, 2, 3, 4))),
+                        "owner",
+                        runId))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue("reason", StopReason.MODEL_BUDGET);
 
         assertThat(calls).hasValue(1);
         assertThat(reads).hasValue(1);
-        assertThat(result.regions()).singleElement();
     }
 
     @Test

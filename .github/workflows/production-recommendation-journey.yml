@@ -11,64 +11,218 @@ on:
         description: Natural player request for one ranked recommendation slate
         required: true
         type: string
-        default: '今晚五个人，想玩能谈判、互相骗一骗的；有两个新手，90 分钟内。请直接挑三款，并把你最推荐的一款放第一。'
+        default: '今晚五个人，90 分钟内，BGG 复杂度不超过 2.5，并且只看 BGG 的 PARTY（聚会游戏）分类。请直接挑三款，并把最推荐的一款放第一。'
       requested_card_count:
         description: Card count requested by the player; recorded as shortfall evidence
         required: true
         type: number
         default: 3
+      expected_player_count:
+        description: Exact hard player count that the typed profile and every returned game must satisfy
+        required: true
+        type: number
+        default: 5
+      maximum_duration_minutes:
+        description: Hard maximum duration that the typed profile and every returned game must satisfy
+        required: true
+        type: number
+        default: 90
+      maximum_complexity:
+        description: Hard maximum BGG complexity that the typed profile and every returned game must satisfy
+        required: true
+        type: number
+        default: 2.5
+      expected_game_type:
+        description: Exact BGG product class that the typed profile and every returned game must satisfy
+        required: true
+        type: choice
+        default: party
+        options:
+          - abstract
+          - customizable
+          - children
+          - family
+          - party
+          - strategy
+          - thematic
+          - war
+          - expansion
       expected_title_term:
         description: Optional case-insensitive title term that every card must match
         required: false
         type: string
         default: ''
+      expected_provider:
+        description: Effective recommendation provider required for this canary
+        required: true
+        type: string
+        default: 'qwen'
+      expected_model:
+        description: Effective recommendation model required for this canary
+        required: true
+        type: string
+        default: 'qwen3.8-flash'
 
 permissions:
   contents: read
 
 concurrency:
   group: production-runtime
+  queue: max
   cancel-in-progress: false
 
 jobs:
-  journey:
-    name: Production recommendation canary
+  prepare_probe:
+    name: Prepare immutable recommendation probe without production authority
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment:
-      name: production
+    timeout-minutes: 15
     env:
-      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
-      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
-      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-      RULEPILOT_PUBLIC_URL: https://rulepilot.cn
       RULEPILOT_RECOMMENDATION_TESTED_SHA: ${{ inputs.tested_sha }}
-      RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: ${{ inputs.selection_prompt }}
-      RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: ${{ inputs.requested_card_count }}
-      RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: ${{ inputs.expected_title_term }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tested_sha }}
+          ref: main
           fetch-depth: 0
+
+      - name: Validate and detach the exact tested main commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tested_sha="$RULEPILOT_RECOMMENDATION_TESTED_SHA"
+          if [[ ! "$tested_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "tested_sha must be one exact lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git cat-file -e "${tested_sha}^{commit}"
+          if ! git merge-base --is-ancestor "$tested_sha" origin/main; then
+            echo "tested_sha is not an ancestor of current origin/main" >&2
+            exit 1
+          fi
+          git checkout --detach "$tested_sha"
+          [[ "$(git rev-parse HEAD)" == "$tested_sha" ]]
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Install production browser probe
-        working-directory: frontend
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Configure production SSH trust
+      - name: Install and seal the exact browser probe without production authority
         shell: bash
         run: |
           set -Eeuo pipefail
+          npm --prefix frontend ci
+          playwright_version=$(node -p \
+            "require('./frontend/node_modules/@playwright/test/package.json').version")
+          [[ "$playwright_version" == '1.61.1' ]]
+
+          artifact_dir="$RUNNER_TEMP/production-recommendation-probe-artifact"
+          archive="production-recommendation-probe-${RULEPILOT_RECOMMENDATION_TESTED_SHA}.tar.gz"
+          mkdir -p "$artifact_dir"
+          tar \
+            --exclude='./.git' \
+            --exclude='./.env' \
+            --exclude='./.env.*' \
+            --exclude='./.artifacts' \
+            -czf "$artifact_dir/$archive" .
+          (
+            cd "$artifact_dir"
+            sha256sum "$archive" > "${archive}.sha256"
+            sha256sum --check "${archive}.sha256"
+          )
+
+      - name: Publish the sealed probe for an isolated production runner
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-recommendation-probe-${{ inputs.tested_sha }}
+          path: ${{ runner.temp }}/production-recommendation-probe-artifact
+          if-no-files-found: error
+          retention-days: 1
+
+  journey:
+    name: Production recommendation browser canary
+    needs: prepare_probe
+    if: needs.prepare_probe.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+    environment:
+      name: production
+    env:
+      RULEPILOT_PUBLIC_URL: https://rulepilot.cn
+      RULEPILOT_RECOMMENDATION_TESTED_SHA: ${{ inputs.tested_sha }}
+      RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: ${{ inputs.selection_prompt }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: ${{ inputs.requested_card_count }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_PLAYER_COUNT: ${{ inputs.expected_player_count }}
+      RULEPILOT_RECOMMENDATION_MAXIMUM_DURATION_MINUTES: ${{ inputs.maximum_duration_minutes }}
+      RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY: ${{ inputs.maximum_complexity }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE: ${{ inputs.expected_game_type }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: ${{ inputs.expected_title_term }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER: ${{ inputs.expected_provider }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: ${{ inputs.expected_model }}
+    steps:
+      - name: Download the sealed probe on a fresh runner
+        uses: actions/download-artifact@v8
+        with:
+          name: production-recommendation-probe-${{ inputs.tested_sha }}
+          path: ${{ runner.temp }}/production-recommendation-probe-artifact
+
+      - name: Verify and extract the exact probe before production authority exists
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tested_sha="$RULEPILOT_RECOMMENDATION_TESTED_SHA"
+          artifact_dir="$RUNNER_TEMP/production-recommendation-probe-artifact"
+          archive="production-recommendation-probe-${tested_sha}.tar.gz"
+          workspace="$RUNNER_TEMP/production-recommendation-probe-workspace"
+          [[ "$tested_sha" =~ ^[0-9a-f]{40}$ ]]
+          test -f "$artifact_dir/$archive" && test ! -L "$artifact_dir/$archive"
+          test -f "$artifact_dir/${archive}.sha256" && test ! -L "$artifact_dir/${archive}.sha256"
+          [[ "$(find "$artifact_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')" == 2 ]]
+          (cd "$artifact_dir" && sha256sum --check "${archive}.sha256")
+          mkdir -p "$workspace"
+          tar -xzf "$artifact_dir/$archive" -C "$workspace"
+          test ! -e "$workspace/.git"
+          test ! -e "$workspace/.env"
+          playwright_version=$(node -p \
+            "require('$workspace/frontend/node_modules/@playwright/test/package.json').version")
+          [[ "$playwright_version" == '1.61.1' ]]
+
+      - name: Ensure the official browser image has the fixed probe prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! command -v ssh >/dev/null || ! command -v jq >/dev/null \
+              || ! command -v python3 >/dev/null; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              jq openssh-client python3
+            rm -rf /var/lib/apt/lists/*
+          fi
+          command -v node
+          command -v ssh
+          command -v jq
+          command -v python3
+
+      - name: Read exact active release and bounded player credentials
+        id: production_identity
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -Eeuo pipefail
+          credential_file="$RUNNER_TEMP/rulepilot-recommendation-player-credentials"
+          cleanup_authority() {
+            rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          }
+          trap cleanup_authority EXIT
           for required_secret in DEPLOY_HOST DEPLOY_KNOWN_HOSTS DEPLOY_SSH_PRIVATE_KEY DEPLOY_USER; do
             if [[ -z "${!required_secret}" ]]; then
               echo "Missing required production deployment secret: ${required_secret}" >&2
@@ -80,35 +234,6 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/id_ed25519"
           chmod 644 "$HOME/.ssh/known_hosts"
-
-      - name: Exercise one production recommendation
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          umask 077
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          report="$artifact_dir/journey.json"
-          mkdir -p "$artifact_dir"
-          chmod 700 "$artifact_dir"
-          jq -n \
-            --arg testedSha "$RULEPILOT_RECOMMENDATION_TESTED_SHA" \
-            '{generatedAt:(now | todate),completed:false,stage:"preflight",testedSha:$testedSha,activeReleaseSha:null}' \
-            > "$report"
-
-          if [[ ! "$RULEPILOT_RECOMMENDATION_TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "tested_sha must be one exact lowercase 40-character commit SHA" >&2
-            exit 1
-          fi
-          tested_sha=$(git rev-parse HEAD)
-          if [[ "$tested_sha" != "$RULEPILOT_RECOMMENDATION_TESTED_SHA" ]]; then
-            echo "The checked-out commit does not equal tested_sha" >&2
-            exit 1
-          fi
-          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
-          if ! git merge-base --is-ancestor "$tested_sha" origin/main; then
-            echo "tested_sha is not an ancestor of current origin/main" >&2
-            exit 1
-          fi
 
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
@@ -123,6 +248,10 @@ jobs:
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
           set -Eeuo pipefail
           application_root=$(readlink -f "$1")
+          if [[ -e "$application_root/deployment-guards/active-transaction" ]]; then
+            echo "Production has an active deployment transaction" >&2
+            exit 1
+          fi
           readlink -f "$application_root/current"
           readlink -f "$application_root/releases"
           REMOTE
@@ -131,22 +260,13 @@ jobs:
           active_release=${release_lines[0]:-}
           releases_root=${release_lines[1]:-}
           active_release_id=${active_release##*/}
+          tested_sha="$RULEPILOT_RECOMMENDATION_TESTED_SHA"
           if [[ -z "$active_release" || -z "$releases_root"
             || "${active_release%/*}" != "$releases_root"
-            || ! "$active_release_id" =~ ^${tested_sha}-[0-9]+(-[0-9]+)?$ ]]; then
+            || ! "$active_release_id" =~ ^${tested_sha}-[0-9]+-[0-9]+$ ]]; then
             echo "Production current does not resolve to the exact tested release" >&2
             exit 1
           fi
-          active_release_sha=${active_release_id%%-*}
-          if [[ "$active_release_sha" != "$tested_sha" ]]; then
-            echo "Production active release SHA does not equal tested_sha" >&2
-            exit 1
-          fi
-
-          report_update="$artifact_dir/journey.active-release.json"
-          jq --arg activeReleaseSha "$active_release_sha" \
-            '.activeReleaseSha = $activeReleaseSha' "$report" > "$report_update"
-          mv "$report_update" "$report"
 
           credentials=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
@@ -158,38 +278,779 @@ jobs:
             value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
             printf '%s' "$value"
           }
-          printf '%s\n%s' \
-            "$(read_value RULEPILOT_USER_USERNAME)" \
-            "$(read_value RULEPILOT_USER_PASSWORD)"
+          read_value RULEPILOT_USER_USERNAME | base64 -w0
+          printf '\n'
+          read_value RULEPILOT_USER_PASSWORD | base64 -w0
+          printf '\n'
           REMOTE
           )
           mapfile -t credential_lines <<< "$credentials"
-          player_username=${credential_lines[0]:-}
-          player_password=${credential_lines[1]:-}
+          player_username_b64=${credential_lines[0]:-}
+          player_password_b64=${credential_lines[1]:-}
+          player_username=$(printf '%s' "$player_username_b64" | base64 --decode)
+          player_password=$(printf '%s' "$player_password_b64" | base64 --decode)
           test -n "$player_username"
           test -n "$player_password"
           echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
+          echo "::add-mask::$player_username_b64"
+          echo "::add-mask::$player_password_b64"
+          umask 077
+          printf '%s\n%s\n' "$player_username_b64" "$player_password_b64" > "$credential_file"
+          printf 'active_release_id=%s\n' "$active_release_id" >> "$GITHUB_OUTPUT"
+          unset player_username player_password player_username_b64 player_password_b64 credentials credential_lines
+          rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          test ! -e "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/known_hosts"
 
+      - name: Exercise one production recommendation with only player authority
+        shell: bash
+        env:
+          RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID: ${{ steps.production_identity.outputs.active_release_id }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test ! -e "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/known_hosts"
+          credential_file="$RUNNER_TEMP/rulepilot-recommendation-player-credentials"
+          workspace="$RUNNER_TEMP/production-recommendation-probe-workspace"
+          artifact_dir="$RUNNER_TEMP/production-recommendation-journey"
+          raw_report="$artifact_dir/journey.raw.json"
+          runner_env_file="$GITHUB_ENV"
+          runner_path_file="$GITHUB_PATH"
+          case "$runner_env_file" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
+          case "$runner_path_file" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
+          reset_runner_command_file() {
+            local target=$1
+            /usr/bin/rm -f -- "$target"
+            /usr/bin/install -m 600 /dev/null "$target"
+          }
+          cleanup_credentials() {
+            /usr/bin/rm -f -- "$credential_file"
+            reset_runner_command_file "$runner_env_file"
+            reset_runner_command_file "$runner_path_file"
+          }
+          trap cleanup_credentials EXIT
+          reset_runner_command_file "$runner_env_file"
+          reset_runner_command_file "$runner_path_file"
+          test -f "$credential_file" && test ! -L "$credential_file"
+          mapfile -t credential_lines < "$credential_file"
+          player_username=$(printf '%s' "${credential_lines[0]:-}" | base64 --decode)
+          player_password=$(printf '%s' "${credential_lines[1]:-}" | base64 --decode)
+          test -n "$player_username"
+          test -n "$player_password"
+          echo "::add-mask::$player_username"
+          echo "::add-mask::$player_password"
+          rm -f "$credential_file"
+
+          mkdir -p "$artifact_dir"
+          chmod 700 "$artifact_dir"
+          jq -n \
+            --arg testedSha "$RULEPILOT_RECOMMENDATION_TESTED_SHA" \
+            --arg activeReleaseId "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
+            '{generatedAt:(now | todate),completed:false,stage:"preflight",testedSha:$testedSha,activeReleaseId:$activeReleaseId}' \
+            > "$raw_report"
+
+          node_binary=$(command -v node)
+          case "$node_binary" in /usr/bin/node|/usr/local/bin/node) ;; *) exit 1 ;; esac
+          cd "$workspace"
           set +e
-          RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true \
-          RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
-          RULEPILOT_RECOMMENDATION_USER="$player_username" \
-          RULEPILOT_RECOMMENDATION_PASSWORD="$player_password" \
-          RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA="$active_release_sha" \
-          RULEPILOT_RECOMMENDATION_REPORT="$report" \
-            npm --prefix frontend exec -- playwright test \
+          /usr/bin/env -i \
+            HOME="$HOME" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            PATH=/usr/local/bin:/usr/bin:/bin \
+            PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+            RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true \
+            RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
+            RULEPILOT_RECOMMENDATION_USER="$player_username" \
+            RULEPILOT_RECOMMENDATION_PASSWORD="$player_password" \
+            RULEPILOT_RECOMMENDATION_REPORT="$raw_report" \
+            RULEPILOT_RECOMMENDATION_TESTED_SHA="$RULEPILOT_RECOMMENDATION_TESTED_SHA" \
+            RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID="$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
+            RULEPILOT_RECOMMENDATION_SELECTION_PROMPT="$RULEPILOT_RECOMMENDATION_SELECTION_PROMPT" \
+            RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT="$RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT" \
+            RULEPILOT_RECOMMENDATION_EXPECTED_PLAYER_COUNT="$RULEPILOT_RECOMMENDATION_EXPECTED_PLAYER_COUNT" \
+            RULEPILOT_RECOMMENDATION_MAXIMUM_DURATION_MINUTES="$RULEPILOT_RECOMMENDATION_MAXIMUM_DURATION_MINUTES" \
+            RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY="$RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY" \
+            RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE="$RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE" \
+            RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM="$RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM" \
+            RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER="$RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER" \
+            RULEPILOT_RECOMMENDATION_EXPECTED_MODEL="$RULEPILOT_RECOMMENDATION_EXPECTED_MODEL" \
+            "$node_binary" frontend/node_modules/@playwright/test/cli.js test \
               --config frontend/playwright.recommendation-production.config.ts
           journey_status=$?
           set -e
+          unset player_username player_password credential_lines
           chmod -R go-rwx "$artifact_dir"
           exit "$journey_status"
 
-      - name: Upload sanitized journey report
+      - name: Prove credentials are absent and rebuild the allowlisted journey report
+        id: cleanup_credentials
         if: always()
+        shell: /bin/bash --noprofile --norc -p {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          LC_ALL: C
+          LD_LIBRARY_PATH: ''
+          LD_PRELOAD: ''
+          PATH: /usr/bin:/bin
+          RULEPILOT_RECOMMENDATION_TESTED_SHA: ${{ inputs.tested_sha }}
+          RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID: ${{ steps.production_identity.outputs.active_release_id }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: ${{ inputs.requested_card_count }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_PLAYER_COUNT: ${{ inputs.expected_player_count }}
+          RULEPILOT_RECOMMENDATION_MAXIMUM_DURATION_MINUTES: ${{ inputs.maximum_duration_minutes }}
+          RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY: ${{ inputs.maximum_complexity }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE: ${{ inputs.expected_game_type }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: ${{ inputs.expected_title_term }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER: ${{ inputs.expected_provider }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: ${{ inputs.expected_model }}
+        run: |
+          set -Eeuo pipefail
+          artifact_dir="$RUNNER_TEMP/production-recommendation-journey"
+          raw_report="$artifact_dir/journey.raw.json"
+          sanitized_report="$artifact_dir/journey.json"
+          rm -f \
+            "$HOME/.ssh/id_ed25519" \
+            "$HOME/.ssh/known_hosts" \
+            "$RUNNER_TEMP/rulepilot-recommendation-player-credentials"
+          test ! -e "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/known_hosts"
+          test ! -e "$RUNNER_TEMP/rulepilot-recommendation-player-credentials"
+          if [[ -e "$artifact_dir" || -L "$artifact_dir" ]]; then
+            test -d "$artifact_dir" && test ! -L "$artifact_dir"
+          else
+            mkdir -m 700 "$artifact_dir"
+          fi
+          chmod 700 "$artifact_dir"
+          temporary_report=
+          sanitization_complete=false
+          cleanup_untrusted_reports() {
+            rm -f "$raw_report"
+            [[ -z "$temporary_report" ]] || rm -f "$temporary_report"
+            [[ "$sanitization_complete" == true ]] || rm -f "$sanitized_report"
+          }
+          trap cleanup_untrusted_reports EXIT
+          temporary_report=$(mktemp "$RUNNER_TEMP/production-recommendation-sanitized.XXXXXX")
+          rm -f "$sanitized_report"
+
+          tested_sha="$RULEPILOT_RECOMMENDATION_TESTED_SHA"
+          active_release_id=${RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID:-not-observed}
+          requested_card_count="$RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT"
+          expected_player_count="$RULEPILOT_RECOMMENDATION_EXPECTED_PLAYER_COUNT"
+          maximum_duration_minutes="$RULEPILOT_RECOMMENDATION_MAXIMUM_DURATION_MINUTES"
+          maximum_complexity="$RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY"
+          expected_game_type="$RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE"
+          expected_provider="$RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER"
+          expected_model="$RULEPILOT_RECOMMENDATION_EXPECTED_MODEL"
+          [[ "$tested_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$active_release_id" != not-observed ]]; then
+            [[ "$active_release_id" =~ ^${tested_sha}-[0-9]+-[0-9]+$ ]]
+          fi
+          [[ "$requested_card_count" =~ ^[0-9]+$ ]]
+          [[ "$expected_player_count" =~ ^[0-9]+$ ]]
+          [[ "$maximum_duration_minutes" =~ ^[0-9]+$ ]]
+          [[ "$maximum_complexity" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]
+          (( requested_card_count >= 1 && requested_card_count <= 10 ))
+          (( expected_player_count >= 1 && expected_player_count <= 20 ))
+          (( maximum_duration_minutes >= 1 && maximum_duration_minutes <= 1440 ))
+          jq --exit-status --null-input --arg value "$maximum_complexity" \
+            '($value | tonumber) > 0 and ($value | tonumber) <= 5' >/dev/null
+          case "$expected_game_type" in
+            abstract|customizable|children|family|party|strategy|thematic|war|expansion) ;;
+            *) echo "Invalid expected BGG game type" >&2; exit 1 ;;
+          esac
+          [[ "$expected_provider" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]]
+          [[ "$expected_model" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]]
+          normalized_expected_title_term=$(/usr/bin/python3 -c \
+            'import os, unicodedata; print(unicodedata.normalize("NFKC", os.environ["RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM"]).strip().lower(), end="")')
+          expected_title_term_sha256=$(printf '%s' "$normalized_expected_title_term" \
+            | sha256sum | awk '{print $1}')
+
+          if [[ ! -e "$raw_report" ]]; then
+            jq -n \
+              --arg testedSha "$tested_sha" \
+              --arg activeReleaseId "$active_release_id" \
+              '{generatedAt:(now | todate),completed:false,stage:"preflight-failed",
+                testedSha:$testedSha,activeReleaseId:$activeReleaseId}' \
+              > "$raw_report"
+          fi
+          test -f "$raw_report" && test ! -L "$raw_report"
+          raw_report_size=$(wc -c < "$raw_report" | tr -d ' ')
+          (( raw_report_size > 0 && raw_report_size <= 1048576 ))
+
+          jq --exit-status --compact-output \
+            --arg testedSha "$tested_sha" \
+            --arg activeReleaseId "$active_release_id" \
+            --arg expectedProvider "$expected_provider" \
+            --arg expectedModel "$expected_model" \
+            --arg expectedGameType "$expected_game_type" \
+            --arg expectedTitleTermSha256 "$expected_title_term_sha256" \
+            --argjson requestedCardCount "$requested_card_count" \
+            --argjson expectedPlayerCount "$expected_player_count" \
+            --argjson maximumDurationMinutes "$maximum_duration_minutes" \
+            --argjson maximumComplexity "$maximum_complexity" '
+            def is_boolean: type == "boolean";
+            def is_boolean_or_null: . == null or is_boolean;
+            def is_finite_number:
+              type == "number" and ((. - .) == 0);
+            def is_integer_between($minimum; $maximum):
+              is_finite_number and floor == . and . >= $minimum and . <= $maximum;
+            def is_integer_or_null($minimum; $maximum):
+              . == null or is_integer_between($minimum; $maximum);
+            def is_number_or_null($minimum; $maximum):
+              . == null or (is_finite_number and . >= $minimum and . <= $maximum);
+            def is_enum_or_null($values):
+              . as $value
+              | $value == null
+                or (($value | type) == "string" and ($values | index($value)) != null);
+            def is_uuid_or_null:
+              . == null
+                or (type == "string"
+                  and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"));
+            def is_sha256_or_null:
+              . == null or (type == "string" and test("^[0-9a-f]{64}$"));
+            def is_generated_at:
+              type == "string"
+                and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$");
+            def is_model_or_null($provider; $model):
+              if . == null then true
+              elif type != "object" then false
+              else (keys | sort) == ["model", "provider"]
+                and .provider == $provider
+                and .model == $model
+              end;
+            def is_content_digest_or_null:
+              if . == null then true
+              elif type != "object" then false
+              else (keys | sort) == [
+                  "assistantMessageCharacterCount",
+                  "assistantMessageSha256",
+                  "cardReplyPartCount",
+                  "cardReplyPartsCharacterCount",
+                  "cardReplyPartsSha256"
+                ]
+                and (.assistantMessageSha256 | is_sha256_or_null) and .assistantMessageSha256 != null
+                and (.cardReplyPartsSha256 | is_sha256_or_null) and .cardReplyPartsSha256 != null
+                and (.assistantMessageCharacterCount | is_integer_between(0; 10000000))
+                and (.cardReplyPartsCharacterCount | is_integer_between(0; 10000000))
+                and (.cardReplyPartCount | is_integer_between(0; 10000))
+              end;
+            def is_integer_array($minimum; $maximum; $maximum_length):
+              type == "array"
+                and length <= $maximum_length
+                and all(.[]; is_integer_between($minimum; $maximum));
+            def has_keys($required):
+              . as $object
+              | all($required[]; . as $key | $object | has($key));
+            def is_safe_official_mutation_path:
+              type == "string"
+                and test("^(POST|PUT|PATCH|DELETE) /api/v1/documents/official-imports(/[0-9a-f-]+/teaching-ensure-current)?$");
+            def completed_recommendation_acceptance($raw):
+              $raw.publicReleaseId == $activeReleaseId
+                and $raw.publicReleaseSha == $testedSha
+                and $raw.publicReleaseNoStore == true
+                and $raw.routeStayedOnDiscover == true
+                and $raw.recommendationRequestMessageMatched == true
+                and $raw.recommendationProfileHardConstraintsMatched == true
+                and $raw.recommendationCardsHardConstraintsMatched == true
+                and $raw.recommendationFitClaimsHardConstraintsMatched == true
+                and $raw.recommendationComplexityHardConstraintsMatched == true
+                and $raw.recommendationGameTypeHardConstraintsMatched == true
+                and $raw.recommendationEvidenceBoundReplyParts == true
+                and $raw.recommendationPersistedCardCount == $requestedCardCount
+                and $raw.recommendationShortfallCount == 0
+                and $raw.recommendationOutcome == "recommendations"
+                and $raw.recommendationTerminalCategory == "RECOMMENDATIONS"
+                and $raw.recommendationTerminalObserved == true
+                and $raw.recommendationClickCaptured == true
+                and ($raw.recommendationFirstProgressMs | is_integer_between(0; 3000))
+                and $raw.recommendationSseTerminalCategory == "RESULT"
+                and ($raw.recommendationSseTerminalMs | is_integer_between(0; 3600000))
+                and ($raw.recommendationSseResultMs | is_integer_between(0; 3600000))
+                and $raw.recommendationSseErrorCode == null
+                and $raw.recommendationSseFailureBoundary == null
+                and ($raw.recommendationPersistedTerminalMs | is_integer_between(0; 3600000))
+                and ($raw.recommendationRenderedSlateMs | is_integer_between(0; 20000))
+                and ($raw.recommendationElapsedMs | is_integer_between(0; 20000))
+                and $raw.recommendationSloMet == true
+                and $raw.recommendationStreamProbeFailed == false
+                and ($raw.recommendationPublishedBggIds | length) == $requestedCardCount
+                and (($raw.recommendationPublishedBggIds | unique | length) == $requestedCardCount)
+                and ($raw.recommendationAssistantReplyCharacterCount | is_integer_between(80; 10000000))
+                and ($raw.recommendationRenderedReplyCharacterCount | is_integer_between(80; 10000000))
+                and ($raw.recommendationCardReplyPartCount | is_integer_between($requestedCardCount; 10000))
+                and $raw.recommendationUsableCardCount == $requestedCardCount
+                and $raw.recommendationUsableReplyPartCount == $raw.recommendationCardReplyPartCount
+                and $raw.recommendationAssistantReplyUsable == true
+                and $raw.recommendationAllCardsUsable == true
+                and $raw.recommendationAllReplyPartsUsable == true
+                and $raw.recommendationSseContentDigest != null
+                and $raw.recommendationPersistedContentDigest != null
+                and $raw.recommendationRenderedContentDigest != null
+                and $raw.recommendationSsePersistedContentConsistent == true
+                and $raw.recommendationPersistedDomContentConsistent == true
+                and ($raw.recommendationCompletedWork | length) >= 1
+                and $raw.recommendationModelBeforeRequest != null
+                and $raw.recommendationModelAfterRequest != null
+                and $raw.recommendationModelProvider == $expectedProvider
+                and $raw.recommendationModelName == $expectedModel
+                and ($raw.recommendationModelCalls | is_integer_between(2; 6))
+                and ($raw.recommendationModelCallElapsedMs | length) == $raw.recommendationModelCalls
+                and ($raw.recommendationAgentElapsedMs | is_integer_between(0; 3600000))
+                and $raw.recommendationCatalogCalls == 1
+                and $raw.recommendationWebResearchCalls == 0
+                and $raw.recommendationFailureBoundary == null
+                and ($raw.handoffSelectedBggId | is_integer_between(1; 1000000000))
+                and $raw.handoffActionClicked == true
+                and $raw.handoffSurfaceVisible == true
+                and $raw.handoffImportRequestedBggId == $raw.handoffSelectedBggId
+                and ($raw.handoffImportResponseStatus | is_integer_between(200; 299))
+                and $raw.handoffImportResponseOk == true
+                and $raw.handoffImportResponseBggId == $raw.handoffSelectedBggId
+                and $raw.handoffImportedGameId != null
+                and $raw.handoffImportedEditionId != null
+                and $raw.handoffEditionBelongsToImportedGame == true
+                and ($raw.handoffImportElapsedMs | is_integer_between(0; 3600000))
+                and $raw.handoffTerminalVisible == true
+                and ($raw.handoffElapsedMs | is_integer_between(0; 3600000))
+                and $raw.handoffRulebookImportStarted == false
+                and (if $raw.handoffRestoredExistingJourney then
+                    $raw.handoffTerminalCategory == "RESTORED_EXISTING"
+                      and $raw.handoffRestoredImportJobId != null
+                      and $raw.handoffRestoredDocumentVersionId != null
+                      and $raw.handoffRestoredPreparationRunId != null
+                      and $raw.handoffFreshnessRequestPreparationRunMatched == true
+                      and $raw.handoffFreshnessResponseStatus == 202
+                      and $raw.handoffFreshnessResponseIdentityMatched == true
+                      and $raw.handoffFreshnessResponseEligible == true
+                      and ($raw.handoffOfficialMutationAttemptedPaths | length) == 1
+                      and ($raw.handoffOfficialMutationAttemptedPaths[0]
+                        | test("^POST /api/v1/documents/official-imports/[0-9a-f-]+/teaching-ensure-current$"))
+                      and $raw.handoffOfficialMutationBlocked == false
+                      and $raw.handoffStoppedAtDiscoveryBoundary == false
+                  else
+                    ($raw.handoffTerminalCategory == "REVIEW" or $raw.handoffTerminalCategory == "UNAVAILABLE")
+                      and $raw.handoffDiscoveryRequestedEditionId == $raw.handoffImportedEditionId
+                      and ($raw.handoffDiscoveryResponseStatus | is_integer_between(200; 299))
+                      and $raw.handoffDiscoveryResponseOk == true
+                      and $raw.handoffDiscoveryIdentityEditionId == $raw.handoffImportedEditionId
+                      and $raw.handoffDiscoveryIdentityMatched == true
+                      and (if $raw.handoffTerminalCategory == "REVIEW" then
+                          $raw.handoffDiscoveryConfigured == true
+                            and ($raw.handoffDiscoveryCandidateCount | is_integer_between(1; 10000))
+                            and ($raw.handoffImportableCandidateCount | is_integer_between(1; 10000))
+                            and $raw.handoffImportableCandidateFound == true
+                            and $raw.handoffDiscoveryCandidateIdentitySha256 != null
+                            and $raw.handoffRenderedCandidateIdentitySha256
+                              == $raw.handoffDiscoveryCandidateIdentitySha256
+                            and $raw.handoffCandidateIdentityOrderConsistent == true
+                        else
+                          $raw.handoffDiscoveryCandidateCount == 0
+                            and $raw.handoffImportableCandidateCount == 0
+                            and $raw.handoffImportableCandidateFound == false
+                        end)
+                      and ($raw.handoffOfficialMutationAttemptedPaths | length) == 0
+                      and $raw.handoffOfficialMutationBlocked == false
+                      and $raw.handoffStoppedAtDiscoveryBoundary == true
+                  end)
+                and $raw.rawModelOutputCaptured == false;
+            def preflight_report($raw): {
+              reportSchemaVersion: 1,
+              generatedAt: $raw.generatedAt,
+              completed: false,
+              stage: "preflight-failed",
+              testedSha: $testedSha,
+              activeReleaseSha: $testedSha,
+              activeReleaseId: $activeReleaseId,
+              recommendationRequestedCardCount: $requestedCardCount,
+              recommendationExpectedPlayerCount: $expectedPlayerCount,
+              recommendationMaximumDurationMinutes: $maximumDurationMinutes,
+              recommendationMaximumComplexity: $maximumComplexity,
+              recommendationExpectedGameType: $expectedGameType,
+              recommendationProfileHardConstraintsMatched: null,
+              recommendationCardsHardConstraintsMatched: null,
+              recommendationFitClaimsHardConstraintsMatched: null,
+              recommendationComplexityHardConstraintsMatched: null,
+              recommendationGameTypeHardConstraintsMatched: null,
+              recommendationExpectedModel: {provider: $expectedProvider, model: $expectedModel},
+              recommendationModelCalls: null,
+              recommendationModelCallElapsedMs: [],
+              handoffTerminalCategory: "NOT_OBSERVED",
+              handoffRestoredExistingJourney: false,
+              handoffRestoredImportJobId: null,
+              handoffRestoredDocumentVersionId: null,
+              handoffRestoredPreparationRunId: null,
+              rawModelOutputCaptured: false
+            };
+            . as $raw
+            | if ($raw.stage == "preflight" or $raw.stage == "preflight-failed") then
+                if (($raw | type) == "object"
+                  and ($raw.generatedAt | is_generated_at)
+                  and $raw.completed == false
+                  and $raw.testedSha == $testedSha
+                  and $raw.activeReleaseId == $activeReleaseId)
+                then preflight_report($raw)
+                else error("invalid preflight recommendation report")
+                end
+              else
+                if (($raw | type) == "object"
+                  and ($raw | has_keys([
+                    "generatedAt", "completed", "stage", "testedSha", "activeReleaseSha", "activeReleaseId",
+                    "publicReleaseId", "publicReleaseSha", "publicReleaseNoStore", "routeStayedOnDiscover",
+                    "recommendationRequestedCardCount", "recommendationExpectedPlayerCount",
+                    "recommendationMaximumDurationMinutes", "recommendationMaximumComplexity",
+                    "recommendationExpectedGameType", "recommendationRequestMessageMatched",
+                    "recommendationProfileHardConstraintsMatched", "recommendationCardsHardConstraintsMatched",
+                    "recommendationFitClaimsHardConstraintsMatched",
+                    "recommendationComplexityHardConstraintsMatched",
+                    "recommendationGameTypeHardConstraintsMatched", "recommendationEvidenceBoundReplyParts",
+                    "recommendationPersistedCardCount", "recommendationShortfallCount", "recommendationOutcome",
+                    "recommendationTerminalCategory", "recommendationTerminalObserved", "recommendationClickCaptured",
+                    "recommendationFirstProgressMs", "recommendationSseTerminalCategory",
+                    "recommendationSseTerminalMs", "recommendationSseResultMs", "recommendationSseErrorCode",
+                    "recommendationSseFailureBoundary", "recommendationPersistedTerminalMs",
+                    "recommendationRenderedSlateMs", "recommendationElapsedMs", "recommendationSloMet",
+                    "recommendationProgressEvents", "recommendationStreamProbeFailed",
+                    "recommendationPublishedBggIds", "recommendationAssistantReplyCharacterCount",
+                    "recommendationRenderedReplyCharacterCount", "recommendationCardReplyPartCount",
+                    "recommendationUsableCardCount", "recommendationUsableReplyPartCount",
+                    "recommendationAssistantReplyUsable", "recommendationAllCardsUsable",
+                    "recommendationAllReplyPartsUsable", "recommendationSseContentDigest",
+                    "recommendationPersistedContentDigest", "recommendationRenderedContentDigest",
+                    "recommendationSsePersistedContentConsistent", "recommendationPersistedDomContentConsistent",
+                    "recommendationCompletedWork", "recommendationExpectedModel",
+                    "recommendationModelBeforeRequest", "recommendationModelAfterRequest",
+                    "recommendationModelProvider", "recommendationModelName", "recommendationModelCalls",
+                    "recommendationModelCallElapsedMs", "recommendationAgentElapsedMs",
+                    "recommendationModelElapsedShare", "recommendationCatalogCalls",
+                    "recommendationWebResearchCalls", "recommendationFailureBoundary",
+                    "expectedRecommendationTitleTermSha256", "handoffSelectedBggId", "handoffActionClicked",
+                    "handoffSurfaceVisible", "handoffImportRequestedBggId", "handoffImportResponseStatus",
+                    "handoffImportResponseOk", "handoffImportResponseBggId", "handoffImportedGameId",
+                    "handoffImportedEditionId", "handoffEditionBelongsToImportedGame", "handoffImportElapsedMs",
+                    "handoffDiscoveryRequestedEditionId", "handoffDiscoveryResponseStatus",
+                    "handoffDiscoveryResponseOk", "handoffDiscoveryIdentityEditionId",
+                    "handoffDiscoveryIdentityMatched", "handoffDiscoveryConfigured",
+                    "handoffDiscoveryCandidateCount", "handoffImportableCandidateCount",
+                    "handoffImportableCandidateFound", "handoffDiscoveryCandidateIdentitySha256",
+                    "handoffRenderedCandidateIdentitySha256", "handoffCandidateIdentityOrderConsistent",
+                    "handoffDiscoveryElapsedMs", "handoffTerminalCategory", "handoffTerminalVisible",
+                    "handoffElapsedMs", "handoffRulebookImportStarted", "handoffRestoredExistingJourney",
+                    "handoffRestoredImportJobId", "handoffRestoredDocumentVersionId",
+                    "handoffRestoredPreparationRunId", "handoffFreshnessRequestPreparationRunMatched",
+                    "handoffFreshnessResponseStatus", "handoffFreshnessResponseIdentityMatched",
+                    "handoffFreshnessResponseEligible", "handoffOfficialMutationAttemptedPaths",
+                    "handoffOfficialMutationBlocked", "handoffStoppedAtDiscoveryBoundary", "rawModelOutputCaptured"
+                  ]))
+                  and $activeReleaseId != "not-observed"
+                  and ($raw.generatedAt | is_generated_at)
+                  and ($raw.completed | is_boolean)
+                  and ($raw.stage | IN("login", "recommendation", "recommendation-stream-error",
+                    "player-visible-slate", "recommendation-to-rulebook-handoff", "completed"))
+                  and (($raw.completed and $raw.stage == "completed")
+                    or (($raw.completed | not) and $raw.stage != "completed"))
+                  and $raw.testedSha == $testedSha
+                  and $raw.activeReleaseSha == $testedSha
+                  and $raw.activeReleaseId == $activeReleaseId
+                  and ($raw.publicReleaseId == null or $raw.publicReleaseId == $activeReleaseId)
+                  and ($raw.publicReleaseSha == null or $raw.publicReleaseSha == $testedSha)
+                  and (($raw.publicReleaseId == null) == ($raw.publicReleaseSha == null))
+                  and ($raw.publicReleaseNoStore | is_boolean_or_null)
+                  and ($raw.routeStayedOnDiscover | is_boolean)
+                  and $raw.recommendationRequestedCardCount == $requestedCardCount
+                  and $raw.recommendationExpectedPlayerCount == $expectedPlayerCount
+                  and $raw.recommendationMaximumDurationMinutes == $maximumDurationMinutes
+                  and $raw.recommendationMaximumComplexity == $maximumComplexity
+                  and $raw.recommendationExpectedGameType == $expectedGameType
+                  and ($raw.recommendationRequestMessageMatched | is_boolean)
+                  and ($raw.recommendationProfileHardConstraintsMatched | is_boolean_or_null)
+                  and ($raw.recommendationCardsHardConstraintsMatched | is_boolean_or_null)
+                  and ($raw.recommendationFitClaimsHardConstraintsMatched | is_boolean_or_null)
+                  and ($raw.recommendationComplexityHardConstraintsMatched | is_boolean_or_null)
+                  and ($raw.recommendationGameTypeHardConstraintsMatched | is_boolean_or_null)
+                  and ($raw.recommendationEvidenceBoundReplyParts | is_boolean_or_null)
+                  and ($raw.recommendationPersistedCardCount | is_integer_or_null(0; 10))
+                  and ($raw.recommendationShortfallCount | is_integer_or_null(0; 10))
+                  and ($raw.recommendationOutcome
+                    | is_enum_or_null(["conversation", "needs_clarification", "recommendations", "no_match", "unavailable"]))
+                  and ($raw.recommendationTerminalCategory
+                    | IN("NOT_OBSERVED", "RECOMMENDATIONS", "NON_RECOMMENDATION", "SESSION_TIMEOUT",
+                      "SESSION_READ_FAILURE", "STREAM_ERROR"))
+                  and ($raw.recommendationTerminalObserved | is_boolean)
+                  and ($raw.recommendationClickCaptured | is_boolean)
+                  and ($raw.recommendationFirstProgressMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationSseTerminalCategory | IN("NOT_OBSERVED", "RESULT", "ERROR"))
+                  and ($raw.recommendationSseTerminalMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationSseResultMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationSseErrorCode
+                    | is_enum_or_null(["recommendation_unavailable", "not_found", "revision_conflict",
+                      "turn_id_reused", "turn_in_progress", "concurrent_turn",
+                      "invalid_stream_error", "unknown_stream_error"]))
+                  and ($raw.recommendationSseFailureBoundary
+                    | is_enum_or_null(["time_budget", "model_response", "service_configuration",
+                      "action_budget", "publication_boundary", "service_failure"]))
+                  and ($raw.recommendationPersistedTerminalMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationRenderedSlateMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationElapsedMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationSloMet | is_boolean_or_null)
+                  and (($raw.recommendationProgressEvents | type) == "array"
+                    and ($raw.recommendationProgressEvents | length) <= 100)
+                  and ($raw.recommendationStreamProbeFailed | is_boolean)
+                  and ($raw.recommendationPublishedBggIds | is_integer_array(1; 1000000000; 10))
+                  and ($raw.recommendationAssistantReplyCharacterCount | is_integer_or_null(0; 10000000))
+                  and ($raw.recommendationRenderedReplyCharacterCount | is_integer_or_null(0; 10000000))
+                  and ($raw.recommendationCardReplyPartCount | is_integer_or_null(0; 10000))
+                  and ($raw.recommendationUsableCardCount | is_integer_between(0; 10000))
+                  and ($raw.recommendationUsableReplyPartCount | is_integer_between(0; 10000))
+                  and ($raw.recommendationAssistantReplyUsable | is_boolean)
+                  and ($raw.recommendationAllCardsUsable | is_boolean)
+                  and ($raw.recommendationAllReplyPartsUsable | is_boolean)
+                  and ($raw.recommendationSseContentDigest | is_content_digest_or_null)
+                  and ($raw.recommendationPersistedContentDigest | is_content_digest_or_null)
+                  and ($raw.recommendationRenderedContentDigest | is_content_digest_or_null)
+                  and ($raw.recommendationSsePersistedContentConsistent | is_boolean_or_null)
+                  and ($raw.recommendationPersistedDomContentConsistent | is_boolean_or_null)
+                  and (($raw.recommendationCompletedWork | type) == "array"
+                    and ($raw.recommendationCompletedWork | length) <= 64
+                    and all($raw.recommendationCompletedWork[]; type == "string" and length <= 128))
+                  and ($raw.recommendationExpectedModel | is_model_or_null($expectedProvider; $expectedModel))
+                  and $raw.recommendationExpectedModel != null
+                  and ($raw.recommendationModelBeforeRequest | is_model_or_null($expectedProvider; $expectedModel))
+                  and ($raw.recommendationModelAfterRequest | is_model_or_null($expectedProvider; $expectedModel))
+                  and ($raw.recommendationModelProvider == null
+                    or $raw.recommendationModelProvider == $expectedProvider)
+                  and ($raw.recommendationModelName == null or $raw.recommendationModelName == $expectedModel)
+                  and ($raw.recommendationModelCalls | is_integer_or_null(0; 20))
+                  and ($raw.recommendationModelCallElapsedMs | is_integer_array(0; 3600000; 20))
+                  and (($raw.recommendationModelCalls == null
+                      and ($raw.recommendationModelCallElapsedMs | length) == 0)
+                    or ($raw.recommendationModelCalls != null
+                      and ($raw.recommendationModelCallElapsedMs | length) == $raw.recommendationModelCalls))
+                  and ($raw.recommendationAgentElapsedMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationModelElapsedShare | is_number_or_null(0; 1000))
+                  and ($raw.recommendationCatalogCalls | is_integer_or_null(0; 100))
+                  and ($raw.recommendationWebResearchCalls | is_integer_or_null(0; 100))
+                  and ($raw.recommendationFailureBoundary
+                    | is_enum_or_null(["time_budget", "model_response", "service_configuration",
+                      "action_budget", "publication_boundary", "service_failure"]))
+                  and $raw.expectedRecommendationTitleTermSha256 == $expectedTitleTermSha256
+                  and ($raw.handoffSelectedBggId | is_integer_or_null(1; 1000000000))
+                  and ($raw.handoffActionClicked | is_boolean)
+                  and ($raw.handoffSurfaceVisible | is_boolean)
+                  and ($raw.handoffImportRequestedBggId | is_integer_or_null(1; 1000000000))
+                  and ($raw.handoffImportResponseStatus | is_integer_or_null(100; 599))
+                  and ($raw.handoffImportResponseOk | is_boolean_or_null)
+                  and ($raw.handoffImportResponseBggId | is_integer_or_null(1; 1000000000))
+                  and ($raw.handoffImportedGameId | is_uuid_or_null)
+                  and ($raw.handoffImportedEditionId | is_uuid_or_null)
+                  and ($raw.handoffEditionBelongsToImportedGame | is_boolean_or_null)
+                  and ($raw.handoffImportElapsedMs | is_integer_or_null(0; 3600000))
+                  and ($raw.handoffDiscoveryRequestedEditionId | is_uuid_or_null)
+                  and ($raw.handoffDiscoveryResponseStatus | is_integer_or_null(100; 599))
+                  and ($raw.handoffDiscoveryResponseOk | is_boolean_or_null)
+                  and ($raw.handoffDiscoveryIdentityEditionId | is_uuid_or_null)
+                  and ($raw.handoffDiscoveryIdentityMatched | is_boolean_or_null)
+                  and ($raw.handoffDiscoveryConfigured | is_boolean_or_null)
+                  and ($raw.handoffDiscoveryCandidateCount | is_integer_or_null(0; 10000))
+                  and ($raw.handoffImportableCandidateCount | is_integer_or_null(0; 10000))
+                  and ($raw.handoffImportableCandidateFound | is_boolean_or_null)
+                  and ($raw.handoffDiscoveryCandidateIdentitySha256 | is_sha256_or_null)
+                  and ($raw.handoffRenderedCandidateIdentitySha256 | is_sha256_or_null)
+                  and ($raw.handoffCandidateIdentityOrderConsistent | is_boolean_or_null)
+                  and ($raw.handoffDiscoveryElapsedMs | is_integer_or_null(0; 3600000))
+                  and ($raw.handoffTerminalCategory
+                    | IN("NOT_OBSERVED", "RESTORED_EXISTING", "REVIEW", "NO_IMPORTABLE_SOURCE",
+                      "UNAVAILABLE", "ERROR", "LOGIN_REQUIRED"))
+                  and ($raw.handoffTerminalVisible | is_boolean)
+                  and ($raw.handoffElapsedMs | is_integer_or_null(0; 3600000))
+                  and ($raw.handoffRulebookImportStarted | is_boolean)
+                  and ($raw.handoffRestoredExistingJourney | is_boolean)
+                  and ($raw.handoffRestoredImportJobId | is_uuid_or_null)
+                  and ($raw.handoffRestoredDocumentVersionId | is_uuid_or_null)
+                  and ($raw.handoffRestoredPreparationRunId | is_uuid_or_null)
+                  and ($raw.handoffFreshnessRequestPreparationRunMatched | is_boolean_or_null)
+                  and ($raw.handoffFreshnessResponseStatus | is_integer_or_null(100; 599))
+                  and ($raw.handoffFreshnessResponseIdentityMatched | is_boolean_or_null)
+                  and ($raw.handoffFreshnessResponseEligible | is_boolean_or_null)
+                  and (if $raw.handoffRestoredExistingJourney then
+                      $raw.handoffTerminalCategory == "RESTORED_EXISTING"
+                        and $raw.handoffRestoredImportJobId != null
+                    else
+                      $raw.handoffTerminalCategory != "RESTORED_EXISTING"
+                        and $raw.handoffRestoredImportJobId == null
+                        and $raw.handoffRestoredDocumentVersionId == null
+                        and $raw.handoffRestoredPreparationRunId == null
+                        and $raw.handoffFreshnessRequestPreparationRunMatched == null
+                        and $raw.handoffFreshnessResponseStatus == null
+                        and $raw.handoffFreshnessResponseIdentityMatched == null
+                        and $raw.handoffFreshnessResponseEligible == null
+                    end)
+                  and (($raw.handoffOfficialMutationAttemptedPaths | type) == "array"
+                    and ($raw.handoffOfficialMutationAttemptedPaths | length) <= 16
+                    and all($raw.handoffOfficialMutationAttemptedPaths[]; is_safe_official_mutation_path))
+                  and ($raw.handoffOfficialMutationBlocked | is_boolean)
+                  and ($raw.handoffStoppedAtDiscoveryBoundary | is_boolean)
+                  and $raw.rawModelOutputCaptured == false
+                  and (($raw.completed | not) or completed_recommendation_acceptance($raw)))
+                then {
+                  reportSchemaVersion: 1,
+                  generatedAt: $raw.generatedAt,
+                  completed: $raw.completed,
+                  stage: $raw.stage,
+                  testedSha: $testedSha,
+                  activeReleaseSha: $testedSha,
+                  activeReleaseId: $activeReleaseId,
+                  publicReleaseId: $raw.publicReleaseId,
+                  publicReleaseSha: $raw.publicReleaseSha,
+                  publicReleaseNoStore: $raw.publicReleaseNoStore,
+                  routeStayedOnDiscover: $raw.routeStayedOnDiscover,
+                  recommendationRequestedCardCount: $requestedCardCount,
+                  recommendationExpectedPlayerCount: $expectedPlayerCount,
+                  recommendationMaximumDurationMinutes: $maximumDurationMinutes,
+                  recommendationMaximumComplexity: $maximumComplexity,
+                  recommendationExpectedGameType: $expectedGameType,
+                  recommendationRequestMessageMatched: $raw.recommendationRequestMessageMatched,
+                  recommendationProfileHardConstraintsMatched: $raw.recommendationProfileHardConstraintsMatched,
+                  recommendationCardsHardConstraintsMatched: $raw.recommendationCardsHardConstraintsMatched,
+                  recommendationFitClaimsHardConstraintsMatched: $raw.recommendationFitClaimsHardConstraintsMatched,
+                  recommendationComplexityHardConstraintsMatched: $raw.recommendationComplexityHardConstraintsMatched,
+                  recommendationGameTypeHardConstraintsMatched: $raw.recommendationGameTypeHardConstraintsMatched,
+                  recommendationEvidenceBoundReplyParts: $raw.recommendationEvidenceBoundReplyParts,
+                  recommendationPersistedCardCount: $raw.recommendationPersistedCardCount,
+                  recommendationShortfallCount: $raw.recommendationShortfallCount,
+                  recommendationOutcome: $raw.recommendationOutcome,
+                  recommendationTerminalCategory: $raw.recommendationTerminalCategory,
+                  recommendationTerminalObserved: $raw.recommendationTerminalObserved,
+                  recommendationClickCaptured: $raw.recommendationClickCaptured,
+                  recommendationFirstProgressMs: $raw.recommendationFirstProgressMs,
+                  recommendationSseTerminalCategory: $raw.recommendationSseTerminalCategory,
+                  recommendationSseTerminalMs: $raw.recommendationSseTerminalMs,
+                  recommendationSseResultMs: $raw.recommendationSseResultMs,
+                  recommendationSseErrorCode: $raw.recommendationSseErrorCode,
+                  recommendationSseFailureBoundary: $raw.recommendationSseFailureBoundary,
+                  recommendationPersistedTerminalMs: $raw.recommendationPersistedTerminalMs,
+                  recommendationRenderedSlateMs: $raw.recommendationRenderedSlateMs,
+                  recommendationElapsedMs: $raw.recommendationElapsedMs,
+                  recommendationSloMet: $raw.recommendationSloMet,
+                  recommendationProgressEventCount: ($raw.recommendationProgressEvents | length),
+                  recommendationStreamProbeFailed: $raw.recommendationStreamProbeFailed,
+                  recommendationPublishedBggIds: $raw.recommendationPublishedBggIds,
+                  recommendationAssistantReplyCharacterCount: $raw.recommendationAssistantReplyCharacterCount,
+                  recommendationRenderedReplyCharacterCount: $raw.recommendationRenderedReplyCharacterCount,
+                  recommendationCardReplyPartCount: $raw.recommendationCardReplyPartCount,
+                  recommendationUsableCardCount: $raw.recommendationUsableCardCount,
+                  recommendationUsableReplyPartCount: $raw.recommendationUsableReplyPartCount,
+                  recommendationAssistantReplyUsable: $raw.recommendationAssistantReplyUsable,
+                  recommendationAllCardsUsable: $raw.recommendationAllCardsUsable,
+                  recommendationAllReplyPartsUsable: $raw.recommendationAllReplyPartsUsable,
+                  recommendationSseContentDigest: $raw.recommendationSseContentDigest,
+                  recommendationPersistedContentDigest: $raw.recommendationPersistedContentDigest,
+                  recommendationRenderedContentDigest: $raw.recommendationRenderedContentDigest,
+                  recommendationSsePersistedContentConsistent: $raw.recommendationSsePersistedContentConsistent,
+                  recommendationPersistedDomContentConsistent: $raw.recommendationPersistedDomContentConsistent,
+                  recommendationCompletedWorkCount: ($raw.recommendationCompletedWork | length),
+                  recommendationExpectedModel: {provider: $expectedProvider, model: $expectedModel},
+                  recommendationModelBeforeRequest: (if $raw.recommendationModelBeforeRequest == null then null
+                    else {provider: $expectedProvider, model: $expectedModel} end),
+                  recommendationModelAfterRequest: (if $raw.recommendationModelAfterRequest == null then null
+                    else {provider: $expectedProvider, model: $expectedModel} end),
+                  recommendationModelProvider: (if $raw.recommendationModelProvider == null then null
+                    else $expectedProvider end),
+                  recommendationModelName: (if $raw.recommendationModelName == null then null else $expectedModel end),
+                  recommendationModelCalls: $raw.recommendationModelCalls,
+                  recommendationModelCallElapsedMs: $raw.recommendationModelCallElapsedMs,
+                  recommendationAgentElapsedMs: $raw.recommendationAgentElapsedMs,
+                  recommendationModelElapsedShare: $raw.recommendationModelElapsedShare,
+                  recommendationCatalogCalls: $raw.recommendationCatalogCalls,
+                  recommendationWebResearchCalls: $raw.recommendationWebResearchCalls,
+                  recommendationFailureBoundary: $raw.recommendationFailureBoundary,
+                  expectedRecommendationTitleTermSha256: $expectedTitleTermSha256,
+                  handoffSelectedBggId: $raw.handoffSelectedBggId,
+                  handoffActionClicked: $raw.handoffActionClicked,
+                  handoffSurfaceVisible: $raw.handoffSurfaceVisible,
+                  handoffImportRequestedBggId: $raw.handoffImportRequestedBggId,
+                  handoffImportResponseStatus: $raw.handoffImportResponseStatus,
+                  handoffImportResponseOk: $raw.handoffImportResponseOk,
+                  handoffImportResponseBggId: $raw.handoffImportResponseBggId,
+                  handoffImportedGameId: $raw.handoffImportedGameId,
+                  handoffImportedEditionId: $raw.handoffImportedEditionId,
+                  handoffEditionBelongsToImportedGame: $raw.handoffEditionBelongsToImportedGame,
+                  handoffImportElapsedMs: $raw.handoffImportElapsedMs,
+                  handoffDiscoveryRequestedEditionId: $raw.handoffDiscoveryRequestedEditionId,
+                  handoffDiscoveryResponseStatus: $raw.handoffDiscoveryResponseStatus,
+                  handoffDiscoveryResponseOk: $raw.handoffDiscoveryResponseOk,
+                  handoffDiscoveryIdentityEditionId: $raw.handoffDiscoveryIdentityEditionId,
+                  handoffDiscoveryIdentityMatched: $raw.handoffDiscoveryIdentityMatched,
+                  handoffDiscoveryConfigured: $raw.handoffDiscoveryConfigured,
+                  handoffDiscoveryCandidateCount: $raw.handoffDiscoveryCandidateCount,
+                  handoffImportableCandidateCount: $raw.handoffImportableCandidateCount,
+                  handoffImportableCandidateFound: $raw.handoffImportableCandidateFound,
+                  handoffDiscoveryCandidateIdentitySha256: $raw.handoffDiscoveryCandidateIdentitySha256,
+                  handoffRenderedCandidateIdentitySha256: $raw.handoffRenderedCandidateIdentitySha256,
+                  handoffCandidateIdentityOrderConsistent: $raw.handoffCandidateIdentityOrderConsistent,
+                  handoffDiscoveryElapsedMs: $raw.handoffDiscoveryElapsedMs,
+                  handoffTerminalCategory: $raw.handoffTerminalCategory,
+                  handoffTerminalVisible: $raw.handoffTerminalVisible,
+                  handoffElapsedMs: $raw.handoffElapsedMs,
+                  handoffRulebookImportStarted: $raw.handoffRulebookImportStarted,
+                  handoffRestoredExistingJourney: $raw.handoffRestoredExistingJourney,
+                  handoffRestoredImportJobId: $raw.handoffRestoredImportJobId,
+                  handoffRestoredDocumentVersionId: $raw.handoffRestoredDocumentVersionId,
+                  handoffRestoredPreparationRunId: $raw.handoffRestoredPreparationRunId,
+                  handoffFreshnessRequestPreparationRunMatched:
+                    $raw.handoffFreshnessRequestPreparationRunMatched,
+                  handoffFreshnessResponseStatus: $raw.handoffFreshnessResponseStatus,
+                  handoffFreshnessResponseIdentityMatched: $raw.handoffFreshnessResponseIdentityMatched,
+                  handoffFreshnessResponseEligible: $raw.handoffFreshnessResponseEligible,
+                  handoffOfficialMutationAttemptCount: ($raw.handoffOfficialMutationAttemptedPaths | length),
+                  handoffOfficialMutationBlocked: $raw.handoffOfficialMutationBlocked,
+                  handoffStoppedAtDiscoveryBoundary: $raw.handoffStoppedAtDiscoveryBoundary,
+                  rawModelOutputCaptured: false
+                }
+                else error("invalid production recommendation report")
+                end
+              end
+          ' "$raw_report" > "$temporary_report"
+          chmod 600 "$temporary_report"
+          mv "$temporary_report" "$sanitized_report"
+          rm -f "$raw_report"
+          test -f "$sanitized_report" && test ! -L "$sanitized_report"
+          [[ "$(find "$artifact_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" == 1 ]]
+          chmod -R go-rwx "$artifact_dir"
+          sanitization_complete=true
+          trap - EXIT
+
+      - name: Upload sanitized journey report
+        if: always() && steps.cleanup_credentials.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: production-recommendation-journey-${{ github.run_id }}
-          path: .artifacts/production-recommendation-journey/journey.json
+          path: ${{ runner.temp }}/production-recommendation-journey/journey.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Require a completed production recommendation journey
+        if: always() && steps.cleanup_credentials.outcome == 'success'
+        shell: /bin/bash --noprofile --norc -p {0}
+        env:
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          GITHUB_ENV: /dev/null
+          GITHUB_PATH: /dev/null
+          LD_PRELOAD: ''
+          PATH: /usr/bin:/bin
+        run: |
+          set -Eeuo pipefail
+          report="$RUNNER_TEMP/production-recommendation-journey/journey.json"
+          test -f "$report" && test ! -L "$report"
+          jq --exit-status '
+            .completed == true
+              and .stage == "completed"
+              and .recommendationOutcome == "recommendations"
+              and .recommendationSloMet == true
+              and (.handoffTerminalCategory == "RESTORED_EXISTING"
+                or .handoffTerminalCategory == "REVIEW"
+                or .handoffTerminalCategory == "UNAVAILABLE")
+          ' "$report" > /dev/null

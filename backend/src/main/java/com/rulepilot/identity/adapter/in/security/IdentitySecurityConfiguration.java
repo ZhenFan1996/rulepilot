@@ -59,6 +59,7 @@ public class IdentitySecurityConfiguration {
                                 "/api/v1/bgg/catalog/covers/*/thumbnail",
                                 "/api/v1/bgg/discovery",
                                 "/api/v1/bgg/recommendations",
+                                "/api/public/release",
                                 "/api/public/lessons/**",
                                 "/error")
                         .permitAll()

@@ -121,10 +121,13 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
    完整 slot 边界上分片，每片只分配 source ownership，最后一次 global ordering 只看到 unit ID、角色、页码、
    可用性和 source identifier，不再重读整本规则事实。每个 slot 和 teaching unit 都必须恰好归属一次。
 4. preparation 的 model-call admission 按真实页数和合同结构最坏上界动态计算，不再用固定调用数卡死长书；
-   动态预算只是上界，不会主动产生调用。不可读页面作为 typed unavailable catalog state 留痕并从 ownership
-   排除；只要还有一个可验证 anchor 就继续，只有零 anchor 才在规划前停止。Teaching run 还会为每章初稿与
-   reviewer 接受替换后的两次可选配图、每次最多四批候选、每批最多一次完整重选预留容量；19 章/19 来源页的
-   最坏模型上界是 441，代表性完整运行实际仍为 21 次，说明 admission 不会把上界变成主动调用。
+   动态预算只是上界，不会主动产生调用。纯图片规则书每页最多两次页面理解；page-owned canonical shard、
+   global ordering 和一次 global ownership refinement 各自都包含 transport replay 与一次完整 replacement，
+   所以 `P` 页 preparation 的完整调用上界是 `6P + 8`（20 页为 128，500 页为 3,008）。10 个并行 shard 只缩短
+   独立页面的串行关键路径，不放宽该上界。不可读页面作为 typed unavailable catalog state 留痕并从 ownership
+   排除；只要还有一个可验证 anchor 就继续，只有零 anchor 才在规划前停止。每次调用前还会以真实消息和工具
+   schema 计算本地及全局上下文容量；若整页事实无论怎样分片都装不进 provider 合同，就在任何付费调用前拒绝。
+   Teaching run 另外按实际章节、检索、review 和可选配图的完整有界调用图取得自己的执行预算。
 5. outline 只描述章节结构；它不能凭空补规则，每个主题必须能回到当前文档版本。章节初稿若未通过确定性
    发布校验，Agent 会收到具体诊断和同一份证据，最多返回一次完整章节替换；应用不从旧稿拣字段拼进新稿。
 6. 局部图示在每章发布前同步处理并与该章正文进入同一 durable snapshot，不再启动独立
@@ -146,6 +149,11 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 | 视觉完整重选仍失败、crop 无法生成、超时或容量满 | 只省略当前章图片 | 已校验正文保持不变 |
 | 部分页不可用或 source catalog 不完整，但至少一章可读 | `DRAFT_READY` | 可读章节立即持久化并交付 |
 | 来源整体不可用、零可验证 anchor 或最终没有任何章可发布 | `INCOMPLETE` / `INSUFFICIENT_EVIDENCE`，整轮停止 | 规则书、页面与已有章节仍保留 |
+| preparation 在普通队列 2 分钟、纯图片长书队列 30 分钟内没有 worker 接手 | `TEACHING_PREPARATION_QUEUE_TIMEOUT`；尚未开始模型调用，可直接重试 | 规则书与之前的 durable 内容保留 |
+| 已有 plan 的独立 Teaching 入口在 2 分钟内没有 worker 接手 | `TEACHING_QUEUE_TIMEOUT`；迟到 runnable 被抑制，尚未开始模型调用 | 规则书、plan 与之前的 durable 内容保留 |
+| worker 已到达但 durable claim 在有限同 token 重放后仍失败 | `*_WORKER_ADMISSION_FAILED`；尚未开始模型调用，可直接重试 | 其他 worker 已有的 claim 不会被覆盖；规则书、plan 与 durable 内容保留 |
+| 第一段带引用讲解已发布，但其余章节在 continuation 队列 30 分钟内没有 worker 或接管失败 | `TEACHING_CONTINUATION_QUEUE_TIMEOUT` / `TEACHING_CONTINUATION_ADMISSION_FAILED` | 第一段保持可读，玩家可以明确重试剩余工作 |
+| preparation 的精确本地/全局上下文预检不满足 provider 容量 | 在任何付费模型调用前停止并说明容量 owner | 规则书与之前的 durable 内容保留 |
 | 用户取消/会话失效，或全局 step/tool/model/token/deadline 用尽 | 当前 durable run 停止 | 已确认页面和已发布章节保留 |
 | 最终持久化、队列或服务在有限恢复后仍失败 | 当前 durable run 停止并显示具体 owner | 上游推荐、规则书和最后一次 durable snapshot 不回滚 |
 
@@ -172,6 +180,19 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 - SSE 用于及时展示活动，轮询负责断线恢复；同一个 lifecycle 只能有一个 mutation/polling owner。讲解正文与
   同步可选配图现在共用 `TEACHING` run 和章节 snapshot，历史 `VISUAL_ENRICHMENT` 只保留存量读取/删除兼容。
 - revision、lease、fencing token、幂等键和 transactional outbox 防止重复消费、旧 worker 覆盖新状态或事务提交后丢事件。
+- `RECEIVED` 只表示排队；普通 preparation 或已有 plan 的独立 Teaching 必须在 2 分钟、纯图片长书必须在独立
+  有界队列的 30 分钟内被唯一 worker 原子领取，否则以可重试的 queue timeout 结束。后台公共课候选也有
+  30 分钟领取边界。执行 deadline 从领取后开始，章节 continuation
+  再次排队的等待时间不计入 active-work 预算；竞争失败的 worker 复用胜者，不会把“已有另一个 Teaching owner”
+  误报为 preparation 失败。
+- 首次 worker 领取把随机 `activation_id` 与 `activated_at` 一起写入 budget row。同一个 delivery 在事务响应
+  丢失后用相同 token 重放时直接确认已有 claim，且不会再次延长 deadline；不同 token 必须退出。若数据库
+  持续不可用，token-aware terminal write 只能结束未领取或属于自己的 RECEIVED run，不能杀掉另一个 worker。
+  终态写入的临时失败由一个有容量和尝试次数上限、独立 scheduler 的 reconciliation owner 重试；耗尽后
+  释放内存槽位并告警，进程重启后再由启动 recovery 统一结束遗留 non-terminal run，避免每个任务各自递归
+  创建无限 timer。
+- 普通 30 分钟/30 万 token 基线按已验证完整调用图等比例扩展，最终以 16 小时和 1,600 万 token 为 active-work
+  硬上限。它们不是完成承诺，也不代替 provider 上下文限制、账户额度、并发和管理员 entitlement。
 - 后端以 `FAILED + AGENT_CANCELLED` 保存取消事实时，玩家界面按 typed error code 映射成 `CANCELLED`，不会在
   同一条提示里同时说“生成失败”和“已取消”。
 - 重试只重做最早失败的 owner，并复用已持久化的页面、证据与章节；停止任务不会顺带删除规则书。
@@ -184,13 +205,23 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 
 1. PR CI 只运行可重复、无付费模型的确定性检查。后端任务同时验证 Java 契约和最终 Docker runtime 中的
    OpenCV native 依赖；前端、基础设施集成和 Playwright 用户旅程各自拥有独立 job。
-2. 合并后部署按一个不可变 Git SHA 构建 release 目录和镜像，检查 Compose、migration、容器健康与公开
-   availability，再原子切换 `current`；激活失败保留上一 release 作为回滚点。
-3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 只验证一次登录用户的新目录推荐、完整回复、
-   每卡证据文案、持久化和页面逐字呈现，并硬性要求固定 fresh 路径为 2 次模型、1 次目录、0 次网页研究，
-   完整有序卡片在 20 秒内呈现；首个进度、持久化终态与页面渲染分别记录延迟。普通用户 canary 使用私有上传
+2. 合并后部署先在无生产权限的 job 封存精确 SHA 源码，再在隔离 job 构建不可变镜像，最后才把校验过的
+   release 和临时凭据交给部署 job。部署事务在切换前保存环境和旧 release，活跃 watchdog 覆盖整个激活窗口；
+   Compose、migration、容器健康、公开 availability 和 `Cache-Control: no-store` release identity 任一不满足都
+   回滚到经过重新校验的旧 topology。公开 `current` 只在 commit checkpoint 后成为新 release。
+3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 验证一次登录用户的新目录推荐、完整回复、
+   每卡证据文案、持久化和页面逐字呈现。固定 fresh 路径通常是 2 次模型、1 次目录、0 次网页研究；若 provider
+   漏掉 required typed action，只允许一次有界协议修复，最终结果仍需在 6 次 Agent 总预算和 20 秒页面 SLO
+   内完成，不能把已经通过全部硬约束的修复结果误判成失败。随后选择其中一张卡，证明相同 BGG 身份被绑定到
+   game/edition，并且只恢复
+   该 edition 的既有旅程或在同 edition discovery 边界停下。首个进度、持久化终态与页面渲染分别记录延迟。
+   普通用户 canary 使用私有上传
    验证规则书、动态 preparation、`IN_TEACHING` 同步局部图示、局部 unavailable 页面和引用答疑，并在结束
    后清理测试数据。
+4. canary 的 sanitizer 总会先删除原始输出和凭据并生成有界诊断 artifact；独立 final success gate 再要求
+   `completed`/`SUCCEEDED` 的完整验收合同。测试被 skip、报告不完整或 sanitizer 只成功保存失败诊断时，workflow
+   仍然必须红，不能把“有诊断可下载”误当成产品链路成功。生产 SSH 只出现在固定 bootstrap 边界；repo-owned
+   canary 代码运行前必须删掉 key 并通过 `env -i` 只接收其最小玩家或管理员权限。
 
 如果 GitHub 没有送达 `main` 的 push CI 事件，恢复动作是手工触发同一份 `CI` workflow；只有该 main SHA
 的 CI 成功，`workflow_run` 才能进入部署。部署 workflow 本身没有直接手工入口，因而恢复不会绕过测试。
@@ -204,6 +235,8 @@ Q&A 阶段，章节视觉作为 lesson 内部的可选局部结果单列计数�
 
 模型输出默认不可信。自然语言只作为展示结果；意图、实体、偏好、数量、证据、工具和流程状态必须通过
 typed JSON 参数返回，并校验 schema、范围、实体身份、证据归属和所有权。任何规则结论没有证据就不能发布。
+外部目录的 `playingtime`、`minplaytime`、`maxplaytime` 非正值在 catalog 边界统一归为未知；selector 对历史
+遗留的非正时长也只能生成 `UNKNOWN` claim，不能用“0 分钟”证明满足玩家的硬时长上限。
 
 普通路径优先“每个独立责任一次能力足够的模型调用 + 当时需要的证据”，调用数由路径决定：能直接回答就
 一次；模型必须先读取新事实时，读取和看见 observation 后的终态各一次；只有 typed contract 拒绝、明确
@@ -293,24 +326,26 @@ GET/POST 仍为 `401`。这类故障应先比较 API 数据、两个资源端点
 
 | 检查 | 精简前 | 上轮基线 | 当前 |
 | --- | ---: | ---: | ---: |
-| 后端展开用例 | 1,937 | 1,689 | 1,626 |
-| 后端声明方法 / JUnit 类 | 未记录 | 1,676 / 306 | 1,620 / 301 |
-| 后端测试源码文件 / 行 | 349 / 87,776 | 312 / 67,153 | 307 / 64,865 |
-| Vitest 文件 / 展开用例 | 103 / 791 | 92 / 731 | 87 / 670 |
+| 后端展开用例 | 1,937 | 1,689 | 1,728 |
+| 后端声明方法 / JUnit 类 | 未记录 | 1,676 / 306 | 1,703 / 305 |
+| 后端测试源码文件 / 行 | 349 / 87,776 | 312 / 67,153 | 311 / 67,686 |
+| Vitest 文件 / 展开用例 | 103 / 791 | 92 / 731 | 87 / 674 |
 | Playwright 文件 / 用例 | 27 / 92 | 18 / 64 | 18 / 64 |
-| 默认脚本测试 | 22 文件 | 4 文件 / 32 条 | 4 文件 / 32 条 |
+| 默认脚本测试 | 22 文件 | 4 文件 / 32 条 | 3 文件 / 62 条 |
 | Prompt 资源 | 217 | 72 | 70 |
 | `make verify` 顶层命令 | 29 | 7 | 7 |
-| 工作流 | 6 个 / 2,549 行 | 5 个 / 1,440 行 | 5 个 / 1,435 行 |
+| 工作流 | 6 个 / 2,549 行 | 5 个 / 1,440 行 | 5 个 / 3,439 行 |
 
-当前后端 1,626 条是 1,615 个普通 `@Test` 加 5 个参数化方法展开的 11 次 invocation。后端没有永久
-`@Disabled`：66 个 Testcontainers 用例只在当前本机门禁的外部依赖条件不满足时跳过、在 Docker CI 执行；
+当前后端 1,728 条是 1,695 个普通 `@Test` 加 8 个参数化方法展开的 33 次 invocation。后端没有永久
+`@Disabled`：70 个 Testcontainers 用例只在当前本机门禁的外部依赖条件不满足时跳过、在 Docker CI 执行；
 4 个付费模型 canary 和 1 个真实来源评测只由命名的 opt-in 命令触发；3 个 PDF 测试在本机检测到 Poppler 后
 正常执行。
-默认脚本测试当前为 31 pass、1 个 Linux-only 锁语义 skip、0 fail。
+默认脚本测试当前为 49 pass、13 个 Linux-only 发布事务语义 skip、0 fail。
 
-本轮又从上轮净删 10 个测试文件、4,241 行测试和 124 条展开用例；从最初基线累计净删 85 个测试文件。
-只计算有完整历史计数的后端、Vitest 和 Playwright，展开用例从 2,820 降到 2,360，累计减少 460 条。
+本轮在补齐队列接管、终态恢复、总截止时间、生产验收合同和前端失败语义后，相对上轮仍净删 6 个测试文件，
+展开用例净减 18 条；后端测试源码增加 533 行，用于覆盖新持久化与恢复边界。只计算有完整历史计数的后端、
+Vitest 和 Playwright，展开用例从 2,820 降到 2,466，累计减少 354 条；测试文件从 479 个降到 416 个，
+累计减少 63 个。
 
 重构前最近 20 条 GitHub 记录显示：核心 CI 为 17 成功、0 失败、1 取消、2 条旧排队；部署为 17 成功、
 1 失败、1 取消、1 条旧排队。真正的高红灯来自把外部 provider 和多段产品结果串联的手工生产巡检：旧普通
@@ -346,9 +381,11 @@ ArchUnit/Modulith 边界和 outbox 已经提供足够隔离，拆服务只会提
 
 - 外部来源和模型仍会受网络、限流与 provider 协议漂移影响，所以真实 canary 与普通 CI 分开运行。
 - 应用的推荐合同始终要求 exactly one typed action；Qwen OpenAI-compatible adapter 在 wire 层使用
-  `tool_choice=auto`，因为该 provider 的 `required` 会触发 400 或极慢路径，应用循环仍拒绝零工具、多种工具、
-  未知工具和非法 schema。`qwen3.8-flash` 已完成有界探针但尚未稳定通过完整两阶段推荐，因此没有因单次
-  延迟数字就替换生产默认模型。
+  `tool_choice=auto`，因为该 provider 的 `required` 会触发 400 或极慢路径。`auto` 合法返回零工具时，应用只做
+  一次不发布自由文本的 typed-action 修复；再次零工具才明确失败，多种工具、未知工具和非法 schema 仍由应用
+  拒绝。推荐角色独立使用 `qwen3.8-flash`，其他共享 Qwen 角色继续使用 `qwen3.7`；模型配置
+  以一份原子 release 环境发布，避免为推荐提速时无意改变讲解或答疑。单次线上 canary 只能证明一个样本及其
+  延迟，不能推导总体失败率。
 - 页面视觉理解是可选增强，复杂图表可能只保留原页而没有可靠 crop；系统选择诚实降级，不伪造图示。
 - 跨页、跨版本的规则冲突仍需要更强的证据关联评测；不能靠生产词表或样例 special case 修补。
 - 历史兼容分支只有在生产存量有测量证据并设定退出事件时才允许存在，不能用“可能还有数据”永久保留双路径。

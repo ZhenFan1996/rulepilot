@@ -39,6 +39,7 @@ public class RuntimeModelConfiguration {
     private static final List<String> SUPPORTED = List.of("gemini", "openai", "deepseek", "qwen", "compatible");
 
     private final ChatModelFactory factory;
+    private final ConfiguredProvider recommendationStartupOverride;
     private final State startupState;
     private final State personalDefaultState;
     private final Set<String> startupAllowedUsers;
@@ -78,6 +79,41 @@ public class RuntimeModelConfiguration {
                 criticProvider,
                 recommendationAdapter,
                 recommendationProvider,
+                "",
+                deepSeekGenerationThinking,
+                startupAllowedUsers);
+    }
+
+    RuntimeModelConfiguration(
+            ChatModelFactory factory,
+            ModelProviderProperties properties,
+            String teachingAdapter,
+            String teachingProvider,
+            String visualAdapter,
+            String visualProvider,
+            String answerAdapter,
+            String answerProvider,
+            String criticAdapter,
+            String criticProvider,
+            String recommendationAdapter,
+            String recommendationProvider,
+            String recommendationModel,
+            boolean deepSeekGenerationThinking,
+            String startupAllowedUsers) {
+        this(
+                factory,
+                properties,
+                teachingAdapter,
+                teachingProvider,
+                visualAdapter,
+                visualProvider,
+                answerAdapter,
+                answerProvider,
+                criticAdapter,
+                criticProvider,
+                recommendationAdapter,
+                recommendationProvider,
+                recommendationModel,
                 deepSeekGenerationThinking,
                 startupAllowedUsers,
                 null,
@@ -100,6 +136,7 @@ public class RuntimeModelConfiguration {
             @Value("${rulepilot.critic.model-provider:gemini}") String criticProvider,
             @Value("${rulepilot.bgg.recommendation-agent.provider:fake}") String recommendationAdapter,
             @Value("${rulepilot.bgg.recommendation-agent.model-provider:qwen}") String recommendationProvider,
+            @Value("${rulepilot.bgg.recommendation-agent.model:}") String recommendationModel,
             @Value("${rulepilot.models.deepseek.generation-thinking:false}") boolean deepSeekGenerationThinking,
             @Value("${rulepilot.models.startup-allowed-users:}") String startupAllowedUsers,
             ModelConfigurationStore store,
@@ -122,6 +159,9 @@ public class RuntimeModelConfiguration {
         addStartupProvider(providers, "qwen", properties.qwen());
         addStartupProvider(providers, "compatible", properties.compatible());
         String teachingAssignment = assignment(teachingAdapter, teachingProvider, providers);
+        String recommendationAssignment = assignment(recommendationAdapter, recommendationProvider, providers);
+        this.recommendationStartupOverride = startupRecommendationOverride(
+                recommendationAssignment, recommendationModel, properties);
         this.startupState = new State(
                 Map.copyOf(providers),
                 new Assignments(
@@ -129,7 +169,7 @@ public class RuntimeModelConfiguration {
                         visualAssignment(visualAdapter, visualProvider, teachingAssignment, providers),
                         assignment(answerAdapter, answerProvider, providers),
                         assignment(criticAdapter, criticProvider, providers),
-                        assignment(recommendationAdapter, recommendationProvider, providers)),
+                        recommendationAssignment),
                 0);
         this.personalDefaultState = new State(
                 Map.of(),
@@ -140,34 +180,56 @@ public class RuntimeModelConfiguration {
     }
 
     public ChatModel modelFor(Role role) {
+        return resolvedModelFor(role).model();
+    }
+
+    public ResolvedModel resolvedModelFor(Role role) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication != null
                 && authentication.isAuthenticated()
                 && !"anonymousUser".equals(authentication.getName())) {
-            return modelFor(role, authentication.getName());
+            return resolvedModelFor(role, authentication.getName());
         }
-        return modelFor(role, startupState);
+        return resolvedModelFor(role, startupState, null);
     }
 
     public ChatModel modelFor(Role role, String username) {
-        if (username == null || username.isBlank()) return modelFor(role, startupState);
-        State state = stateFor(username);
-        ConfiguredProvider configured = configured(role, state);
-        if (quota == null) return configured.model();
-        return new QuotaAwareChatModel(
-                configured.model(),
-                quota,
-                required(username, "username", 160),
-                configured.credentialSource(),
-                role,
-                configured.id(),
-                configured.modelName(),
-                perCallReservationTokens,
-                Clock.systemUTC());
+        return resolvedModelFor(role, username).model();
     }
 
-    private ChatModel modelFor(Role role, State current) {
-        return configured(role, current).model();
+    public ResolvedModel resolvedModelFor(Role role, String username) {
+        if (username == null || username.isBlank()) return resolvedModelFor(role, startupState, null);
+        String owner = required(username, "username", 160);
+        State state = stateFor(owner);
+        return resolvedModelFor(role, state, owner);
+    }
+
+    private ResolvedModel resolvedModelFor(Role role, State state, String quotaOwner) {
+        ConfiguredProvider configured = configured(role, state);
+        ChatModel selected = configured.model();
+        if (quota != null && quotaOwner != null) {
+            selected = new QuotaAwareChatModel(
+                    selected,
+                    quota,
+                    quotaOwner,
+                    configured.credentialSource(),
+                    role,
+                    configured.id(),
+                    configured.modelName(),
+                    perCallReservationTokens,
+                    Clock.systemUTC());
+        }
+        boolean deepSeekNonThinking = !deepSeekGenerationThinking
+                && (role == Role.TEACHING
+                        || role == Role.ANSWER
+                        || role == Role.CRITIC
+                        || role == Role.RECOMMENDATION)
+                && "deepseek".equals(configured.id());
+        return new ResolvedModel(
+                selected,
+                configured.id(),
+                configured.modelName(),
+                deepSeekNonThinking);
     }
 
     private ConfiguredProvider configured(Role role, State current) {
@@ -175,6 +237,12 @@ public class RuntimeModelConfiguration {
         ConfiguredProvider configured = current.providers().get(provider);
         if (configured == null) {
             throw new IllegalStateException("model provider '" + provider + "' is not configured");
+        }
+        if (role == Role.RECOMMENDATION
+                && recommendationStartupOverride != null
+                && configured.startupDefault()
+                && recommendationStartupOverride.id().equals(provider)) {
+            return recommendationStartupOverride;
         }
         return configured;
     }
@@ -218,11 +286,24 @@ public class RuntimeModelConfiguration {
     }
 
     private String modelNameFor(Role role, State state) {
-        ConfiguredProvider configured = state.providers().get(state.assignments().forRole(role));
-        if (configured == null) {
-            throw new IllegalStateException("model provider '" + state.assignments().forRole(role) + "' is not configured");
+        return configured(role, state).modelName();
+    }
+
+    /** Returns only the non-secret provider/model pair that a role would use for the current account. */
+    public EffectiveModel effectiveModelFor(Role role) {
+        return effectiveModelFor(role, currentState());
+    }
+
+    public EffectiveModel effectiveModelFor(Role role, String username) {
+        return effectiveModelFor(role, stateForOrStartup(username));
+    }
+
+    private EffectiveModel effectiveModelFor(Role role, State state) {
+        String provider = state.assignments().forRole(role);
+        if ("fake".equals(provider)) {
+            return new EffectiveModel("fake", "");
         }
-        return configured.modelName();
+        return new EffectiveModel(provider, configured(role, state).modelName());
     }
 
     public boolean supportsVision(Role role) {
@@ -260,7 +341,8 @@ public class RuntimeModelConfiguration {
                 checkedModel,
                 client,
                 visionCapable,
-                ModelAccountQuota.CredentialSource.PERSONAL));
+                ModelAccountQuota.CredentialSource.PERSONAL,
+                false));
         Assignments assignments = visionCapable ? current.assignments() : current.assignments().withoutVisual(id);
         long revision = current.revision() + 1;
         if (managedPersistence()) {
@@ -345,7 +427,8 @@ public class RuntimeModelConfiguration {
                 checkedModel,
                 client,
                 visionCapable,
-                ModelAccountQuota.CredentialSource.PLATFORM));
+                ModelAccountQuota.CredentialSource.PLATFORM,
+                false));
         Assignments assignments = visionCapable ? current.assignments() : current.assignments().withoutVisual(id);
         Instant updatedAt = Instant.now();
         long revision = store.savePlatformProvider(
@@ -440,6 +523,7 @@ public class RuntimeModelConfiguration {
         return new Snapshot(
                 List.copyOf(providers),
                 current.assignments(),
+                effectiveModelFor(Role.RECOMMENDATION, current),
                 current.revision(),
                 volatileSecrets,
                 managedStartupAccess);
@@ -502,7 +586,8 @@ public class RuntimeModelConfiguration {
                     provider.model(),
                     client,
                     provider.visionCapable(),
-                    ModelAccountQuota.CredentialSource.PERSONAL));
+                    ModelAccountQuota.CredentialSource.PERSONAL,
+                    false));
         }
         Assignments assignments = stored.assignments() == null
                 ? platform.assignments()
@@ -522,7 +607,8 @@ public class RuntimeModelConfiguration {
                     provider.model(),
                     client,
                     provider.visionCapable(),
-                    ModelAccountQuota.CredentialSource.PLATFORM));
+                    ModelAccountQuota.CredentialSource.PLATFORM,
+                    false));
         }
         Assignments assignments = stored.assignments() == null
                 ? fallback.assignments()
@@ -591,16 +677,41 @@ public class RuntimeModelConfiguration {
         if (properties == null || !properties.enabled()) {
             return;
         }
+        providers.put(id, startupProvider(id, properties, properties.model()));
+    }
+
+    private ConfiguredProvider startupRecommendationOverride(
+            String provider, String model, ModelProviderProperties properties) {
+        if (model == null || model.isBlank()) {
+            return null;
+        }
+        if ("fake".equals(provider)) {
+            throw new IllegalArgumentException(
+                    "recommendation model requires a configured Spring AI recommendation provider");
+        }
+        Provider providerProperties = switch (provider) {
+            case "gemini" -> properties.gemini();
+            case "openai" -> properties.openai();
+            case "deepseek" -> properties.deepseek();
+            case "qwen" -> properties.qwen();
+            case "compatible" -> properties.compatible();
+            default -> throw new IllegalArgumentException("unsupported model provider: " + provider);
+        };
+        return startupProvider(provider, providerProperties, model);
+    }
+
+    private ConfiguredProvider startupProvider(String id, Provider properties, String modelName) {
         String baseUrl = "gemini".equals(id) ? "" : validBaseUrl(properties.baseUrl());
-        String model = required(properties.model(), "model name", 200);
+        String model = required(modelName, "model name", 200);
         ChatModel client = factory.create(id, properties.apiKey(), baseUrl, model);
-        providers.put(id, new ConfiguredProvider(
+        return new ConfiguredProvider(
                 id,
                 baseUrl,
                 model,
                 client,
                 properties.visionCapable(),
-                ModelAccountQuota.CredentialSource.PLATFORM));
+                ModelAccountQuota.CredentialSource.PLATFORM,
+                true);
     }
 
     private String assignment(String adapter, String provider, Map<String, ConfiguredProvider> providers) {
@@ -716,7 +827,8 @@ public class RuntimeModelConfiguration {
             String modelName,
             ChatModel model,
             boolean visionCapable,
-            ModelAccountQuota.CredentialSource credentialSource) {}
+            ModelAccountQuota.CredentialSource credentialSource,
+            boolean startupDefault) {}
 
     private record State(Map<String, ConfiguredProvider> providers, Assignments assignments, long revision) {}
 
@@ -728,6 +840,15 @@ public class RuntimeModelConfiguration {
             boolean apiKeyConfigured,
             boolean visionCapable,
             String credentialSource) {}
+
+    public record EffectiveModel(String provider, String model) {}
+
+    /** One immutable provider selection for a complete model call, including its quota boundary. */
+    public record ResolvedModel(
+            ChatModel model,
+            String provider,
+            String modelName,
+            boolean deepSeekNonThinkingGeneration) {}
 
     public record Assignments(String teaching, String visual, String answer, String critic, String recommendation) {
         String forRole(Role role) {
@@ -757,6 +878,7 @@ public class RuntimeModelConfiguration {
     public record Snapshot(
             List<ProviderView> providers,
             Assignments assignments,
+            EffectiveModel recommendationModel,
             long revision,
             boolean volatileSecrets,
             boolean managedStartupAccess) {}

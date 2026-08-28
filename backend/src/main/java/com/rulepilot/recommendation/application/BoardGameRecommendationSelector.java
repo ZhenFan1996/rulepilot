@@ -138,12 +138,13 @@ class BoardGameRecommendationSelector {
         }
 
         if (profile.durationMinutes() != null) {
-            Integer minimum = details.minimumPlayTimeMinutes() == null
-                    ? details.playingTimeMinutes()
-                    : details.minimumPlayTimeMinutes();
-            Integer maximum = details.maximumPlayTimeMinutes() == null
-                    ? details.playingTimeMinutes()
-                    : details.maximumPlayTimeMinutes();
+            Integer playingTime = positiveDuration(details.playingTimeMinutes());
+            Integer minimum = positiveDuration(details.minimumPlayTimeMinutes()) == null
+                    ? playingTime
+                    : positiveDuration(details.minimumPlayTimeMinutes());
+            Integer maximum = positiveDuration(details.maximumPlayTimeMinutes()) == null
+                    ? playingTime
+                    : positiveDuration(details.maximumPlayTimeMinutes());
             CandidateClaim.Relation relation;
             if (minimum == null || maximum == null) {
                 relation = CandidateClaim.Relation.UNKNOWN;
@@ -224,12 +225,13 @@ class BoardGameRecommendationSelector {
         if (details.minPlayers() != null && details.maxPlayers() != null) {
             values.add(metadata(bggId, "playerCount", details.minPlayers() + ".." + details.maxPlayers()));
         }
-        Integer minimumMinutes = details.minimumPlayTimeMinutes() == null
-                ? details.playingTimeMinutes()
-                : details.minimumPlayTimeMinutes();
-        Integer maximumMinutes = details.maximumPlayTimeMinutes() == null
-                ? details.playingTimeMinutes()
-                : details.maximumPlayTimeMinutes();
+        Integer playingTime = positiveDuration(details.playingTimeMinutes());
+        Integer minimumMinutes = positiveDuration(details.minimumPlayTimeMinutes()) == null
+                ? playingTime
+                : positiveDuration(details.minimumPlayTimeMinutes());
+        Integer maximumMinutes = positiveDuration(details.maximumPlayTimeMinutes()) == null
+                ? playingTime
+                : positiveDuration(details.maximumPlayTimeMinutes());
         if (minimumMinutes != null && maximumMinutes != null) {
             values.add(metadata(bggId, "durationMinutes", minimumMinutes + ".." + maximumMinutes));
         }
@@ -261,6 +263,10 @@ class BoardGameRecommendationSelector {
             values.add(metadata(bggId, "publisherDescription", details.description().strip()));
         }
         return List.copyOf(values);
+    }
+
+    private Integer positiveDuration(Integer minutes) {
+        return minutes != null && minutes > 0 ? minutes : null;
     }
 
     private FitAssessment fitAssessment(

@@ -1400,7 +1400,8 @@ final class RecommendationActions {
                         state.webResearchCalls,
                         false,
                         state.actions,
-                        state.elapsedMs()),
+                        state.elapsedMs(),
+                        state.modelCallElapsedMs),
                 games,
                 state.comparison,
                 shortfall);

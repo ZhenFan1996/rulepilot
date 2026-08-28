@@ -29,6 +29,8 @@ public class AssistantRunService implements AssistantRuns {
     private final BudgetLimits answerLimits;
     private final BudgetLimits teachingLimits;
     private final BudgetLimits visualEnrichmentLimits;
+    private final Duration teachingMaxWorkloadTimeout;
+    private final int teachingMaxWorkloadTokens;
     private final Clock clock = Clock.systemUTC();
 
     @Autowired
@@ -45,6 +47,10 @@ public class AssistantRunService implements AssistantRuns {
             @Value("${rulepilot.teaching.agent.max-model-calls:72}") int teachingMaxModelCalls,
             @Value("${rulepilot.teaching.agent.max-tokens:300000}") int teachingMaxTokens,
             @Value("${rulepilot.teaching.agent.timeout:PT30M}") Duration teachingTimeout,
+            @Value("${rulepilot.teaching.agent.max-workload-timeout:PT16H}")
+                    Duration teachingMaxWorkloadTimeout,
+            @Value("${rulepilot.teaching.agent.max-workload-tokens:16000000}")
+                    int teachingMaxWorkloadTokens,
             @Value("${rulepilot.teaching.visual-enrichment.agent.max-model-calls:192}")
                     int visualEnrichmentMaxModelCalls,
             @Value("${rulepilot.teaching.visual-enrichment.agent.max-tokens:600000}")
@@ -58,6 +64,19 @@ public class AssistantRunService implements AssistantRuns {
                 maxSteps, maxToolCalls, maxModelCalls, maxTokens, boundedAnswerTimeout);
         this.teachingLimits = new BudgetLimits(
                 maxSteps, teachingMaxToolCalls, teachingMaxModelCalls, teachingMaxTokens, teachingTimeout);
+        if (teachingMaxWorkloadTimeout == null
+                || teachingMaxWorkloadTimeout.isZero()
+                || teachingMaxWorkloadTimeout.isNegative()
+                || teachingMaxWorkloadTimeout.compareTo(teachingTimeout) < 0) {
+            throw new IllegalArgumentException(
+                    "teaching maximum workload timeout must be positive and no shorter than the teaching timeout");
+        }
+        this.teachingMaxWorkloadTimeout = teachingMaxWorkloadTimeout;
+        if (teachingMaxWorkloadTokens < teachingMaxTokens) {
+            throw new IllegalArgumentException(
+                    "teaching maximum workload tokens must be positive and no lower than the teaching token budget");
+        }
+        this.teachingMaxWorkloadTokens = teachingMaxWorkloadTokens;
         this.visualEnrichmentLimits = new BudgetLimits(
                 maxSteps,
                 teachingMaxToolCalls,
@@ -88,6 +107,149 @@ public class AssistantRunService implements AssistantRuns {
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public RunSnapshot activateQueued(RunSnapshot queued) {
+        return activateQueued(queued, UUID.randomUUID());
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public RunSnapshot activateQueued(RunSnapshot queued, UUID activationId) {
+        return activateQueued(queued, activationId, Instant.now(clock));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public RunSnapshot activateQueued(RunSnapshot queued, UUID activationId, Instant admittedAt) {
+        if (queued == null
+                || activationId == null
+                || admittedAt == null
+                || admittedAt.isBefore(queued.createdAt())
+                || (queued.mode() != AssistantRunMode.TEACHING_PREPARATION
+                        && queued.mode() != AssistantRunMode.TEACHING)
+                || queued.state() != AssistantRunState.RECEIVED) {
+            throw new IllegalArgumentException("only received teaching work can leave its queue");
+        }
+        execution.activate(queued.id(), activationId, admittedAt);
+        AssistantRun current = require(queued.id(), queued.revision());
+        if (current.mode() != queued.mode()
+                || !current.subjectId().equals(queued.subjectId())
+                || !current.ownerUsername().equals(queued.ownerUsername())
+                || current.state() != AssistantRunState.RECEIVED) {
+            throw new IllegalStateException("queued teaching preparation identity changed before worker admission");
+        }
+        return snapshot(current);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public RunSnapshot resumeAfterQueue(RunSnapshot queued, Duration queueWait) {
+        if (queued == null
+                || queueWait == null
+                || queueWait.isNegative()
+                || queued.mode() != AssistantRunMode.TEACHING
+                || queued.state().terminal()) {
+            throw new IllegalArgumentException("only active teaching work can resume from its queue");
+        }
+        execution.excludeQueueWait(queued.id(), queueWait);
+        AssistantRun current = require(queued.id(), queued.revision());
+        if (current.mode() != queued.mode()
+                || !current.subjectId().equals(queued.subjectId())
+                || !current.ownerUsername().equals(queued.ownerUsername())
+                || current.state() != queued.state()
+                || current.state().terminal()) {
+            throw new IllegalStateException("queued teaching identity changed before worker admission");
+        }
+        return snapshot(current);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean failQueuedIfUnactivated(
+            UUID runId,
+            String ownerUsername,
+            String errorCode,
+            String stepSummary) {
+        if (runId == null || ownerUsername == null || ownerUsername.isBlank()) {
+            throw new IllegalArgumentException("queued assistant run identity is required");
+        }
+        validateSummary(stepSummary);
+        if (!execution.lockUnactivated(runId)) return false;
+        AssistantRun current = repository.find(runId).orElse(null);
+        if (current == null) return false;
+        if (!current.ownerUsername().equals(ownerUsername.strip())) {
+            throw new IllegalArgumentException("queued assistant run does not exist");
+        }
+        if (current.state().terminal() || current.state() != AssistantRunState.RECEIVED) return false;
+        AssistantRun failed = current.fail(errorCode, Instant.now(clock));
+        execution.stopRunning(runId, AgentExecutionControl.ActivityOutcome.FAILED, stepSummary.strip());
+        persist(current, failed, stepSummary);
+        return true;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean failQueuedIfUnactivatedOrOwned(
+            UUID runId,
+            String ownerUsername,
+            UUID activationId,
+            String errorCode,
+            String stepSummary) {
+        if (runId == null || activationId == null || ownerUsername == null || ownerUsername.isBlank()) {
+            throw new IllegalArgumentException("queued assistant run admission identity is required");
+        }
+        validateSummary(stepSummary);
+        if (!execution.lockUnactivatedOrOwned(runId, activationId)) return false;
+        AssistantRun current = repository.find(runId).orElse(null);
+        if (current == null) return true;
+        if (!current.ownerUsername().equals(ownerUsername.strip())) {
+            throw new IllegalArgumentException("queued assistant run does not exist");
+        }
+        if (current.state().terminal()) return true;
+        if (current.state() != AssistantRunState.RECEIVED) return false;
+        AssistantRun failed = current.fail(errorCode, Instant.now(clock));
+        execution.stopRunning(runId, AgentExecutionControl.ActivityOutcome.FAILED, stepSummary.strip());
+        persist(current, failed, stepSummary);
+        return true;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean failActiveIfOwned(
+            UUID runId,
+            String ownerUsername,
+            String errorCode,
+            String stepSummary) {
+        if (runId == null || ownerUsername == null || ownerUsername.isBlank()) {
+            throw new IllegalArgumentException("active assistant run identity is required");
+        }
+        validateSummary(stepSummary);
+        String owner = ownerUsername.strip();
+        AssistantRun current = repository.find(runId).orElse(null);
+        if (current == null) return true;
+        if (!current.ownerUsername().equals(owner)) {
+            throw new IllegalArgumentException("active assistant run does not exist");
+        }
+        if (current.state().terminal()) return true;
+        if (current.state() == AssistantRunState.RECEIVED) return false;
+
+        // Cancellation and post-work completion take the same budget-row lock. Re-read after acquiring it so the
+        // terminal decision is made from the state that won that boundary, not from a stale queue snapshot.
+        execution.assertFinalizationAllowed(runId);
+        current = repository.find(runId).orElse(null);
+        if (current == null) return true;
+        if (!current.ownerUsername().equals(owner)) {
+            throw new IllegalArgumentException("active assistant run does not exist");
+        }
+        if (current.state().terminal()) return true;
+        if (current.state() == AssistantRunState.RECEIVED) return false;
+        AssistantRun failed = current.fail(errorCode, Instant.now(clock));
+        execution.stopRunning(runId, AgentExecutionControl.ActivityOutcome.FAILED, stepSummary.strip());
+        persist(current, failed, stepSummary);
+        return true;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunSnapshot advance(
             UUID runId,
             long expectedRevision,
@@ -107,6 +269,7 @@ public class AssistantRunService implements AssistantRuns {
             long expectedRevision,
             AssistantRunState nextState,
             String stepSummary) {
+        execution.assertFinalizationAllowed(runId);
         AssistantRun current = require(runId, expectedRevision);
         if (current.mode() != AssistantRunMode.TEACHING) {
             throw new IllegalArgumentException("post-work finalization is only available to teaching runs");
@@ -211,9 +374,10 @@ public class AssistantRunService implements AssistantRuns {
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void requestCancellation(UUID runId, String ownerUsername) {
-        execution.requestCancellation(runId, ownerUsername);
+        if (!execution.requestCancellationIfActive(runId, ownerUsername)) return;
         AssistantRun current = repository.find(runId)
                 .orElseThrow(() -> new IllegalArgumentException("active assistant run does not exist"));
+        if (current.state().terminal()) return;
         AssistantRun cancelled = current.fail("AGENT_CANCELLED", Instant.now(clock));
         execution.stopRunning(runId, AgentExecutionControl.ActivityOutcome.REJECTED, "Work stopped by the user");
         persist(current, cancelled, "Cancellation requested by run owner");
@@ -258,8 +422,44 @@ public class AssistantRunService implements AssistantRuns {
                 configured.maxSteps(),
                 Math.max(1, workloadDemand.requiredToolCalls()),
                 workloadDemand.requiredModelCalls(),
-                configured.maxTokens(),
-                configured.timeout());
+                workloadAwareTeachingTokens(configured, workloadDemand),
+                workloadAwareTeachingTimeout(configured, workloadDemand));
+    }
+
+    private int workloadAwareTeachingTokens(BudgetLimits configured, WorkloadDemand workloadDemand) {
+        if (workloadDemand.requiredModelCalls() <= configured.maxModelCalls()) {
+            return configured.maxTokens();
+        }
+        try {
+            long numerator = Math.multiplyExact(
+                    (long) configured.maxTokens(), workloadDemand.requiredModelCalls());
+            long projected = numerator / configured.maxModelCalls();
+            if (numerator % configured.maxModelCalls() != 0) projected++;
+            return (int) Math.min(projected, teachingMaxWorkloadTokens);
+        } catch (ArithmeticException overflow) {
+            return teachingMaxWorkloadTokens;
+        }
+    }
+
+    private Duration workloadAwareTeachingTimeout(BudgetLimits configured, WorkloadDemand workloadDemand) {
+        if (workloadDemand.requiredModelCalls() <= configured.maxModelCalls()) {
+            return configured.timeout();
+        }
+        Duration projected;
+        try {
+            // The configured timeout/model-call pair is the ordinary Teaching capacity baseline. WorkloadDemand
+            // counts the complete admitted call graph, including bounded model retries, after the owning workflow has
+            // collapsed independent work off its serial critical path. Scale the ordinary allowance without teaching
+            // this lifecycle boundary about provider-specific stages; the maximum remains only the final hard stop.
+            projected = configured.timeout()
+                    .multipliedBy(workloadDemand.requiredModelCalls())
+                    .dividedBy(configured.maxModelCalls());
+        } catch (ArithmeticException overflow) {
+            return teachingMaxWorkloadTimeout;
+        }
+        return projected.compareTo(teachingMaxWorkloadTimeout) > 0
+                ? teachingMaxWorkloadTimeout
+                : projected;
     }
 
     private void persist(AssistantRun current, AssistantRun changed, String summary) {

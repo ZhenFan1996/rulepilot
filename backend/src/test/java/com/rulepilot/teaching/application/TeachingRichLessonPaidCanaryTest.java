@@ -541,6 +541,12 @@ class TeachingRichLessonPaidCanaryTest {
         when(configuration.providerFor(RuntimeModelConfiguration.Role.VISUAL)).thenReturn("fake");
         when(configuration.providerFor(RuntimeModelConfiguration.Role.VISUAL, OWNER)).thenReturn("fake");
         when(configuration.modelFor(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(teachingModel);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.TEACHING, OWNER))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        teachingModel,
+                        provider.provider(),
+                        provider.model(),
+                        "deepseek".equals(provider.provider()) && !deepSeekThinking()));
         when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(criticModel);
         when(configuration.modelNameFor(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(provider.model());
         when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(provider.model());

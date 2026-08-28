@@ -464,19 +464,36 @@ public class BoardGameRecommendationAgent {
             int webResearchCalls,
             boolean fallbackUsed,
             List<String> actions,
-            long totalElapsedMs) {
+            long totalElapsedMs,
+            List<Long> modelCallElapsedMs) {
         public HarnessTrace(
                 int modelCalls,
                 int catalogCalls,
                 int webResearchCalls,
                 boolean fallbackUsed,
                 List<String> actions) {
-            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, 0);
+            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, 0, List.of());
+        }
+
+        public HarnessTrace(
+                int modelCalls,
+                int catalogCalls,
+                int webResearchCalls,
+                boolean fallbackUsed,
+                List<String> actions,
+                long totalElapsedMs) {
+            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, totalElapsedMs, List.of());
         }
 
         public HarnessTrace {
             actions = List.copyOf(actions);
+            // Existing persisted recommendation turns predate per-call timing evidence.
+            modelCallElapsedMs = modelCallElapsedMs == null ? List.of() : List.copyOf(modelCallElapsedMs);
             if (totalElapsedMs < 0) throw new IllegalArgumentException("totalElapsedMs must not be negative");
+            if (modelCallElapsedMs.size() > modelCalls
+                    || modelCallElapsedMs.stream().anyMatch(elapsed -> elapsed == null || elapsed < 0)) {
+                throw new IllegalArgumentException("model call elapsed times are invalid");
+            }
         }
     }
 
