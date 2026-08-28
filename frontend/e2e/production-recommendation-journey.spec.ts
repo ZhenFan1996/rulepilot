@@ -35,6 +35,9 @@ interface RecommendationGame {
     name: string
     originalName: string
   }
+  replyParts?: Array<{
+    text: string
+  }>
 }
 
 interface RecommendationResult {
@@ -88,6 +91,8 @@ interface ProductionRecommendationReport {
   recommendationTerminalCategory: TerminalCategory | 'NOT_OBSERVED'
   recommendationTerminalObserved: boolean
   recommendationFirstProgressMs: number | null
+  recommendationPersistedTerminalMs: number | null
+  recommendationRenderedSlateMs: number | null
   recommendationElapsedMs: number | null
   recommendationSloMet: boolean | null
   recommendationPublishedGames: Array<{
@@ -95,6 +100,9 @@ interface ProductionRecommendationReport {
     name: string
     originalName: string
   }>
+  recommendationAssistantReplyCharacterCount: number | null
+  recommendationRenderedReplyCharacterCount: number | null
+  recommendationCardReplyPartCount: number | null
   recommendationCompletedWork: string[]
   recommendationModelCalls: number | null
   recommendationCatalogCalls: number | null
@@ -258,9 +266,14 @@ test('production returns one persisted player-visible recommendation slate', asy
     recommendationTerminalCategory: 'NOT_OBSERVED',
     recommendationTerminalObserved: false,
     recommendationFirstProgressMs: null,
+    recommendationPersistedTerminalMs: null,
+    recommendationRenderedSlateMs: null,
     recommendationElapsedMs: null,
     recommendationSloMet: null,
     recommendationPublishedGames: [],
+    recommendationAssistantReplyCharacterCount: null,
+    recommendationRenderedReplyCharacterCount: null,
+    recommendationCardReplyPartCount: null,
     recommendationCompletedWork: [],
     recommendationModelCalls: null,
     recommendationCatalogCalls: null,
@@ -329,6 +342,7 @@ test('production returns one persisted player-visible recommendation slate', asy
     )
     report.recommendationTerminalCategory = terminal.category
     report.recommendationTerminalObserved = terminal.session !== null
+    report.recommendationPersistedTerminalMs = terminal.elapsedMs
     report.recommendationElapsedMs = terminal.elapsedMs
 
     const result = terminal.session?.latestResponse ?? null
@@ -345,6 +359,12 @@ test('production returns one persisted player-visible recommendation slate', asy
       name: game.name,
       originalName: game.originalName,
     })) ?? []
+    report.recommendationAssistantReplyCharacterCount = result
+      ? Array.from(result.assistantMessage.trim()).length
+      : null
+    report.recommendationCardReplyPartCount = result
+      ? result.games.reduce((count, game) => count + (game.replyParts?.length ?? 0), 0)
+      : null
     report.recommendationPersistedCardCount = result?.outcome === 'recommendations'
       ? result.games.length
       : null
@@ -356,10 +376,20 @@ test('production returns one persisted player-visible recommendation slate', asy
     expect(terminal.category, 'The recommendation did not reach a persisted recommendation terminal')
       .toBe('RECOMMENDATIONS')
     expect(result?.outcome).toBe('recommendations')
-    expect(result?.assistantMessage.trim().length,
-      'The persisted recommendation has no player-facing reply').toBeGreaterThan(0)
+    expect(report.recommendationAssistantReplyCharacterCount,
+      'The persisted recommendation reply is still only a terse status line').toBeGreaterThanOrEqual(80)
+    expect(report.recommendationModelCalls,
+      'The fixed fresh recommendation must use one catalog model turn and one terminal model turn')
+      .toBe(2)
+    expect(report.recommendationCatalogCalls,
+      'The fixed fresh recommendation must verify the catalog exactly once').toBe(1)
+    expect(report.recommendationWebResearchCalls,
+      'The fixed fresh recommendation must not require optional web research').toBe(0)
     expect(hasPositiveDistinctBggIds(result?.games ?? []),
       'Every persisted recommendation needs a positive, distinct BGG identity').toBe(true)
+    expect((result?.games ?? []).every(game => (game.replyParts ?? []).some(part =>
+      typeof part.text === 'string' && Array.from(part.text.trim()).length >= 12)),
+    'Every persisted card needs a substantive model-authored, evidence-bound explanation').toBe(true)
     expect((result?.games ?? []).every(({ game }) => [game.name, game.originalName]
       .some(title => typeof title === 'string' && title.trim().length > 0)),
     'Every persisted recommendation needs a public title').toBe(true)
@@ -370,11 +400,19 @@ test('production returns one persisted player-visible recommendation slate', asy
     report.stage = 'player-visible-slate'
     const persistedBggIds = result!.games.map(entry => entry.game.bggId)
     const slate = await waitForRenderedSlate(cards, persistedBggIds, startedAt, deadlineAt)
+    report.recommendationRenderedSlateMs = slate.elapsedMs
     report.recommendationElapsedMs = slate.elapsedMs
     report.recommendationSloMet = slate.rendered && slate.elapsedMs <= INTERACTION_SLO_MS
     await retainReport(reportFile, report)
     expect(slate.rendered,
       'The persisted recommendation did not render the exact ordered card slate').toBe(true)
+    expect(report.recommendationSloMet,
+      'The fixed fresh recommendation did not render within the 20-second interaction SLO').toBe(true)
+    const renderedReply = await page.getByTestId('assistant-recommendation-message').last().innerText()
+    report.recommendationRenderedReplyCharacterCount = Array.from(renderedReply.trim()).length
+    await retainReport(reportFile, report)
+    expect(report.recommendationRenderedReplyCharacterCount,
+      'The player-visible recommendation was replaced by a terse summary').toBeGreaterThanOrEqual(80)
 
     await expect(page).toHaveURL(/\/discover$/)
     report.routeStayedOnDiscover = true

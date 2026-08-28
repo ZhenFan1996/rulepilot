@@ -35,7 +35,7 @@ class RecommendationTerminalEnvelopeContractTest {
     }
 
     @Test
-    void publishesOnlyTheValidatedFreeReplyFieldAndPreservesItsNaturalFormatting() {
+    void publishesOnlyTheValidatedFreeReplyFieldWithoutRewritingItsFormatting() {
         ConversationRequest request = request();
         RecommendationAgentState state = state(request);
 
@@ -52,7 +52,7 @@ class RecommendationTerminalEnvelopeContractTest {
         assertThat(outcome.rejected()).isFalse();
         assertThat(outcome.response()).isNotNull();
         assertThat(outcome.response().assistantMessage())
-                .isEqualTo("今晚先看这一类。\n\n如果你想更短，我再换一个方向。");
+                .isEqualTo("  今晚先看这一类。\n\n如果你想更短，我再换一个方向。  ");
         assertThat(state.actions).containsExactly("REPLY_TO_USER");
     }
 

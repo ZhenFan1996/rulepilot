@@ -187,7 +187,6 @@ class TeachingRichLessonPaidCanaryTest {
                 audit,
                 visualFacts,
                 3,
-                3,
                 refiner,
                 VisualRulebookCatalogerTestFixture.unavailable(corpus, audit, visualFacts));
         List<IllustratedLesson> progressSnapshots = new CopyOnWriteArrayList<>();

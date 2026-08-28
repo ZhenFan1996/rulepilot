@@ -83,7 +83,13 @@ public class IllustratedLessonService {
     }
 
     public GenerationOutcome generate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {
-        return continueGeneration(startGeneration(teachingPlanId, ownerUsername, run));
+        GenerationContinuation continuation = startGeneration(teachingPlanId, ownerUsername, run);
+        GenerationOutcome outcome;
+        do {
+            outcome = continueGeneration(continuation);
+            continuation = outcome.continuation();
+        } while (!outcome.complete());
+        return outcome;
     }
 
     public GenerationOutcome generateCandidate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {
@@ -149,9 +155,13 @@ public class IllustratedLessonService {
     private GenerationOutcome continueGenerationObserved(GenerationContinuation continuation) {
         RunSnapshot run = continuation.run();
         try {
-            IllustratedLesson lesson = agent.continueBase(
+            GroundedTeachingAgent.BaseWorkUnitResult result = agent.continueBaseWorkUnit(
                     continuation.base(),
                     progressPublisher::publish);
+            IllustratedLesson lesson = result.lesson();
+            if (!result.complete()) {
+                return new GenerationOutcome(run, lesson.status(), continuation);
+            }
             run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
         } catch (AgentExecutionStoppedException stopped) {
@@ -306,7 +316,24 @@ public class IllustratedLessonService {
         }
     }
 
-    public record GenerationOutcome(RunSnapshot run, LessonStatus lessonStatus) {}
+    public record GenerationOutcome(
+            RunSnapshot run,
+            LessonStatus lessonStatus,
+            GenerationContinuation continuation) {
+        public GenerationOutcome(RunSnapshot run, LessonStatus lessonStatus) {
+            this(run, lessonStatus, null);
+        }
+
+        public GenerationOutcome {
+            if (run == null || lessonStatus == null) {
+                throw new IllegalArgumentException("teaching generation outcome is invalid");
+            }
+        }
+
+        boolean complete() {
+            return continuation == null;
+        }
+    }
 
     record GenerationContinuation(
             RunSnapshot run,

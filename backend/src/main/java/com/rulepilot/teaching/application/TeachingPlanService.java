@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentVersionScopeLookup;
@@ -11,14 +12,14 @@ import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
+import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Supplier;
-import java.util.function.ToIntFunction;
 import org.springframework.context.annotation.Profile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,13 @@ public class TeachingPlanService {
     // oscillate on wording while delaying a fully cited lesson; section-level validation still protects every claim.
     private static final int MAX_CHAPTER_OWNERSHIP_REFINEMENTS = 1;
     private static final int MAX_SOURCE_COVERAGE_REFINEMENTS = 1;
+    private static final int MAX_VISUAL_PAGE_MODEL_ATTEMPTS = 2;
+    private static final int MAX_OUTLINE_STAGE_MODEL_ATTEMPTS = 4;
+    // A hierarchical shard always contains at least one canonical slot. The typed visual-page contract admits at
+    // most 32 rule groups plus four external dependencies with four missing-coverage tags each, so even arbitrarily
+    // long facts can create at most 48 ownership shards per page. This structural ceiling does not infer anything
+    // from provider prose or assume a token-to-character ratio.
+    private static final int MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE = 48;
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
     private final DocumentProcessing documents;
@@ -197,6 +205,41 @@ public class TeachingPlanService {
                 outline), outline.gameTitle());
     }
 
+    WorkloadDemand preparationWorkload(UUID documentVersionId, String createdBy) {
+        var scope = documentScopes.findVersion(documentVersionId)
+                .filter(found -> found.createdBy().equals(createdBy))
+                .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
+        if (!"READY".equals(scope.processingStatus())) {
+            throw new IllegalArgumentException("rule document is not ready for teaching");
+        }
+        List<DocumentProcessing.PageView> pages = documents.pages(documentVersionId);
+        if (pages.isEmpty()) {
+            throw new IllegalArgumentException("rule document has no pages to teach");
+        }
+        boolean visualOnly = pages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
+        return preparationWorkload(visualOnly, pages.size());
+    }
+
+    static WorkloadDemand preparationWorkload(boolean visualOnly, int pageCount) {
+        if (pageCount < 1) throw new IllegalArgumentException("teaching preparation page count is invalid");
+        long visualPageCalls = (long) MAX_VISUAL_PAGE_MODEL_ATTEMPTS
+                * (visualOnly
+                        ? pageCount
+                        : Math.min(pageCount, VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES));
+        // Every planner stage has at most one transport replay and one complete structured-output replacement, whose
+        // own transport may replay once: four actual provider calls. Dense visual planning has up to 48 local
+        // ownership shards per page (one per structurally bounded canonical slot), one global ordering stage, and at
+        // most one later global ownership refinement.
+        long plannerStages = visualOnly
+                ? (long) MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE * pageCount + 2
+                : 2;
+        long requiredModelCalls = visualPageCalls + MAX_OUTLINE_STAGE_MODEL_ATTEMPTS * plannerStages;
+        if (requiredModelCalls > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("teaching preparation workload is too large");
+        }
+        return new WorkloadDemand(0, (int) requiredModelCalls);
+    }
+
     void refreshVisualEvidence(
             UUID documentVersionId,
             String createdBy,
@@ -233,13 +276,9 @@ public class TeachingPlanService {
             UUID assistantRunId) {
         TeachingOutlineModel.OutlineDraft organized;
         try {
-            organized = invokeModel(
-                    assistantRunId,
-                    "organizeTeachingOutline",
-                    outlineInputTokens(pages),
-                    "Rulebook lesson topics organized",
-                    () -> outlines.organize(request),
-                    this::outlineOutputTokens);
+            organized = assistantRunId == null
+                    ? outlines.organize(request)
+                    : outlines.organize(request, modelCalls(assistantRunId));
         } catch (OutlineGenerationException generationFailure) {
             log.warn(
                     "Teaching outline generation failed before a source-bound whole-game plan was available "
@@ -276,13 +315,13 @@ public class TeachingPlanService {
             if (feedback.isEmpty()) return current;
             TeachingOutlineModel.OutlineDraft beforeRefinement = current;
             try {
-                var refined = invokeModel(
-                        assistantRunId,
-                        "refineTeachingOutlineOwnership",
-                        Math.max(1, outlineOutputTokens(beforeRefinement) + feedback.get().length() / 4),
-                        "Lesson chapters separated so each detailed rule has one home",
-                        () -> outlines.refineChapterOwnership(request, beforeRefinement, feedback.get()),
-                        this::outlineOutputTokens);
+                var refined = assistantRunId == null
+                        ? outlines.refineChapterOwnership(request, beforeRefinement, feedback.get())
+                        : outlines.refineChapterOwnership(
+                                request,
+                                beforeRefinement,
+                                feedback.get(),
+                                modelCalls(assistantRunId));
                 current = preferDocumentTitle(
                         documentTitle,
                         VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
@@ -324,13 +363,13 @@ public class TeachingPlanService {
             if (feedback.isEmpty()) return current;
             TeachingOutlineModel.OutlineDraft beforeRefinement = current;
             try {
-                var refined = invokeModel(
-                        assistantRunId,
-                        "refineTeachingOutlineCoverage",
-                        Math.max(1, outlineOutputTokens(beforeRefinement) + feedback.get().length() / 4),
-                        "Lesson topics expanded to cover omitted rulebook pages",
-                        () -> outlines.refineChapterOwnership(request, beforeRefinement, feedback.get()),
-                        this::outlineOutputTokens);
+                var refined = assistantRunId == null
+                        ? outlines.refineChapterOwnership(request, beforeRefinement, feedback.get())
+                        : outlines.refineChapterOwnership(
+                                request,
+                                beforeRefinement,
+                                feedback.get(),
+                                modelCalls(assistantRunId));
                 current = preferDocumentTitle(
                         documentTitle,
                         VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
@@ -419,55 +458,23 @@ public class TeachingPlanService {
                 outline.wholeGameUnderstanding());
     }
 
-    private <T> T invokeModel(
-            UUID assistantRunId,
-            String operation,
-            int inputTokens,
-            String successSummary,
-            Supplier<T> invocation,
-            ToIntFunction<T> outputTokens) {
-        if (assistantRunId == null) return invocation.get();
-        return invocations.invoke(
-                assistantRunId,
-                ActivityType.MODEL,
-                operation,
-                inputTokens,
-                successSummary,
-                invocation,
-                outputTokens);
+    private ModelCallExecutor modelCalls(UUID assistantRunId) {
+        if (assistantRunId == null) return ModelCallExecutor.direct();
+        return new ModelCallExecutor() {
+            @Override
+            public <T> T invoke(
+                    ModelCall call,
+                    java.util.function.Supplier<T> invocation,
+                    java.util.function.ToIntFunction<T> outputTokens) {
+                return invocations.invoke(
+                        assistantRunId,
+                        ActivityType.MODEL,
+                        call.operation(),
+                        call.estimatedInputTokens(),
+                        call.successSummary(),
+                        invocation,
+                        outputTokens);
+            }
+        };
     }
-
-    private int outlineInputTokens(List<PageInput> pages) {
-        return Math.max(1, pages.stream().mapToInt(page -> page.text().length()).sum() / 4);
-    }
-
-    private int outlineOutputTokens(TeachingOutlineModel.OutlineDraft outline) {
-        int characters = outline.gameTitle().length() + outline.premise().length();
-        characters += outline.topics().stream()
-                .mapToInt(topic -> topic.title().length()
-                        + topic.objective().length()
-                        + topic.retrievalQueries().stream().mapToInt(String::length).sum())
-                .sum();
-        characters += outline.sourceCoverageSlots().stream()
-                .mapToInt(slot -> slot.slotId().length()
-                        + slot.sourceIdentifier().length()
-                        + slot.ownerTopicKey().length()
-                        + slot.teachingUnitId().length())
-                .sum();
-        characters += outline.wholeGameUnderstanding().summary().length();
-        characters += outline.wholeGameUnderstanding().concepts().stream()
-                .mapToInt(concept -> concept.conceptId().length()
-                        + concept.label().length()
-                        + concept.explanation().length()
-                        + concept.sourceIdentifiers().stream().mapToInt(String::length).sum()
-                        + concept.relatedTopicKeys().stream().mapToInt(String::length).sum())
-                .sum();
-        characters += outline.wholeGameUnderstanding().topicDependencies().stream()
-                .mapToInt(dependency -> dependency.prerequisiteTopicKey().length()
-                        + dependency.dependentTopicKey().length()
-                        + dependency.reason().length())
-                .sum();
-        return Math.max(1, characters / 4);
-    }
-
 }

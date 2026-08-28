@@ -38,6 +38,7 @@ import com.rulepilot.recommendation.application.RecommendationConversationCoordi
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionSnapshot;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.TurnResult;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
+import com.rulepilot.recommendation.application.RecommendationConversationStore.PublishedTurn;
 import java.math.BigDecimal;
 import java.security.Principal;
 import java.util.ArrayList;
@@ -320,6 +321,99 @@ class BggRecommendationAgentControllerTest {
 
         statefulController.delete(conversationId, principal);
         verify(conversations).delete(conversationId, "player");
+    }
+
+    @Test
+    void restoresThePriorPublishedCardsWhenTheLatestCompletedTurnWasUnavailable() {
+        RecommendationConversationCoordinator conversations = mock(RecommendationConversationCoordinator.class);
+        var statefulController = new BggRecommendationAgentController(agent, presentation, conversations);
+        UUID conversationId = UUID.randomUUID();
+        UUID publishedTurnId = UUID.randomUUID();
+        UUID unavailableTurnId = UUID.randomUUID();
+        Game game = comparisonGame(401, "Preserved Candidate", 60, List.of("Pattern Building"));
+        ConversationResponse published = new ConversationResponse(
+                Outcome.RECOMMENDATIONS,
+                DecisionMode.MODEL_ASSISTED,
+                "上一轮已经核对完成。",
+                RecommendationProfile.empty(),
+                null,
+                10,
+                1,
+                List.of(new RecommendedGame(game, List.of("已核验"), List.of())));
+        ConversationResponse unavailable = new ConversationResponse(
+                Outcome.UNAVAILABLE,
+                DecisionMode.MODEL_ASSISTED,
+                "这一轮没有完成。",
+                RecommendationProfile.empty(),
+                null,
+                10,
+                0,
+                List.of());
+        ConversationState state = new ConversationState(
+                RecommendationProfile.empty(),
+                List.of(
+                        new BoardGameRecommendationAgent.DialogueMessage("user", "先推荐一款"),
+                        new BoardGameRecommendationAgent.DialogueMessage("assistant", "上一轮已经核对完成。")),
+                List.of(new BoardGameRecommendationAgent.KnownGame(
+                        game.ranking().bggId(), game.details().name(), game.ranking().sourceName())),
+                List.of(game.ranking().bggId()),
+                List.of(game),
+                new PublishedTurn(publishedTurnId, "zh-CN", published));
+        when(conversations.latest("player")).thenReturn(Optional.of(new SessionSnapshot(
+                conversationId,
+                2,
+                state,
+                unavailableTurnId,
+                null,
+                null,
+                unavailable,
+                "en")));
+        when(presentation.localizeTaxonomy(
+                        List.of("Abstract Strategy"),
+                        List.of("Pattern Building"),
+                        "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+
+        var restored = statefulController.latest(principal).getBody();
+
+        assertThat(restored).isNotNull();
+        assertThat(restored.latestResponse()).isNotNull();
+        assertThat(restored.latestResponse().outcome()).isEqualTo("recommendations");
+        assertThat(restored.latestResponse().clientTurnId()).isEqualTo(publishedTurnId);
+        assertThat(restored.latestResponse().responseLocale()).isEqualTo("zh-CN");
+        assertThat(restored.latestResponse().assistantMessage()).isEqualTo("上一轮已经核对完成。");
+        assertThat(restored.latestResponse().games())
+                .extracting(candidate -> candidate.game().bggId())
+                .containsExactly(401);
+    }
+
+    @Test
+    void doesNotInventPublishedCardsWhenTheConversationHasOnlyAnUnavailableTurn() {
+        RecommendationConversationCoordinator conversations = mock(RecommendationConversationCoordinator.class);
+        var statefulController = new BggRecommendationAgentController(agent, presentation, conversations);
+        ConversationResponse unavailable = new ConversationResponse(
+                Outcome.UNAVAILABLE,
+                DecisionMode.MODEL_ASSISTED,
+                "这一轮没有完成。",
+                RecommendationProfile.empty(),
+                null,
+                10,
+                0,
+                List.of());
+        when(conversations.latest("player")).thenReturn(Optional.of(new SessionSnapshot(
+                UUID.randomUUID(),
+                1,
+                new ConversationState(RecommendationProfile.empty(), List.of(), List.of(), List.of()),
+                UUID.randomUUID(),
+                null,
+                null,
+                unavailable,
+                "zh-CN")));
+
+        var restored = statefulController.latest(principal).getBody();
+
+        assertThat(restored).isNotNull();
+        assertThat(restored.latestResponse()).isNull();
     }
 
     @Test

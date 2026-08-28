@@ -49,6 +49,25 @@ import org.mockito.ArgumentCaptor;
 class TeachingPlanServiceTest {
 
     @Test
+    void sizesVisualPreparationForEveryPageAttemptAndEveryBoundedPlannerStage() {
+        assertThat(TeachingPlanService.preparationWorkload(true, 20))
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 3_888));
+    }
+
+    @Test
+    void keepsExtractedTextPreparationSmallBecauseItDoesNotRunTheVisualShardGraph() {
+        assertThat(TeachingPlanService.preparationWorkload(false, 20))
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 16));
+    }
+
+    @Test
+    void rejectsAnEmptyPreparationInsteadOfStartingWithAnArbitraryFixedBudget() {
+        assertThatThrownBy(() -> TeachingPlanService.preparationWorkload(true, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("page count");
+    }
+
+    @Test
     void refreshesVisualFactsBeforeAStoredPlanIsReused() {
         UUID documentVersionId = UUID.randomUUID();
         UUID assistantRunId = UUID.randomUUID();
@@ -370,7 +389,7 @@ class TeachingPlanServiceTest {
                         documentVersionId, visualPages, "Opaque Rulebook", "alice", assistantRunId))
                 .thenReturn(completeLedger);
         com.rulepilot.teaching.TeachingOutlineModel outlines = mock(com.rulepilot.teaching.TeachingOutlineModel.class);
-        when(outlines.organize(any())).thenThrow(new OutlineGenerationException(
+        when(outlines.organize(any(), any())).thenThrow(new OutlineGenerationException(
                 "teaching outline generation returned no valid outline",
                 new IllegalArgumentException("teaching outline topic is invalid")));
         when(publication.publish(any(TeachingPlan.class), eq("Opaque Rulebook")))

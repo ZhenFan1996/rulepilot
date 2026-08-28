@@ -222,7 +222,7 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
 
     const turn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
-    expect(turn.text()).toContain(assistantMessage)
+    expect(turn.get('[data-testid="assistant-recommendation-message"]').text()).toBe(assistantMessage)
     expect(turn.findAll('dt').filter(label => label.text() === '为什么选它')).toHaveLength(1)
     expect(turn.findAll('dt').filter(label => label.text() === '需要留意')).toHaveLength(1)
   })

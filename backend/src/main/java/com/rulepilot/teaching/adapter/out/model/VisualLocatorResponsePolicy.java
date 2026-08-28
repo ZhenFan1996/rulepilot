@@ -160,12 +160,22 @@ final class VisualLocatorResponsePolicy {
         }
     }
 
-    static String malformedRepairInstruction() {
-        return "The previous response did not match the exact batchAction plus six-field review contract. "
-                + "Return JSON only with batchAction STOP or CONTINUE and reviews. "
-                + "Use ACCEPT_CANDIDATE with one offered candidateId or NO_VISUAL with null candidateId, label, "
-                + "and visibleDescription plus an empty supportedClaimRefs array. Keep label within 80 characters "
-                + "and visibleDescription within 240 characters. Do not add page or geometry fields.";
+    static String completeReplacementFeedback(Rejection rejection) {
+        if (rejection == null || !rejection.retryable()) {
+            throw new IllegalArgumentException("visual selection rejection cannot be corrected");
+        }
+        Map<String, Object> feedback = new LinkedHashMap<>();
+        feedback.put("status", "PREVIOUS_COMPLETE_SELECTION_REJECTED");
+        feedback.put("reasonCode", rejection.name());
+        feedback.put("remainingCompleteReplacements", 1);
+        feedback.put("requiredAction", "RETURN_COMPLETE_REPLACEMENT");
+        feedback.put("allowedDecisions", List.of("ACCEPT_CANDIDATE", "NO_VISUAL"));
+        feedback.put("forbiddenActions", List.of(
+                "PATCH_PREVIOUS_FIELDS",
+                "EDIT_PIXELS",
+                "RETURN_GEOMETRY",
+                "RETURN_PROSE_OUTSIDE_JSON"));
+        return promptJson(Collections.unmodifiableMap(feedback));
     }
 
     static Diagnostic diagnosticFor(Rejection rejection) {
@@ -174,6 +184,8 @@ final class VisualLocatorResponsePolicy {
             case EXPLICIT_NO_REGION -> Diagnostic.EXPLICIT_NO_REGION;
             case MALFORMED_JSON -> Diagnostic.MALFORMED_RESPONSE;
             case UNSUPPORTED_SCOPE -> Diagnostic.UNSUPPORTED_SCOPE;
+            case PROVIDER_FAILURE -> Diagnostic.PROVIDER_FAILURE;
+            case CANDIDATE_PREPARATION_FAILED -> Diagnostic.CANDIDATE_PREPARATION_FAILED;
         };
     }
 
@@ -224,6 +236,12 @@ final class VisualLocatorResponsePolicy {
         NONE,
         EXPLICIT_NO_REGION,
         MALFORMED_JSON,
-        UNSUPPORTED_SCOPE
+        UNSUPPORTED_SCOPE,
+        PROVIDER_FAILURE,
+        CANDIDATE_PREPARATION_FAILED;
+
+        boolean retryable() {
+            return this == MALFORMED_JSON || this == UNSUPPORTED_SCOPE || this == PROVIDER_FAILURE;
+        }
     }
 }

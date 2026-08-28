@@ -161,10 +161,6 @@ function responseT(
   return translated(turnResponse?.responseLocale ?? locale.value, key, parameters)
 }
 
-function visibleAssistantMessage(message: RecommendationMessage) {
-  return message.text
-}
-
 function emptyProfile(): RecommendationProfile {
   return emptyRecommendationProfile()
 }
@@ -1552,7 +1548,11 @@ onBeforeUnmount(() => {
                 <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
                   <span v-if="message.response?.games.length" class="mb-1.5 block pl-1 text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ responseT(message.response, 'recommendationJudgment') }}</span>
-                  <SafeMarkdown :source="visibleAssistantMessage(message)" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
+                  <SafeMarkdown
+                    :source="message.text"
+                    :data-testid="message.response?.games.length ? 'assistant-recommendation-message' : undefined"
+                    class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72"
+                  />
 
                   <div v-if="message.response?.researchSources?.length" data-testid="recommendation-research-sources" class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 pl-1 text-[0.6875rem] text-ink/50">
                     <span class="font-semibold">{{ responseT(message.response, 'researchSources') }}</span>

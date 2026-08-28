@@ -110,7 +110,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             } else if ("qwen".equals(providerFor(ownerUsername))) {
                 builder.extraBody(Map.of("enable_thinking", false));
             }
-            builder.toolChoice("required");
+            // Qwen's OpenAI-compatible endpoint accepts the same typed tools reliably in auto mode. Its required
+            // wire mode is unsupported by some current Qwen models and sends others down a severe latency path.
+            // The provider hint does not weaken the application contract: Request remains logically REQUIRED and
+            // the ReAct loop rejects zero, multiple incompatible, unknown, or schema-invalid action calls.
+            builder.toolChoice("qwen".equals(providerFor(ownerUsername)) ? "auto" : "required");
             builder.parallelToolCalls(false);
             options = builder;
         } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {

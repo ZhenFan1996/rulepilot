@@ -66,7 +66,12 @@ public class TeachingPlanLauncher {
             return new PlanLaunch(run.id(), run.state(), true);
         }
 
-        RunSnapshot run = runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, ownerUsername);
+        var workload = plans.preparationWorkload(documentVersionId, ownerUsername);
+        RunSnapshot run = runs.start(
+                AssistantRunMode.TEACHING_PREPARATION,
+                documentVersionId,
+                ownerUsername,
+                workload);
         try {
             executor.execute(() -> prepare(
                     run,

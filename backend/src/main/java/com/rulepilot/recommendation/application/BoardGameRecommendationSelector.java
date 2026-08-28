@@ -9,10 +9,8 @@ import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReplyPart;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -82,14 +80,7 @@ class BoardGameRecommendationSelector {
                         claim.text(),
                         claim.sourceIndexes()))
                 .toList();
-        List<RecommendationReplyPart> replyParts = claims.stream()
-                .map(claim -> new RecommendationReplyPart(
-                        claim.relation() == CandidateClaim.Relation.SATISFIED
-                                ? ReplyPartRole.WHY_FIT
-                                : ReplyPartRole.TRADEOFF,
-                        claim))
-                .toList();
-        return new RecommendedGame(game, matches, tradeoffs, reasons, claims, replyParts);
+        return new RecommendedGame(game, matches, tradeoffs, reasons, claims, List.of());
     }
 
     Candidate researchCandidate(Game game) {

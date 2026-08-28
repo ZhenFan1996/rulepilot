@@ -30,9 +30,10 @@ public class BoardGameRecommendationAgent {
     static final String DISCOVER_TOOL = "discover_public_relationship";
     static final String LOOKUP_TOOL = "lookup_bgg_games";
     static final String RESEARCH_TOOL = "research_game_fit";
+    static final String RECOMMEND_TOOL = "recommend_games";
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
-    static final String PROMPT_VERSION = "recommendation-agent-v82-recommendation-only";
+    static final String PROMPT_VERSION = "recommendation-agent-v83-model-authored-cards";
 
     private final RecommendationReActLoop loop;
 

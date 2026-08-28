@@ -11,7 +11,6 @@ import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
@@ -83,8 +82,8 @@ class BoardGameRecommendationSelectorTest {
                     assertThat(result.reasons()).hasSize(2);
                     assertThat(result.tradeoffs()).isEmpty();
                     assertThat(result.replyParts())
-                            .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
-                            .containsOnly(ReplyPartRole.WHY_FIT);
+                            .as("verified selector claims are facts, not model-authored card prose")
+                            .isEmpty();
                 });
     }
 
@@ -167,8 +166,8 @@ class BoardGameRecommendationSelectorTest {
         assertThat(presented.tradeoffs()).isEmpty();
         assertThat(presented.reasons()).hasSize(3);
         assertThat(presented.replyParts())
-                .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
-                .containsOnly(ReplyPartRole.WHY_FIT);
+                .as("only the terminal recommend action may author player-facing card notes")
+                .isEmpty();
         assertThat(presented.claims())
                 .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
                 .extracting(CandidateClaim::relation)
@@ -203,9 +202,8 @@ class BoardGameRecommendationSelectorTest {
         assertThat(presented.tradeoffs()).singleElement().isEqualTo(presented.claims().getFirst().text());
         assertThat(presented.reasons()).hasSize(1);
         assertThat(presented.replyParts())
-                .singleElement()
-                .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
-                .isEqualTo(ReplyPartRole.TRADEOFF);
+                .as("a deterministic constraint conflict remains a claim, not a drafted tradeoff")
+                .isEmpty();
         assertThat(presented.claims()).singleElement().satisfies(claim -> {
             assertThat(claim.subject()).isEqualTo("durationMinutes");
             assertThat(claim.strength()).isEqualTo(ConstraintRange.Strength.SOFT);

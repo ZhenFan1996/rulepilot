@@ -241,6 +241,31 @@ class VisualLessonStepLocatorBatchingTest {
     }
 
     @Test
+    void allContinueCannotExceedTheAdmissionVisibleSectionBatchCeiling() {
+        UUID evidence = UUID.randomUUID();
+        List<Integer> citedPages = java.util.stream.IntStream.rangeClosed(1, 13).boxed().toList();
+        List<Set<Integer>> pageReads = new ArrayList<>();
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        DocumentPageImages images = (ignored, pages) -> {
+            pageReads.add(Set.copyOf(pages));
+            return pages.stream().map(this::page).toList();
+        };
+
+        var result = stepLocator(images, continuingFirstCandidate(evidence, calls)).locate(
+                understanding(),
+                UUID.randomUUID(),
+                section(evidence, citedPages),
+                List.of(step(evidence, citedPages)),
+                "owner");
+
+        assertThat(calls).hasValue(VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION);
+        assertThat(pageReads).hasSize(VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION)
+                .allSatisfy(read -> assertThat(read).allMatch(page -> page <= 10));
+        assertThat(result.regions())
+                .hasSize(VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION);
+    }
+
+    @Test
     void aLaterBatchFailureDoesNotEraseAlreadyValidatedVisuals() {
         UUID evidence = UUID.randomUUID();
         List<Integer> citedPages = List.of(1, 2, 3, 4);

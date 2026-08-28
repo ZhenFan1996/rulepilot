@@ -11,7 +11,6 @@ import com.rulepilot.assistant.AgentExecutionControl.BudgetSnapshot;
 import com.rulepilot.assistant.AgentExecutionControl.InvocationReservation;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.ContentCriticModel.CritiqueDraft;
-import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.adapter.out.persistence.JpaAgentExecutionControl;
@@ -100,8 +99,6 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         var model = new GroundedTeachingAgentWorkloadTest.WorkflowModel();
         AgentExecutionControl execution = new TransactionalJpaExecutionControl(sessionFactory);
         var invocations = new BudgetedAgentInvocations(execution);
-        GeneratedContentCritic critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of()), invocations, false);
         NativeToolScopes scopes = (owner, documentVersionId, assistantRunId) -> Optional.of(
                 new ToolScope(owner, documentVersionId, assistantRunId, Instant.now().plusSeconds(30)));
         var refiner = new TeachingSourcePageEvidenceRefiner(
@@ -111,10 +108,10 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
-                critic,
+                new ConditionalGeneratedContentCritic(
+                        request -> new CritiqueDraft(List.of()), invocations, false),
                 invocations,
                 visualFacts,
-                3,
                 3,
                 refiner,
                 VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
@@ -137,10 +134,15 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         List<ActivitySnapshot> activities = execution.activities(runId);
         // The durable admission covers the initial image interpretation plus one page-local repair or replay.
         // This fixture's visual catalog is unavailable, so its lower actual usage remains asserted independently.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 115));
+        assertThat(demand).isEqualTo(new WorkloadDemand(95, 441));
         assertThat(lesson.sections()).hasSize(19).allSatisfy(section ->
                 assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED));
-        assertThat(model.maximumConcurrentCalls()).isGreaterThanOrEqualTo(3);
+        assertThat(model.maximumConcurrentCalls()).isOne();
+        List<String> expectedCallOrder = new java.util.ArrayList<>(IntStream.rangeClosed(1, 19)
+                .mapToObj(position -> "topic-" + position)
+                .toList());
+        expectedCallOrder.add(7, "topic-7");
+        assertThat(model.callOrder()).containsExactlyElementsOf(expectedCallOrder);
         assertThat(model.attempts("topic-7")).isEqualTo(2);
         assertThat(tools.searches()).isEqualTo(57);
         assertThat(tools.visualPageReads()).isEqualTo(19);

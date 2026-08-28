@@ -116,6 +116,8 @@ export function teachingActivityText(
   locale: AppLocale = 'zh-CN',
 ) {
   if (!activity) return locale === 'en' ? 'Preparing rulebook support and chapter order' : '正在准备规则依据和章节顺序'
+  const visualSelection = visualCandidateSelectionProgress(activity.operation)
+  if (visualSelection) return visualCandidateSelectionActivityText(activity.outcome, visualSelection, locale)
   if (activity.outcome === 'UNKNOWN') {
     return locale === 'en'
       ? 'The latest guide activity has an unrecognized status; use the overall task state'
@@ -149,6 +151,15 @@ export function teachingActivityText(
         ? `${target} is now readable`
         : `${target} was not published; other validated chapters remain available`
     }
+    if (activity.operation.startsWith('enrichTeachingSectionVisual')) {
+      const settledSelection = latestVisualCandidateSelectionBefore(activities, activity.sequence)
+      if (activity.outcome !== 'SUCCEEDED' && settledSelection?.reasonCode === 'EXPLICIT_NO_REGION') {
+        return `The visual Agent selected NO_VISUAL for ${target}; this is a valid local result and its cited text remains readable`
+      }
+      return activity.outcome === 'SUCCEEDED'
+        ? `${target}'s optional visual and cited text were published together`
+        : `${target}'s bounded visual selection is unavailable; only the visual is omitted and its cited text remains readable`
+    }
     return 'Organising and reviewing the guide'
   }
   if (activity.operation.startsWith('readTeachingSourcePages')
@@ -173,6 +184,15 @@ export function teachingActivityText(
     return activity.outcome === 'SUCCEEDED'
       ? `${target}已经可以阅读`
       : `${target}本次未发布，其他已校验章节不受影响`
+  }
+  if (activity.operation.startsWith('enrichTeachingSectionVisual')) {
+    const settledSelection = latestVisualCandidateSelectionBefore(activities, activity.sequence)
+    if (activity.outcome !== 'SUCCEEDED' && settledSelection?.reasonCode === 'EXPLICIT_NO_REGION') {
+      return `视觉 Agent 为${target}选择了 NO_VISUAL；这是有效的局部结果，已校验正文仍可阅读`
+    }
+    return activity.outcome === 'SUCCEEDED'
+      ? `${target}的可选配图已与引用正文同步发布`
+      : `${target}经过有限选择后仍没有可用配图；仅省略图片，已校验正文仍可阅读`
   }
   return '正在整理并核对讲解'
 }
@@ -299,6 +319,63 @@ export function teachingChapterFailureText(
     : '有章节没有通过发布校验。'
 }
 
+/** Explains only an authoritative whole-run stop; local page, chapter, and visual omissions stay local. */
+export function teachingRunStopReasonText(
+  run: TeachingRunProgress | null,
+  locale: AppLocale = 'zh-CN',
+) {
+  const state = teachingRunPresentationState(run)
+  const code = run?.run.lastErrorCode
+  if (state !== 'FAILED' && state !== 'CANCELLED') return ''
+  if (state === 'CANCELLED' || code === 'AGENT_CANCELLED') {
+    return locale === 'en'
+      ? 'The player cancelled the run. Already published chapters remain available.'
+      : '本轮由用户取消；已经发布的章节仍然保留。'
+  }
+  if (code === 'AGENT_TIMEOUT') {
+    return locale === 'en'
+      ? 'The run reached its wall-time deadline after bounded recovery. Already published chapters remain available.'
+      : '本轮在有限恢复后到达总时限；已经发布的章节仍然保留。'
+  }
+  if (code === 'AGENT_STEP_BUDGET'
+    || code === 'AGENT_TOOL_BUDGET'
+    || code === 'AGENT_MODEL_BUDGET'
+    || code === 'AGENT_TOKEN_BUDGET') {
+    return locale === 'en'
+      ? 'The run exhausted its bounded step, tool, model-call, or token budget. Already published chapters remain available.'
+      : '本轮用完了预先限定的步骤、工具、模型调用或令牌预算；已经发布的章节仍然保留。'
+  }
+  if (code === 'TEACHING_COMPLETION_FAILED') {
+    return locale === 'en'
+      ? 'The saved guide could not be marked complete after bounded persistence recovery. Its last durable chapters remain available.'
+      : '讲解在有限持久化恢复后仍无法标记完成；最后一次成功保存的章节仍然保留。'
+  }
+  if (code === 'APPLICATION_RESTARTED') {
+    return locale === 'en'
+      ? 'The service restarted and could not safely resume this run. Its last durable chapters remain available.'
+      : '服务重启后无法安全续跑本轮任务；最后一次成功保存的章节仍然保留。'
+  }
+  if (code === 'TEACHING_QUEUE_FULL' || code === 'TEACHING_CONTINUATION_QUEUE_FULL') {
+    return locale === 'en'
+      ? 'The service could not schedule the next bounded work unit. Any chapter already published remains available.'
+      : '服务未能调度下一个有限工作单元；已经发布的章节仍然保留。'
+  }
+  if (code === 'TEACHING_WORKFLOW_FAILED') {
+    return locale === 'en'
+      ? 'A teaching service or persistence step still failed after its bounded recovery. Any durable chapter remains available.'
+      : '讲解服务或持久化步骤在有限恢复后仍失败；已经持久化的章节仍然保留。'
+  }
+  return locale === 'en'
+    ? 'The run stopped at a whole-run service boundary. Local visual or page omissions alone do not produce this state.'
+    : '本轮在整任务服务边界停止；单页或单章配图不可用本身不会产生这个状态。'
+}
+
+/** Maps the persisted cancellation error code to its player-facing terminal state. */
+export function teachingRunPresentationState(run: TeachingRunProgress | null) {
+  if (run?.run.state === 'FAILED' && run.run.lastErrorCode === 'AGENT_CANCELLED') return 'CANCELLED'
+  return run?.run.state
+}
+
 export function teachingElapsedLabel(run: TeachingRunProgress | null, now: number) {
   const startedAt = run?.run.createdAt
   const seconds = startedAt ? Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000)) : 0
@@ -317,8 +394,8 @@ export function teachingRemainingTimeText(
     ? 'After the first chapter is ready, we will estimate the remaining time from this rulebook’s actual pace.'
     : '第一节完成后，会按这本规则书的真实速度估算剩余时间。'
   if (completed >= total) return locale === 'en'
-    ? 'The complete starter guide is readable; background detail review is still running.'
-    : '完整基础讲解已经可读，后台正在核对细节。'
+    ? 'The complete starter guide is readable. Every publishable chapter has completed its text, citation checks, and synchronous optional visual step; final review may still be settling.'
+    : '完整基础讲解已经可读；所有可发布章节都已完成正文、引用校验与同步可选配图，最终复核可能仍在收尾。'
   const startedAt = run?.run.createdAt
   if (!startedAt) return locale === 'en'
     ? 'Some chapters are ready; the remaining content is still being processed.'
@@ -328,8 +405,8 @@ export function teachingRemainingTimeText(
   const low = Math.max(1, Math.floor(estimatedMinutes * 0.7))
   const high = Math.max(low + 1, Math.ceil(estimatedMinutes * 1.5))
   return locale === 'en'
-    ? `At the current pace, the remaining chapters may take about ${low}–${high} minutes. The starter guide publishes first; visuals and detail review follow.`
-    : `按目前速度，剩余章节大约还需 ${low}–${high} 分钟；基础讲解会优先发布，配图与细节核对随后补充。`
+    ? `At the current pace, the remaining chapters may take about ${low}–${high} minutes. Each chapter publishes after its text, citation checks, and synchronous optional visual step settle.`
+    : `按目前速度，剩余章节大约还需 ${low}–${high} 分钟；每章会在正文、引用校验与同步可选配图完成后立即发布。`
 }
 
 function operationPosition(operation: string) {
@@ -376,6 +453,83 @@ function isPlayerFacingTeachingOperation(operation: string) {
     || isTeachingContractRepair(operation)
     || operation.startsWith('validateTeachingSection')
     || operation.startsWith('publishTeachingSection')
+    || operation.startsWith('settleVisualCandidateSelection')
+    || operation.startsWith('enrichTeachingSectionVisual')
+}
+
+function visualCandidateSelectionProgress(operation: string) {
+  const [kind, batchText, attemptText, reasonCode, ...extra] = operation.split('|')
+  if (kind !== 'settleVisualCandidateSelection' || extra.length > 0 || !reasonCode) return null
+  const batch = Number(batchText)
+  const attempt = Number(attemptText)
+  if (!Number.isInteger(batch) || batch < 1 || (attempt !== 1 && attempt !== 2)) return null
+  return { batch, attempt, reasonCode }
+}
+
+function latestVisualCandidateSelectionBefore(
+  activities: readonly TeachingActivitySummary<TeachingActivityDisplayOutcome>[],
+  sequence: number,
+) {
+  let latest: { sequence: number; reasonCode: string } | null = null
+  for (const activity of activities) {
+    if (activity.sequence >= sequence || (latest && activity.sequence <= latest.sequence)) continue
+    const progress = visualCandidateSelectionProgress(activity.operation)
+    if (progress) latest = { sequence: activity.sequence, reasonCode: progress.reasonCode }
+  }
+  return latest
+}
+
+function visualCandidateSelectionActivityText(
+  outcome: TeachingActivityDisplayOutcome,
+  progress: NonNullable<ReturnType<typeof visualCandidateSelectionProgress>>,
+  locale: AppLocale,
+) {
+  if (outcome === 'UNKNOWN') {
+    return locale === 'en'
+      ? 'The latest visual-candidate status is unrecognized; use the chapter and whole-run states'
+      : '最新配图候选状态无法识别，请以章节状态和整轮任务状态为准'
+  }
+  const reason = visualCandidateSelectionReason(progress.reasonCode, locale)
+  if (progress.reasonCode === 'NONE' && outcome === 'SUCCEEDED') {
+    return locale === 'en'
+      ? progress.attempt === 1
+        ? 'The visual candidate passed validation'
+        : 'The Agent’s one complete visual replacement passed validation'
+      : progress.attempt === 1
+        ? '配图候选已经通过校验'
+        : '视觉 Agent 的一次完整重选已经通过校验'
+  }
+  if (progress.reasonCode === 'EXPLICIT_NO_REGION' && outcome === 'SUCCEEDED') {
+    return locale === 'en'
+      ? 'The visual Agent selected NO_VISUAL; this is a valid local result and the cited text remains unchanged'
+      : '视觉 Agent 明确选择 NO_VISUAL；这是有效的局部结果，引用正文保持不变'
+  }
+  if (progress.reasonCode === 'CANDIDATE_PREPARATION_FAILED') {
+    return locale === 'en'
+      ? 'The candidate crop could not be prepared; only this optional visual is omitted and the cited text remains readable'
+      : '候选截图无法生成；仅省略这张可选配图，已校验正文仍可阅读'
+  }
+  if (progress.attempt === 1) {
+    return locale === 'en'
+      ? `${reason}; the same visual Agent is making one bounded complete replacement or retry. This is not a final visual failure.`
+      : `${reason}；同一个视觉 Agent 正在进行一次有限的完整重选或重试，这还不是最终配图失败。`
+  }
+  return locale === 'en'
+    ? `${reason} after the one bounded complete replacement or retry; only this optional visual is omitted and the cited text remains readable.`
+    : `经过一次有限的完整重选或重试后，${reason}；仅省略这张可选配图，已校验正文仍可阅读。`
+}
+
+function visualCandidateSelectionReason(code: string, locale: AppLocale) {
+  if (locale === 'en') {
+    if (code === 'MALFORMED_JSON') return 'The returned selection structure did not pass validation'
+    if (code === 'UNSUPPORTED_SCOPE') return 'The selected candidate or evidence binding was outside the offered scope'
+    if (code === 'PROVIDER_FAILURE') return 'The visual provider call did not complete'
+    return 'The visual candidate did not pass its application boundary'
+  }
+  if (code === 'MALFORMED_JSON') return '返回的候选选择结构没有通过校验'
+  if (code === 'UNSUPPORTED_SCOPE') return '所选候选或依据归属超出了本次提供范围'
+  if (code === 'PROVIDER_FAILURE') return '视觉服务调用本次未完成'
+  return '配图候选没有通过应用边界'
 }
 
 function isPlayerFacingTeachingPreparationOperation(operation: string) {

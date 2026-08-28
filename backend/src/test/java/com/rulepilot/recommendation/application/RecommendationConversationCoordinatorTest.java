@@ -26,6 +26,7 @@ import java.math.BigDecimal;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionTurn;
 import com.rulepilot.recommendation.application.RecommendationConversationException.Code;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
+import com.rulepilot.recommendation.application.RecommendationConversationStore.PublishedTurn;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.StoredConversation;
 import java.time.Clock;
 import java.time.Duration;
@@ -288,6 +289,7 @@ class RecommendationConversationCoordinatorTest {
         assertThat(afterUnavailable.state().verifiedGames())
                 .extracting(game -> game.ranking().bggId())
                 .containsExactly(64);
+        assertThat(afterUnavailable.state().latestPublishedTurn()).isNull();
 
         var replayedUnavailable = coordinator.converse(
                 new SessionTurn(
@@ -328,6 +330,90 @@ class RecommendationConversationCoordinatorTest {
                 .containsExactly("user:" + requestMessage, "assistant:这次已经完成。");
         assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
                 .noneMatch(message -> message.text().equals(unavailableMessage));
+    }
+
+    @Test
+    void unavailableTurnPreservesThePriorPublishedResponseWithoutChangingItsIdempotentResult() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        ConversationResponse published = responseWithGame("上一轮已经核对完成。", verifiedGame(65));
+        ConversationResponse unavailable = unavailableResponse("这一轮没有完成。");
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+                .thenReturn(published)
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    Consumer<TurnCheckpoint> checkpoints = invocation.getArgument(4);
+                    checkpoints.accept(new TurnCheckpoint(RecommendationProfile.empty(), List.of(verifiedGame(67))));
+                    return unavailable;
+                });
+        InMemoryStore store = new InMemoryStore();
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+        UUID publishedTurnId = UUID.randomUUID();
+        UUID unavailableTurnId = UUID.randomUUID();
+        String unavailableRequest = "保留上一款，再找一个对比对象";
+
+        var first = coordinator.converse(
+                new SessionTurn(null, 0, publishedTurnId, request("先推荐一款")),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+        var second = coordinator.converse(
+                new SessionTurn(
+                        first.conversationId(),
+                        first.revision(),
+                        unavailableTurnId,
+                        request(unavailableRequest)),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+
+        StoredConversation stored = store.findLatestOwned("alice").orElseThrow();
+        assertThat(stored.lastResponse()).isEqualTo(unavailable);
+        assertThat(stored.lastClientTurnId()).isEqualTo(unavailableTurnId);
+        assertThat(stored.state().latestPublishedTurn()).isEqualTo(
+                new PublishedTurn(publishedTurnId, "zh-CN", published));
+        assertThat(stored.state().verifiedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(67, 65);
+        assertThat(stored.state().transcript())
+                .extracting(message -> message.role() + ":" + message.text())
+                .containsExactly("user:先推荐一款", "assistant:上一轮已经核对完成。");
+
+        var replay = coordinator.converse(
+                new SessionTurn(
+                        first.conversationId(),
+                        first.revision(),
+                        unavailableTurnId,
+                        request(unavailableRequest)),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+        assertThat(replay.replayed()).isTrue();
+        assertThat(replay.response()).isEqualTo(unavailable);
+        assertThat(coordinator.latest("alice").orElseThrow().latestPublishedTurn())
+                .isEqualTo(new PublishedTurn(publishedTurnId, "zh-CN", published));
+        verify(agent, times(2)).conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any());
+    }
+
+    @Test
+    void persistedConversationStateRoundTripsThePublishedTurnAndReadsOlderStateWithoutOne() throws Exception {
+        ObjectMapper json = new ObjectMapper().findAndRegisterModules();
+        ConversationResponse published = responseWithGame("已经核对完成。", verifiedGame(66));
+        ConversationState state = new ConversationState(
+                RecommendationProfile.empty(),
+                List.of(new DialogueMessage("assistant", published.assistantMessage())),
+                List.of(),
+                List.of(66),
+                List.of(published.games().getFirst().game()),
+                new PublishedTurn(UUID.randomUUID(), "zh-CN", published));
+
+        ConversationState restored = json.readValue(json.writeValueAsBytes(state), ConversationState.class);
+        assertThat(restored).isEqualTo(state);
+
+        var legacyJson = (com.fasterxml.jackson.databind.node.ObjectNode) json.valueToTree(state);
+        legacyJson.remove("latestPublishedTurn");
+        ConversationState restoredLegacy = json.treeToValue(legacyJson, ConversationState.class);
+        assertThat(restoredLegacy.latestPublishedTurn()).isNull();
+        assertThat(restoredLegacy.verifiedGames()).isEqualTo(state.verifiedGames());
     }
 
     @Test

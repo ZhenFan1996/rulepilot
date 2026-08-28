@@ -17,6 +17,7 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunDetails;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.ImmediateLessonStartupFailure;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -30,6 +31,7 @@ import org.springframework.core.task.SyncTaskExecutor;
 
 class TeachingPlanLauncherTest {
 
+    private static final WorkloadDemand PREPARATION_WORKLOAD = new WorkloadDemand(0, 3_888);
     private final TeachingPlanService plans = mock(TeachingPlanService.class);
     private final IllustratedLessonLauncher lessons = mock(IllustratedLessonLauncher.class);
     private final AssistantRuns runs = mock(AssistantRuns.class);
@@ -67,6 +69,11 @@ class TeachingPlanLauncherTest {
         assertThat(launch.assistantRunId()).isEqualTo(received.id());
         assertThat(launch.state()).isEqualTo(AssistantRunState.RECEIVED);
         assertThat(launch.reused()).isFalse();
+        verify(runs).start(
+                AssistantRunMode.TEACHING_PREPARATION,
+                documentVersionId,
+                "alice",
+                PREPARATION_WORKLOAD);
         verify(lessons).launchImmediately(plan, "alice");
         verify(runs).advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready");
         assertThat(metrics.find(TeachingPlanLauncher.STARTUP_PHASE_DURATION_METRIC)
@@ -452,6 +459,17 @@ class TeachingPlanLauncherTest {
     }
 
     private TeachingPlanLauncher launcher() {
+        when(plans.preparationWorkload(documentVersionId, "alice"))
+                .thenReturn(PREPARATION_WORKLOAD);
+        when(runs.start(
+                        AssistantRunMode.TEACHING_PREPARATION,
+                        documentVersionId,
+                        "alice",
+                        PREPARATION_WORKLOAD))
+                .thenAnswer(ignored -> runs.start(
+                        AssistantRunMode.TEACHING_PREPARATION,
+                        documentVersionId,
+                        "alice"));
         return new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor(), metrics);
     }
 

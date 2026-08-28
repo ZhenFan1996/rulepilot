@@ -100,6 +100,25 @@ class AssistantRunServiceTest {
     }
 
     @Test
+    void initializesPreparationWithItsPageAndPlannerSizedCallBudget() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+
+        service.start(
+                AssistantRunMode.TEACHING_PREPARATION,
+                UUID.randomUUID(),
+                "player",
+                new WorkloadDemand(0, 3_888));
+
+        ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
+        verify(execution).initialize(any(), limits.capture(), any());
+        assertThat(limits.getValue().maxToolCalls()).isOne();
+        assertThat(limits.getValue().maxModelCalls()).isEqualTo(3_888);
+        assertThat(limits.getValue().maxTokens()).isEqualTo(300_000);
+    }
+
+    @Test
     void recordsFinalizationAfterModelWorkWithoutRecheckingTheExecutionBudget() {
         AssistantRunRepository repository = mock(AssistantRunRepository.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);

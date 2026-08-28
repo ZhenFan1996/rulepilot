@@ -13,427 +13,328 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Applies one bounded whole-lesson review and withholds any defect that the Critic actually confirmed. */
+/**
+ * Applies one measured whole-lesson semantic publication boundary.
+ *
+ * <p>An unavailable critic cannot erase a deterministic, cited chapter. A confirmed defect is different: the
+ * drafting Agent sees the typed defect and the same bounded evidence once, and must return one complete replacement
+ * chapter. The replacement is accepted only after deterministic validation and one independent semantic review.
+ * This boundary never patches fields or combines prose from two model responses.</p>
+ */
 final class TeachingPublishedLessonReviewer {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingPublishedLessonReviewer.class);
-    private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 4;
 
-    static int maximumModelCalls() {
-        // A review pass may make one discovery and one independent confirmation call.
-        return Math.addExact(
-                Math.multiplyExact(MAX_POST_PUBLICATION_REVIEW_PASSES, 2),
-                TeachingReviewCorrectionPolicy.maximumModelCalls());
+    static int maximumModelCalls(int sectionCount) {
+        if (sectionCount < 1) throw new IllegalArgumentException("review section count must be positive");
+        // Ordinary accepted chapters use only the initial review (discovery plus an optional atomic confirmation).
+        // Every confirmed chapter may conditionally add one complete revision (plus schema repair); all replacements
+        // then share one acceptance review. This is a budget ceiling, not a required number of calls.
+        return Math.addExact(4, Math.multiplyExact(sectionCount, 2));
     }
 
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionDraftComposer sectionDraftComposer;
-    private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy;
     private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
 
     TeachingPublishedLessonReviewer(
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
-            TeachingSectionDraftComposer sectionDraftComposer,
-            TeachingReviewCorrectionPolicy reviewCorrectionPolicy) {
+            TeachingSectionDraftComposer sectionDraftComposer) {
         this.critic = critic;
         this.invocations = invocations;
         this.sectionDraftComposer = sectionDraftComposer;
-        this.reviewCorrectionPolicy = reviewCorrectionPolicy;
     }
 
-    void review(
+    ReviewResult review(
             TeachingPlan plan,
             List<TeachingSectionDraftCandidate> candidates,
             List<LessonSection> sections,
             UUID assistantRunId,
             Runnable progressPublisher) {
-        reviewBatch(
-                plan,
-                candidates,
-                sections,
-                assistantRunId,
-                progressPublisher,
-                MAX_POST_PUBLICATION_REVIEW_PASSES,
-                new CorrectionBudget(),
-                false);
-    }
-
-    private boolean reviewBatch(
-            TeachingPlan plan,
-            List<TeachingSectionDraftCandidate> candidates,
-            List<LessonSection> sections,
-            UUID assistantRunId,
-            Runnable progressPublisher,
-            int remainingPasses,
-            CorrectionBudget correctionBudget,
-            boolean acceptanceRequired) {
+        if (candidates.isEmpty()) return ReviewResult.none();
         LessonReviewPlanner.LessonReviewBatch batch = LessonReviewPlanner.plan(plan, candidates, assistantRunId);
         GeneratedContentCritic.Review review;
         try {
             review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, plan.createdBy());
         } catch (AgentExecutionStoppedException stopped) {
-            if (acceptanceRequired) {
-                withholdCandidates(
-                        candidates,
-                        sections,
-                        assistantRunId,
-                        progressPublisher,
-                        "POST_PUBLICATION_REVIEW_UNAVAILABLE_WITHHELD_UNVERIFIED_CORRECTION");
-            } else {
-                resolveInitialReviewFailure(
-                        candidates,
-                        sections,
-                        assistantRunId,
-                        progressPublisher,
-                        "POST_PUBLICATION_REVIEW_DEFERRED_RETAINING_CITED_DRAFT",
-                        "POST_PUBLICATION_REVIEW_UNAVAILABLE_WITHHELD_QUANTITATIVE_DRAFT");
-            }
-            return true;
+            retainCitedDrafts(candidates, assistantRunId, "POST_PUBLICATION_REVIEW_STOPPED_RETAINING_CITED_DRAFT");
+            return ReviewResult.none();
         } catch (RuntimeException reviewFailure) {
-            if (acceptanceRequired) {
-                log.warn("Whole-lesson acceptance review withheld unverified correction: {}", reviewFailure.getMessage());
-                withholdCandidates(
-                        candidates,
-                        sections,
-                        assistantRunId,
-                        progressPublisher,
-                        "POST_PUBLICATION_REVIEW_FAILED_WITHHELD_UNVERIFIED_CORRECTION");
-            } else {
-                log.warn(
-                        "Whole-lesson factual review retained only non-quantitative cited drafts: {}",
-                        reviewFailure.getMessage());
-                resolveInitialReviewFailure(
-                        candidates,
-                        sections,
-                        assistantRunId,
-                        progressPublisher,
-                        "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT",
-                        "POST_PUBLICATION_REVIEW_FAILED_WITHHELD_QUANTITATIVE_DRAFT");
-            }
-            return true;
+            log.warn("Whole-lesson review failed; retaining cited drafts: {}", reviewFailure.getMessage());
+            retainCitedDrafts(candidates, assistantRunId, "POST_PUBLICATION_REVIEW_FAILED_RETAINING_CITED_DRAFT");
+            return ReviewResult.none();
         }
         if (!review.performed()) {
-            resolveInitialReviewFailure(
-                    candidates,
-                    sections,
-                    assistantRunId,
-                    progressPublisher,
-                    "POST_PUBLICATION_REVIEW_SKIPPED_RETAINING_CITED_DRAFT",
-                    "POST_PUBLICATION_REVIEW_SKIPPED_WITHHELD_QUANTITATIVE_DRAFT");
-            return true;
+            retainCitedDrafts(candidates, assistantRunId, "POST_PUBLICATION_REVIEW_SKIPPED_RETAINING_CITED_DRAFT");
+            return ReviewResult.none();
         }
 
-        Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection = review.issues().stream()
-                .collect(Collectors.groupingBy(issue -> batch.claimOwners()
-                        .get(issue.claimPosition()).sectionIndex()));
-        List<TeachingSectionDraftCandidate> correctedCandidates = new ArrayList<>();
+        Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection = issuesBySection(review, batch);
+        List<RevisionRequest> revisionRequests = new ArrayList<>();
         for (TeachingSectionDraftCandidate candidate : candidates) {
             List<GeneratedContentCritic.Issue> issues = issuesBySection.getOrDefault(
                     candidate.sectionIndex(), List.of());
+            if (issues.isEmpty()) {
+                sections.set(candidate.sectionIndex(), supported(sections.get(candidate.sectionIndex())));
+                record(
+                        assistantRunId,
+                        candidate,
+                        ActivityOutcome.SUCCEEDED,
+                        "POST_PUBLICATION_REVIEW_ACCEPTED");
+                continue;
+            }
+
+            withhold(
+                    candidate,
+                    sections,
+                    assistantRunId,
+                    "POST_PUBLICATION_REVIEW_CONFIRMED_DEFECT_WITHHELD_PENDING_REVISION");
+            revisionRequests.add(new RevisionRequest(candidate, issues));
+        }
+
+        // Persist the safe boundary before any replacement call. Cancellation, budget exhaustion, or a process stop
+        // can therefore never leave a reviewer-confirmed defective chapter readable; unrelated chapters stay intact.
+        progressPublisher.run();
+        if (revisionRequests.isEmpty()) return ReviewResult.none();
+
+        List<TeachingSectionDraftCandidate> correctedCandidates = new ArrayList<>();
+        for (RevisionRequest revision : revisionRequests) {
+            TeachingSectionDraftCandidate corrected = completeReplacement(
+                    plan, revision.candidate(), revision.issues(), assistantRunId);
+            if (corrected == null) {
+                record(
+                        assistantRunId,
+                        revision.candidate(),
+                        ActivityOutcome.REJECTED,
+                        "POST_PUBLICATION_REVISION_FAILED_REMAINS_WITHHELD");
+            } else {
+                correctedCandidates.add(corrected);
+            }
+        }
+
+        List<Integer> acceptedReplacementIndexes = acceptReplacements(
+                plan, correctedCandidates, sections, assistantRunId);
+        progressPublisher.run();
+        return new ReviewResult(acceptedReplacementIndexes);
+    }
+
+    private record RevisionRequest(
+            TeachingSectionDraftCandidate candidate,
+            List<GeneratedContentCritic.Issue> issues) {
+        private RevisionRequest {
+            issues = List.copyOf(issues);
+        }
+    }
+
+    private TeachingSectionDraftCandidate completeReplacement(
+            TeachingPlan plan,
+            TeachingSectionDraftCandidate candidate,
+            List<GeneratedContentCritic.Issue> issues,
+            UUID assistantRunId) {
+        try {
+            List<String> feedback = List.of(correctionFeedback(issues));
+            SectionDraft replacement = sectionDraftComposer.reviseModelDraft(
+                    assistantRunId,
+                    candidate.planned(),
+                    candidate.modelRequest(),
+                    candidate.draft(),
+                    feedback,
+                    "replaceReviewedTeachingSection",
+                    "repairReviewedTeachingSectionContract",
+                    "Confirmed teaching defect returned as one complete replacement");
+            replacement = sectionDraftComposer.normalizeDraft(
+                    replacement, candidate.modelRequest(), candidate.evidence());
+            LessonSection validated = sectionDraftComposer.validatedSection(
+                    plan,
+                    candidate.planned(),
+                    candidate.evidence(),
+                    candidate.modelRequest(),
+                    replacement,
+                    EvidenceStatus.CITED_DRAFT);
             sectionDraftComposer.recordValidation(
                     assistantRunId,
                     candidate.planned(),
-                    0,
-                    issues.isEmpty() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
-                    issues.isEmpty() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : reviewCorrectionPolicy.criticDiagnostic(issues));
-            TeachingReviewCorrectionPolicy.CorrectionKind correctionKind = reviewCorrectionPolicy.correctionKind(issues);
-            boolean correctionBudgetExhausted = !issues.isEmpty()
-                    && !correctionBudget.tryStart(reviewCorrectionPolicy, correctionKind);
-            if (!issues.isEmpty() && correctionBudgetExhausted) {
-                log.info(
-                        "Whole-lesson review withholds {} defect for topic {} after its correction budget",
-                        correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE
-                                ? "chapter-scope"
-                                : "factual",
-                        candidate.planned().topicKey());
-                withholdCandidate(
-                        candidate,
-                        sections,
-                        assistantRunId,
-                        "POST_PUBLICATION_REVIEW_BUDGET_EXHAUSTED_WITHHELD_CONFIRMED_DEFECT");
-                progressPublisher.run();
-                continue;
-            }
-            try {
-                TeachingSectionDraftCandidate reviewed = issues.isEmpty()
-                        ? supportedCandidate(plan, candidate)
-                        : correctedDraft(
-                                plan,
-                                candidate,
-                                issues,
-                                firstClaimPosition(batch, candidate.sectionIndex()),
-                                correctionKind,
-                                correctionBudget,
-                                assistantRunId);
-                sections.set(candidate.sectionIndex(), reviewed.section());
-                if (!issues.isEmpty()) correctedCandidates.add(reviewed);
-                recordPublication(
-                        assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        reviewed.section().evidenceStatus() == EvidenceStatus.SUPPORTED
-                                ? "POST_PUBLICATION_REVIEW_ACCEPTED"
-                                : "POST_PUBLICATION_REVIEW_PENDING");
-                progressPublisher.run();
-            } catch (AgentExecutionStoppedException stopped) {
-                List<TeachingSectionDraftCandidate> defectiveCandidates = candidates.stream()
-                        .filter(pending -> !issuesBySection.getOrDefault(pending.sectionIndex(), List.of()).isEmpty())
-                        .toList();
-                withholdCandidates(
-                        defectiveCandidates,
-                        sections,
-                        assistantRunId,
-                        progressPublisher,
-                        "POST_PUBLICATION_CORRECTION_STOPPED_WITHHELD_CONFIRMED_DEFECT");
-                return true;
-            } catch (RuntimeException correctionFailure) {
-                log.warn(
-                        "Whole-lesson review withheld confirmed defect for topic {}: {}",
-                        candidate.planned().topicKey(),
-                        correctionFailure.getMessage());
-                withholdCandidate(
-                        candidate,
-                        sections,
-                        assistantRunId,
-                        "POST_PUBLICATION_CORRECTION_FAILED_WITHHELD_CONFIRMED_DEFECT");
-                progressPublisher.run();
-            }
-        }
-        if (!correctedCandidates.isEmpty() && remainingPasses > 1) {
-            return reviewBatch(
-                    plan,
-                    correctedCandidates,
-                    sections,
+                    1,
+                    ActivityOutcome.SUCCEEDED,
+                    "POST_PUBLICATION_COMPLETE_REPLACEMENT_VALIDATED");
+            return new TeachingSectionDraftCandidate(
+                    candidate.sectionIndex(),
+                    candidate.planned(),
+                    candidate.evidence(),
+                    candidate.modelRequest(),
+                    replacement,
+                    validated);
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException invalidReplacement) {
+            log.warn(
+                    "Whole-lesson review replacement failed for topic {}: {}",
+                    candidate.planned().topicKey(),
+                    invalidReplacement.getMessage());
+            sectionDraftComposer.recordValidation(
                     assistantRunId,
-                    progressPublisher,
-                    remainingPasses - 1,
-                    correctionBudget,
-                    true);
+                    candidate.planned(),
+                    1,
+                    ActivityOutcome.REJECTED,
+                    "POST_PUBLICATION_COMPLETE_REPLACEMENT_REJECTED");
+            return null;
         }
-        if (!correctedCandidates.isEmpty()) {
-            withholdCandidates(
-                    correctedCandidates,
-                    sections,
-                    assistantRunId,
-                    progressPublisher,
-                    "POST_PUBLICATION_REVIEW_LIMIT_WITHHELD_UNVERIFIED_CORRECTION");
-        }
-        return true;
     }
 
-    private void withholdCandidates(
-            List<TeachingSectionDraftCandidate> candidates,
+    private List<Integer> acceptReplacements(
+            TeachingPlan plan,
+            List<TeachingSectionDraftCandidate> correctedCandidates,
             List<LessonSection> sections,
+            UUID assistantRunId) {
+        if (correctedCandidates.isEmpty()) return List.of();
+        LessonReviewPlanner.LessonReviewBatch acceptanceBatch =
+                LessonReviewPlanner.plan(plan, correctedCandidates, assistantRunId);
+        GeneratedContentCritic.Review acceptance;
+        try {
+            acceptance = critic.review(
+                    acceptanceBatch.request(), ReviewRisk.HIGH_IMPACT, plan.createdBy());
+        } catch (AgentExecutionStoppedException stopped) {
+            withholdAll(
+                    correctedCandidates,
+                    sections,
+                    assistantRunId,
+                    "POST_PUBLICATION_ACCEPTANCE_STOPPED_WITHHELD_UNVERIFIED_REPLACEMENT");
+            return List.of();
+        } catch (RuntimeException reviewFailure) {
+            log.warn("Whole-lesson replacement acceptance failed: {}", reviewFailure.getMessage());
+            withholdAll(
+                    correctedCandidates,
+                    sections,
+                    assistantRunId,
+                    "POST_PUBLICATION_ACCEPTANCE_FAILED_WITHHELD_UNVERIFIED_REPLACEMENT");
+            return List.of();
+        }
+        if (!acceptance.performed()) {
+            withholdAll(
+                    correctedCandidates,
+                    sections,
+                    assistantRunId,
+                    "POST_PUBLICATION_ACCEPTANCE_SKIPPED_WITHHELD_UNVERIFIED_REPLACEMENT");
+            return List.of();
+        }
+
+        Map<Integer, List<GeneratedContentCritic.Issue>> remainingIssues =
+                issuesBySection(acceptance, acceptanceBatch);
+        List<Integer> accepted = new ArrayList<>();
+        for (TeachingSectionDraftCandidate candidate : correctedCandidates) {
+            if (remainingIssues.getOrDefault(candidate.sectionIndex(), List.of()).isEmpty()) {
+                sections.set(candidate.sectionIndex(), supported(candidate.section()));
+                accepted.add(candidate.sectionIndex());
+                record(
+                        assistantRunId,
+                        candidate,
+                        ActivityOutcome.SUCCEEDED,
+                        "POST_PUBLICATION_COMPLETE_REPLACEMENT_ACCEPTED");
+            } else {
+                withhold(
+                        candidate,
+                        sections,
+                        assistantRunId,
+                        "POST_PUBLICATION_REPLACEMENT_STILL_DEFECTIVE_WITHHELD");
+            }
+        }
+        return List.copyOf(accepted);
+    }
+
+    private Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection(
+            GeneratedContentCritic.Review review,
+            LessonReviewPlanner.LessonReviewBatch batch) {
+        return review.issues().stream()
+                .collect(Collectors.groupingBy(issue -> batch.claimOwners()
+                        .get(issue.claimPosition()).sectionIndex()));
+    }
+
+    private String correctionFeedback(List<GeneratedContentCritic.Issue> issues) {
+        String defects = issues.stream()
+                .map(issue -> "type=" + issue.type()
+                        + ", aspect=" + issue.claimAspect()
+                        + ", claim=" + issue.claimPosition()
+                        + ", evidenceIds=" + issue.evidenceIds()
+                        + ", reason=" + issue.summary())
+                .collect(Collectors.joining("; "));
+        return "Independent review confirmed these defects: " + defects
+                + ". Return one COMPLETE replacement chapter using only the supplied evidence. Preserve the chapter "
+                + "objective and independently supported meaning, correct every flagged relation, and attach valid "
+                + "citations to every rule claim. Do not return a field patch or refer to hidden prior context.";
+    }
+
+    private void retainCitedDrafts(
+            List<TeachingSectionDraftCandidate> candidates,
             UUID assistantRunId,
-            Runnable progressPublisher,
             String category) {
-        candidates.forEach(candidate -> withholdCandidate(candidate, sections, assistantRunId, category));
-        if (!candidates.isEmpty()) progressPublisher.run();
+        candidates.forEach(candidate -> record(
+                assistantRunId,
+                candidate,
+                ActivityOutcome.REJECTED,
+                category));
     }
 
-    private void resolveInitialReviewFailure(
+    private void withholdAll(
             List<TeachingSectionDraftCandidate> candidates,
             List<LessonSection> sections,
             UUID assistantRunId,
-            Runnable progressPublisher,
-            String retainedCategory,
-            String withheldCategory) {
-        List<TeachingSectionDraftCandidate> quantitative = candidates.stream()
-                .filter(candidate -> TeachingQuantitativeReviewPolicy.requiresCompleteReviewEvidence(
-                        candidate.planned(), candidate.draft()))
-                .toList();
-        Set<Integer> quantitativeIndexes = quantitative.stream()
-                .map(TeachingSectionDraftCandidate::sectionIndex)
-                .collect(Collectors.toSet());
-        candidates.stream()
-                .filter(candidate -> !quantitativeIndexes.contains(candidate.sectionIndex()))
-                .forEach(candidate -> recordPublication(
-                        assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        retainedCategory));
-        withholdCandidates(quantitative, sections, assistantRunId, progressPublisher, withheldCategory);
+            String category) {
+        candidates.forEach(candidate -> withhold(candidate, sections, assistantRunId, category));
     }
 
-    private void withholdCandidate(
+    private void withhold(
             TeachingSectionDraftCandidate candidate,
             List<LessonSection> sections,
             UUID assistantRunId,
             String category) {
         sections.set(candidate.sectionIndex(), lessonAssembly.insufficient(candidate.planned()));
-        recordPublication(
-                assistantRunId,
-                candidate.planned(),
-                ActivityOutcome.REJECTED,
-                category);
+        record(assistantRunId, candidate, ActivityOutcome.REJECTED, category);
     }
 
-    private TeachingSectionDraftCandidate supportedCandidate(TeachingPlan plan, TeachingSectionDraftCandidate candidate) {
-        return new TeachingSectionDraftCandidate(
-                candidate.sectionIndex(),
-                candidate.planned(),
-                candidate.evidence(),
-                candidate.modelRequest(),
-                candidate.draft(),
-                sectionDraftComposer.validatedSection(
-                        plan,
-                        candidate.planned(),
-                        candidate.evidence(),
-                        candidate.modelRequest(),
-                        candidate.draft(),
-                        EvidenceStatus.SUPPORTED));
+    private LessonSection supported(LessonSection section) {
+        return new LessonSection(
+                section.position(),
+                section.topicKey(),
+                section.coverageTags(),
+                section.title(),
+                section.required(),
+                EvidenceStatus.SUPPORTED,
+                section.visualKind(),
+                section.visualCaption(),
+                section.visualSourcePages(),
+                section.visualSourceChunkIds(),
+                section.steps());
     }
 
-    private TeachingSectionDraftCandidate correctedDraft(
-            TeachingPlan plan,
+    private void record(
+            UUID assistantRunId,
             TeachingSectionDraftCandidate candidate,
-            List<GeneratedContentCritic.Issue> issues,
-            int firstClaimPosition,
-            TeachingReviewCorrectionPolicy.CorrectionKind correctionKind,
-            CorrectionBudget correctionBudget,
-            UUID assistantRunId) {
-        List<String> feedback = reviewCorrectionPolicy.correctionFeedback(issues);
-        SectionDraft corrected = sectionDraftComposer.reviseModelDraft(
-                assistantRunId,
-                candidate.planned(),
-                candidate.modelRequest(),
-                candidate.draft(),
-                feedback,
-                "correctTeachingSection",
-                "repairTeachingSectionCorrectionContract",
-                "Published teaching section corrected from whole-lesson review");
-        corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
-        EvidenceStatus correctionStatus = EvidenceStatus.CITED_DRAFT;
-        LessonSection correctedSection;
-        try {
-            validateFlaggedClaimsChanged(candidate.draft(), corrected, issues, firstClaimPosition);
-            correctedSection = sectionDraftComposer.validatedSection(
-                    plan,
-                    candidate.planned(),
-                    candidate.evidence(),
-                    candidate.modelRequest(),
-                    corrected,
-                    correctionStatus);
-        } catch (IllegalArgumentException invalidCorrection) {
-            if (!correctionBudget.tryStart(reviewCorrectionPolicy, correctionKind)) {
-                throw new IllegalArgumentException(
-                        "Post-publication correction repair budget exhausted after an invalid correction.",
-                        invalidCorrection);
-            }
-            SectionDraft invalidDraft = corrected;
-            List<String> structuralRepair = reviewCorrectionPolicy.structuralRepairFeedback(
-                    feedback, "DRAFT_VALIDATION_REJECTED");
-            corrected = sectionDraftComposer.reviseModelDraft(
-                    assistantRunId,
-                    candidate.planned(),
-                    candidate.modelRequest(),
-                    invalidDraft,
-                    structuralRepair,
-                    "repairCorrectedTeachingSection",
-                    "repairCorrectedTeachingSectionContract",
-                    "Published teaching correction repaired to the section contract");
-            corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
-            validateFlaggedClaimsChanged(candidate.draft(), corrected, issues, firstClaimPosition);
-            correctionStatus = EvidenceStatus.CITED_DRAFT;
-            correctedSection = sectionDraftComposer.validatedSection(
-                    plan,
-                    candidate.planned(),
-                    candidate.evidence(),
-                    candidate.modelRequest(),
-                    corrected,
-                    correctionStatus);
-        }
-        sectionDraftComposer.recordValidation(
-                assistantRunId,
-                candidate.planned(),
-                1,
-                ActivityOutcome.SUCCEEDED,
-                "POST_PUBLICATION_CORRECTION_APPLIED");
-        return new TeachingSectionDraftCandidate(
-                candidate.sectionIndex(),
-                candidate.planned(),
-                candidate.evidence(),
-                candidate.modelRequest(),
-                corrected,
-                correctedSection);
-    }
-
-    private int firstClaimPosition(LessonReviewPlanner.LessonReviewBatch batch, int sectionIndex) {
-        return batch.claimOwners().entrySet().stream()
-                .filter(entry -> entry.getValue().sectionIndex() == sectionIndex)
-                .mapToInt(Map.Entry::getKey)
-                .min()
-                .orElseThrow(() -> new IllegalArgumentException("review claim owner is missing"));
-    }
-
-    private void validateFlaggedClaimsChanged(
-            SectionDraft previous,
-            SectionDraft corrected,
-            List<GeneratedContentCritic.Issue> issues,
-            int firstClaimPosition) {
-        List<GeneratedContentCritic.Claim> previousClaims = LessonDraftValidator.reviewClaims(
-                previous, previous.visualCitationIds());
-        List<GeneratedContentCritic.Claim> correctedClaims = LessonDraftValidator.reviewClaims(
-                corrected, corrected.visualCitationIds());
-        boolean leftFlaggedClaimUnchanged = issues.stream()
-                .filter(issue -> issue.type() != GeneratedContentCritic.IssueType.MISSING_CRITICAL_RULE)
-                .mapToInt(issue -> issue.claimPosition() - firstClaimPosition)
-                .filter(localIndex -> localIndex >= 0 && localIndex < previousClaims.size())
-                .anyMatch(localIndex -> localIndex < correctedClaims.size()
-                        && normalizedClaim(previousClaims.get(localIndex).text())
-                                .equals(normalizedClaim(correctedClaims.get(localIndex).text()))
-                        && Set.copyOf(previousClaims.get(localIndex).citationIds())
-                                .equals(Set.copyOf(correctedClaims.get(localIndex).citationIds())));
-        if (leftFlaggedClaimUnchanged) {
-            throw new IllegalArgumentException(
-                    "A review correction left a Critic-flagged player-facing claim unchanged.");
-        }
-    }
-
-    private String normalizedClaim(String claim) {
-        return claim == null ? "" : claim.replaceAll("\\s+", " ").strip();
-    }
-
-    private void recordPublication(
-            UUID runId,
-            TeachingPlan.PlannedSection section,
             ActivityOutcome outcome,
             String category) {
         invocations.record(
-                runId,
+                assistantRunId,
                 ActivityType.VALIDATION,
-                "publishTeachingSection|" + section.position(),
+                "publishTeachingSectionReview|" + candidate.planned().position(),
                 outcome,
-                "Teaching section " + (outcome == ActivityOutcome.SUCCEEDED ? "published: " : "withheld: ") + category);
+                category);
     }
 
-    /** Counts semantic correction attempts; every provider request also consumes the shared audited model budget. */
-    private static final class CorrectionBudget {
+    record ReviewResult(List<Integer> acceptedReplacementIndexes) {
+        ReviewResult {
+            acceptedReplacementIndexes = acceptedReplacementIndexes == null
+                    ? List.of()
+                    : acceptedReplacementIndexes.stream().distinct().sorted().toList();
+        }
 
-        private int factualCorrectionsStarted;
-        private int scopeCorrectionsStarted;
-
-        private boolean tryStart(
-                TeachingReviewCorrectionPolicy policy,
-                TeachingReviewCorrectionPolicy.CorrectionKind correctionKind) {
-            if (policy.correctionBudgetExhausted(
-                    correctionKind, factualCorrectionsStarted, scopeCorrectionsStarted)) {
-                return false;
-            }
-            if (correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE) {
-                scopeCorrectionsStarted++;
-            } else {
-                factualCorrectionsStarted++;
-            }
-            return true;
+        static ReviewResult none() {
+            return new ReviewResult(List.of());
         }
     }
 }

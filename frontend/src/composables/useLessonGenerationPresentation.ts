@@ -11,7 +11,6 @@ import {
   type TeachingProgressPlan,
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
-import { visualEnrichmentResult } from '@/lib/visualEnrichment'
 
 interface GenerationLesson {
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
@@ -23,7 +22,6 @@ interface UseLessonGenerationPresentationOptions {
   lesson: Readonly<Ref<GenerationLesson | null>>
   currentSectionIndex: Readonly<Ref<number>>
   generationRun: Ref<TeachingRunProgress | null>
-  visualEnrichmentRun: Ref<TeachingRunProgress | null>
   generationStatusUnknown: Ref<boolean>
   now: Ref<number>
 }
@@ -33,28 +31,6 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
   const generationActive = computed(
     () => options.generationStatusUnknown.value || teachingRunIsActive(options.generationRun.value?.run.state),
   )
-  const visualEnrichmentActive = computed(() => teachingRunIsActive(options.visualEnrichmentRun.value?.run.state))
-  const visualEnrichmentResultState = computed(() => visualEnrichmentResult(
-    options.visualEnrichmentRun.value,
-    visualEnrichmentActive.value,
-  ))
-  const visualEnrichmentFailed = computed(() => ['FAILED', 'PARTIAL'].includes(visualEnrichmentResultState.value.outcome))
-  const visualEnrichmentSummary = computed(() => {
-    if (visualEnrichmentActive.value) return t('lesson.generation.visual.active')
-    const result = visualEnrichmentResultState.value
-    if (result.outcome === 'ABSENT') return ''
-    if (result.outcome === 'FAILED') return t('lesson.generation.visual.failed')
-    if (result.outcome === 'PARTIAL') {
-      return t('lesson.generation.visual.partial', { count: result.addedSectionCount })
-    }
-    if (result.outcome === 'EMPTY') return t('lesson.generation.visual.none')
-    return t(
-      result.addedSectionCount === 1
-        ? 'lesson.generation.visual.added.one'
-        : 'lesson.generation.visual.added.many',
-      { count: result.addedSectionCount },
-    )
-  })
   const draftReady = computed(() => options.lesson.value?.status === 'DRAFT_READY')
   const lessonStillGrowing = computed(() => generationActive.value && !draftReady.value)
   const readingCurrentLastChapter = computed(
@@ -87,9 +63,6 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
 
   return {
     generationActive,
-    visualEnrichmentActive,
-    visualEnrichmentFailed,
-    visualEnrichmentSummary,
     draftReady,
     lessonStillGrowing,
     readingCurrentLastChapter,

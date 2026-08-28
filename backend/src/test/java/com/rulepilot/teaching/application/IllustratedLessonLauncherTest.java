@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.mockito.ArgumentMatchers.any;
 
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AssistantRunMode;
@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -112,79 +113,6 @@ class IllustratedLessonLauncherTest {
     }
 
     @Test
-    void enriches_visuals_only_after_the_base_lesson_is_finished() {
-        RunSnapshot run = run(AssistantRunState.RECEIVED);
-        var visuals = mock(VisualLessonEnrichmentService.class);
-        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
-        when(lessons.begin(planId, "alice")).thenReturn(run);
-        var continuation = continuation(run);
-        var outcome = new GenerationOutcome(run, LessonStatus.DRAFT_READY);
-        when(lessons.startGeneration(planId, "alice", run)).thenReturn(continuation);
-        when(lessons.continueGeneration(continuation)).thenReturn(outcome);
-        when(visuals.supportsVisualEvidence("alice")).thenReturn(true);
-        when(visuals.launch(planId, "alice")).thenReturn(new VisualLessonEnrichmentService.VisualEnrichmentLaunch(
-                UUID.randomUUID(), AssistantRunState.RECEIVED, 1, false));
-        var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor(), visuals);
-
-        launcher.launch(planId, "alice");
-
-        verify(lessons).finish(outcome);
-        verify(visuals).launch(planId, "alice");
-        verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
-    }
-
-    @Test
-    void sends_optional_visual_work_to_its_own_executor() {
-        RunSnapshot run = run(AssistantRunState.RECEIVED);
-        var visuals = mock(VisualLessonEnrichmentService.class);
-        AtomicReference<Runnable> queuedVisualWork = new AtomicReference<>();
-        TaskExecutor lessonExecutor = Runnable::run;
-        TaskExecutor visualExecutor = queuedVisualWork::set;
-        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
-        when(lessons.begin(planId, "alice")).thenReturn(run);
-        var continuation = continuation(run);
-        var outcome = new GenerationOutcome(run, LessonStatus.COMPLETE);
-        when(lessons.startGeneration(planId, "alice", run)).thenReturn(continuation);
-        when(lessons.continueGeneration(continuation)).thenReturn(outcome);
-        when(visuals.supportsVisualEvidence("alice")).thenReturn(true);
-        when(visuals.launch(planId, "alice")).thenReturn(new VisualLessonEnrichmentService.VisualEnrichmentLaunch(
-                UUID.randomUUID(), AssistantRunState.RECEIVED, 1, false));
-        var launcher = new IllustratedLessonLauncher(lessons, runs, lessonExecutor, visualExecutor, visuals);
-
-        launcher.launch(planId, "alice");
-
-        verify(lessons).finish(outcome);
-        verify(visuals).launch(planId, "alice");
-        verify(visuals, never()).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
-        assertThat(queuedVisualWork.get()).isNotNull();
-
-        queuedVisualWork.get().run();
-
-        verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
-    }
-
-    @Test
-    void skipsOptionalVisualWorkWhenTheOwnerHasOnlyTextModels() {
-        RunSnapshot run = run(AssistantRunState.RECEIVED);
-        var visuals = mock(VisualLessonEnrichmentService.class);
-        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
-        when(lessons.begin(planId, "alice")).thenReturn(run);
-        var continuation = continuation(run);
-        var outcome = new GenerationOutcome(run, LessonStatus.COMPLETE);
-        when(lessons.startGeneration(planId, "alice", run)).thenReturn(continuation);
-        when(lessons.continueGeneration(continuation)).thenReturn(outcome);
-        when(visuals.supportsVisualEvidence("alice")).thenReturn(false);
-        var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor(), visuals);
-
-        launcher.launch(planId, "alice");
-
-        verify(lessons).finish(outcome);
-        verify(visuals, never()).launch(planId, "alice");
-        verify(visuals, never()).enrichLatest(
-                org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
-    }
-
-    @Test
     void reusesAnExistingNonTerminalRun() {
         RunSnapshot run = run(AssistantRunState.RETRIEVING);
         when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice"))
@@ -260,9 +188,7 @@ class IllustratedLessonLauncherTest {
                 lessons,
                 runs,
                 startup,
-                continuationLane,
-                Runnable::run,
-                null);
+                continuationLane);
 
         try {
             launcher.launch(planId, "alice");
@@ -293,9 +219,7 @@ class IllustratedLessonLauncherTest {
                 lessons,
                 runs,
                 Runnable::run,
-                rejectingContinuation,
-                Runnable::run,
-                null);
+                rejectingContinuation);
 
         var launch = launcher.launch(planId, "alice");
 
@@ -319,9 +243,7 @@ class IllustratedLessonLauncherTest {
                 lessons,
                 runs,
                 Runnable::run,
-                brokenContinuation,
-                Runnable::run,
-                null);
+                brokenContinuation);
 
         var launch = launcher.launch(planId, "alice");
 
@@ -345,15 +267,43 @@ class IllustratedLessonLauncherTest {
                 lessons,
                 runs,
                 Runnable::run,
-                queuedContinuation::set,
-                Runnable::run,
-                null);
+                queuedContinuation::set);
 
         launcher.launch(planId, "alice");
 
         assertThat(queuedContinuation.get()).isNull();
         verify(lessons).continueGeneration(continuation);
         verify(lessons).finish(outcome);
+    }
+
+    @Test
+    void schedulesEachLongLessonChapterAsItsOwnRecoverableWorkUnit() {
+        RunSnapshot run = run(AssistantRunState.RECEIVED);
+        var continuation = continuation(run);
+        var intermediate = new GenerationOutcome(run, LessonStatus.DRAFT_READY, continuation);
+        var complete = new GenerationOutcome(run, LessonStatus.COMPLETE);
+        ArrayDeque<Runnable> workUnits = new ArrayDeque<>();
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
+        when(lessons.begin(planId, "alice")).thenReturn(run);
+        when(lessons.startGeneration(planId, "alice", run)).thenReturn(continuation);
+        when(lessons.continueGeneration(continuation)).thenReturn(intermediate, complete);
+        var launcher = new IllustratedLessonLauncher(
+                lessons,
+                runs,
+                Runnable::run,
+                workUnits::addLast);
+
+        launcher.launch(planId, "alice");
+
+        assertThat(workUnits).hasSize(1);
+        workUnits.removeFirst().run();
+        verify(lessons, never()).finish(intermediate);
+        assertThat(workUnits).hasSize(1);
+
+        workUnits.removeFirst().run();
+        verify(lessons, times(2)).continueGeneration(continuation);
+        verify(lessons).finish(complete);
+        assertThat(workUnits).isEmpty();
     }
 
     private RunSnapshot run(AssistantRunState state) {

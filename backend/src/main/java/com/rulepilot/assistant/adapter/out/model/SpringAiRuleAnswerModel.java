@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
-import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
@@ -80,10 +79,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             "prompts/rule-answer-repair-v1-lean-runtime-system.txt");
     private static final String ANSWER_REPAIR_USER = readPrompt(
             "prompts/rule-answer-repair-v1-user.txt");
-    private static final String PLAYER_FACING_REPAIR_SYSTEM = readPrompt(
-            "prompts/rule-answer-player-facing-repair-v1-lean-system.txt");
-    private static final String PLAYER_FACING_REPAIR_USER = readPrompt(
-            "prompts/rule-answer-player-facing-repair-v1-user.txt");
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
     private final double answerTemperature;
@@ -159,29 +154,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         requireConfigured(ownerUsername);
         try {
             return repairOnce(request, previousDraft, feedback, ownerUsername);
-        } catch (RuntimeException exception) {
-            if (isTimeout(exception)) {
-                throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
-            }
-            throw exception;
-        }
-    }
-
-    @Override
-    public ModelDraft revisePlayerFacing(
-            ModelRequest request,
-            ModelDraft previousDraft,
-            List<String> feedback,
-            Set<PlayerFacingField> editableFields,
-            String ownerUsername) {
-        requireConfigured(ownerUsername);
-        try {
-            PlayerFacingRepairDraft repaired = repairPlayerFacingOnce(
-                    request, previousDraft, feedback, editableFields, ownerUsername);
-            if (repaired == null) {
-                throw new IllegalStateException("player-facing repair returned no structured fields");
-            }
-            return repaired.mergeWith(previousDraft, editableFields);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -372,46 +344,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         }
     }
 
-    private PlayerFacingRepairDraft repairPlayerFacingOnce(
-            ModelRequest request,
-            ModelDraft previousDraft,
-            List<String> feedback,
-            Set<PlayerFacingField> editableFields,
-            String ownerUsername) {
-        if (editableFields == null || editableFields.isEmpty()) {
-            throw new IllegalArgumentException("player-facing repair requires at least one editable field");
-        }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
-        if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
-            OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-            options.model(modelNameFor(ownerUsername));
-            options.temperature(interpretationTemperature);
-            if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
-                options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
-            } else {
-                options.extraBody(Map.of("enable_thinking", false));
-            }
-            options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
-            prompt = prompt.options(options);
-        } else {
-            prompt = prompt.options(ChatOptions.builder()
-                    .temperature(interpretationTemperature));
-        }
-        String content = prompt
-                .system(PLAYER_FACING_REPAIR_SYSTEM)
-                .user(user -> user.text(PLAYER_FACING_REPAIR_USER)
-                        .param("question", request.question())
-                        .param("subquestions", request.subquestions())
-                        .param("outputLanguage", request.context().outputLanguageForPrompt())
-                        .param("evidence", request.evidence())
-                        .param("editableFields", editableFields)
-                        .param("rejectedFields", rejectedFieldsJson(previousDraft, editableFields))
-                        .param("feedback", feedback))
-                .call()
-                .content();
-        return parsePlayerFacingRepair(content, editableFields);
-    }
-
     private boolean usesQwen(String ownerUsername) {
         return "qwen".equals(providerFor(ownerUsername));
     }
@@ -468,161 +400,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         return ownerUsername == null || ownerUsername.isBlank()
                 ? models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)
                 : models.usesDeepSeekNonThinkingGeneration(Role.ANSWER, ownerUsername);
-    }
-
-    private Map<String, Object> rejectedFields(ModelDraft previousDraft, Set<PlayerFacingField> editableFields) {
-        Map<String, Object> rejected = new LinkedHashMap<>();
-        if (editableFields.contains(PlayerFacingField.SHORT_VERDICT)) {
-            rejected.put("shortVerdict", previousDraft.shortVerdict());
-        }
-        if (editableFields.contains(PlayerFacingField.EXPLANATION)) {
-            rejected.put("explanation", previousDraft.explanation());
-        }
-        if (editableFields.contains(PlayerFacingField.EXCEPTIONS)) {
-            rejected.put("exceptions", previousDraft.exceptions());
-        }
-        if (editableFields.contains(PlayerFacingField.CITATION_IDS)) {
-            rejected.put("citationIds", previousDraft.citationIds());
-        }
-        return Map.copyOf(rejected);
-    }
-
-    private String rejectedFieldsJson(ModelDraft previousDraft, Set<PlayerFacingField> editableFields) {
-        try {
-            return JSON.writeValueAsString(rejectedFields(previousDraft, editableFields));
-        } catch (IOException exception) {
-            throw new IllegalStateException("player-facing repair fields could not be encoded", exception);
-        }
-    }
-
-    private PlayerFacingRepairDraft parsePlayerFacingRepair(
-            String content, Set<PlayerFacingField> editableFields) {
-        try {
-            JsonNode root = JSON.readTree(content);
-            if (root == null || !root.isObject()) {
-                throw new IllegalStateException("player-facing repair is not a JSON object");
-            }
-            Set<String> expected = editableFieldNames(editableFields);
-            Set<String> actual = new LinkedHashSet<>();
-            root.fieldNames().forEachRemaining(actual::add);
-            if (!actual.equals(expected)) {
-                throw new IllegalStateException("player-facing repair returned fields outside its edit scope");
-            }
-            return new PlayerFacingRepairDraft(
-                    expected.contains("shortVerdict") ? requiredText(root, "shortVerdict") : null,
-                    expected.contains("explanation") ? requiredText(root, "explanation") : null,
-                    expected.contains("exceptions") ? stringList(root, "exceptions") : null,
-                    expected.contains("citationIds") ? uuidList(root, "citationIds") : null);
-        } catch (IOException exception) {
-            throw new IllegalStateException("player-facing repair is not valid JSON", exception);
-        }
-    }
-
-    private Set<String> editableFieldNames(Set<PlayerFacingField> editableFields) {
-        LinkedHashSet<String> names = new LinkedHashSet<>();
-        if (editableFields.contains(PlayerFacingField.SHORT_VERDICT)) names.add("shortVerdict");
-        if (editableFields.contains(PlayerFacingField.EXPLANATION)) names.add("explanation");
-        if (editableFields.contains(PlayerFacingField.EXCEPTIONS)) names.add("exceptions");
-        if (editableFields.contains(PlayerFacingField.CITATION_IDS)) names.add("citationIds");
-        return Set.copyOf(names);
-    }
-
-    private String requiredText(JsonNode root, String field) {
-        JsonNode value = root.get(field);
-        if (value == null || !value.isTextual() || value.textValue().isBlank()) {
-            throw new IllegalStateException("player-facing repair omitted " + field);
-        }
-        return value.textValue();
-    }
-
-    private List<String> stringList(JsonNode root, String field) {
-        JsonNode value = root.get(field);
-        if (value == null || !value.isArray()) {
-            throw new IllegalStateException("player-facing repair omitted " + field);
-        }
-        List<String> values = new java.util.ArrayList<>();
-        LinkedHashSet<String> distinct = new LinkedHashSet<>();
-        value.forEach(item -> {
-            if (!item.isTextual() || item.textValue().isBlank() || !distinct.add(item.textValue().strip())) {
-                throw new IllegalStateException("player-facing repair returned an invalid or duplicated exception");
-            }
-            values.add(item.textValue().strip());
-        });
-        return List.copyOf(values);
-    }
-
-    private List<UUID> uuidList(JsonNode root, String field) {
-        JsonNode value = root.get(field);
-        if (value == null || !value.isArray() || value.isEmpty()) {
-            throw new IllegalStateException("player-facing repair omitted " + field);
-        }
-        List<UUID> values = new java.util.ArrayList<>();
-        value.forEach(item -> {
-            if (!item.isTextual()) {
-                throw new IllegalStateException("player-facing repair returned a non-text citation ID");
-            }
-            try {
-                values.add(UUID.fromString(item.textValue()));
-            } catch (IllegalArgumentException invalidId) {
-                throw new IllegalStateException("player-facing repair returned an invalid citation ID", invalidId);
-            }
-        });
-        if (new LinkedHashSet<>(values).size() != values.size()) {
-            throw new IllegalStateException("player-facing repair returned duplicated citation IDs");
-        }
-        return List.copyOf(values);
-    }
-
-    private record PlayerFacingRepairDraft(
-            String shortVerdict,
-            String explanation,
-            List<String> exceptions,
-            List<UUID> citationIds) {
-
-        ModelDraft mergeWith(ModelDraft previous, Set<PlayerFacingField> editableFields) {
-            requireReturnedFields(editableFields);
-            return new ModelDraft(
-                    previous.answerable(),
-                    previous.insufficiencyReason(),
-                    editableFields.contains(PlayerFacingField.SHORT_VERDICT) ? shortVerdict : previous.shortVerdict(),
-                    editableFields.contains(PlayerFacingField.EXPLANATION) ? explanation : previous.explanation(),
-                    editableFields.contains(PlayerFacingField.CITATION_IDS)
-                            ? citationIds
-                            : previous.citationIds(),
-                    editableFields.contains(PlayerFacingField.EXCEPTIONS) ? exceptions : previous.exceptions(),
-                    previous.confidence(),
-                    previous.answerBasis(),
-                    previous.calculations(),
-                    previous.walkthroughSteps(),
-                    previous.decisionBranches(),
-                    previous.exceptionClauses(),
-                    previous.termDefinitions(),
-                    previous.workedExamples(),
-                    previous.priorityResolutions(),
-                    previous.timingResolutions(),
-                    previous.tieResolutions(),
-                    previous.scopeResolutions(),
-                    previous.conceptComparisons(),
-                    previous.ruleOptions());
-        }
-
-        private void requireReturnedFields(Set<PlayerFacingField> editableFields) {
-            if (editableFields.contains(PlayerFacingField.SHORT_VERDICT)
-                    && (shortVerdict == null || shortVerdict.isBlank())) {
-                throw new IllegalStateException("player-facing repair omitted shortVerdict");
-            }
-            if (editableFields.contains(PlayerFacingField.EXPLANATION)
-                    && (explanation == null || explanation.isBlank())) {
-                throw new IllegalStateException("player-facing repair omitted explanation");
-            }
-            if (editableFields.contains(PlayerFacingField.EXCEPTIONS) && exceptions == null) {
-                throw new IllegalStateException("player-facing repair omitted exceptions");
-            }
-            if (editableFields.contains(PlayerFacingField.CITATION_IDS)
-                    && (citationIds == null || citationIds.isEmpty())) {
-                throw new IllegalStateException("player-facing repair omitted citationIds");
-            }
-        }
     }
 
     private boolean isTimeout(Throwable failure) {

@@ -13,12 +13,17 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
+import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
+import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -79,9 +84,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                     .containsExactly("R-1");
             assertThat(outline.topics()).allSatisfy(topic -> assertThat(topic.coverageTags())
                     .contains(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG));
-            assertThat(outline.premise()).contains(
-                    "第2页本轮没有获得可验证的视觉证据",
-                    "不会推断这些页面未纳入的规则");
+            assertThat(outline.premise()).isEqualTo("先理解可验证的行动关系。");
 
             ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
             verify(chatModel).call(prompt.capture());
@@ -115,9 +118,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                     .containsExactly("R-1", "R-2");
             assertThat(outline.topics()).allSatisfy(topic -> assertThat(topic.coverageTags())
                     .contains(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG));
-            assertThat(outline.premise()).contains(
-                    "第2页仅纳入了已精确绑定的视觉规则",
-                    "未列出的来源义务仍未知");
+            assertThat(outline.premise()).isEqualTo("先理解可验证的行动关系。");
 
             ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
             verify(chatModel).call(prompt.capture());
@@ -165,7 +166,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                     .containsExactly("R-1");
             assertThat(outline.topics()).allSatisfy(topic -> assertThat(topic.coverageTags())
                     .contains(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG));
-            assertThat(outline.premise()).contains("第1页仅纳入了已精确绑定的视觉规则");
+            assertThat(outline.premise()).isEqualTo("先理解可验证的行动关系。");
             ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
             verify(chatModel).call(prompt.capture());
             assertThat(prompt.getValue().getInstructions())
@@ -361,6 +362,128 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
         }
     }
 
+    @Test
+    void plansALargeLedgerInBoundedShardsAndKeepsUnavailablePagesOutOfSourceOwnership() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                response("""
+                        {"teachingUnits":[{"teachingUnitId":"first","role":"LEGAL_ACTION",\
+                        "sourceSlotIds":["page-1-rule-1"]}]}
+                        """),
+                response("""
+                        {"teachingUnits":[{"teachingUnitId":"second","role":"LEGAL_ACTION",\
+                        "sourceSlotIds":["page-2-rule-1"]}]}
+                        """),
+                response("""
+                        {
+                          "gameTitle":"长规则示例",
+                          "premise":"先建立两个来源单元之间的关系。",
+                          "topics":[{
+                            "key":"whole-flow",
+                            "objective":"理解两个已验证规则单元的先后关系。",
+                            "required":true,
+                            "visualEvidenceRecommended":false,
+                            "teachingUnitIds":["shard-1-first","shard-2-second"]
+                          }],
+                          "wholeGameUnderstanding":{
+                            "summary":"两个已验证单元共同构成可讲解流程。",
+                            "concepts":[{
+                              "conceptId":"verified-flow",
+                              "label":"已验证流程",
+                              "explanation":"两个来源单元按同一章节组织。",
+                              "sourceSlotIds":["page-1-rule-1","page-2-rule-1"],
+                              "relatedTopicKeys":["whole-flow"],
+                              "prerequisiteConceptIds":[]
+                            }],
+                            "topicDependencies":[]
+                          }
+                        }
+                        """));
+        SpringAiTeachingOutlineModel model = model(configuration);
+        var request = new OutlineRequest(
+                List.of(
+                        longExactPage(1, "LONG-1", "FIRST_LONG_FACT_MARKER"),
+                        longExactPage(2, "LONG-2", "SECOND_LONG_FACT_MARKER"),
+                        unavailablePage(3, "UNSAFE_UNAVAILABLE_LONG_PAGE")),
+                List.of(),
+                "player");
+        RecordingModelCalls calls = new RecordingModelCalls();
+
+        try {
+            assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
+
+            var outline = model.organize(request, calls);
+
+            assertThat(outline.sourceCoverageSlots())
+                    .extracting(slot -> slot.slotId())
+                    .containsExactly("page-1-rule-1", "page-2-rule-1");
+            assertThat(outline.topics()).singleElement().satisfies(topic -> assertThat(topic.coverageTags())
+                    .contains(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG));
+            assertThat(calls.calls)
+                    .extracting(ModelCall::operation)
+                    .containsExactly(
+                            "organizeTeachingOutline|canonical-shard-1",
+                            "organizeTeachingOutline|canonical-shard-2",
+                            "organizeTeachingOutline|canonical-global-ordering");
+
+            ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+            verify(chatModel, times(3)).call(prompts.capture());
+            String firstShardPrompt = promptText(prompts.getAllValues().get(0));
+            String secondShardPrompt = promptText(prompts.getAllValues().get(1));
+            String globalPrompt = promptText(prompts.getAllValues().get(2));
+            assertThat(firstShardPrompt).contains("FIRST_LONG_FACT_MARKER").doesNotContain("SECOND_LONG_FACT_MARKER");
+            assertThat(secondShardPrompt).contains("SECOND_LONG_FACT_MARKER").doesNotContain("FIRST_LONG_FACT_MARKER");
+            assertThat(globalPrompt)
+                    .contains("shard-1-first", "shard-2-second", "unavailable-page-3")
+                    .doesNotContain(
+                            "FIRST_LONG_FACT_MARKER",
+                            "SECOND_LONG_FACT_MARKER",
+                            "RULE_GROUP_FACT:",
+                            "UNSAFE_UNAVAILABLE_LONG_PAGE");
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void rejectsALargeShardThatStillOmitsItsExactSlotAfterOneCompleteReplacement() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                response("{\"teachingUnits\":[]}"),
+                response("{\"teachingUnits\":[]}"));
+        SpringAiTeachingOutlineModel model = model(configuration);
+        var request = new OutlineRequest(
+                List.of(new PageInput(
+                        1,
+                        "UNSAFE_LARGE_DISPLAY_TEXT",
+                        List.of(),
+                        List.of("R-1", "R-2"),
+                        true,
+                        List.of(
+                                new RuleGroupFact("R-1", "First", "x".repeat(17_000)),
+                                new RuleGroupFact("R-2", "Second", "y".repeat(17_000))),
+                        PageLedgerState.VISUAL_EXACT_COMPLETE)),
+                List.of(),
+                "player");
+        RecordingModelCalls calls = new RecordingModelCalls();
+
+        try {
+            assertThatThrownBy(() -> model.organize(request, calls))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasRootCauseMessage("canonical source shard returned no teaching units");
+            assertThat(calls.calls)
+                    .extracting(ModelCall::operation)
+                    .containsExactly(
+                            "organizeTeachingOutline|canonical-shard-1",
+                            "organizeTeachingOutline|complete-replacement|canonical-shard-1");
+            verify(chatModel, times(2)).call(any(Prompt.class));
+        } finally {
+            model.close();
+        }
+    }
+
     private RuntimeModelConfiguration configuration() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
@@ -423,6 +546,26 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                 PageLedgerState.VISUAL_EXACT_COMPLETE);
     }
 
+    private PageInput longExactPage(int pageNumber, String identifier, String marker) {
+        return new PageInput(
+                pageNumber,
+                "UNSAFE_LONG_DISPLAY_TEXT_" + pageNumber,
+                List.of(),
+                List.of(identifier),
+                true,
+                List.of(new RuleGroupFact(
+                        identifier,
+                        "Long typed fact " + pageNumber,
+                        marker + " " + "x".repeat(17_000))),
+                PageLedgerState.VISUAL_EXACT_COMPLETE);
+    }
+
+    private String promptText(Prompt prompt) {
+        return prompt.getInstructions().stream()
+                .map(message -> message.getText())
+                .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
     private PageInput twoFactPartialPage(String secondFact) {
         return new PageInput(
                 1,
@@ -449,5 +592,18 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
 
     private ChatResponse response(String content) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
+    }
+
+    private static final class RecordingModelCalls implements ModelCallExecutor {
+        private final List<ModelCall> calls = new ArrayList<>();
+
+        @Override
+        public <T> T invoke(
+                ModelCall call,
+                Supplier<T> invocation,
+                ToIntFunction<T> outputTokens) {
+            calls.add(call);
+            return invocation.get();
+        }
     }
 }

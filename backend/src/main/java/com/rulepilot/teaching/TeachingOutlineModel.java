@@ -1,6 +1,8 @@
 package com.rulepilot.teaching;
 
 import java.util.List;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 
 /** Lets the model decide how this particular game should be taught before retrieval begins. */
 public interface TeachingOutlineModel {
@@ -8,11 +10,69 @@ public interface TeachingOutlineModel {
     OutlineDraft organize(OutlineRequest request);
 
     /**
+     * Gives an adapter an audited budget reservation for each real provider call in a compound planning graph.
+     * Simple implementations remain one-call models through this default boundary.
+     */
+    default OutlineDraft organize(OutlineRequest request, ModelCallExecutor calls) {
+        return calls.invoke(
+                new ModelCall(
+                        "organizeTeachingOutline",
+                        estimateTokens(request),
+                        "Rulebook lesson topics organized"),
+                () -> organize(request),
+                TeachingOutlineModel::estimateTokens);
+    }
+
+    /**
      * Rebuilds an otherwise usable outline when its broad flow chapter steals detail owned by later chapters.
      * Implementations must preserve the supplied draft when refinement cannot complete.
      */
     default OutlineDraft refineChapterOwnership(OutlineRequest request, OutlineDraft current, String feedback) {
         return current;
+    }
+
+    default OutlineDraft refineChapterOwnership(
+            OutlineRequest request,
+            OutlineDraft current,
+            String feedback,
+            ModelCallExecutor calls) {
+        return calls.invoke(
+                new ModelCall(
+                        "refineTeachingOutlineOwnership",
+                        estimateTokens(current) + estimateTokens(feedback),
+                        "Lesson chapters separated so each detailed rule has one home"),
+                () -> refineChapterOwnership(request, current, feedback),
+                TeachingOutlineModel::estimateTokens);
+    }
+
+    interface ModelCallExecutor {
+        <T> T invoke(ModelCall call, Supplier<T> invocation, ToIntFunction<T> outputTokens);
+
+        static ModelCallExecutor direct() {
+            return new ModelCallExecutor() {
+                @Override
+                public <T> T invoke(
+                        ModelCall call,
+                        Supplier<T> invocation,
+                        ToIntFunction<T> outputTokens) {
+                    return invocation.get();
+                }
+            };
+        }
+    }
+
+    record ModelCall(String operation, int estimatedInputTokens, String successSummary) {
+        public ModelCall {
+            if (operation == null || operation.isBlank()
+                    || estimatedInputTokens < 1
+                    || successSummary == null || successSummary.isBlank()) {
+                throw new IllegalArgumentException("teaching outline model call is invalid");
+            }
+        }
+    }
+
+    private static int estimateTokens(Object value) {
+        return Math.max(1, value == null ? 1 : (value.toString().length() + 3) / 4);
     }
 
     /**

@@ -61,7 +61,8 @@ public interface VisualRegionLocator {
         TIMEOUT,
         INTERRUPTED,
         EXECUTOR_BUSY,
-        PROVIDER_FAILURE
+        PROVIDER_FAILURE,
+        CANDIDATE_PREPARATION_FAILED
     }
 
     /** The model decides whether inspecting another finite attachment batch is worth another bounded call. */

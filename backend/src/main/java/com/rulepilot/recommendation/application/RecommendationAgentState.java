@@ -23,6 +23,10 @@ final class RecommendationAgentState {
 
     static final int MAX_VERIFIED_GAMES = 8;
     static final int MAX_OBSERVED_CANDIDATES = 16;
+    static final int MIN_RECOMMENDATION_REPLY_CODE_POINTS = 80;
+    static final int MAX_RECOMMENDATION_REPLY_CODE_POINTS = 1_200;
+    static final int MIN_CARD_REPLY_CODE_POINTS = 12;
+    static final int MAX_CARD_REPLY_CODE_POINTS = 400;
 
     final long startedAtNanos;
     final String modelConfigurationOwner;
@@ -42,6 +46,7 @@ final class RecommendationAgentState {
     final Set<String> finalResponseEvidenceIds = new LinkedHashSet<>();
     final Set<String> finalResponsePublicEvidenceIds = new LinkedHashSet<>();
     final Map<String, Object> finalResponseDecisionFacts = new LinkedHashMap<>();
+    PublicationSeed pendingPublicationSeed;
     TitleConstraint titleConstraint;
     Research research = Research.empty();
     CandidateComparison comparison;
@@ -52,7 +57,6 @@ final class RecommendationAgentState {
     int referenceResolutionAttempts;
     boolean catalogBrowseAttempted;
     boolean discoveryAttempted;
-    boolean discoveryProducedVerifiedGames;
     DiscoveryPurpose discoveryPurpose;
     RelationshipKind discoveredRelationshipKind;
     List<String> discoveredRelationshipNames = List.of();
@@ -164,6 +168,7 @@ final class RecommendationAgentState {
         catalogBrowseAttempted = false;
         researchAttempted = false;
         research = Research.empty();
+        pendingPublicationSeed = null;
         if (selectionWorkObserved) {
             actions.add("RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE");
         }
@@ -214,11 +219,6 @@ final class RecommendationAgentState {
         SELECTABLE_CARDS
     }
 
-    enum CandidateUse {
-        PUBLISH_CARDS,
-        CONTINUE_REACT
-    }
-
     record TitleConstraint(String value, String evidenceId) {
         TitleConstraint {
             value = normalize(value);
@@ -264,5 +264,53 @@ final class RecommendationAgentState {
             }
         }
 
+    }
+
+    record RecommendationReplyDraft(String text, List<String> evidenceIds) {
+        RecommendationReplyDraft {
+            if (text == null || text.isBlank()) {
+                throw new IllegalArgumentException("recommendation reply draft text is invalid");
+            }
+            evidenceIds = evidenceIds == null ? List.of() : List.copyOf(evidenceIds);
+            if (evidenceIds.isEmpty()
+                    || evidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
+                    || evidenceIds.stream().distinct().count() != evidenceIds.size()) {
+                throw new IllegalArgumentException("recommendation reply draft evidence is invalid");
+            }
+        }
+    }
+
+    record CandidateReplyDraft(
+            int bggId,
+            RecommendationReplyDraft why,
+            RecommendationReplyDraft tradeoff) {
+        CandidateReplyDraft {
+            if (bggId <= 0 || why == null) {
+                throw new IllegalArgumentException("candidate reply draft is invalid");
+            }
+        }
+    }
+
+    record PublicationDraft(
+            String playerReply,
+            List<String> playerReplyEvidenceIds,
+            List<CandidateReplyDraft> candidates) {
+        PublicationDraft {
+            if (playerReply == null || playerReply.isBlank()) {
+                throw new IllegalArgumentException("recommendation publication reply is invalid");
+            }
+            playerReplyEvidenceIds = playerReplyEvidenceIds == null
+                    ? List.of()
+                    : List.copyOf(playerReplyEvidenceIds);
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            if (playerReplyEvidenceIds.isEmpty()
+                    || playerReplyEvidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
+                    || playerReplyEvidenceIds.stream().distinct().count() != playerReplyEvidenceIds.size()
+                    || candidates.isEmpty()
+                    || candidates.stream().map(CandidateReplyDraft::bggId).distinct().count()
+                            != candidates.size()) {
+                throw new IllegalArgumentException("recommendation publication candidates are invalid");
+            }
+        }
     }
 }

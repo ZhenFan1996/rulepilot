@@ -14,7 +14,6 @@ import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch
 import com.rulepilot.teaching.application.IllustratedLessonService;
 import com.rulepilot.teaching.application.TeachingPlanSummary;
 import com.rulepilot.teaching.application.LessonLocalizationService;
-import com.rulepilot.teaching.application.VisualLessonEnrichmentService.VisualEnrichmentLaunch;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.security.Principal;
 import java.util.Optional;

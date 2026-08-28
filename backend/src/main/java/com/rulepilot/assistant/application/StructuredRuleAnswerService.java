@@ -153,8 +153,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.ruleOptionResolver = new AnswerRuleOptionResolver();
         this.sourceEvidenceResolver = new AnswerSourceEvidenceResolver();
         this.permissionResolver = new AnswerPermissionResolver();
-        this.postPublicationReviewer = new AnswerPostPublicationReviewer(
-                critic, modelGateway, publicationValidator);
+        this.postPublicationReviewer = new AnswerPostPublicationReviewer(critic);
         this.runLifecycle = new AnswerRunLifecycle(runs);
         this.invocations = invocations;
         this.observations = observations;
@@ -586,7 +585,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         "回答在一次有针对性的修订后仍未通过结构或引用校验。");
             }
             draftResult = draftComposer.repairAfterPublicationFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
+                    assistantRunId,
+                    username,
+                    gameSessionId,
+                    modelRequest,
+                    draft,
+                    rejectedPublication);
             if (!draftResult.ready()) {
                 return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
             }
@@ -608,32 +612,20 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             publicationWarnings.add(new AnswerWarning(Type.LOW_CONFIDENCE));
         }
         answer = AnswerOutcomePolicy.withWarnings(answer, publicationWarnings);
-        AnswerPostPublicationReviewer.Result reviewResult;
         try {
-            reviewResult = postPublicationReviewer.review(
+            answer = postPublicationReviewer.review(
                     assistantRunId,
                     interpretedQuestion,
                     context,
                     username,
-                    gameSessionId,
                     modelRequest,
-                    draft,
                     answer,
-                    evidence,
-                    !modelRepairUsed);
+                    evidence);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "局部重讲超时，可以稍后重试或直接查看规则引用。");
         } catch (AgentExecutionStoppedException exception) {
             throw exception;
         }
-        if (!reviewResult.accepted()) {
-            if (reviewResult.failureStatus() == AnswerStatus.INSUFFICIENT_EVIDENCE) {
-                return AnswerOutcomePolicy.insufficientWithSources(
-                        context.documentVersionId(), reviewResult.failureMessage(), evidence);
-            }
-            return safe(context.documentVersionId(), reviewResult.failureStatus(), reviewResult.failureMessage());
-        }
-        answer = reviewResult.answer();
         if (!withinAllowedEvidencePages(answer, context.allowedEvidencePages())) {
             return safe(
                     context.documentVersionId(),

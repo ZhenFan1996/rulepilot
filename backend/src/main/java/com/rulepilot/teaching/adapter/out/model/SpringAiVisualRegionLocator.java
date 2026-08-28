@@ -1,6 +1,8 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
@@ -66,6 +68,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             never proves a mechanical effect, condition, quantity, score, timing, or exception; cited text remains
             authoritative. Reject decorative, prose-only, contradictory, or ambiguous crops. Do not add fields,
             page numbers, geometry, source kinds, reasoning, or prose outside the JSON object.
+
+            When the application supplies structured rejection feedback, reconsider the whole batch and return one
+            complete replacement object. Never patch fields from the rejected object. Choose only an offered opaque
+            candidate id that now satisfies every constraint, choose another offered candidate, or choose NO_VISUAL.
+            Never edit pixels or return geometry.
             """;
 
     /** Shorter wording preserves the same six-field contract for Qwen multimodal JSON mode. */
@@ -80,7 +87,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             label is at most 80 characters and visibleDescription is at most 240 characters.
             NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Never select
             one candidate twice. Select all useful candidates without targeting a fixed count. Images prove appearance
-            only. Add no fields.
+            only. Add no fields. Structured rejection feedback requires one complete replacement object, never a field
+            patch. Reconsider the offered opaque candidate ids and return a valid candidate or NO_VISUAL; never edit
+            pixels or return geometry.
             """;
 
     private static final int MAX_ATTACHMENT_EDGE = 1_024;
@@ -132,16 +141,84 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return LocateGuideResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
         }
-        List<CandidateAttachment> attachments = candidateAttachments(request);
-        GuideAttempt first = invokeGuideAttempt(request, owner, "", attachments, 1);
-        if (first.rejection() != Rejection.MALFORMED_JSON) return first.guide();
-        return invokeGuideAttempt(
-                        request,
-                        owner,
-                        VisualLocatorResponsePolicy.malformedRepairInstruction(),
-                        attachments,
-                        2)
-                .guide();
+        List<CandidateAttachment> attachments;
+        try {
+            attachments = candidateAttachments(request);
+        } catch (RuntimeException candidatePreparationFailure) {
+            GuideAttempt unavailable = unavailable(Rejection.CANDIDATE_PREPARATION_FAILED);
+            recordSelectionResult(request, unavailable, 1, false);
+            return unavailable.guide();
+        }
+        GuideAttempt first = invokeGuideAttemptSafely(request, owner, "", attachments, 1);
+        recordSelectionResult(request, first, 1, first.rejection().retryable());
+        if (!first.rejection().retryable()) return first.guide();
+        GuideAttempt replacement = invokeGuideAttemptSafely(
+                request,
+                owner,
+                VisualLocatorResponsePolicy.completeReplacementFeedback(first.rejection()),
+                attachments,
+                2);
+        recordSelectionResult(request, replacement, 2, false);
+        return replacement.guide();
+    }
+
+    private GuideAttempt invokeGuideAttemptSafely(
+            VisualLocationRequest request,
+            String owner,
+            String correction,
+            List<CandidateAttachment> attachments,
+            int attemptNumber) {
+        if (request.runId() != null && invocations == null) {
+            throw new IllegalStateException("observable visual model attempts require audited invocations");
+        }
+        try {
+            return invokeGuideAttempt(request, owner, correction, attachments, attemptNumber);
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException providerFailure) {
+            return unavailable(Rejection.PROVIDER_FAILURE);
+        }
+    }
+
+    private void recordSelectionResult(
+            VisualLocationRequest request,
+            GuideAttempt attempt,
+            int attemptNumber,
+            boolean completeReplacementFollows) {
+        if (request.runId() == null || invocations == null) return;
+        Rejection rejection = attempt.rejection();
+        ActivityOutcome outcome = switch (rejection) {
+            case NONE, EXPLICIT_NO_REGION -> ActivityOutcome.SUCCEEDED;
+            case MALFORMED_JSON, UNSUPPORTED_SCOPE -> ActivityOutcome.REJECTED;
+            case PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED -> ActivityOutcome.FAILED;
+        };
+        invocations.record(
+                request.runId(),
+                ActivityType.VALIDATION,
+                "settleVisualCandidateSelection|" + request.batchNumber() + "|" + attemptNumber + "|"
+                        + rejection.name(),
+                outcome,
+                selectionResultSummary(attempt, attemptNumber, completeReplacementFollows));
+    }
+
+    private String selectionResultSummary(
+            GuideAttempt attempt,
+            int attemptNumber,
+            boolean completeReplacementFollows) {
+        if (attempt.rejection() == Rejection.NONE) {
+            return attemptNumber == 1
+                    ? "视觉候选已通过校验"
+                    : "视觉候选的完整重选已通过校验";
+        }
+        if (attempt.rejection() == Rejection.EXPLICIT_NO_REGION) {
+            return "视觉 Agent 明确选择 NO_VISUAL；本章正文保持不变";
+        }
+        if (completeReplacementFollows) {
+            return "视觉候选本次未通过（" + attempt.rejection().name()
+                    + "）；正在请求一次完整重选，这不是最终配图失败";
+        }
+        return "视觉候选在有限处理后仍不可用（" + attempt.rejection().name()
+                + "）；仅省略本章配图，正文保持不变";
     }
 
     private GuideAttempt invokeGuideAttempt(
@@ -180,8 +257,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     }
 
     private String attemptSummary(GuideAttempt attempt) {
-        if (attempt.rejection() == Rejection.MALFORMED_JSON) {
-            return "视觉候选批次返回了格式不合格的响应，准备一次结构修复";
+        if (attempt.rejection().retryable()) {
+            return "视觉候选批次本次未通过，准备一次完整重选";
         }
         if (attempt.guide().regions().isEmpty()) {
             return "视觉候选批次未采用图片：" + attempt.guide().diagnostic().name();
@@ -206,6 +283,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Candidate manifest (same order as image attachments): {manifest}
                                     batchNumber: {batchNumber}
                                     hasMoreCandidates: {hasMoreCandidates}
+                                    Previous-attempt feedback (application-owned JSON; empty on the first attempt):
                                     {correction}
                                     Return the exact batchAction plus reviews JSON object only.
                                     """)

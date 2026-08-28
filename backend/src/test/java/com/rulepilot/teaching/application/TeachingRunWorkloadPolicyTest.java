@@ -20,8 +20,9 @@ class TeachingRunWorkloadPolicyTest {
 
         // Three searches, one possible image read, and one canonical fallback read per section.
         assertThat(demand.requiredToolCalls()).isEqualTo(95);
-        // Three shared section calls, plus one initial page interpretation and at most one page-local repair or retry.
-        assertThat(demand.requiredModelCalls()).isEqualTo(115);
+        // Three shared section calls, page interpretation/recovery, one whole-lesson review, one complete replacement
+        // allowance, and two bounded synchronous visual passes per chapter. Admission itself performs none of them.
+        assertThat(demand.requiredModelCalls()).isEqualTo(441);
     }
 
     @Test
@@ -29,7 +30,7 @@ class TeachingRunWorkloadPolicyTest {
         var demand = policy.demand(plan(3, false));
 
         assertThat(demand.requiredToolCalls()).isEqualTo(9);
-        assertThat(demand.requiredModelCalls()).isEqualTo(29);
+        assertThat(demand.requiredModelCalls()).isEqualTo(67);
     }
 
     @Test
@@ -37,12 +38,12 @@ class TeachingRunWorkloadPolicyTest {
         var demand = policy.demand(plan(30, true));
 
         assertThat(demand.requiredToolCalls()).isEqualTo(150);
-        assertThat(demand.requiredModelCalls()).isEqualTo(170);
+        assertThat(demand.requiredModelCalls()).isEqualTo(694);
     }
 
     @Test
     void countsVisualInterpretationFromTheImmutablePlanInsteadOfMutableCatalogAvailability() {
-        assertThat(policy.demand(plan(19, true)).requiredModelCalls()).isEqualTo(115);
+        assertThat(policy.demand(plan(19, true)).requiredModelCalls()).isEqualTo(441);
     }
 
     @Test
@@ -57,7 +58,17 @@ class TeachingRunWorkloadPolicyTest {
 
         assertThat(visualCalls).isEqualTo(42);
         assertThat(policy.demand(plan))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 119));
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 445));
+    }
+
+    @Test
+    void reservesBothBoundedVisualPassesWithoutDependingOnMutableVisualResults() {
+        TeachingPlan plan = plan(2, false);
+
+        assertThat(VisualLessonEnricher.maximumTeachingRunModelCalls(plan))
+                .isEqualTo(2 * 2 * VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION
+                        * VisualLessonStepLocator.MAX_MODEL_CALLS_PER_CANDIDATE_BATCH);
+        assertThat(policy.demand(plan).requiredModelCalls()).isEqualTo(46);
     }
 
     private TeachingPlan plan(int sectionCount, boolean sourceBound) {

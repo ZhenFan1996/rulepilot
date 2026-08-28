@@ -5,7 +5,6 @@ import com.rulepilot.teaching.application.TeachingPlanSummary;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.application.LessonLocalizationService;
-import com.rulepilot.teaching.application.VisualLessonEnrichmentService.VisualEnrichmentLaunch;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.assistant.PlayerLocale;
 import java.security.Principal;
@@ -46,15 +45,6 @@ public class IllustratedLessonController {
     LessonLaunch create(@PathVariable UUID planId, Principal principal) {
         owners.requireOwned(planId, principal.getName());
         return launcher.launch(planId, principal.getName());
-    }
-
-    @PostMapping("/latest/visuals")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    VisualEnrichmentLaunch enrichVisuals(@PathVariable UUID planId, Principal principal) {
-        owners.requireOwned(planId, principal.getName());
-        lessons.latest(planId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
-        return launcher.enrichLatest(planId, principal.getName());
     }
 
     @GetMapping("/latest")

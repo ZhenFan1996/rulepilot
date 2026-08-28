@@ -351,21 +351,6 @@ export async function ensureTeachingRun(client, planId) {
   return { runId: launch.assistantRunId, state: launch.state, reused: launch.reused }
 }
 
-/**
- * Older completed teaching runs predate visual enrichment. Start that optional follow-up explicitly instead of
- * waiting for an event that no longer has a producer.
- */
-export async function ensureVisualEnrichmentRun(client, planId) {
-  const existing = await latestRun(client, planId, 'VISUAL_ENRICHMENT')
-  if (existing && !FAILED_RUN_STATES.has(existing.run.state)) {
-    return { runId: existing.run.id, state: existing.run.state, reused: true }
-  }
-  const launch = await client.request(`/api/v1/teaching-plans/${planId}/illustrated-lessons/latest/visuals`, {
-    method: 'POST',
-  })
-  return { runId: launch.assistantRunId, state: launch.state, reused: launch.reused }
-}
-
 /** Public corpus entries promise a readable English projection, not only an English navigation shell. */
 export async function ensureEnglishLocalization(client, planId) {
   const path = `/api/v1/teaching-plans/${planId}/illustrated-lessons/latest/localizations/en`
@@ -419,6 +404,9 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
   let state = options.restart ? null : await readJson(outputPath)
   if (state && (state.source?.sha256 !== checksum || state.source?.officialSourceUrl !== entry.source)) {
     throw new Error(`Checkpoint source does not match ${entry.title}; rerun with --restart`)
+  }
+  if (state?.visual) {
+    delete state.visual
   }
   state ??= {
     schemaVersion: 1,
@@ -584,25 +572,6 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     if (FAILED_RUN_STATES.has(details.run.state)) throw new Error(`Teaching generation ended as ${details.run.state}`)
   }
 
-  if (!state.visual) {
-    state.visual = await ensureVisualEnrichmentRun(client, state.plan.id)
-    await checkpoint(outputPath, state)
-    progress(state, state.visual.reused ? '复用已有局部图示任务' : '已启动局部图示任务')
-  }
-  if (!TERMINAL_RUN_STATES.has(state.visual.state)) {
-    const details = await poll(
-      '定位并核对局部图示',
-      state,
-      () => runDetails(client, state.visual.runId),
-      (value) => TERMINAL_RUN_STATES.has(value.run.state),
-      deadline,
-    )
-    state.visual.state = details.run.state
-    state.visual.lastErrorCode = details.run.lastErrorCode
-    state.visual.activityCount = details.activities?.length ?? 0
-    await checkpoint(outputPath, state)
-  }
-
   if (!state.localization || state.localization.state === 'FAILED') {
     state.localization = await ensureEnglishLocalization(client, state.plan.id)
     await checkpoint(outputPath, state)
@@ -639,8 +608,7 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     coverCachedBytes,
     coverSource: hasRegisteredCover ? 'REGISTERED' : hasRulebookFrontCover ? 'RULEBOOK_FRONT' : 'MISSING',
     hasOfficialRulebook: Boolean(publicLesson.officialSourceUrl),
-    visualEnrichmentState: state.visual.state,
-    visualActivityCount: state.visual.activityCount ?? null,
+    visualAssemblyMode: 'IN_TEACHING',
     englishLocalizationState: state.localization.state,
     hasEnglishLocalization: englishPublicLesson.contentLanguage === 'en'
       && englishPublicLesson.localizationStatus === 'READY',
@@ -652,7 +620,7 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
   if (!result.hasCover || !result.hasOfficialRulebook) throw new Error('Public lesson is missing its cover or official rulebook link')
   if (!result.hasEnglishLocalization) throw new Error('Public lesson is missing its English localization')
   await checkpoint(outputPath, state, { result })
-  progress(state, `公开讲解可读：${result.sectionCount} 章、${result.stepCount} 步、${result.visualStepCount} 个局部图示（视觉任务 ${result.visualEnrichmentState}）`)
+  progress(state, `公开讲解可读：${result.sectionCount} 章、${result.stepCount} 步、${result.visualStepCount} 个同步局部图示`)
   return state
 }
 
