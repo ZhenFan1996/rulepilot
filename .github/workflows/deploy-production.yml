@@ -184,14 +184,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
-          cache-dependency-path: ${{ runner.temp }}/rulepilot-build-source/backend/pom.xml
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: ${{ runner.temp }}/rulepilot-build-source/frontend/package-lock.json
+          package-manager-cache: false
 
       - name: Build immutable deployment artifacts
         run: |
