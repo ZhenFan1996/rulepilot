@@ -679,6 +679,106 @@ describe('GameRecommendationAgent', () => {
     expect(refreshed.get('textarea').element).toHaveProperty('value', '这一句还没有发送')
   })
 
+  it('recovers the exact persisted failure after a broken stream without hiding prior cards', async () => {
+    const conversationId = '209b9bce-b5d0-451c-9878-630761828356'
+    const previousClientTurnId = 'c1a691ee-1f72-4a38-93e5-f695721d3708'
+    const previousResponse = {
+      conversationId,
+      revision: 3,
+      clientTurnId: previousClientTurnId,
+      replayed: true,
+      responseLocale: 'zh-CN' as const,
+      outcome: 'recommendations' as const,
+      mode: 'model_assisted' as const,
+      assistantMessage: '上一轮已经核对并保存了这款候选。',
+      profile: baseProfile,
+      clarification: null,
+      sourceCount: 1,
+      candidatesEvaluated: 1,
+      games: [{ game, matches: ['支持 4 人'], tradeoffs: [] }],
+    }
+    let pending: Record<string, unknown> | null = null
+    let rejectStream: (() => void) | null = null
+    const sessionPaths: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        return Response.json({
+          conversationId,
+          revision: 3,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: '先给我一款核对过的候选' },
+            { role: 'assistant', text: previousResponse.assistantMessage },
+          ],
+          knownGames: [{ bggId: game.bggId, name: game.name, originalName: game.originalName }],
+          shownBggIds: [game.bggId],
+          processing: false,
+          processingSince: null,
+          latestResponse: previousResponse,
+          lastTurnResult: {
+            clientTurnId: previousClientTurnId,
+            responseLocale: 'zh-CN',
+            outcome: 'recommendations',
+            assistantMessage: previousResponse.assistantMessage,
+            failureBoundary: null,
+            failureReason: null,
+          },
+        })
+      }
+      if (path === `/api/v1/bgg/recommendation-agent/sessions/${conversationId}`) {
+        sessionPaths.push(path)
+        const clientTurnId = String(pending?.clientTurnId)
+        return Response.json({
+          conversationId,
+          revision: 4,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: '先给我一款核对过的候选' },
+            { role: 'assistant', text: previousResponse.assistantMessage },
+          ],
+          knownGames: [{ bggId: game.bggId, name: game.name, originalName: game.originalName }],
+          shownBggIds: [game.bggId],
+          processing: false,
+          processingSince: null,
+          latestResponse: previousResponse,
+          lastTurnResult: {
+            clientTurnId,
+            responseLocale: 'zh-CN',
+            outcome: 'unavailable',
+            assistantMessage: '旧版本在累计资源边界停止，本轮没有发布临时结果。',
+            failureBoundary: 'action_budget',
+            failureReason: 'resource_budget_exhausted',
+          },
+        })
+      }
+      pending = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return await new Promise<Response>((_resolve, reject) => {
+        rejectStream = () => reject(new TypeError('connection closed after request upload'))
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('保留上一款，再核对一项未知条件')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    rejectStream!()
+    await flushPromises()
+
+    expect(sessionPaths).toEqual([`/api/v1/bgg/recommendation-agent/sessions/${conversationId}`])
+    expect(wrapper.findAll('[data-testid="recommendation-game-card"]')).toHaveLength(1)
+    expect(wrapper.text()).toContain(previousResponse.assistantMessage)
+    expect(wrapper.text()).toContain('旧版本已移除的累计资源预算')
+    expect(wrapper.text()).toContain('不需要缩小问题')
+    expect(wrapper.text()).toContain('旧版本在累计资源边界停止，本轮没有发布临时结果。')
+    expect(wrapper.findAll('button').some(button => button.text() === '重试')).toBe(true)
+    const turns = wrapper.findAll('[data-conversation-message]').map(turn => turn.text())
+    expect(turns.filter(turn => turn.includes('保留上一款，再核对一项未知条件'))).toHaveLength(1)
+    expect(turns).not.toContain('旧版本在累计资源边界停止，本轮没有发布临时结果。')
+  })
+
   it('keeps an unaccepted turn after server reconciliation and retries the exact request identity', async () => {
     const conversationId = '6b97841c-2a4d-49e9-a451-a58ee02f4583'
     const previousClientTurnId = '41d3b9ea-5d58-468c-9528-a6459725294a'
@@ -691,7 +791,8 @@ describe('GameRecommendationAgent', () => {
     const requestBodies: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
-      if (path === '/api/v1/bgg/recommendation-agent/session') {
+      if (path === '/api/v1/bgg/recommendation-agent/session'
+        || path === `/api/v1/bgg/recommendation-agent/sessions/${conversationId}`) {
         return Response.json({
           conversationId,
           revision: 3,
@@ -865,50 +966,6 @@ describe('GameRecommendationAgent', () => {
     expect(requestBodies).toHaveLength(1)
   })
 
-  it('requires a smaller request or new conversation after the resource safety budget is exhausted', async () => {
-    const requestBodies: Array<Record<string, unknown>> = []
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      if (String(input) === '/api/auth/csrf') {
-        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      }
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-      requestBodies.push(body)
-      return recommendationStreamResult({
-        conversationId: '67c9bff0-02af-454a-b0ac-8bf770d3b017',
-        revision: 1,
-        clientTurnId: body.clientTurnId,
-        replayed: false,
-        responseLocale: 'zh-CN',
-        outcome: 'unavailable',
-        mode: 'model_assisted',
-        assistantMessage: '本轮已在资源安全边界停止，没有发布未完成结果。',
-        failureBoundary: 'action_budget',
-        failureReason: 'resource_budget_exhausted',
-        profile: baseProfile,
-        clarification: null,
-        sourceCount: 0,
-        candidatesEvaluated: 0,
-        games: [],
-      })
-    }))
-    const wrapper = await mountAgent()
-
-    await wrapper.get('textarea').setValue('请综合所有历史偏好和候选做一份非常完整的比较')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    const failedTurn = wrapper.get('[role="alert"]')
-    expect(failedTurn.text()).toContain('token')
-    expect(failedTurn.text()).toContain('派生的 step/tool')
-    expect(failedTurn.text()).toContain('缩小问题')
-    expect(failedTurn.text()).toContain('新对话')
-    expect(failedTurn.findAll('button').filter(button => button.text() === '重试')).toHaveLength(0)
-    const reviseAction = failedTurn.get('[data-testid="recommendation-revise-after-budget"]')
-    await reviseAction.trigger('click')
-    expect(document.activeElement).toBe(wrapper.get('textarea').element)
-    expect(requestBodies).toHaveLength(1)
-  })
-
   it('removes stale clarification choices when the submitted choice becomes unavailable', async () => {
     const conversationId = 'ddf8cd74-3d16-4302-b804-74a2d1edb264'
     let recommendationCalls = 0
@@ -999,7 +1056,8 @@ describe('GameRecommendationAgent', () => {
     let sessionReads = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
-      if (path === '/api/v1/bgg/recommendation-agent/session') {
+      if (path === '/api/v1/bgg/recommendation-agent/session'
+        || path === `/api/v1/bgg/recommendation-agent/sessions/${conversationId}`) {
         sessionReads += 1
         return Response.json({
           conversationId,
@@ -1085,7 +1143,8 @@ describe('GameRecommendationAgent', () => {
     let sessionReads = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
-      if (path === '/api/v1/bgg/recommendation-agent/session') {
+      if (path === '/api/v1/bgg/recommendation-agent/session'
+        || path === `/api/v1/bgg/recommendation-agent/sessions/${conversationId}`) {
         sessionReads += 1
         return Response.json({
           conversationId,
@@ -1203,7 +1262,8 @@ describe('GameRecommendationAgent', () => {
     let sessionReads = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
-      if (path === '/api/v1/bgg/recommendation-agent/session') {
+      if (path === '/api/v1/bgg/recommendation-agent/session'
+        || path === `/api/v1/bgg/recommendation-agent/sessions/${conversationId}`) {
         sessionReads += 1
         const revision = sessionReads === 1 ? 2 : 3
         return Response.json({
@@ -1284,6 +1344,158 @@ describe('GameRecommendationAgent', () => {
     await vi.advanceTimersByTimeAsync(5_000)
 
     expect(sessionReads).toBe(1)
+  })
+
+  it('keeps a restored pending turn in progress when the latest terminal belongs to the prior turn', async () => {
+    vi.useFakeTimers()
+    const conversationId = '2011a4fa-da7c-4a1a-a12b-19d1d36a8758'
+    const pendingClientTurnId = '77e7841b-0982-42f0-b8ba-c197e415cd72'
+    const previousClientTurnId = '8515c78f-e5e2-4e63-8128-72bbb96a3526'
+    sessionStorage.setItem('rulepilot:recommendation-conversation:v2:alice', JSON.stringify({
+      conversationId,
+      revision: 3,
+      responseLocale: 'zh-CN',
+      profile: baseProfile,
+      transcript: [
+        { role: 'user', text: '先保留上一轮' },
+        { role: 'assistant', text: '上一轮已经完成。' },
+        { role: 'user', text: '这一轮还在核对公开资料' },
+      ],
+      knownGames: [],
+      shownBggIds: [],
+      selectedBggId: null,
+      failed: false,
+      pending: {
+        message: '这一轮还在核对公开资料',
+        excludedBggIds: [],
+        focusedBggId: null,
+        clientTurnId: pendingClientTurnId,
+        responseLocale: 'zh-CN',
+      },
+    }))
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe(`/api/v1/bgg/recommendation-agent/sessions/${conversationId}`)
+      sessionReads += 1
+      if (sessionReads > 1) throw new TypeError('temporary session read failure')
+      return Response.json({
+        conversationId,
+        revision: 3,
+        profile: baseProfile,
+        transcript: [
+          { role: 'user', text: '先保留上一轮' },
+          { role: 'assistant', text: '上一轮已经完成。' },
+        ],
+        knownGames: [],
+        shownBggIds: [],
+        processing: true,
+        processingSince: '2026-08-15T08:00:00Z',
+        latestResponse: null,
+        lastTurnResult: {
+          clientTurnId: previousClientTurnId,
+          responseLocale: 'zh-CN',
+          outcome: 'conversation',
+          assistantMessage: '上一轮已经完成。',
+          failureBoundary: null,
+          failureReason: null,
+        },
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    expect(sessionReads).toBe(1)
+    expect(wrapper.text()).toContain('这一轮还在核对公开资料')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPromises()
+
+    expect(sessionReads).toBe(2)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    const stored = JSON.parse(
+      sessionStorage.getItem('rulepilot:recommendation-conversation:v2:alice') ?? 'null',
+    ) as { conversationId: string; failed: boolean; pending: { clientTurnId: string } }
+    expect(stored).toMatchObject({
+      conversationId,
+      failed: false,
+      pending: { clientTurnId: pendingClientTurnId },
+    })
+  })
+
+  it('drops a server-deleted conversation identity before retrying its preserved pending turn', async () => {
+    const deletedConversationId = '2011a4fa-da7c-4a1a-a12b-19d1d36a8758'
+    const replacementConversationId = '6b97841c-2a4d-49e9-a451-a58ee02f4583'
+    const pendingClientTurnId = '77e7841b-0982-42f0-b8ba-c197e415cd72'
+    sessionStorage.setItem('rulepilot:recommendation-conversation:v2:alice', JSON.stringify({
+      conversationId: deletedConversationId,
+      revision: 3,
+      responseLocale: 'zh-CN',
+      profile: baseProfile,
+      transcript: [{ role: 'user', text: '保留这轮条件再试' }],
+      knownGames: [],
+      shownBggIds: [],
+      selectedBggId: null,
+      failed: true,
+      pending: {
+        message: '保留这轮条件再试',
+        excludedBggIds: [],
+        focusedBggId: null,
+        clientTurnId: pendingClientTurnId,
+        responseLocale: 'zh-CN',
+      },
+    }))
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === `/api/v1/bgg/recommendation-agent/sessions/${deletedConversationId}`) {
+        return new Response(null, { status: 404 })
+      }
+      if (path === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      return recommendationStreamResult({
+        conversationId: replacementConversationId,
+        revision: 1,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        responseLocale: 'zh-CN',
+        outcome: 'conversation',
+        mode: 'model_assisted',
+        assistantMessage: '已用保留的条件建立新的服务端会话。',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 0,
+        candidatesEvaluated: 0,
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    const stored = JSON.parse(
+      sessionStorage.getItem('rulepilot:recommendation-conversation:v2:alice') ?? 'null',
+    ) as { conversationId: string | null; pending: { clientTurnId: string } }
+    expect(stored).toMatchObject({
+      conversationId: null,
+      pending: { clientTurnId: pendingClientTurnId },
+    })
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+
+    await wrapper.findAll('button').find(button => button.text() === '重试')!.trigger('click')
+    await flushPromises()
+
+    expect(requestBodies).toHaveLength(1)
+    expect(requestBodies[0]).toMatchObject({
+      conversationId: null,
+      revision: 0,
+      clientTurnId: pendingClientTurnId,
+      message: '保留这轮条件再试',
+    })
+    expect(wrapper.text()).toContain('已用保留的条件建立新的服务端会话。')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   })
 
   it('does not reconcile an intentionally aborted turn into a newly selected account', async () => {

@@ -190,9 +190,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         } else {
             options = ToolCallingChatOptions.builder();
         }
-        return options.toolCallbacks(callbacks)
-                .temperature(temperature)
-                .maxTokens(request.maxOutputTokens());
+        options.toolCallbacks(callbacks).temperature(temperature);
+        if (request.maxOutputTokens() != null) {
+            options.maxTokens(request.maxOutputTokens());
+        }
+        return options;
     }
 
     private Object openAiToolChoice(Request request, String provider) {

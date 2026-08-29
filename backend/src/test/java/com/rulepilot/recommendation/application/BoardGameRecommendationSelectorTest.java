@@ -28,15 +28,10 @@ class BoardGameRecommendationSelectorTest {
                 8, 3, new BigDecimal("0.66"), Duration.ofMinutes(2));
 
         assertThat(accepted.timeout()).isEqualTo(Duration.ofMinutes(2));
-        assertThat(accepted.maxTokens()).isEqualTo(BoardGameRecommendationProperties.DEFAULT_MAX_TOKENS);
         assertThatThrownBy(() -> new BoardGameRecommendationProperties(
                         8, 3, new BigDecimal("0.66"), Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be positive");
-        assertThatThrownBy(() -> new BoardGameRecommendationProperties(
-                        8, 3, new BigDecimal("0.66"), Duration.ofMinutes(2), 0))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("token budget must be positive");
     }
 
     @Test

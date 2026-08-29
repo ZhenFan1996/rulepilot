@@ -23,7 +23,6 @@ final class RecommendationAgentState {
 
     final long startedAtNanos;
     final String modelConfigurationOwner;
-    final RecommendationRunBudget budget;
     RecommendationProfile profile;
     final Set<Integer> excludedIds;
     final Set<Integer> previouslyShownIds = new LinkedHashSet<>();
@@ -69,25 +68,10 @@ final class RecommendationAgentState {
             long startedAtNanos,
             String modelConfigurationOwner,
             boolean webResearchConfigured) {
-        this(
-                request,
-                startedAtNanos,
-                modelConfigurationOwner,
-                webResearchConfigured,
-                BoardGameRecommendationProperties.DEFAULT_MAX_TOKENS);
-    }
-
-    RecommendationAgentState(
-            ConversationRequest request,
-            long startedAtNanos,
-            String modelConfigurationOwner,
-            boolean webResearchConfigured,
-            int maxTokens) {
         this.startedAtNanos = startedAtNanos;
         this.modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                 ? null
                 : modelConfigurationOwner.strip();
-        budget = new RecommendationRunBudget(maxTokens);
         profile = request.profile();
         excludedIds = new LinkedHashSet<>(request.excludedBggIds());
         previouslyShownIds.addAll(request.shownBggIds());

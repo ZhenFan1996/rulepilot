@@ -149,6 +149,28 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
+    void leavesOutputSizingToTheSelectedModelWhenTheAgentDidNotRequestACap() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                "tool_calls",
+                new AssistantMessage.ToolCall("browse-1", "function", "browse", "{\"requestedCount\":1}")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        Request uncapped = new Request(
+                List.of(Message.system("Choose one typed action."), Message.user("Help me choose.")),
+                List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}")),
+                ToolChoice.AUTO);
+
+        adapter.next(uncapped);
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(uncapped.maxOutputTokens()).isNull();
+        assertThat(options.getMaxTokens()).isNull();
+    }
+
+    @Test
     void keepsQwenAutoEvenWhenOneActionIsAvailable() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");

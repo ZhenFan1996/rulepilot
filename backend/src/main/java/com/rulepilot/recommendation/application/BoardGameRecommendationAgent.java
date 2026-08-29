@@ -677,6 +677,7 @@ public class BoardGameRecommendationAgent {
     /** Stable player-safe cause for a recommendation turn that reached no publishable terminal result. */
     public enum FailureReason {
         TIME_LIMIT,
+        /** Read compatibility for turns completed before the cumulative recommendation run budget was removed. */
         RESOURCE_BUDGET_EXHAUSTED,
         MODEL_NOT_CONFIGURED,
         PROVIDER_CALL_FAILED,

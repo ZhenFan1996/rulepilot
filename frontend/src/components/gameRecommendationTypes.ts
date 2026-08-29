@@ -161,6 +161,15 @@ export type RecommendationAgentResponse = {
   games: RecommendedGame[]
 }
 
+export type RecommendationTurnResult = {
+  clientTurnId: string
+  responseLocale: 'zh-CN' | 'en'
+  outcome: RecommendationAgentResponse['outcome']
+  assistantMessage: string
+  failureBoundary?: RecommendationFailureBoundary | null
+  failureReason?: RecommendationFailureReason | null
+}
+
 export type RecommendationServerSession = {
   conversationId: string
   revision: number
@@ -171,6 +180,7 @@ export type RecommendationServerSession = {
   processing: boolean
   processingSince: string | null
   latestResponse: RecommendationAgentResponse | null
+  lastTurnResult?: RecommendationTurnResult | null
 }
 
 export type RecommendationMessage = {

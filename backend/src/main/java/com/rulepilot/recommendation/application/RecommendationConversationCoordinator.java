@@ -206,7 +206,9 @@ public class RecommendationConversationCoordinator {
     }
 
     public Optional<SessionSnapshot> latest(String ownerUsername) {
-        return conversations.findLatestOwned(owner(ownerUsername)).map(SessionSnapshot::from);
+        return conversations.findLatestOwned(owner(ownerUsername))
+                .flatMap(this::recoverStaleTurn)
+                .map(SessionSnapshot::from);
     }
 
     public SessionSnapshot startNew(String ownerUsername) {
@@ -218,13 +220,43 @@ public class RecommendationConversationCoordinator {
 
     public Optional<SessionSnapshot> find(UUID conversationId, String ownerUsername) {
         if (conversationId == null) return Optional.empty();
-        return conversations.findOwned(conversationId, owner(ownerUsername)).map(SessionSnapshot::from);
+        return conversations.findOwned(conversationId, owner(ownerUsername))
+                .flatMap(this::recoverStaleTurn)
+                .map(SessionSnapshot::from);
     }
 
     public List<SessionSnapshot> recent(String ownerUsername, int limit) {
         return conversations.findRecentOwned(owner(ownerUsername), limit).stream()
+                .map(this::recoverStaleTurn)
+                .flatMap(Optional::stream)
                 .map(SessionSnapshot::from)
                 .toList();
+    }
+
+    /**
+     * A process can die after claiming a turn but before its guarded release. Session reads own crash recovery after
+     * the same externally measured active-work deadline used by claim takeover, so clients never need a polling-count
+     * guess. The fenced release cannot clear a newer attempt and retains every durable checkpoint for an exact retry.
+     */
+    private Optional<StoredConversation> recoverStaleTurn(StoredConversation conversation) {
+        Instant startedAt = conversation.activeStartedAt();
+        if (conversation.activeClientTurnId() == null
+                || conversation.activeRequestFingerprint() == null
+                || conversation.activeClaimAttemptId() == null
+                || startedAt == null) {
+            return Optional.of(conversation);
+        }
+        Instant now = clock.instant();
+        if (startedAt.isAfter(now.minus(staleTurnAge))) return Optional.of(conversation);
+        conversations.releaseTurn(
+                conversation.id(),
+                conversation.ownerUsername(),
+                conversation.revision(),
+                conversation.activeClientTurnId(),
+                conversation.activeRequestFingerprint(),
+                conversation.activeClaimAttemptId(),
+                now);
+        return conversations.findOwned(conversation.id(), conversation.ownerUsername());
     }
 
     public void delete(UUID conversationId, String ownerUsername) {

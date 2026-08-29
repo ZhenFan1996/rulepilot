@@ -78,8 +78,10 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
    随后又选择工具时，该前导语只留在 Agent transcript，不会在玩家界面闪现后撤回。
 3. 一个 ReAct Agent 自主选择 allow-list 内的 typed tools。每次工具 observation 都回到同一个模型；模型可以
    继续选择真正有用的下一步，也可以直接用自然文字结束。应用不规定“必须两次”、不强制自然回复后再调用一次，
-   也不在某次读取后把能力表收缩成固定流水线。模型调用数只是审计事实；step/tool 安全预算由本轮 token 包络推导，
-   不是手写流程长度。防无限循环同时依赖 token、active-work deadline、取消和完全相同的 action/observation no-progress。
+   也不在某次读取后把能力表收缩成固定流水线。模型调用数只是审计事实，不是手写流程长度或失败边界。
+   防无限循环依赖 active-work deadline、取消和完全相同的 action/observation no-progress；provider 的真实
+   context/output 能力约束单次模型请求，应用不再把每轮重复携带的完整 prompt、tool arguments 和 observation
+   累计进一个人工总额，也不由该总额伪造 step/tool 上限。
 4. catalog tool 提供身份已验证的游戏事实。公开资料发现把候选线索与有来源的公开事实作为一个原子结果返回；
    坏的候选、公开事实、研究 observation 或附带偏好 patch 只丢当前 item，合法 sibling 继续。公开搜索不能代替
    BGG 身份校验，重复同一 typed read 会被阻止；是否继续查目录、研究体验或结束，由 Agent 根据 observation 决定。
@@ -87,13 +89,17 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
    应用不再用 80 字 lead、12 字卡片说明或 exact selection count 充当安全边界：generic lead 可以没有 evidence ID，
    只要非空即可；候选身份、排除/硬条件、证据 allow-list 和同候选归属仍严格。坏的可选 tradeoff 只省略该字段，
    坏的单张卡只省略该卡并形成真实 shortfall，合法卡片和模型原文逐字发布。
-6. provider、协议、输出长度、空响应、重复无效动作、token/active-work 边界、发布边界或服务失败都不会触发
+6. provider、协议、输出长度、空响应、重复无效动作、active-work 边界、发布边界或服务失败都不会触发
    应用拼写成功回复，
    也不会只凭“已核验候选”生成卡片。本轮返回 typed `failureReason` 和玩家安全的具体说明；请求、偏好与已核验
    会话状态保留供重试。前端从持久会话恢复真实模型输出，选中真实发布的卡片后才创建规则书接力。
 7. 会话把“最近完成回合”与“最近已发布回合”分开持久化：前者保留失败回合的精确幂等重放，后者负责刷新
    后恢复完整卡片、比较结构、原 locale 和 turn identity。`UNAVAILABLE` 不进入对话 transcript，也不覆盖
-   上一次成功发布；第一轮就不可用时则保持没有已发布结果，不能根据 known games 猜造卡片。
+   上一次成功发布；session read model 用独立的 `lastTurnResult` 返回最近完成回合的终态原因，同时让
+   `latestResponse` 继续指向最近已发布结果。第一轮就不可用时保持没有已发布结果，不能根据 known games 猜造卡片。
+   如果进程在持久化 active turn 后崩溃，会话读取会在同一个 active-work deadline 加恢复宽限后，以 claim attempt
+   fencing 回收陈旧占用、保留已落盘 checkpoint，并把原 turn 留给精确重试；浏览器按服务端 `processing` 状态等待，
+   不再用固定轮询次数猜测失败。
 
 推荐的“没有结果”不都叫失败：
 
@@ -102,7 +108,6 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 | 目录中没有满足硬条件的候选 | 成功返回 `no_match`，说明最小可行调整 | 否 |
 | 模型未配置、provider 连接失败、协议无法解析、输出截断或空响应 | 本轮不发布临时/模板成功结果；显示具体失败原因并保留请求 | 否 |
 | 已有合法候选，但完整终态回复仍无法取得 | 同样返回 `UNAVAILABLE`；候选留在内部 checkpoint，不能冒充已发布卡片 | 否 |
-| 64,000 token 的本轮安全包络，或由它派生的 step/tool 安全预算用尽，仍没有终态 | 以明确的 resource failure boundary 停止；原样重试不会自动扩大资源，玩家需缩小问题或开启新对话 | 否 |
 | active-work deadline 用尽，仍没有终态 | 以明确的 time failure boundary 停止；服务恢复后可保留上下文重试 | 否 |
 | 一组并行动作没有逐步观察，或完全相同的无效动作再次出现 | 第一次作为 typed observation 交回模型；完全相同的重复才停止，避免无意义循环 | 否 |
 | 单张卡、可选 tradeoff 或附带偏好 patch 无效 | 只丢局部坏 item；其余合法结果继续，卡片不足时显示 shortfall | 否 |
@@ -111,13 +116,14 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 
 `UNAVAILABLE` 的对外原因不是一条笼统“生成失败”，而是稳定区分为 `time_limit`、`model_not_configured`、
 `provider_call_failed`、`provider_protocol_invalid`、`provider_output_truncated`、`empty_model_response`、
-`repeated_incompatible_actions`、`repeated_invalid_action`、`resource_budget_exhausted`、`publication_rejected` 和
-`service_failure`。前端按这个精确原因解释发生了什么，同时把未知新原因回退到较宽的安全边界；任何一种都
+`repeated_incompatible_actions`、`repeated_invalid_action`、`publication_rejected` 和 `service_failure`。历史会话中的
+`resource_budget_exhausted` 只为持久化兼容继续可读；新版本不再产生它，前端明确说明这是已经移除的旧预算误判，
+并允许原请求直接重试。前端按精确原因解释发生了什么，同时把未知新原因回退到较宽的安全边界；任何一种都
 不会把内部 checkpoint 或应用模板冒充成一次成功推荐。
 
 read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以换工具、缩小目标或诚实结束；只有
-token/active-work 时间内仍无法形成合法终态，或完全相同的 action/observation 已经 no-progress，才使本轮失败。
-调用数只是实际决策路径的观测值，不是测试合同或失败边界；验收关注是否重复相同读取、是否在 token 与
+active-work 时间内仍无法形成合法终态，或完全相同的 action/observation 已经 no-progress，才使本轮失败。
+调用数只是实际决策路径的观测值，不是测试合同或失败边界；验收关注是否重复相同读取、是否在
 active-work deadline 内、是否发布有用且有归属的结果。公开库为空、规则书导入失败或讲解失败从来不是推荐失败条件。
 
 ### 2. 规则书取得与绑定

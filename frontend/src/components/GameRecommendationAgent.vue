@@ -519,44 +519,35 @@ const failureReasonCopy: Record<Exclude<RecommendationFailureReason, 'resource_b
   publication_rejected: 'failurePublicationRejected',
   service_failure: 'failureUnclassified',
 }
-const resourceBudgetRecoveryCopy = {
-  'zh-CN': {
-    summary: '这次推荐没有完成，也没有写入对话结果。你刚才的请求仍保留；请缩小问题后重新发送，或建立新对话后再试。',
-    explanation: '失败原因：本轮 token 安全预算，或由它派生的 step/tool 安全预算已用尽；系统已停止继续执行，不会发布未完成结果。',
-    action: '缩小问题后再发送',
-  },
-  en: {
-    summary: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; narrow it and send a new turn, or retry from a new conversation.',
-    explanation: 'Why it failed: this turn exhausted its token safety budget or the step/tool safety budgets derived from it. Execution stopped without publishing an incomplete result.',
-    action: 'Narrow the request and send again',
-  },
-} as const
 const requiresModelConfiguration = computed(() => unavailableFailure.value
   && failureReason.value === 'model_not_configured')
-const requiresChangedRequest = computed(() => unavailableFailure.value
-  && failureReason.value === 'resource_budget_exhausted')
+const legacyResourceBudgetExplanation = {
+  'zh-CN': '失败原因：这个轮次由旧版本已移除的累计资源预算终止；这不代表请求太大，也不需要缩小问题。当前版本可以保留原请求直接重试。',
+  en: 'Why it failed: this turn was stopped by a cumulative resource budget that has since been removed. The request was not inherently too large; the current version can retry it unchanged.',
+} as const
 const failureMessage = computed(() => {
   const responseLocale = failedTurnLocale.value ?? locale.value
   const summary = requiresModelConfiguration.value
     ? translated(responseLocale, 'modelConfigurationError')
-    : requiresChangedRequest.value
-      ? resourceBudgetRecoveryCopy[responseLocale].summary
-      : translated(responseLocale, unavailableFailure.value ? 'unavailableError' : 'error')
+    : translated(responseLocale, unavailableFailure.value ? 'unavailableError' : 'error')
   const reason = failureReason.value
-  const explanation = requiresChangedRequest.value
-    ? resourceBudgetRecoveryCopy[responseLocale].explanation
-    : unavailableFailure.value && reason && reason !== 'resource_budget_exhausted'
-      ? translated(responseLocale, failureReasonCopy[reason])
-    : unavailableFailure.value && failureBoundary.value
-      ? translated(responseLocale, failureBoundaryCopy[failureBoundary.value])
-      : ''
+  let explanation = ''
+  if (unavailableFailure.value && reason === 'resource_budget_exhausted') {
+    explanation = legacyResourceBudgetExplanation[responseLocale]
+  } else if (unavailableFailure.value && reason) {
+    explanation = translated(
+      responseLocale,
+      failureReasonCopy[reason as Exclude<RecommendationFailureReason, 'resource_budget_exhausted'>],
+    )
+  } else if (unavailableFailure.value && failureBoundary.value) {
+    explanation = translated(responseLocale, failureBoundaryCopy[failureBoundary.value])
+  }
   return [summary, explanation].filter(Boolean).join(' ')
 })
 const visibleFailedAssistantMessage = computed(() => failedAssistantMessage.value
   || (failed.value ? translated(failedTurnLocale.value ?? locale.value, 'failureReply') : ''))
 const retryLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'retry'))
 const modelSettingsLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'modelSettings'))
-const resourceBudgetActionLabel = computed(() => resourceBudgetRecoveryCopy[failedTurnLocale.value ?? locale.value].action)
 const loginLocale = computed(() => activeTurnLocale.value ?? locale.value)
 
 const profileLabels = computed(() => {
@@ -1066,7 +1057,7 @@ function changeJourneyGame() {
 }
 
 function retry() {
-  if (requiresModelConfiguration.value || requiresChangedRequest.value) return
+  if (requiresModelConfiguration.value) return
   const pending = lastRequest.value
   if (!pending) return
   const retried = unavailableFailure.value
@@ -1074,10 +1065,6 @@ function retry() {
     : pending
   failed.value = false
   void submitPendingTurn(retried)
-}
-
-function focusNarrowerRequest() {
-  recommendationInput.value?.focus({ preventScroll: true })
 }
 
 function playerConversationTranscript() {
@@ -1222,13 +1209,20 @@ function isRecommendationServerSession(value: unknown): value is RecommendationS
     && typeof session.processing === 'boolean'
     && (session.latestResponse === null
       || Boolean(session.latestResponse && typeof session.latestResponse === 'object'))
+    && (session.lastTurnResult === undefined
+      || session.lastTurnResult === null
+      || Boolean(session.lastTurnResult && typeof session.lastTurnResult === 'object'))
 }
 
 function applyServerRecommendationConversation(session: RecommendationServerSession) {
   const pending = lastRequest.value ? copiedPendingRequest(lastRequest.value) : null
   const pendingTurnIdentityConflict = turnIdentityConflict.value
   const selectedBggId = selectedGame.value?.bggId ?? selectedBggIdToRestore
-  const unavailableResponse = session.latestResponse?.outcome === 'unavailable'
+  const lastTurnResult = session.lastTurnResult ?? session.latestResponse
+  const unavailableResponse = lastTurnResult?.outcome === 'unavailable'
+  const publishedResponse = session.latestResponse?.outcome === 'unavailable'
+    ? null
+    : session.latestResponse
   clearVisibleRecommendationConversation(true)
   conversationId.value = session.conversationId
   conversationRevision.value = session.revision
@@ -1237,10 +1231,10 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
   rememberedKnownGames.value = session.knownGames.map(game => ({ ...game }))
   seenBggIds.value = [...session.shownBggIds]
 
-  if (session.latestResponse && !unavailableResponse) {
+  if (publishedResponse) {
     const latest = {
-      ...session.latestResponse,
-      profile: canonicalRecommendationProfile(session.latestResponse.profile),
+      ...publishedResponse,
+      profile: canonicalRecommendationProfile(publishedResponse.profile),
     }
     response.value = latest
     activeTurnLocale.value = latest.responseLocale ?? activeTurnLocale.value
@@ -1266,27 +1260,34 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
   const completedPending = pending
     && !unavailableResponse
     && !pendingTurnIdentityConflict
-    && protocolUuid(session.latestResponse?.clientTurnId)
-    && session.latestResponse.clientTurnId === pending.clientTurnId
+    && protocolUuid(lastTurnResult?.clientTurnId)
+    && lastTurnResult.clientTurnId === pending.clientTurnId
+  const pendingStillProcessing = Boolean(
+    pending
+    && session.processing
+    && !pendingTurnIdentityConflict,
+  )
   if (pending && !completedPending) {
     clarification.value = null
     lastRequest.value = pending
     activeTurnLocale.value = pending.responseLocale
-    failedTurnLocale.value = pending.responseLocale
+    failedTurnLocale.value = pendingStillProcessing ? null : pending.responseLocale
     activeFocusedBggId.value = pending.focusedBggId
-    failed.value = true
+    failed.value = !pendingStillProcessing
     turnIdentityConflict.value = pendingTurnIdentityConflict
     unavailableFailure.value = Boolean(
-      unavailableResponse && session.latestResponse?.clientTurnId === pending.clientTurnId,
+      !pendingStillProcessing
+      && unavailableResponse
+      && lastTurnResult?.clientTurnId === pending.clientTurnId,
     )
     failureBoundary.value = unavailableFailure.value
-      ? playerSafeFailureBoundary(session.latestResponse?.failureBoundary)
+      ? playerSafeFailureBoundary(lastTurnResult?.failureBoundary)
       : null
     failureReason.value = unavailableFailure.value
-      ? playerSafeFailureReason(session.latestResponse?.failureReason)
+      ? playerSafeFailureReason(lastTurnResult?.failureReason)
       : null
     failedAssistantMessage.value = unavailableFailure.value
-      ? boundedPlayerFacingText(session.latestResponse?.assistantMessage ?? '')
+      ? boundedPlayerFacingText(lastTurnResult?.assistantMessage ?? '')
       : ''
     const pendingTurn = pending.transcript.at(-1)
     const visibleLastTurn = messages.value.at(-1)
@@ -1300,44 +1301,71 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
 async function restoreServerRecommendationConversation(
   owner: string,
   generation: number,
-  attempt = 0,
 ) {
   if (disposed || generation !== serverRestoreGeneration) return
+  let observedProcessing = false
   try {
-    const result = await fetch('/api/v1/bgg/recommendation-agent/session', { credentials: 'include' })
-    if (disposed || generation !== serverRestoreGeneration) return
-    if (!result || typeof result.status !== 'number') return
-    if (result.status === 204) return
-    if (result.status === 401) {
-      loginGateVisible.value = true
-      notifyLoginRequired({ showReminder: false })
-      return
-    }
-    if (!result.ok) return
-    const candidate = await result.json() as unknown
-    if (disposed || generation !== serverRestoreGeneration || !isRecommendationServerSession(candidate)) return
+    while (!disposed && generation === serverRestoreGeneration) {
+      const sessionPath = conversationId.value
+        ? `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(conversationId.value)}`
+        : '/api/v1/bgg/recommendation-agent/session'
+      let result: Response
+      try {
+        result = await fetch(sessionPath, { credentials: 'include' })
+      } catch {
+        if (!observedProcessing) return
+        await new Promise(resolve => setTimeout(resolve, 1_000))
+        continue
+      }
+      if (disposed || generation !== serverRestoreGeneration) return
+      if (!result || typeof result.status !== 'number') return
+      if (result.status === 204) return
+      if (result.status === 401) {
+        loginGateVisible.value = true
+        notifyLoginRequired({ showReminder: false })
+        return
+      }
+      if (result.status === 404 || result.status === 410) {
+        conversationId.value = null
+        conversationRevision.value = 0
+        failed.value = Boolean(lastRequest.value)
+        failedTurnLocale.value = lastRequest.value?.responseLocale ?? null
+        return
+      }
+      if (!result.ok) {
+        if (!observedProcessing || result.status < 500) return
+        await new Promise(resolve => setTimeout(resolve, 1_000))
+        continue
+      }
+      let candidate: unknown
+      try {
+        candidate = await result.json()
+      } catch {
+        if (!observedProcessing) return
+        await new Promise(resolve => setTimeout(resolve, 1_000))
+        continue
+      }
+      if (disposed || generation !== serverRestoreGeneration) return
+      if (!isRecommendationServerSession(candidate)) {
+        if (!observedProcessing) return
+        await new Promise(resolve => setTimeout(resolve, 1_000))
+        continue
+      }
 
-    restoringConversation = true
-    applyServerRecommendationConversation(candidate)
-    restoringConversation = false
-    if (candidate.processing && attempt < 50) {
+      restoringConversation = true
+      applyServerRecommendationConversation(candidate)
+      restoringConversation = false
+      if (!candidate.processing) return
+      observedProcessing = true
       if (!loading.value) beginLoading()
       await new Promise(resolve => setTimeout(resolve, 1_000))
-      if (!disposed && generation === serverRestoreGeneration) {
-        await restoreServerRecommendationConversation(owner, generation, attempt + 1)
-      }
-      return
     }
-  } catch {
-    // The bounded browser snapshot remains available when session restoration is temporarily offline.
   } finally {
     if (!disposed && generation === serverRestoreGeneration) {
       restoringConversation = false
-      if (attempt === 0 || attempt >= 50) {
-        if (loading.value) endLoading()
-        serverSessionReady.value = true
-        persistRecommendationConversation(owner)
-      }
+      if (loading.value) endLoading()
+      serverSessionReady.value = true
+      persistRecommendationConversation(owner)
     }
   }
 }
@@ -1689,7 +1717,6 @@ onBeforeUnmount(() => {
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert">
               <p>{{ failureMessage }}</p>
               <RouterLink v-if="requiresModelConfiguration" data-testid="recommendation-model-settings" :to="{ name: 'model-settings' }" class="mt-2 inline-flex min-h-11 items-center font-semibold underline underline-offset-4">{{ modelSettingsLabel }}</RouterLink>
-              <button v-else-if="requiresChangedRequest" data-testid="recommendation-revise-after-budget" type="button" class="mt-2 min-h-11 font-semibold underline" @click="focusNarrowerRequest">{{ resourceBudgetActionLabel }}</button>
               <button v-else type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button>
             </div>
             <div v-if="loginGateVisible" class="mx-4 mb-3 rounded-xl border border-copper/25 bg-copper/5 p-4 text-sm leading-6 text-ink/72 sm:mx-6" role="status">

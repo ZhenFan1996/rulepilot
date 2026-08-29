@@ -254,8 +254,7 @@ final class RecommendationReActLoop {
                 request,
                 startedAt,
                 modelConfigurationOwner,
-                tools.webResearchConfigured(),
-                properties.maxTokens());
+                tools.webResearchConfigured());
         ProgressTracker progress = new ProgressTracker(progressListener, state, startedAt);
         try {
             return converseWithProgress(
@@ -310,20 +309,12 @@ final class RecommendationReActLoop {
             OperationObservation decisionObservation = startOperation(
                     "decision_model", "choose_next_action");
             long modelCallStartedAt = System.nanoTime();
-            int estimatedModelInputTokens = estimatedModelInputTokens(messages, currentActions);
-            RecommendationRunBudget.StopReason budgetStop = state.budget.beginModelStep(estimatedModelInputTokens);
-            if (budgetStop != null) {
-                decisionObservation.stop("resource_budget", false, null);
-                progress.fail();
-                return unavailableForBudget(state, locale, budgetStop);
-            }
             state.modelCalls++;
             try {
                 List<Message> turnMessages = messages;
                 Request modelRequest = new Request(
                         turnMessages,
                         currentActions,
-                        state.budget.remainingTokens(),
                         ToolChoice.AUTO);
                 turn = withinDeadline(state, () -> answerPartListener == null
                         ? model.next(modelRequest, state.modelConfigurationOwner)
@@ -358,15 +349,6 @@ final class RecommendationReActLoop {
                 return unavailable(state, locale, failureCode);
             }
             state.recordModelCallElapsed(modelCallStartedAt);
-            budgetStop = state.budget.completeModel(
-                    turn.promptTokens(),
-                    turn.completionTokens(),
-                    estimatedTurnOutputTokens(turn));
-            if (budgetStop != null) {
-                decisionObservation.stop("resource_budget", false, null);
-                progress.fail();
-                return unavailableForBudget(state, locale, budgetStop);
-            }
             if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
                 decisionObservation.stop("output_limit", false, null);
                 progress.fail();
@@ -460,12 +442,6 @@ final class RecommendationReActLoop {
                         "ACTION_NOT_AVAILABLE");
                 actionObservation.stop("rejected", false, null);
             } else {
-                budgetStop = state.budget.beginToolCall(RecommendationRunBudget.estimateTokens(call.argumentsJson()));
-                if (budgetStop != null) {
-                    actionObservation.stop("resource_budget", false, null);
-                    progress.fail();
-                    return unavailableForBudget(state, locale, budgetStop);
-                }
                 try {
                     outcome = actionExecutor.execute(
                             call,
@@ -542,11 +518,6 @@ final class RecommendationReActLoop {
             String observation = contextualObservation(
                     contractObservation(call, outcome, currentActions),
                     state);
-            budgetStop = state.budget.completeToolCall(RecommendationRunBudget.estimateTokens(observation));
-            if (budgetStop != null) {
-                progress.fail();
-                return unavailableForBudget(state, locale, budgetStop);
-            }
             compactPriorToolState(messages);
             messages.add(Message.assistant(turn.text(), call));
             messages.add(Message.tool(call, observation));
@@ -767,44 +738,6 @@ final class RecommendationReActLoop {
         };
     }
 
-    private int estimatedModelInputTokens(List<Message> messages, List<ToolSpec> tools) {
-        int tokens = 0;
-        for (Message message : messages) {
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(message.content()));
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(message.toolCallId()));
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(message.toolName()));
-            for (ToolCall call : message.toolCalls()) {
-                tokens = RecommendationRunBudget.saturatedAdd(
-                        tokens, RecommendationRunBudget.estimateTokens(call.name()));
-                tokens = RecommendationRunBudget.saturatedAdd(
-                        tokens, RecommendationRunBudget.estimateTokens(call.argumentsJson()));
-            }
-        }
-        for (ToolSpec tool : tools) {
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(tool.name()));
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(tool.description()));
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(tool.inputSchema()));
-        }
-        return Math.max(1, tokens);
-    }
-
-    private int estimatedTurnOutputTokens(BoardGameRecommendationModel.Turn turn) {
-        int tokens = RecommendationRunBudget.estimateTokens(turn.text());
-        for (ToolCall call : turn.toolCalls()) {
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(call.name()));
-            tokens = RecommendationRunBudget.saturatedAdd(
-                    tokens, RecommendationRunBudget.estimateTokens(call.argumentsJson()));
-        }
-        return tokens;
-    }
-
     ConversationResponse unavailable(RecommendationAgentState state, String locale, String code) {
         state.actions.add("UNAVAILABLE:" + code);
         FailureReason reason = failureReason(state, code);
@@ -836,24 +769,8 @@ final class RecommendationReActLoop {
         return response;
     }
 
-    private ConversationResponse unavailableForBudget(
-            RecommendationAgentState state,
-            String locale,
-            RecommendationRunBudget.StopReason stopReason) {
-        String code = switch (stopReason) {
-            case STEP_BUDGET -> "RUN_STEP_BUDGET_EXCEEDED";
-            case TOOL_BUDGET -> "RUN_TOOL_BUDGET_EXCEEDED";
-            case TOKEN_BUDGET -> "RUN_TOKEN_BUDGET_EXCEEDED";
-        };
-        state.actions.add(code);
-        return unavailable(state, locale, code);
-    }
-
     private FailureReason failureReason(RecommendationAgentState state, String code) {
         if ("RUN_DEADLINE_EXCEEDED".equals(code)) return FailureReason.TIME_LIMIT;
-        if (code.startsWith("RUN_") && code.endsWith("_BUDGET_EXCEEDED")) {
-            return FailureReason.RESOURCE_BUDGET_EXHAUSTED;
-        }
         if ("MODEL_NOT_CONFIGURED".equals(code)) return FailureReason.MODEL_NOT_CONFIGURED;
         if ("MODEL_CALL_FAILED".equals(code)) return FailureReason.PROVIDER_CALL_FAILED;
         if (code.startsWith("MODEL_PROTOCOL_FAILED:")) return FailureReason.PROVIDER_PROTOCOL_INVALID;
@@ -883,8 +800,8 @@ final class RecommendationReActLoop {
                     ? "本轮总时限已用完，模型或检索尚未返回可发布的完整结果。已核对的会话信息仍然保留，可以直接重试。"
                     : "This turn reached its total time limit before the model or retrieval returned a complete publishable result. Verified conversation context is still saved, so you can retry.";
             case RESOURCE_BUDGET_EXHAUSTED -> zh
-                    ? "本轮在得到可发布结果前用完了安全资源预算。请求与已核对的会话信息仍然保留；修改问题以缩小范围，或稍后在新的上下文中重试。"
-                    : "This turn exhausted its safety resource budget before producing a publishable result. The request and verified context remain saved; narrow the question or retry later in a fresh context.";
+                    ? "这个旧版本推荐轮次被已移除的累计资源预算终止。已核对的会话信息仍然保留，可以直接重试。"
+                    : "This legacy recommendation turn was stopped by the cumulative resource budget that has since been removed. Verified conversation context is still saved, so you can retry.";
             case MODEL_NOT_CONFIGURED -> zh
                     ? "当前账号没有可用的推荐模型配置。本轮没有调用检索，也没有发布临时结果。"
                     : "This account has no available recommendation model configuration. No retrieval ran and no provisional result was published.";
