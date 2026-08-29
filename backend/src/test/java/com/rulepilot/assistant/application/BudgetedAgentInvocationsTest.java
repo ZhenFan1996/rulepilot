@@ -77,6 +77,33 @@ class BudgetedAgentInvocationsTest {
     }
 
     @Test
+    void preservesCompletedWorkWhenActualUsageConsumesTheLastAvailableTokens() {
+        RecordingControl control = new RecordingControl();
+        control.stopOnSuccessfulComplete = StopReason.TOKEN_BUDGET;
+        var invocations = new BudgetedAgentInvocations(control);
+
+        String result = invocations.invoke(
+                UUID.randomUUID(), AgentExecutionControl.ActivityType.MODEL, "composeRuleAnswer", 5,
+                "Answer composed", () -> "complete cited answer", value -> 40);
+
+        assertThat(result).isEqualTo("complete cited answer");
+    }
+
+    @Test
+    void neverPublishesCompletedWorkAfterCancellationWinsTheAuditBoundary() {
+        RecordingControl control = new RecordingControl();
+        control.stopOnSuccessfulComplete = StopReason.CANCELLED;
+        var invocations = new BudgetedAgentInvocations(control);
+
+        assertThatThrownBy(() -> invocations.invoke(
+                        UUID.randomUUID(), AgentExecutionControl.ActivityType.MODEL, "composeRuleAnswer", 5,
+                        "Answer composed", () -> "must not publish", value -> 4))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .extracting("reason")
+                .isEqualTo(StopReason.CANCELLED);
+    }
+
+    @Test
     void auditsFailureWithoutReplacingOriginalException() {
         RecordingControl control = new RecordingControl();
         var invocations = new BudgetedAgentInvocations(control);
@@ -90,6 +117,24 @@ class BudgetedAgentInvocationsTest {
                 .hasMessage("provider failed");
         assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.FAILED);
         assertThat(control.summary).isEqualTo("composeRuleAnswer failed safely");
+    }
+
+    @Test
+    void keepsTheProviderFailurePrimaryWhenItsAuditAlsoFails() {
+        RecordingControl control = new RecordingControl();
+        control.failOnComplete = true;
+        var invocations = new BudgetedAgentInvocations(control);
+
+        assertThatThrownBy(() -> invocations.invoke(
+                        UUID.randomUUID(), AgentExecutionControl.ActivityType.MODEL, "composeRuleAnswer", 5,
+                        "Answer composed", () -> {
+                            throw new IllegalStateException("provider failed");
+                        }, value -> 0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("provider failed")
+                .satisfies(failure -> assertThat(failure.getSuppressed())
+                        .extracting(Throwable::getMessage)
+                        .containsExactly("audit failed"));
     }
 
     @Test
@@ -155,6 +200,8 @@ class BudgetedAgentInvocationsTest {
         private int outputTokens;
         private String summary;
         private boolean stopOnReserve;
+        private boolean failOnComplete;
+        private StopReason stopOnSuccessfulComplete;
         private UUID recordedRunId;
         private UUID stoppedRunId;
         private String stoppedOperation;
@@ -181,6 +228,10 @@ class BudgetedAgentInvocationsTest {
                 int estimatedOutputTokens,
                 long latencyMs,
                 String summary) {
+            if (failOnComplete) throw new IllegalStateException("audit failed");
+            if (outcome == ActivityOutcome.SUCCEEDED && stopOnSuccessfulComplete != null) {
+                throw new AgentExecutionStoppedException(stopOnSuccessfulComplete);
+            }
             this.outcome = outcome;
             this.outputTokens = estimatedOutputTokens;
             this.summary = summary;

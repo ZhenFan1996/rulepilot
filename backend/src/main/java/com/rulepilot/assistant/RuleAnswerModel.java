@@ -15,6 +15,7 @@ import com.rulepilot.assistant.domain.TieResolutionBasis;
 import com.rulepilot.assistant.domain.TimingOrderBasis;
 import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
 import com.rulepilot.assistant.domain.WorkedExampleBasis;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException.RejectedOutput;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -42,18 +43,37 @@ public interface RuleAnswerModel {
         return compose(request);
     }
 
-    /**
-     * Produces one complete replacement after the application rejected the initial structured envelope. This is a
-     * distinct model invocation so the application can audit it, charge it to the run budget, and enforce the
-     * single-replacement ceiling.
-     */
-    default ModelDraft replaceInvalidOutput(ModelRequest request, String rejectionDiagnostic) {
+    /** Produces one complete replacement after the application rejected a structured envelope. */
+    default ModelDraft replaceInvalidOutput(ModelRequest request, RejectedOutput rejectedOutput) {
         return compose(request);
     }
 
     default ModelDraft replaceInvalidOutput(
-            ModelRequest request, String rejectionDiagnostic, String ownerUsername) {
-        return replaceInvalidOutput(request, rejectionDiagnostic);
+            ModelRequest request, RejectedOutput rejectedOutput, String ownerUsername) {
+        return replaceInvalidOutput(request, rejectedOutput);
+    }
+
+    /**
+     * Produces one complete replacement after application validation rejected an otherwise decoded draft.
+     * Production adapters must return the complete candidate, exact validation error, original schema, and allowed
+     * evidence identities to the same answer model; the default keeps lightweight test models source-compatible.
+     */
+    default ModelDraft replaceValidationRejectedOutput(
+            ModelRequest request, ModelDraft rejectedDraft, String validationError) {
+        return revise(
+                request,
+                rejectedDraft,
+                List.of(
+                        "The application rejected the complete answer: " + validationError,
+                        "Return one complete replacement object; do not return a patch or commentary."));
+    }
+
+    default ModelDraft replaceValidationRejectedOutput(
+            ModelRequest request,
+            ModelDraft rejectedDraft,
+            String validationError,
+            String ownerUsername) {
+        return replaceValidationRejectedOutput(request, rejectedDraft, validationError);
     }
 
     default ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
@@ -79,6 +99,19 @@ public interface RuleAnswerModel {
     default Optional<QuestionInterpretationDraft> interpretQuestion(
             QuestionInterpretationRequest request, String ownerUsername) {
         return interpretQuestion(request);
+    }
+
+    /** Produces one complete replacement for a rejected question-interpretation envelope. */
+    default Optional<QuestionInterpretationDraft> replaceInvalidQuestionInterpretation(
+            QuestionInterpretationRequest request, RejectedOutput rejectedOutput) {
+        return interpretQuestion(request);
+    }
+
+    default Optional<QuestionInterpretationDraft> replaceInvalidQuestionInterpretation(
+            QuestionInterpretationRequest request,
+            RejectedOutput rejectedOutput,
+            String ownerUsername) {
+        return replaceInvalidQuestionInterpretation(request, rejectedOutput);
     }
 
     default boolean supportsQuestionInterpretation() {
@@ -159,7 +192,13 @@ public interface RuleAnswerModel {
         PRIOR_TURN
     }
 
-    /** One bounded player-facing shape selected by the semantic planning stage. */
+    /** Whether every configured retrieval source was available for this answer. */
+    enum EvidenceCoverage {
+        COMPLETE,
+        PARTIAL
+    }
+
+    /** One player-facing shape selected by the semantic planning stage. */
     enum AnswerAid {
         NONE,
         WALKTHROUGH,
@@ -202,11 +241,10 @@ public interface RuleAnswerModel {
             SubquestionOwner owner,
             List<String> retrievalQueries) {
         public PlannedSubquestion {
-            if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 300
-                    || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3
-                    || owner == null || retrievalQueries == null || retrievalQueries.size() > 3
-                    || retrievalQueries.stream()
-                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 200)) {
+            if (questionSpan == null || questionSpan.isBlank()
+                    || evidenceNeeds == null || evidenceNeeds.isEmpty()
+                    || owner == null || retrievalQueries == null
+                    || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank())) {
                 throw new IllegalArgumentException("planned answer subquestion is invalid");
             }
             questionSpan = questionSpan.strip();
@@ -236,8 +274,7 @@ public interface RuleAnswerModel {
     /** One explicit page locator copied from the current question; it is never rule evidence by itself. */
     record PlannedPageHint(String questionSpan, int pageNumber) {
         public PlannedPageHint {
-            if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 120
-                    || pageNumber < 1 || pageNumber > 10_000) {
+            if (questionSpan == null || questionSpan.isBlank() || pageNumber < 1) {
                 throw new IllegalArgumentException("planned answer page hint is invalid");
             }
             questionSpan = questionSpan.strip();
@@ -255,18 +292,15 @@ public interface RuleAnswerModel {
             AnswerAid answerAid,
             List<PlannedSubquestion> subquestions) {
         public QuestionInterpretationDraft {
-            if (questionType == null || referenceBinding == null || terms == null || terms.size() > 12
-                    || ruleObjectSpans == null || ruleObjectSpans.size() > 4
-                    || pageHints == null || pageHints.size() > 4
-                    || missingContext == null || missingContext.size() > 2
-                    || answerAid == null || subquestions == null || subquestions.size() > 4) {
+            if (questionType == null || referenceBinding == null || terms == null
+                    || ruleObjectSpans == null || pageHints == null || missingContext == null
+                    || answerAid == null || subquestions == null) {
                 throw new IllegalArgumentException("question interpretation draft is invalid");
             }
-            if (terms.stream().anyMatch(value -> value == null || value.isBlank() || value.length() > 80)) {
+            if (terms.stream().anyMatch(value -> value == null || value.isBlank())) {
                 throw new IllegalArgumentException("question interpretation term is invalid");
             }
-            if (ruleObjectSpans.stream()
-                    .anyMatch(value -> value == null || value.isBlank() || value.length() > 120)) {
+            if (ruleObjectSpans.stream().anyMatch(value -> value == null || value.isBlank())) {
                 throw new IllegalArgumentException("question interpretation rule object is invalid");
             }
             List<String> normalizedTerms = terms.stream()
@@ -359,7 +393,7 @@ public interface RuleAnswerModel {
         public ModelRequest {
             if (question == null || question.isBlank() || questionType == null || context == null
                     || evidence == null || evidence.isEmpty() || evidenceNeeds == null || answerAid == null
-                    || subquestions == null || subquestions.size() > 4) {
+                    || subquestions == null) {
                 throw new IllegalArgumentException("answer model request is invalid");
             }
             evidence = List.copyOf(evidence);
@@ -415,23 +449,39 @@ public interface RuleAnswerModel {
             PlayerLocale outputLanguage,
             ReferenceBinding referenceBinding,
             List<String> currentRuleObjectSpans,
-            List<Integer> pageHints) {
+            List<Integer> pageHints,
+            EvidenceCoverage evidenceCoverage) {
 
         public AnswerContext {
             previousQuestion = optional(previousQuestion);
             outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
             referenceBinding = referenceBinding == null ? ReferenceBinding.CURRENT_QUESTION : referenceBinding;
+            evidenceCoverage = evidenceCoverage == null ? EvidenceCoverage.COMPLETE : evidenceCoverage;
             currentRuleObjectSpans = currentRuleObjectSpans == null
                     ? List.of()
                     : currentRuleObjectSpans.stream().map(String::strip).distinct().toList();
             pageHints = pageHints == null ? List.of() : pageHints.stream().distinct().toList();
-            if (currentRuleObjectSpans.size() > 4
-                    || currentRuleObjectSpans.stream()
-                            .anyMatch(value -> value.isBlank() || value.length() > 120)
-                    || pageHints.size() > 4
-                    || pageHints.stream().anyMatch(page -> page == null || page < 1 || page > 10_000)) {
+            if (currentRuleObjectSpans.stream().anyMatch(String::isBlank)
+                    || pageHints.stream().anyMatch(page -> page == null || page < 1)) {
                 throw new IllegalArgumentException("answer context focus is invalid");
             }
+        }
+
+        public AnswerContext(
+                String previousQuestion,
+                LearningIntent learningIntent,
+                PlayerLocale outputLanguage,
+                ReferenceBinding referenceBinding,
+                List<String> currentRuleObjectSpans,
+                List<Integer> pageHints) {
+            this(
+                    previousQuestion,
+                    learningIntent,
+                    outputLanguage,
+                    referenceBinding,
+                    currentRuleObjectSpans,
+                    pageHints,
+                    EvidenceCoverage.COMPLETE);
         }
 
         public AnswerContext(
@@ -444,7 +494,8 @@ public interface RuleAnswerModel {
                     outputLanguage,
                     ReferenceBinding.CURRENT_QUESTION,
                     List.of(),
-                    List.of());
+                    List.of(),
+                    EvidenceCoverage.COMPLETE);
         }
 
         private static String optional(String value) {
@@ -517,10 +568,13 @@ public interface RuleAnswerModel {
             List<CalculationOperandRequest> operands) {
 
         public CalculationRequest {
+            // Expression size remains bounded by BoundedRuleCalculator's deliberately small, non-code-executing
+            // parser. Display labels and provenance collections are content, so this transport record must not
+            // impose additional handwritten ceilings on them.
             if (expression == null || expression.isBlank() || expression.length() > 160
                     || expectedResult == null
-                    || resultUnit == null || resultUnit.length() > 80
-                    || operands == null || operands.isEmpty() || operands.size() > 16
+                    || resultUnit == null
+                    || operands == null || operands.isEmpty()
                     || operands.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("calculation request is invalid");
             }
@@ -539,10 +593,10 @@ public interface RuleAnswerModel {
             UUID citationId) {
 
         public CalculationOperandRequest {
-            if (name == null || name.isBlank() || name.length() > 80
+            if (name == null || name.isBlank()
                     || value == null
                     || source == null
-                    || sourceSpan == null || sourceSpan.isBlank() || sourceSpan.length() > 240
+                    || sourceSpan == null || sourceSpan.isBlank()
                     || (source == CalculationOperandSource.QUESTION && citationId != null)
                     || (source == CalculationOperandSource.EVIDENCE && citationId == null)) {
                 throw new IllegalArgumentException("calculation operand request is invalid");

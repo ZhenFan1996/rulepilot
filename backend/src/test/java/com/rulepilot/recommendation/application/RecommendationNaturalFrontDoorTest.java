@@ -1530,8 +1530,7 @@ class RecommendationNaturalFrontDoorTest {
                 new ConversationRequest(RecommendationProfile.empty(), "exercise an optional capability"),
                 System.nanoTime(),
                 "player",
-                false,
-                3);
+                false);
     }
 
     private void stubStreamingThroughNext(BoardGameRecommendationModel model) {

@@ -117,6 +117,6 @@ class RecommendationTerminalEnvelopeContractTest {
     }
 
     private RecommendationAgentState state(ConversationRequest request) {
-        return new RecommendationAgentState(request, System.nanoTime(), null, false, 3);
+        return new RecommendationAgentState(request, System.nanoTime(), null, false);
     }
 }

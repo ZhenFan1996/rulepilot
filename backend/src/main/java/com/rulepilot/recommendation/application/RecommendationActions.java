@@ -10,7 +10,6 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL;
-import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_VERIFIED_GAMES;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonParser;
@@ -18,6 +17,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
@@ -53,10 +53,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationTools.Dis
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ReferenceObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ResearchObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
-import com.rulepilot.recommendation.application.RecommendationAgentState.CandidateReplyDraft;
 import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
-import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationDraft;
-import com.rulepilot.recommendation.application.RecommendationAgentState.RecommendationReplyDraft;
 import com.rulepilot.recommendation.application.RecommendationAgentState.TitleConstraint;
 import com.rulepilot.recommendation.application.RecommendationEvidenceReview.PreferenceUpdatePlan;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
@@ -80,9 +77,9 @@ import org.slf4j.LoggerFactory;
 final class RecommendationActions {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
-    private static final int MAX_PUBLISHER_DESCRIPTION_CONTEXT_CODE_POINTS = 800;
-    private static final int MAX_LOCAL_CATALOG_SCAN_RESULTS = 20;
-    private static final int MAX_LOCAL_CATALOG_SCAN_OFFSET = 200;
+    /** One storage page; larger slates are read page-by-page until exhaustion or the run deadline. */
+    private static final int CATALOG_PAGE_SIZE = BoardGameRecommendationCatalog.MAX_SEARCH_PAGE_SIZE;
+    private static final int MAX_CATALOG_OFFSET = Integer.MAX_VALUE - CATALOG_PAGE_SIZE;
     private final BoardGameRecommendationTools tools;
     private final BoardGameRecommendationSelector selector;
     private final BoardGameRecommendationProperties properties;
@@ -113,6 +110,9 @@ final class RecommendationActions {
             ConversationRequest request,
             String locale,
             BiConsumer<ProgressStage, ProgressFocus> progress) {
+        if (RECOMMEND_TOOL.equals(call.name())) {
+            return ActionOutcome.publication(call.argumentsJson());
+        }
         try {
             JsonNode arguments = actionJson.readTree(call.argumentsJson());
             return switch (call.name()) {
@@ -123,7 +123,6 @@ final class RecommendationActions {
                 case DISCOVER_TOOL -> discover(arguments, state, request, locale, progress);
                 case LOOKUP_TOOL -> lookup(arguments, state, progress);
                 case RESEARCH_TOOL -> research(arguments, state, locale, progress);
-                case RECOMMEND_TOOL -> recommend(arguments, state);
                 case COMPARE_TOOL -> compare(arguments, state, request, locale);
                 case NO_MATCH_TOOL -> noMatch(arguments, state, locale);
                 default -> rejectedContract(
@@ -205,115 +204,6 @@ final class RecommendationActions {
                 List.of()));
     }
 
-    private ActionOutcome recommend(
-            JsonNode arguments,
-            RecommendationAgentState state) {
-        requireObject(
-                arguments,
-                Set.of("playerReply", "playerReplyEvidenceIds", "selections"),
-                Set.of());
-        PublicationSeed pending = state.pendingPublicationSeed;
-        if (pending == null) throw new InvalidAction("RECOMMENDATION_STATE_REQUIRED");
-
-        String playerReply = playerReply(arguments);
-        if (!withinCodePointBounds(
-                playerReply,
-                RecommendationAgentState.MIN_RECOMMENDATION_REPLY_CODE_POINTS,
-                RecommendationAgentState.MAX_RECOMMENDATION_REPLY_CODE_POINTS)) {
-            throw new InvalidAction("RECOMMENDATION_REPLY_INVALID");
-        }
-        List<Integer> allowedCandidateIds = pending.candidateBggIds().stream()
-                .filter(runtime.recommendableIds(state)::contains)
-                .filter(id -> {
-                    Game game = state.verified.get(id);
-                    return game != null && !narrativeObservations(game, state.research).isEmpty();
-                })
-                .toList();
-        int expectedCount = Math.min(pending.requestedCount(), allowedCandidateIds.size());
-        JsonNode selections = arguments.path("selections");
-        if (!selections.isArray()
-                || selections.isEmpty()
-                || selections.size() > expectedCount
-                || expectedCount == 0) {
-            throw new InvalidAction("RECOMMENDATION_SELECTION_COUNT_INVALID");
-        }
-
-        List<CandidateReplyDraft> candidates = new ArrayList<>();
-        Set<Integer> selectedIds = new LinkedHashSet<>();
-        Map<String, Integer> selectedEvidenceOwners = new LinkedHashMap<>();
-        InvalidAction firstCandidateFailure = null;
-        for (JsonNode selection : selections) {
-            try {
-                requireObject(selection, Set.of("bggId", "why"), Set.of("tradeoff"));
-                int bggId = integer(
-                        selection.path("bggId"), 1, Integer.MAX_VALUE, "FINAL_ID_NOT_VERIFIED");
-                if (!allowedCandidateIds.contains(bggId)) {
-                    throw new InvalidAction("FINAL_ID_FAILS_HARD_GATES");
-                }
-                if (selectedIds.contains(bggId)) throw new InvalidAction("DUPLICATE_SELECTION");
-                Game game = state.verified.get(bggId);
-                Map<String, CandidateObservation> evidence = narrativeObservations(game, state.research);
-                RecommendationReplyDraft why = recommendationReplyDraft(selection.path("why"), evidence);
-                RecommendationReplyDraft tradeoff = null;
-                if (selection.has("tradeoff")) {
-                    try {
-                        tradeoff = recommendationReplyDraft(selection.path("tradeoff"), evidence);
-                    } catch (InvalidAction invalidTradeoff) {
-                        state.actions.add("OPTIONAL_TRADEOFF_DROPPED:" + invalidTradeoff.code);
-                    }
-                }
-                selectedIds.add(bggId);
-                evidence.keySet().forEach(id -> selectedEvidenceOwners.put(id, bggId));
-                candidates.add(new CandidateReplyDraft(bggId, why, tradeoff));
-            } catch (InvalidAction invalidCandidate) {
-                if (firstCandidateFailure == null) firstCandidateFailure = invalidCandidate;
-                state.actions.add("RECOMMENDATION_CANDIDATE_DROPPED:" + invalidCandidate.code);
-            }
-        }
-        if (candidates.isEmpty()) {
-            throw firstCandidateFailure == null
-                    ? new InvalidAction("RECOMMENDATION_SELECTION_COUNT_INVALID")
-                    : firstCandidateFailure;
-        }
-        List<String> playerReplyEvidenceIds = strings(
-                arguments.path("playerReplyEvidenceIds"),
-                0,
-                Math.min(16, selectedEvidenceOwners.size()),
-                1,
-                80);
-        if (playerReplyEvidenceIds.stream().anyMatch(id -> !selectedEvidenceOwners.containsKey(id))) {
-            throw new InvalidAction("RECOMMENDATION_EVIDENCE_NOT_GROUNDED");
-        }
-        state.actions.add("MODEL_AUTHORED_RECOMMENDATION");
-        return ActionOutcome.publication(new PublicationDraft(
-                playerReply,
-                playerReplyEvidenceIds,
-                candidates));
-    }
-
-    private RecommendationReplyDraft recommendationReplyDraft(
-            JsonNode node,
-            Map<String, CandidateObservation> availableEvidence) {
-        requireObject(node, Set.of("text", "internalEvidenceIds"), Set.of());
-        String text = playerFacingText(node.path("text"));
-        if (!withinCodePointBounds(
-                text,
-                RecommendationAgentState.MIN_CARD_REPLY_CODE_POINTS,
-                RecommendationAgentState.MAX_CARD_REPLY_CODE_POINTS)) {
-            throw new InvalidAction("RECOMMENDATION_REPLY_INVALID");
-        }
-        List<String> evidenceIds = strings(
-                node.path("internalEvidenceIds"),
-                1,
-                Math.min(8, availableEvidence.size()),
-                1,
-                80);
-        if (evidenceIds.stream().anyMatch(id -> !availableEvidence.containsKey(id))) {
-            throw new InvalidAction("RECOMMENDATION_EVIDENCE_NOT_GROUNDED");
-        }
-        return new RecommendationReplyDraft(text, evidenceIds);
-    }
-
     private ActionOutcome compare(
             JsonNode arguments,
             RecommendationAgentState state,
@@ -390,12 +280,7 @@ final class RecommendationActions {
         if (!arguments.has("internalEvidenceIds")) {
             throw new InvalidAction("COMPARISON_MESSAGE_INCOMPLETE");
         }
-        List<String> internalEvidenceIds = strings(
-                arguments.path("internalEvidenceIds"),
-                1,
-                availableEvidence.size(),
-                3,
-                80);
+        List<String> internalEvidenceIds = strings(arguments.path("internalEvidenceIds"), 1);
         List<CandidateObservation> messageEvidence = internalEvidenceIds.stream()
                 .map(availableEvidence::get)
                 .toList();
@@ -433,7 +318,7 @@ final class RecommendationActions {
     private ActionOutcome noMatch(JsonNode arguments, RecommendationAgentState state, String locale) {
         requireObject(arguments, Set.of("relaxSubject", "playerReply"), Set.of());
         String playerReply = playerReply(arguments);
-        String subject = text(arguments.path("relaxSubject"), 1, 40);
+        String subject = text(arguments.path("relaxSubject"));
         if (!runtime.relaxableSubjects(state).contains(subject)) {
             throw new InvalidAction("NO_MATCH_RELAXATION_NOT_ACTIONABLE");
         }
@@ -609,11 +494,11 @@ final class RecommendationActions {
         }
         JsonNode constraint = arguments.path("titleConstraint");
         requireObject(constraint, Set.of("operator", "value"), Set.of());
-        String operator = text(constraint.path("operator"), 1, 24).strip();
+        String operator = text(constraint.path("operator")).strip();
         if (!"CONTAINS".equals(operator)) throw new InvalidAction("TITLE_CONSTRAINT_OPERATOR_INVALID");
-        String value = text(constraint.path("value"), 1, 160).strip();
+        String value = text(constraint.path("value")).strip();
         if (value.isEmpty()) throw new InvalidAction("TITLE_CONSTRAINT_VALUE_INVALID");
-        String evidenceId = text(arguments.path("evidence"), 1, 32).strip();
+        String evidenceId = text(arguments.path("evidence")).strip();
         evidenceReview.requireCurrentTurnUserEvidence(
                 evidenceId,
                 request,
@@ -658,11 +543,11 @@ final class RecommendationActions {
         List<BggGameType> types = preferencePlan.profile().type() == BggGameType.ALL
                 ? requestedTypes
                 : List.of(preferencePlan.profile().type());
-        List<String> categories = optionalStrings(arguments, "categories", 5, 120);
-        List<String> mechanics = optionalStrings(arguments, "mechanics", 5, 120);
-        List<String> designers = optionalStrings(arguments, "designers", 3, 120);
-        List<String> publishers = optionalStrings(arguments, "publishers", 5, 120);
-        List<String> families = optionalStrings(arguments, "families", 5, 120);
+        List<String> categories = optionalStrings(arguments, "categories");
+        List<String> mechanics = optionalStrings(arguments, "mechanics");
+        List<String> designers = optionalStrings(arguments, "designers");
+        List<String> publishers = optionalStrings(arguments, "publishers");
+        List<String> families = optionalStrings(arguments, "families");
         Integer minimumPublicationYear = arguments.has("minimumPublicationYear")
                 ? integer(arguments.path("minimumPublicationYear"), 1, 2100, "PUBLICATION_YEAR_INVALID")
                 : null;
@@ -690,7 +575,7 @@ final class RecommendationActions {
                 ? state.titleConstraint
                 : requestedTitleConstraint;
         String textQuery = arguments.has("textQuery")
-                ? text(arguments.path("textQuery"), 1, 240).strip()
+                ? text(arguments.path("textQuery")).strip()
                 : activeTitleConstraint == null ? null : activeTitleConstraint.value();
         CatalogSort sort = arguments.has("sort")
                 ? enumValue(CatalogSort.class, arguments.path("sort"), "CATALOG_SORT_INVALID")
@@ -699,7 +584,7 @@ final class RecommendationActions {
             throw new InvalidAction("CATALOG_TEXT_QUERY_REQUIRED");
         }
         int offset = arguments.has("offset")
-                ? integer(arguments.path("offset"), 0, 200, "CATALOG_OFFSET_INVALID")
+                ? integer(arguments.path("offset"), 0, MAX_CATALOG_OFFSET, "CATALOG_OFFSET_INVALID")
                 : 0;
         if (purpose == DiscoveryPurpose.IDENTITY_ONLY
                 && (designers.size() != 1
@@ -719,8 +604,12 @@ final class RecommendationActions {
                     "For a creator identity check, supply exactly one designer and no category or mechanic filters.");
         }
         int limit = arguments.has("limit")
-                ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
-                : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
+                ? integer(
+                        arguments.path("limit"),
+                        1,
+                        properties.modelCandidateLimit(),
+                        "LIMIT_OUT_OF_RANGE")
+                : properties.modelCandidateLimit();
         int publicationCount = publicationCount(arguments, request);
         if (activeTitleConstraint != null) state.titleConstraint = activeTitleConstraint;
         int eligibilityLimit = purpose == DiscoveryPurpose.IDENTITY_ONLY
@@ -729,28 +618,18 @@ final class RecommendationActions {
         Set<Integer> unavailableCandidateIds = new LinkedHashSet<>(state.excludedIds);
         unavailableCandidateIds.addAll(state.previouslyShownIds);
         unavailableCandidateIds.addAll(state.comparisonReferenceIds);
-        int requestedCandidateCount = Math.max(eligibilityLimit, properties.resultCount());
-        int boundedPlanningWindow = Math.min(
-                MAX_LOCAL_CATALOG_SCAN_RESULTS,
-                requestedCandidateCount
-                        + Math.min(
-                                Math.max(properties.resultCount(), unavailableCandidateIds.size()),
-                                MAX_LOCAL_CATALOG_SCAN_RESULTS));
-        int catalogLimit = purpose == DiscoveryPurpose.IDENTITY_ONLY
-                ? boundedPlanningWindow
-                : MAX_LOCAL_CATALOG_SCAN_RESULTS;
+        int catalogLimit = CATALOG_PAGE_SIZE;
         int selectionLimit = eligibilityLimit;
         progress.accept(
                 ProgressStage.SEARCHING_BGG_CATALOG,
                 browseFocus(categories, mechanics, designers, publishers, families));
-        List<Game> scannedGames = new ArrayList<>();
-        Set<Integer> scannedIds = new LinkedHashSet<>();
         List<Game> eligible = List.of();
+        Set<Integer> previousPageIds = Set.of();
         CatalogObservation result = null;
         int catalogSourceCount = 0;
         int pageOffset = offset;
         int scannedPages = 0;
-        boolean scanBudgetReached = false;
+        long catalogPageBudget = 1;
         boolean completedCatalogPage = false;
         while (eligible.size() < eligibilityLimit) {
             state.catalogCalls++;
@@ -782,17 +661,25 @@ final class RecommendationActions {
             result = page;
             scannedPages++;
             catalogSourceCount = Math.max(catalogSourceCount, page.sourceCount());
+            catalogPageBudget = catalogPageBudget(catalogSourceCount, offset, catalogLimit);
             if (!page.succeeded()) break;
             completedCatalogPage = true;
-            int distinctBefore = scannedIds.size();
+            LinkedHashMap<Integer, Game> selectionWindow = eligible.stream().collect(
+                    java.util.stream.Collectors.toMap(
+                            game -> game.ranking().bggId(),
+                            game -> game,
+                            (first, ignored) -> first,
+                            LinkedHashMap::new));
+            LinkedHashSet<Integer> pageIds = new LinkedHashSet<>();
             page.games().forEach(game -> {
-                if (scannedIds.add(game.ranking().bggId())) scannedGames.add(game);
+                int bggId = game.ranking().bggId();
+                if (pageIds.add(bggId)
+                        && (activeTitleConstraint == null || activeTitleConstraint.matches(game))) {
+                    selectionWindow.putIfAbsent(bggId, game);
+                }
             });
-            List<Game> titleEligibleGames = activeTitleConstraint == null
-                    ? scannedGames
-                    : scannedGames.stream().filter(activeTitleConstraint::matches).toList();
             eligible = selector.eligible(
-                    titleEligibleGames,
+                    List.copyOf(selectionWindow.values()),
                     preferencePlan.profile(),
                     unavailableCandidateIds,
                     selectionLimit);
@@ -800,15 +687,20 @@ final class RecommendationActions {
                     || eligible.size() >= eligibilityLimit
                     || page.pageExhausted()
                     || page.games().isEmpty()
-                    || scannedIds.size() == distinctBefore) {
+                    || pageIds.equals(previousPageIds)) {
                 break;
             }
-            if (pageOffset > MAX_LOCAL_CATALOG_SCAN_OFFSET - catalogLimit) {
-                scanBudgetReached = true;
-                state.actions.add("CATALOG_SCAN_STOPPED:ROW_BUDGET");
+            previousPageIds = Set.copyOf(pageIds);
+            if (scannedPages >= catalogPageBudget) {
+                state.actions.add("CATALOG_SCAN_STOPPED:SOURCE_CARDINALITY");
                 break;
             }
-            pageOffset += catalogLimit;
+            long nextPageOffset = (long) pageOffset + catalogLimit;
+            if (nextPageOffset > MAX_CATALOG_OFFSET) {
+                state.actions.add("CATALOG_SCAN_STOPPED:OFFSET_RANGE");
+                break;
+            }
+            pageOffset = (int) nextPageOffset;
         }
         CatalogObservation terminalResult = Objects.requireNonNull(result, "catalog scan must complete one page");
         Map<String, Object> appliedFilters = new LinkedHashMap<>();
@@ -834,7 +726,7 @@ final class RecommendationActions {
         appliedFilters.put("sort", sort);
         appliedFilters.put("offset", offset);
         appliedFilters.put("pagesScanned", scannedPages);
-        appliedFilters.put("scanBudgetReached", scanBudgetReached);
+        appliedFilters.put("pageBudget", catalogPageBudget);
         String observation = runtime.observation(Map.of(
                 "status", completedCatalogPage
                         ? terminalResult.succeeded() ? "SUCCESS" : "PARTIAL"
@@ -859,6 +751,12 @@ final class RecommendationActions {
         return preparePublication(observation, state, eligible, publicationCount);
     }
 
+    private long catalogPageBudget(int sourceCount, int offset, int pageSize) {
+        long remainingRows = Math.max(0L, (long) sourceCount - offset);
+        if (remainingRows == 0) return 1;
+        return (remainingRows + pageSize - 1L) / pageSize;
+    }
+
     private ActionOutcome discover(
             JsonNode arguments,
             RecommendationAgentState state,
@@ -876,10 +774,10 @@ final class RecommendationActions {
         DiscoveryPurpose purpose = goal == DiscoveryGoal.SELECTABLE_CARDS
                 ? DiscoveryPurpose.SELECTABLE_CARDS
                 : DiscoveryPurpose.IDENTITY_ONLY;
-        String evidenceId = text(arguments.path("evidence"), 1, 16);
+        String evidenceId = text(arguments.path("evidence"));
         evidenceReview.requireUserEvidence(evidenceId, request);
         String query = evidenceReview.preferenceEvidence(request).get(evidenceId);
-        String subject = text(arguments.path("subject"), 1, 80).strip();
+        String subject = text(arguments.path("subject")).strip();
         List<BggGameType> types = optionalGameTypeHints(arguments, state);
         progress.accept(ProgressStage.DISCOVERING_CANDIDATES, null);
         state.publicContextEvidence.clear();
@@ -925,7 +823,6 @@ final class RecommendationActions {
         state.sourceCount = Math.max(state.sourceCount, discovery.sources().size());
         List<PublicContextEvidence> publicContext = recordPublicContext(discovery, state);
         state.discoveredCandidateLeads = discovery.candidates().stream()
-                .limit(6)
                 .filter(lead -> !lead.name().isBlank())
                 .filter(lead -> !lead.sourceIndexes().isEmpty())
                 .filter(lead -> sourceIndexes.containsAll(lead.sourceIndexes()))
@@ -971,7 +868,6 @@ final class RecommendationActions {
         LinkedHashMap<String, PublicContextEvidence> verified = new LinkedHashMap<>();
         discovery.publicContext().stream()
                 .filter(Objects::nonNull)
-                .limit(4)
                 .filter(evidence -> sourceIndexes.containsAll(evidence.sourceIndexes()))
                 .forEach(evidence -> verified.putIfAbsent(evidence.id(), evidence));
         if (verified.isEmpty()) return List.of();
@@ -998,23 +894,63 @@ final class RecommendationActions {
             RecommendationAgentState state,
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(arguments, Set.of("bggIds"), Set.of());
-        List<Integer> ids = ids(arguments.path("bggIds"), 1, MAX_VERIFIED_GAMES);
+        List<Integer> ids = ids(arguments.path("bggIds"), 1);
         if (!state.legalIds.containsAll(ids)) throw new InvalidAction("ID_NOT_OBSERVED");
         progress.accept(
                 ProgressStage.VERIFYING_BGG_CANDIDATES,
                 new ProgressFocus(ProgressFocusKind.VERIFIED_GAME_COUNT, List.of(Integer.toString(ids.size()))));
-        state.catalogCalls++;
-        CatalogObservation result = runtime.withinDeadline(state, () -> tools.lookupCandidates(ids));
+        List<Game> loaded = new ArrayList<>();
+        Set<Integer> loadedIds = new LinkedHashSet<>();
+        ToolStatus status = ToolStatus.SUCCESS;
+        String code = "";
+        boolean completedBatch = false;
+        int attemptedPages = 0;
+        int completedPages = 0;
+        long pageBudget = pageBudget(ids.size(), CATALOG_PAGE_SIZE);
+        for (int start = 0; start < ids.size(); ) {
+            int end = (int) Math.min(
+                    (long) ids.size(),
+                    (long) start + CATALOG_PAGE_SIZE);
+            List<Integer> batch = List.copyOf(ids.subList(start, end));
+            state.catalogCalls++;
+            attemptedPages++;
+            CatalogObservation result;
+            try {
+                result = runtime.withinDeadline(state, () -> tools.lookupCandidates(batch));
+            } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
+                if (!completedBatch) throw exception;
+                status = loaded.isEmpty() ? ToolStatus.ERROR : ToolStatus.PARTIAL;
+                code = "RUN_DEADLINE_EXCEEDED";
+                state.actions.add("LOOKUP_STOPPED:TIME_BUDGET");
+                break;
+            }
+            completedBatch = true;
+            completedPages++;
+            state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
+            if (!result.succeeded()) {
+                status = loaded.isEmpty() ? ToolStatus.ERROR : ToolStatus.PARTIAL;
+                code = result.code();
+                break;
+            }
+            result.games().forEach(game -> {
+                if (loadedIds.add(game.ranking().bggId())) loaded.add(game);
+            });
+            start = end;
+        }
         state.actions.add("LOOKUP_BGG_CANDIDATES");
-        state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
-        result.games().forEach(state::addVerified);
+        loaded.forEach(state::addVerified);
         return ActionOutcome.observation(runtime.observation(Map.of(
-                "status", result.succeeded() ? "SUCCESS" : "ERROR",
-                "code", result.code(),
-                "guidance", result.games().isEmpty()
+                "status", status.name(),
+                "code", code,
+                "guidance", loaded.isEmpty()
                         ? "No complete BGG details were returned. Try different observed candidates or respond transparently."
                         : "These bounded BGG facts are verified and may support comparison or final selection.",
-                "verifiedBggIds", result.games().stream().map(game -> game.ranking().bggId()).toList())));
+                "resourceBoundary", Map.of(
+                        "pageSize", CATALOG_PAGE_SIZE,
+                        "pageBudget", pageBudget,
+                        "pagesAttempted", attemptedPages,
+                        "pagesCompleted", completedPages),
+                "verifiedBggIds", loaded.stream().map(game -> game.ranking().bggId()).toList())));
     }
 
     private ActionOutcome research(
@@ -1023,8 +959,8 @@ final class RecommendationActions {
             String locale,
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(arguments, Set.of("bggIds", "question"), Set.of());
-        List<Integer> ids = ids(arguments.path("bggIds"), 1, 5);
-        String question = text(arguments.path("question"), 1, 300);
+        List<Integer> ids = ids(arguments.path("bggIds"), 1);
+        String question = text(arguments.path("question"));
         if (ids.stream().anyMatch(id -> !state.verified.containsKey(id))) {
             throw new InvalidAction("GAME_NOT_VERIFIED");
         }
@@ -1037,31 +973,73 @@ final class RecommendationActions {
                                 .map(game -> game.ranking().sourceName())
                                 .limit(3)
                                 .toList()));
-        state.webResearchCalls++;
-        List<BoardGameRecommendationWebResearch.Candidate> candidates = ids.stream()
-                .map(state.verified::get)
-                .map(selector::researchCandidate)
-                .toList();
-        ResearchObservation result = runtime.withinDeadline(
-                state,
-                () -> tools.researchGameFit(candidates, locale, question));
-        Research added = result.result().orElse(Research.empty());
-        Research merged = mergeResearch(state.research, added);
-        boolean webResearchAvailable = result.status() != ToolStatus.ERROR
-                && result.status() != ToolStatus.UNAVAILABLE;
+        ToolStatus status = ToolStatus.SUCCESS;
+        String code = "";
+        boolean completedBatch = false;
+        boolean webResearchAvailable = true;
+        LinkedHashSet<Integer> researchedIds = new LinkedHashSet<>();
+        int researchPageSize = properties.modelCandidateLimit();
+        int attemptedPages = 0;
+        int completedPages = 0;
+        long pageBudget = pageBudget(ids.size(), researchPageSize);
+        for (int start = 0; start < ids.size(); ) {
+            int end = (int) Math.min(
+                    (long) ids.size(),
+                    (long) start + researchPageSize);
+            List<BoardGameRecommendationWebResearch.Candidate> candidates = ids.subList(start, end).stream()
+                    .map(state.verified::get)
+                    .map(selector::researchCandidate)
+                    .toList();
+            state.webResearchCalls++;
+            attemptedPages++;
+            ResearchObservation result;
+            try {
+                result = runtime.withinDeadline(
+                        state,
+                        () -> tools.researchGameFit(candidates, locale, question));
+            } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
+                if (!completedBatch) throw exception;
+                status = researchedIds.isEmpty() ? ToolStatus.ERROR : ToolStatus.PARTIAL;
+                code = "RUN_DEADLINE_EXCEEDED";
+                state.actions.add("RESEARCH_STOPPED:TIME_BUDGET");
+                break;
+            }
+            completedBatch = true;
+            completedPages++;
+            Research added = result.result().orElse(Research.empty());
+            added.games().stream().map(GameResearch::bggId).forEach(researchedIds::add);
+            state.research = mergeResearch(state.research, added);
+            boolean batchAvailable = result.status() != ToolStatus.ERROR
+                    && result.status() != ToolStatus.UNAVAILABLE;
+            if (!batchAvailable) {
+                webResearchAvailable = false;
+                status = researchedIds.isEmpty() ? result.status() : ToolStatus.PARTIAL;
+                code = result.code();
+                break;
+            }
+            if (result.status() != ToolStatus.SUCCESS) {
+                status = ToolStatus.PARTIAL;
+                code = result.code();
+            }
+            start = end;
+        }
         String observation = runtime.observation(Map.of(
-                "status", result.status().name(),
-                "code", result.code(),
-                "guidance", added.games().isEmpty()
+                "status", status.name(),
+                "code", code,
+                "guidance", researchedIds.isEmpty()
                         ? webResearchAvailable
                                 ? "No attributed experience evidence was returned. Do not invent it."
                                 : "Public web research is unavailable for the rest of this run. Use verified BGG facts or finish transparently; do not retry web research."
                         : "Use these attributed observations as reported experience, distinct from BGG facts.",
-                "researchedBggIds", added.games().stream().map(GameResearch::bggId).toList()));
+                "resourceBoundary", Map.of(
+                        "pageSize", researchPageSize,
+                        "pageBudget", pageBudget,
+                        "pagesAttempted", attemptedPages,
+                        "pagesCompleted", completedPages),
+                "researchedBggIds", List.copyOf(researchedIds)));
         state.researchAttempted = true;
         state.actions.add("RESEARCH_GAME_FIT");
-        if (!webResearchAvailable) state.disableWebResearch(result.code());
-        state.research = merged;
+        if (!webResearchAvailable) state.disableWebResearch(code);
         return ActionOutcome.observation(observation);
     }
 
@@ -1130,9 +1108,9 @@ final class RecommendationActions {
             case "REFERENCE_TITLE_TYPE_INVALID" ->
                 "title and every alternateTitles item must be a JSON string containing only one exact board-game title spelling from the cited user turn.";
             case "REFERENCE_TITLE_LENGTH_INVALID" ->
-                "Copy only the exact board-game title substring from the cited user turn into title; do not copy the surrounding request. Each title must contain 1 to 160 characters.";
+                "Copy one non-blank exact board-game title from the cited user turn; do not copy the surrounding request.";
             case "REFERENCE_ALTERNATES_INVALID" ->
-                "alternateTitles must be a JSON array with at most two distinct exact localized or original title spellings from the cited user turn.";
+                "alternateTitles must be a JSON array of distinct exact localized or original title spellings from the cited user turn.";
             case "REFERENCE_EVIDENCE_INVALID" ->
                 "Use exactly one supplied user evidence ID such as U1 in evidence; do not copy the user message into that field.";
             case "RECOMMENDATION_STATE_REQUIRED" ->
@@ -1148,9 +1126,9 @@ final class RecommendationActions {
             case "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID" ->
                 "Use DIRECT for a cited number. Use INFERRED_GROUP_MEMBER_COUNT only to count stated members when no total is given; otherwise omit the update.";
             case "RECOMMENDATION_EVIDENCE_REQUIRED", "RECOMMENDATION_EVIDENCE_NOT_GROUNDED" ->
-                "For every selection, cite one to eight observation IDs that belong to that same candidate in current turnState. Use them only as internalEvidenceIds and keep them out of player-facing prose.";
+                "For every selection, cite one or more observation IDs that belong to that same candidate in current turnState. Use them only as internalEvidenceIds and keep them out of player-facing prose.";
             case "RECOMMENDATION_REPLY_INVALID" ->
-                "Write the complete locale-matched playerReply and concise card notes within their schema limits. The application publishes this prose unchanged.";
+                "Write the complete locale-matched playerReply and useful card notes. The application publishes this prose unchanged.";
             case "FINAL_ID_FAILS_HARD_GATES", "FINAL_ID_IS_COMPARISON_REFERENCE" ->
                 "Select only IDs listed in turnState.recommendableBggIds; those IDs already satisfy the current typed hard gates.";
             case "NO_MATCH_RELAXATION_NOT_ACTIONABLE" ->
@@ -1213,31 +1191,11 @@ final class RecommendationActions {
         Map<String, List<String>> observations = gameObservations.stream()
                 .collect(java.util.stream.Collectors.toMap(
                         CandidateObservation::id,
-                        observation -> List.of(observationKindCode(observation), modelContextValue(observation)),
+                        observation -> List.of(observationKindCode(observation), observation.value()),
                         (first, ignored) -> first,
                         LinkedHashMap::new));
         value.put("observations", observations);
-        List<String> truncatedObservationIds = gameObservations.stream()
-                .filter(this::truncatedInModelContext)
-                .map(CandidateObservation::id)
-                .toList();
-        if (!truncatedObservationIds.isEmpty()) {
-            value.put("truncatedObservationIds", truncatedObservationIds);
-        }
         return value;
-    }
-
-    private String modelContextValue(CandidateObservation observation) {
-        String value = observation.value();
-        if (!truncatedInModelContext(observation)) return value;
-        int end = value.offsetByCodePoints(0, MAX_PUBLISHER_DESCRIPTION_CONTEXT_CODE_POINTS);
-        return value.substring(0, end).stripTrailing() + "…";
-    }
-
-    private boolean truncatedInModelContext(CandidateObservation observation) {
-        return "publisherDescription".equals(observation.attribute())
-                && observation.value().codePointCount(0, observation.value().length())
-                        > MAX_PUBLISHER_DESCRIPTION_CONTEXT_CODE_POINTS;
     }
 
     private String observationKindCode(CandidateObservation observation) {
@@ -1271,7 +1229,6 @@ final class RecommendationActions {
         List<Source> sources = new ArrayList<>(current.sources());
         Map<Integer, Integer> remapped = new LinkedHashMap<>();
         for (Source source : added.sources()) {
-            if (sources.size() == 12) break;
             int index = sources.size() + 1;
             sources.add(new Source(index, source.title(), source.url(), source.domain()));
             remapped.put(source.index(), index);
@@ -1294,6 +1251,10 @@ final class RecommendationActions {
         return new Research(games, List.copyOf(sources));
     }
 
+    private long pageBudget(int itemCount, int pageSize) {
+        return ((long) itemCount + pageSize - 1L) / pageSize;
+    }
+
     private void requireObject(JsonNode node, Set<String> required, Set<String> optional) {
         if (node == null || !node.isObject()) throw new InvalidAction("ARGUMENT_OBJECT_REQUIRED");
         Set<String> allowed = new LinkedHashSet<>(required);
@@ -1308,10 +1269,10 @@ final class RecommendationActions {
         }
     }
 
-    private String text(JsonNode node, int minimum, int maximum) {
+    private String text(JsonNode node) {
         if (!node.isTextual()) throw new InvalidAction("TEXT_ARGUMENT_REQUIRED");
         String value = node.asText().strip();
-        if (value.length() < minimum || value.length() > maximum) throw new InvalidAction("TEXT_LENGTH_INVALID");
+        if (value.isEmpty()) throw new InvalidAction("TEXT_LENGTH_INVALID");
         return value;
     }
 
@@ -1320,7 +1281,7 @@ final class RecommendationActions {
         titles.add(referenceTitle(arguments.path("title")));
         if (!arguments.has("alternateTitles")) return List.copyOf(titles);
         JsonNode alternates = arguments.path("alternateTitles");
-        if (!alternates.isArray() || alternates.size() > 2) {
+        if (!alternates.isArray()) {
             throw new InvalidAction("REFERENCE_ALTERNATES_INVALID");
         }
         for (JsonNode alternate : alternates) titles.add(referenceTitle(alternate));
@@ -1333,7 +1294,7 @@ final class RecommendationActions {
     private String referenceTitle(JsonNode node) {
         if (!node.isTextual()) throw new InvalidAction("REFERENCE_TITLE_TYPE_INVALID");
         String title = node.asText().strip();
-        if (title.isEmpty() || title.length() > 160) {
+        if (title.isEmpty()) {
             throw new InvalidAction("REFERENCE_TITLE_LENGTH_INVALID");
         }
         return title;
@@ -1342,7 +1303,7 @@ final class RecommendationActions {
     private String referenceEvidence(JsonNode node) {
         if (!node.isTextual()) throw new InvalidAction("REFERENCE_EVIDENCE_INVALID");
         String evidence = node.asText().strip();
-        if (evidence.isEmpty() || evidence.length() > 16) {
+        if (evidence.isEmpty()) {
             throw new InvalidAction("REFERENCE_EVIDENCE_INVALID");
         }
         return evidence;
@@ -1356,17 +1317,7 @@ final class RecommendationActions {
     }
 
     private String playerReply(JsonNode arguments) {
-        String reply = playerFacingText(arguments.path("playerReply"));
-        if (reply.codePointCount(0, reply.length()) > 1_200) {
-            throw new InvalidAction("PLAYER_REPLY_TOO_LONG");
-        }
-        return reply;
-    }
-
-    private boolean withinCodePointBounds(String value, int minimum, int maximum) {
-        String meaningful = value.strip();
-        int codePoints = meaningful.codePointCount(0, meaningful.length());
-        return codePoints >= minimum && codePoints <= maximum;
+        return playerFacingText(arguments.path("playerReply"));
     }
 
     private List<String> playerFacingStrings(JsonNode node, int minimumItems, int maximumItems) {
@@ -1380,12 +1331,12 @@ final class RecommendationActions {
         return distinct;
     }
 
-    private List<String> strings(JsonNode node, int minimumItems, int maximumItems, int minimumLength, int maximumLength) {
-        if (!node.isArray() || node.size() < minimumItems || node.size() > maximumItems) {
+    private List<String> strings(JsonNode node, int minimumItems) {
+        if (!node.isArray() || node.size() < minimumItems) {
             throw new InvalidAction("STRING_LIST_INVALID");
         }
         List<String> values = new ArrayList<>();
-        for (JsonNode value : node) values.add(text(value, minimumLength, maximumLength));
+        for (JsonNode value : node) values.add(text(value));
         List<String> distinct = values.stream().distinct().toList();
         if (distinct.size() != values.size()) throw new InvalidAction("DUPLICATE_LIST_VALUE");
         return distinct;
@@ -1402,10 +1353,20 @@ final class RecommendationActions {
         return distinct;
     }
 
+    private List<Integer> ids(JsonNode node, int minimumItems) {
+        return ids(node, minimumItems, Integer.MAX_VALUE);
+    }
+
     private int integer(JsonNode node, int minimum, int maximum, String code) {
-        if (!node.canConvertToInt()) throw new InvalidAction(code);
+        if (!node.isNumber()
+                || !node.canConvertToInt()
+                || node.decimalValue().stripTrailingZeros().scale() > 0) {
+            throw InvalidAction.integerRange(code, minimum, maximum);
+        }
         int value = node.intValue();
-        if (value < minimum || value > maximum) throw new InvalidAction(code);
+        if (value < minimum || value > maximum) {
+            throw InvalidAction.integerRange(code, minimum, maximum);
+        }
         return value;
     }
 
@@ -1428,8 +1389,8 @@ final class RecommendationActions {
     }
 
     private <E extends Enum<E>> List<E> enumValues(
-            Class<E> type, JsonNode node, int minimumItems, int maximumItems, String code) {
-        if (!node.isArray() || node.size() < minimumItems || node.size() > maximumItems) {
+            Class<E> type, JsonNode node, int minimumItems, String code) {
+        if (!node.isArray() || node.size() < minimumItems) {
             throw new InvalidAction(code);
         }
         List<E> values = new ArrayList<>();
@@ -1444,7 +1405,7 @@ final class RecommendationActions {
             RecommendationAgentState state) {
         if (!arguments.has("types")) return List.of();
         List<BggGameType> values = enumValues(
-                BggGameType.class, arguments.path("types"), 0, 3, "GAME_TYPES_INVALID");
+                BggGameType.class, arguments.path("types"), 0, "GAME_TYPES_INVALID");
         if (values.contains(BggGameType.ALL)) throw new InvalidAction("GAME_TYPES_INVALID");
         return values;
     }
@@ -1474,14 +1435,14 @@ final class RecommendationActions {
         int requestedCount = integer(
                 arguments.path("requestedCount"),
                 1,
-                runtime.maximumRecommendationResults(),
+                properties.modelCandidateLimit(),
                 "REQUESTED_COUNT_OUT_OF_RANGE");
         if (!arguments.has("evidence")) {
             throw new InvalidAction(
                     "REQUESTED_COUNT_EVIDENCE_REQUIRED",
                     "An explicit requestedCount must cite the current user turn in evidence; omit requestedCount when the player stated no count.");
         }
-        String evidenceId = text(arguments.path("evidence"), 1, 32);
+        String evidenceId = text(arguments.path("evidence"));
         evidenceReview.requireCurrentTurnUserEvidence(evidenceId, request);
         return requestedCount;
     }
@@ -1513,13 +1474,9 @@ final class RecommendationActions {
         return ActionOutcome.observation(observation);
     }
 
-    private List<String> optionalStrings(
-            JsonNode arguments,
-            String field,
-            int maximumItems,
-            int maximumLength) {
+    private List<String> optionalStrings(JsonNode arguments, String field) {
         return arguments.has(field)
-                ? strings(arguments.path(field), 0, maximumItems, 1, maximumLength)
+                ? strings(arguments.path(field), 0)
                 : List.of();
     }
 
@@ -1528,7 +1485,7 @@ final class RecommendationActions {
             String observation,
             boolean rejected,
             boolean settledRead,
-            PublicationDraft publicationDraft,
+            String publicationArgumentsJson,
             RejectionKind rejectionKind,
             String rejectionCode) {
         static ActionOutcome terminal(ConversationResponse response) {
@@ -1543,13 +1500,13 @@ final class RecommendationActions {
             return new ActionOutcome(null, observation, false, true, null, RejectionKind.NONE, null);
         }
 
-        static ActionOutcome publication(PublicationDraft publicationDraft) {
+        static ActionOutcome publication(String argumentsJson) {
             return new ActionOutcome(
                     null,
                     "",
                     false,
                     false,
-                    publicationDraft,
+                    argumentsJson,
                     RejectionKind.NONE,
                     null);
         }
@@ -1620,6 +1577,18 @@ final class RecommendationActions {
                     Map.of(
                             "unexpectedArguments", unexpectedFields,
                             "allowedArguments", allowedFields));
+        }
+
+        static InvalidAction integerRange(String code, int minimum, int maximum) {
+            return new InvalidAction(
+                    code,
+                    "Use a JSON integer within allowedRange, matching the current action schema.",
+                    Map.of(
+                            "allowedRange",
+                            Map.of(
+                                    "type", "integer",
+                                    "minimum", minimum,
+                                    "maximum", maximum)));
         }
     }
 }

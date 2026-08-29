@@ -49,33 +49,26 @@ import org.mockito.ArgumentCaptor;
 class TeachingPlanServiceTest {
 
     @Test
-    void sizesVisualPreparationForEveryPageAttemptAndEveryPageOwnedPlannerStage() {
+    void estimatesTheOrdinaryFirstCandidateForEveryVisualAndPlannerStageWithoutCreatingACallCap() {
         assertThat(TeachingPlanService.preparationWorkload(true, 20))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 128));
-    }
-
-    @Test
-    void keepsTheLargestAcceptedDocumentWithinTheCollapsedPageOwnedCallGraph() {
-        assertThat(TeachingPlanService.preparationWorkload(true, 500))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 3_008));
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(41));
     }
 
     @Test
     void keepsExtractedTextPreparationSmallBecauseItDoesNotRunTheVisualShardGraph() {
         assertThat(TeachingPlanService.preparationWorkload(false, 20))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 16));
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(1));
     }
 
     @Test
-    void routesAnyTextPageThatWouldBeSampledThroughTheDurablePagePlanner() {
+    void keepsTheCompleteTextOfALongPageWhenTheDirectCatalogFitsItsRoutingTarget() {
         List<PageView> pages = List.of(
                 new PageView(1, "setup", 5),
-                new PageView(2, "x".repeat(TeachingPageCatalogText.MAX_CHARACTERS + 1),
-                        TeachingPageCatalogText.MAX_CHARACTERS + 1));
+                new PageView(2, "x".repeat(7_000), 7_000));
 
-        assertThat(TeachingPlanService.requiresCanonicalPagePlanning(pages)).isTrue();
-        assertThat(TeachingPlanService.preparationWorkload(true, pages.size()))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 20));
+        assertThat(TeachingPlanService.requiresCanonicalPagePlanning(pages)).isFalse();
+        assertThat(TeachingPlanService.preparationWorkload(false, pages.size()))
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(1));
     }
 
     @Test
@@ -94,10 +87,10 @@ class TeachingPlanServiceTest {
     @Test
     void isolatesOnlyWorkloadsBeyondTheOrdinaryPreparationCallGraph() {
         assertThat(TeachingPlanService.requiresExtendedPreparationLane(
-                        new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 16)))
+                        new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(1)))
                 .isFalse();
         assertThat(TeachingPlanService.requiresExtendedPreparationLane(
-                        new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 17)))
+                        new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(2)))
                 .isTrue();
     }
 
@@ -109,7 +102,7 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void rejectsAVisualPreparationWhoseBoundedCallGraphCannotFitTheRunCounter() {
+    void rejectsOnlyAWorkloadEstimateThatCannotFitTheSchedulerCounterRepresentation() {
         assertThatThrownBy(() -> TeachingPlanService.preparationWorkload(true, Integer.MAX_VALUE))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("workload is too large");
@@ -476,7 +469,7 @@ class TeachingPlanServiceTest {
                         documentVersionId, visualPages, "Opaque Rulebook", "alice", null))
                 .thenReturn(List.of(new PageInput(
                         1,
-                        TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
+                        VisualRulebookCatalogPolicy.VISUAL_CATALOG_PREFIX
                                 + "\nPrinted terms: OPAQUE GROUP"
                                 + "\nVisible facts: A page-local observation exists without its exact identifier."
                                 + "\nKeywords: opaque",
@@ -574,57 +567,6 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void ownershipRefinementBudgetStopCannotPublishTheRetainedOutline() {
-        UUID documentVersionId = UUID.randomUUID();
-        UUID assistantRunId = UUID.randomUUID();
-        DocumentProcessing documents = mock(DocumentProcessing.class);
-        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
-        com.rulepilot.teaching.TeachingOutlineModel outlines =
-                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
-        TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
-        OutlineDraft overlapping = sourceBoundOutline(
-                "Example Game",
-                "Teach the complete game in dependency order.",
-                List.of(
-                        topic("overview", List.of("setup", "core_loop", "end", "scoring"), List.of(1)),
-                        topic("early-owner", List.of("setup", "core_loop"), List.of(2)),
-                        topic("late-owner", List.of("end", "scoring"), List.of(3))));
-        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
-                documentVersionId, null, "READY", "alice", "Example Game")));
-        when(documents.pages(documentVersionId)).thenReturn(List.of(
-                page(1, "Overview source content with enough opaque text for structural admission."),
-                page(2, "Early source content with enough opaque text for structural admission."),
-                page(3, "Late source content with enough opaque text for structural admission.")));
-        when(outlines.organize(
-                        any(),
-                        any(com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor.class)))
-                .thenReturn(overlapping);
-        when(outlines.refineChapterOwnership(
-                        any(),
-                        any(),
-                        any(),
-                        any(com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor.class)))
-                .thenThrow(new AgentExecutionStoppedException(StopReason.TOKEN_BUDGET));
-        TeachingPlanService service = new TeachingPlanService(
-                documents,
-                scopes,
-                mock(CatalogEditionLookup.class),
-                mock(VisualRulebookCataloger.class),
-                outlines,
-                mock(AuditedAgentInvocations.class),
-                new TeachingPlanFactory(),
-                mock(TeachingPlanRepository.class),
-                publication);
-
-        assertThatThrownBy(() -> service.create(
-                        documentVersionId, "Teach every rule", "alice", assistantRunId))
-                .isInstanceOfSatisfying(
-                        AgentExecutionStoppedException.class,
-                        stopped -> assertThat(stopped.reason()).isEqualTo(StopReason.TOKEN_BUDGET));
-        verifyNoInteractions(publication);
-    }
-
-    @Test
     void planIdentityUsesTheBoundCatalogGameRatherThanThePdfFilename() {
         UUID editionId = UUID.randomUUID();
         UUID gameId = UUID.randomUUID();
@@ -680,69 +622,6 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void pageLengthNeverTriggersASecondOutlineModelCall() {
-        assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(true)).isFalse();
-        assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(false)).isFalse();
-    }
-
-    @Test
-    void keepsAValidSourceBoundOutlineWithoutAPageLengthDrivenRewrite() {
-        UUID documentVersionId = UUID.randomUUID();
-        DocumentProcessing documents = mock(DocumentProcessing.class);
-        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
-        CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
-        VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
-        com.rulepilot.teaching.TeachingOutlineModel outlines =
-                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
-        AuditedAgentInvocations invocations = mock(AuditedAgentInvocations.class);
-        TeachingPlanRepository repository = mock(TeachingPlanRepository.class);
-        TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
-        OutlineDraft complete = sourceBoundOutline(
-                "Example Game",
-                "Teach the complete game in dependency order.",
-                List.of(new TopicDraft(
-                        "complete",
-                        "完整讲解",
-                        "覆盖所有核心学习义务。",
-                        true,
-                        false,
-                        List.of("SOURCE TERM"),
-                        List.of("setup", "core_loop", "end", "scoring"),
-                        List.of(1))));
-        OutlineDraft invalidRewrite = new OutlineDraft(
-                "Example Game",
-                "Incomplete rewrite",
-                List.of(topic("partial", List.of("source_coverage"), List.of(2))));
-        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
-                documentVersionId, null, "READY", "alice", "Example Game")));
-        when(documents.pages(documentVersionId)).thenReturn(List.of(
-                page(1, "SOURCE TERM. A complete first source page with enough opaque text for structural admission."),
-                page(2, "A complete second source page with enough opaque text for structural admission.")));
-        when(outlines.organize(any())).thenReturn(complete);
-        when(outlines.refineChapterOwnership(any(), any(), any())).thenReturn(invalidRewrite);
-        when(publication.publish(any(TeachingPlan.class), eq("Example Game")))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-        TeachingPlanService service = new TeachingPlanService(
-                documents,
-                scopes,
-                catalog,
-                visualCataloger,
-                outlines,
-                invocations,
-                new TeachingPlanFactory(),
-                repository,
-                publication);
-
-        TeachingPlan plan = service.create(documentVersionId, null, "alice", null);
-
-        assertThat(plan.sections()).singleElement().satisfies(section -> {
-            assertThat(section.topicKey()).isEqualTo("complete");
-            assertThat(section.coverageTags()).contains("setup", "core_loop", "end", "scoring");
-        });
-        verify(outlines, never()).refineChapterOwnership(any(), any(), any());
-    }
-
-    @Test
     void rejectsAnIncompleteTextOutlineInsteadOfPublishingTheGenericFourChapterFallback() {
         UUID documentVersionId = UUID.randomUUID();
         DocumentProcessing documents = mock(DocumentProcessing.class);
@@ -793,108 +672,6 @@ class TeachingPlanServiceTest {
         worker.join(250);
         assertThat(slow.isCancelled()).isTrue();
         assertThat(worker.isAlive()).isFalse();
-    }
-
-    @Test
-    void visualInterpretationUsesExplicitPlannerBindingsInOrderAndHonorsTheBudget() {
-        OutlineDraft outline = outline(List.of(
-                topic("text", List.of("core_loop"), List.of(1)),
-                visualTopic("visual-a", List.of("setup"), List.of(5, 6, 7)),
-                visualTopic("visual-b", List.of("end", "scoring"), List.of(7, 8, 9)),
-                topic("tail", List.of("source_coverage"), List.of(10))));
-        List<PageView> pages = IntStream.rangeClosed(1, 10)
-                .mapToObj(page -> page(page, "opaque page " + page))
-                .toList();
-
-        assertThat(VisualOutlineEvidencePolicy.selectedVisualPageNumbers(outline, pages))
-                .containsExactly(5, 6, 7, 8);
-    }
-
-    @Test
-    void sparseCoverageSamplingUsesOwnershipAndDensityNotPageVocabulary() {
-        OutlineDraft outline = outline(List.of(topic("owned", List.of("core_loop"), List.of(2))));
-        List<PageView> pages = List.of(
-                page(1, "cover setup winner credits"),
-                page(2, "owned"),
-                page(3, "x".repeat(400)),
-                page(4, "arbitrary sparse ledger"),
-                page(5, "another arbitrary sparse ledger"),
-                page(6, "final sparse ledger"));
-
-        assertThat(VisualOutlineEvidencePolicy.unownedSparseVisualCoveragePageNumbers(outline, pages, 3))
-                .containsExactly(1, 5, 6);
-    }
-
-    @Test
-    void chapterOwnershipIsNotRewrittenByJavaKeywordComparisons() {
-        OutlineDraft outline = outline(List.of(
-                detailedTopic("alpha", "回合流程与终局", "Contains setup, winner, cleanup, and scoring words."),
-                detailedTopic("beta", "下一章", "Contains the same words in another language.")));
-
-        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline)).isEmpty();
-    }
-
-    @Test
-    void requestsSemanticOwnershipReviewWhenOneTopicStructurallyClaimsFourLaterDimensions() {
-        OutlineDraft outline = outline(List.of(
-                topic("overview", List.of("axis_one", "axis_two", "axis_three", "axis_four"), List.of(1)),
-                topic("procedure-a", List.of("axis_one", "axis_two"), List.of(3)),
-                topic("procedure-b", List.of("axis_three", "axis_four"), List.of(8))));
-
-        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
-                .hasValueSatisfying(feedback -> assertThat(feedback)
-                        .contains("topic=overview", "axis_one", "axis_three", "procedure-a", "procedure-b")
-                        .contains("dependency order", "one primary teaching home"));
-    }
-
-    @Test
-    void appliesTheSameOwnershipInvariantToDifferentOpaqueTopicShapes() {
-        OutlineDraft outline = outline(List.of(
-                topic("hub", List.of("red", "green", "blue", "violet"), List.of(9)),
-                topic("left", List.of("red", "green"), List.of(2)),
-                topic("right", List.of("blue", "violet"), List.of(4)),
-                topic("unrelated", List.of("amber"), List.of(6))));
-
-        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
-                .hasValueSatisfying(feedback -> assertThat(feedback)
-                        .contains("topic=hub", "red", "green", "blue", "violet"));
-    }
-
-    @Test
-    void doesNotRequestOwnershipReviewForOneSharedDimensionOrAnUncontestedBroadTopic() {
-        OutlineDraft oneSharedDimension = outline(List.of(
-                topic("first", List.of("shared"), List.of(1)),
-                topic("second", List.of("shared"), List.of(2))));
-        OutlineDraft uncontested = outline(List.of(
-                topic("only", List.of("one", "two", "three", "four"), List.of(1))));
-
-        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(oneSharedDimension)).isEmpty();
-        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(uncontested)).isEmpty();
-    }
-
-    @Test
-    void doesNotTreatThreeOrthogonalMetadataTagsAsBroadChapterOwnership() {
-        OutlineDraft outline = outline(List.of(
-                topic("reference", List.of("goal", "flow", "visual"), List.of(1)),
-                topic("goal-owner", List.of("goal"), List.of(2)),
-                topic("flow-owner", List.of("flow"), List.of(3)),
-                topic("visual-owner", List.of("visual"), List.of(4))));
-
-        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline)).isEmpty();
-    }
-
-    @Test
-    void sourceCoverageRevisionListsOnlyUnboundStructurallySubstantivePages() {
-        OutlineDraft outline = outline(List.of(topic("owned", List.of("core_loop"), List.of(1))));
-        List<PageInput> pages = List.of(
-                new PageInput(1, "A".repeat(80)),
-                new PageInput(2, "Opaque source content ".repeat(4)),
-                new PageInput(3, "short"));
-
-        assertThat(TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(outline, pages))
-                .hasValueSatisfying(feedback -> assertThat(feedback)
-                        .contains("Page 2:", "Opaque source content")
-                        .doesNotContain("Page 1:", "Page 3:"));
     }
 
     @Test
@@ -1009,19 +786,10 @@ class TeachingPlanServiceTest {
         return new TopicDraft(key, key, "Teach " + key, true, false, List.of(key), tags, pages);
     }
 
-    private TopicDraft visualTopic(String key, List<String> tags, List<Integer> pages) {
-        return new TopicDraft(key, key, "Teach " + key, true, true, List.of(key), tags, pages);
-    }
-
-    private TopicDraft detailedTopic(String key, String title, String objective) {
-        return new TopicDraft(
-                key, title, objective, true, false, List.of("opaque query"), List.of("core_loop"), List.of(1));
-    }
-
     private PageInput visualPage(int number, String terms, String facts) {
         return new PageInput(
                 number,
-                TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
+                VisualRulebookCatalogPolicy.VISUAL_CATALOG_PREFIX
                         + "\nPrinted terms: " + terms
                         + "\nVisible facts: " + facts
                         + "\nKeywords: opaque");
@@ -1031,7 +799,7 @@ class TeachingPlanServiceTest {
             int number, String identifier, String fact, List<SourceDependency> dependencies) {
         return new PageInput(
                 number,
-                TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
+                VisualRulebookCatalogPolicy.VISUAL_CATALOG_PREFIX
                         + "\nPrinted terms: " + identifier
                         + "\nVisible facts: " + identifier + ": " + fact
                         + "\nKeywords: opaque",

@@ -21,7 +21,7 @@ class DocumentNativeToolScopeFactoryTest {
         Instant deadline = Instant.now().plusSeconds(30);
         when(access.canRead("player", versionId)).thenReturn(true);
         when(execution.budget(runId)).thenReturn(new BudgetSnapshot(
-                40, 24, 16, 24_000, 0, 0, 0, deadline, null));
+                24_000, 0, 0, 0, deadline, null));
         DocumentNativeToolScopeFactory factory = new DocumentNativeToolScopeFactory(access, execution);
 
         var scope = factory.create("player", versionId, runId);
@@ -35,6 +35,24 @@ class DocumentNativeToolScopeFactoryTest {
     }
 
     @Test
+    void doesNotInventAShorterDeadlineForAHealthyRun() {
+        DocumentNativeToolAccess access = mock(DocumentNativeToolAccess.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        UUID versionId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        Instant runDeadline = Instant.now().plusSeconds(110);
+        when(access.canRead("player", versionId)).thenReturn(true);
+        when(execution.budget(runId)).thenReturn(new BudgetSnapshot(
+                24_000, 0, 0, 0, runDeadline, null));
+
+        var scope = new DocumentNativeToolScopeFactory(access, execution)
+                .create("player", versionId, runId);
+
+        assertThat(scope).isPresent();
+        assertThat(scope.orElseThrow().deadlineAt()).isEqualTo(runDeadline);
+    }
+
+    @Test
     void rejectsExpiredOrUnavailableRunBudgets() {
         DocumentNativeToolAccess access = mock(DocumentNativeToolAccess.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
@@ -43,7 +61,7 @@ class DocumentNativeToolScopeFactoryTest {
         UUID missingRun = UUID.randomUUID();
         when(access.canRead("player", versionId)).thenReturn(true);
         when(execution.budget(expiredRun)).thenReturn(new BudgetSnapshot(
-                40, 24, 16, 24_000, 0, 0, 0, Instant.now().minusSeconds(1), null));
+                24_000, 0, 0, 0, Instant.now().minusSeconds(1), null));
         when(execution.budget(missingRun)).thenThrow(new IllegalArgumentException("missing"));
         DocumentNativeToolScopeFactory factory = new DocumentNativeToolScopeFactory(access, execution);
 

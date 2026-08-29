@@ -3,6 +3,7 @@ package com.rulepilot.retrieval;
 import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
 import com.rulepilot.retrieval.AnswerRetrievalPlanner.RetrievalIntent;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
+import com.rulepilot.retrieval.HybridRuleSearch.SourceAvailability;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.LinkedHashMap;
@@ -61,8 +62,9 @@ public final class AnswerEvidenceRetriever {
         Set<Integer> directQuestionVisualFactPages = new LinkedHashSet<>();
         boolean visualRequested = questionPlan.evidenceNeeds().contains(EvidenceNeed.VISUAL_REFERENCE);
         boolean conflicting = false;
-        int successfulCoreRetrievals = 0;
+        int availableCoreRetrievals = 0;
         int failedCoreRetrievals = 0;
+        boolean coreCoveragePartial = false;
         retrievePageHintCandidates(
                 assistantRunId,
                 context.documentVersionId(),
@@ -82,12 +84,12 @@ public final class AnswerEvidenceRetriever {
         for (RetrievalIntent intent : intents) {
             List<HybridEvidenceHit> retrieved;
             try {
-                retrieved = invocations.invoke(
+                HybridRuleSearch.SearchPage retrievalPage = invocations.invoke(
                         assistantRunId,
                         "hybridRuleSearch",
                         estimateTokens(intent.query()),
                         "Version-scoped answer evidence retrieved",
-                        () -> retrieval.search(
+                        () -> retrieval.searchPage(
                                 context.documentVersionId(),
                                 intent.query(),
                                 new RetrievalOptions(
@@ -98,11 +100,16 @@ public final class AnswerEvidenceRetriever {
                                         Set.of(),
                                         null,
                                         context.allowedEvidencePages())),
-                        this::evidenceTokens);
-                successfulCoreRetrievals++;
+                        page -> evidenceTokens(page.hits()));
+                retrieved = retrievalPage.hits();
+                availableCoreRetrievals++;
+                if (retrievalPage.sourceAvailability() == SourceAvailability.PARTIAL) {
+                    coreCoveragePartial = true;
+                }
             } catch (RuntimeException retrievalFailure) {
                 if (invocations.executionStopped(retrievalFailure)) throw retrievalFailure;
                 failedCoreRetrievals++;
+                coreCoveragePartial = true;
                 LOGGER.warn(
                         "Answer retrieval intent failed for document version {}: {}",
                         context.documentVersionId(),
@@ -162,7 +169,7 @@ public final class AnswerEvidenceRetriever {
         if (conflicting) {
             return new Result(List.of(), State.CONFLICTING);
         }
-        if (successfulCoreRetrievals == 0 && failedCoreRetrievals > 0) {
+        if (availableCoreRetrievals == 0 && failedCoreRetrievals > 0) {
             return new Result(List.of(), State.UNAVAILABLE);
         }
         Set<Integer> visualPagePriority = new LinkedHashSet<>(directQuestionVisualFactPages);
@@ -170,7 +177,7 @@ public final class AnswerEvidenceRetriever {
                 assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage, visualPagePriority);
         List<HybridEvidenceHit> selectedEvidence = AnswerEvidenceSelectionPolicy.select(
                 evidenceById, intentAnchors.values(), visualEvidenceIds, questionPlan, List.of());
-        return new Result(selectedEvidence, State.READY);
+        return new Result(selectedEvidence, coreCoveragePartial ? State.PARTIAL : State.READY);
     }
 
     private void retrievePageHintCandidates(
@@ -282,7 +289,7 @@ public final class AnswerEvidenceRetriever {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 
-    public enum State { READY, CONFLICTING, UNAVAILABLE }
+    public enum State { READY, PARTIAL, CONFLICTING, UNAVAILABLE }
 
     public record Result(List<HybridEvidenceHit> evidence, State state) {}
 }

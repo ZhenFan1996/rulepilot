@@ -1,4 +1,10 @@
-import { playerJourneyRunIsTerminal } from './playerJourney'
+import {
+  playerJourneyRunIsTerminal,
+  typedFailurePolicy,
+  type PlayerJourneyFailureClassification,
+  type PlayerJourneyFailureRecovery,
+  type TeachingRecoveryAction,
+} from './playerJourney'
 
 export interface PendingGuidePlan {
   documentVersionId: string
@@ -16,6 +22,7 @@ export interface PendingGuideImport {
   teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   teachingPreparationRunId: string | null
   teachingErrorCode?: string | null
+  teachingNextAction?: TeachingRecoveryAction
   updatedAt: string
 }
 
@@ -35,6 +42,7 @@ export interface PendingGuideUploadHandoff {
   state: 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   preparationRunId: string | null
   errorCode: string | null
+  nextAction?: TeachingRecoveryAction
   updatedAt: string
 }
 
@@ -61,6 +69,9 @@ export interface PendingGuideJourney {
   progress: number | null
   canReadRulebook: boolean
   retryAction: 'PREPARE_TEACHING' | null
+  errorCode: string | null
+  failureClassification: PlayerJourneyFailureClassification | null
+  failureRecovery: PlayerJourneyFailureRecovery
   updatedAt: string
 }
 
@@ -92,10 +103,28 @@ export function buildPendingGuideJourneys(
       || job.teachingHandoffState === 'FAILED'
       || document?.latestVersion.status === 'FAILED'
       || preparationFailed
-    const canRetryPreparation = Boolean(job.documentVersionId)
-      && (preparationFailed || job.teachingHandoffState === 'FAILED')
-      && document?.latestVersion.status !== 'FAILED'
-      && !teachingStorageRepairRequired(preparation?.lastErrorCode ?? job.teachingErrorCode)
+    const preparationOrHandoffFailed = preparationFailed || job.teachingHandoffState === 'FAILED'
+    const errorCode = document?.latestVersion.status === 'FAILED'
+      ? 'DOCUMENT_PROCESSING_FAILED'
+      : preparationFailed
+        ? preparation?.lastErrorCode ?? preparation?.state ?? 'TEACHING_PREPARATION_FAILED'
+        : job.teachingHandoffState === 'FAILED'
+          ? job.teachingErrorCode ?? 'TEACHING_HANDOFF_FAILED'
+          : job.stage === 'FAILED' ? job.errorCode ?? 'RULEBOOK_IMPORT_FAILED' : null
+    const failurePolicy = failed && errorCode
+      ? typedFailurePolicy(
+          errorCode,
+          Boolean(job.documentVersionId)
+            && preparationOrHandoffFailed
+            && document?.latestVersion.status !== 'FAILED'
+            && job.teachingNextAction !== 'NONE'
+            && job.teachingNextAction !== 'OPEN_PROGRESS'
+            && job.teachingNextAction !== 'RETRY_DOCUMENT'
+            ? 'PREPARE_TEACHING'
+            : null,
+          job.teachingNextAction === 'RETRY_TEACHING',
+        )
+      : null
     return [{
       id: `import:${job.id}`,
       title: job.title,
@@ -115,7 +144,10 @@ export function buildPendingGuideJourneys(
         || preparation != null
         || job.teachingHandoffState === 'LAUNCHING'
         || job.teachingHandoffState === 'LAUNCHED',
-      retryAction: canRetryPreparation ? 'PREPARE_TEACHING' : null,
+      retryAction: failurePolicy?.retryAction === 'PREPARE_TEACHING' ? 'PREPARE_TEACHING' : null,
+      errorCode: failurePolicy?.errorCode ?? null,
+      failureClassification: failurePolicy?.failureClassification ?? null,
+      failureRecovery: failurePolicy?.failureRecovery ?? null,
       updatedAt: preparation?.updatedAt ?? job.updatedAt,
     }]
   })
@@ -128,13 +160,28 @@ export function buildPendingGuideJourneys(
     const gameTitle = editionId ? gameByEdition.get(editionId) : null
     const preparation = preparationByVersion.get(handoff.documentVersionId)
     const preparationFailed = preparation != null
-      && ['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(preparation.state)
+      && playerJourneyRunIsTerminal(preparation.state)
+      && preparation.state !== 'COMPLETED'
     const failed = handoff.state === 'FAILED'
       || document?.latestVersion.status === 'FAILED'
       || preparationFailed
-    const canRetryPreparation = (preparationFailed || handoff.state === 'FAILED')
-      && document?.latestVersion.status !== 'FAILED'
-      && !teachingStorageRepairRequired(preparation?.lastErrorCode ?? handoff.errorCode)
+    const errorCode = document?.latestVersion.status === 'FAILED'
+      ? 'DOCUMENT_PROCESSING_FAILED'
+      : preparationFailed
+        ? preparation?.lastErrorCode ?? preparation?.state ?? 'TEACHING_PREPARATION_FAILED'
+        : handoff.state === 'FAILED' ? handoff.errorCode ?? 'TEACHING_HANDOFF_FAILED' : null
+    const failurePolicy = failed && errorCode
+      ? typedFailurePolicy(
+          errorCode,
+          document?.latestVersion.status !== 'FAILED'
+            && handoff.nextAction !== 'NONE'
+            && handoff.nextAction !== 'OPEN_PROGRESS'
+            && handoff.nextAction !== 'RETRY_DOCUMENT'
+            ? 'PREPARE_TEACHING'
+            : null,
+          handoff.nextAction === 'RETRY_TEACHING',
+        )
+      : null
     return [{
       id: `upload:${handoff.id}`,
       title: gameTitle ?? handoff.rulebookTitle,
@@ -154,7 +201,10 @@ export function buildPendingGuideJourneys(
         || preparation != null
         || handoff.state === 'LAUNCHING'
         || handoff.state === 'LAUNCHED',
-      retryAction: canRetryPreparation ? 'PREPARE_TEACHING' : null,
+      retryAction: failurePolicy?.retryAction === 'PREPARE_TEACHING' ? 'PREPARE_TEACHING' : null,
+      errorCode: failurePolicy?.errorCode ?? null,
+      failureClassification: failurePolicy?.failureClassification ?? null,
+      failureRecovery: failurePolicy?.failureRecovery ?? null,
       updatedAt: preparation?.updatedAt ?? handoff.updatedAt,
     }]
   })
@@ -167,6 +217,9 @@ export function buildPendingGuideJourneys(
       ? gameByEdition.get(document.document.gameEditionId)
       : null
     const failed = playerJourneyRunIsTerminal(run.state) && run.state !== 'COMPLETED'
+    const failurePolicy = failed
+      ? typedFailurePolicy(run.lastErrorCode ?? run.state, 'PREPARE_TEACHING', false)
+      : null
     return [{
       id: `preparation:${run.id}`,
       title: gameTitle ?? document.document.title,
@@ -179,17 +232,16 @@ export function buildPendingGuideJourneys(
       state: failed ? 'failed' : 'active',
       progress: null,
       canReadRulebook: true,
-      retryAction: failed && !teachingStorageRepairRequired(run.lastErrorCode) ? 'PREPARE_TEACHING' : null,
+      retryAction: failurePolicy?.retryAction === 'PREPARE_TEACHING' ? 'PREPARE_TEACHING' : null,
+      errorCode: failurePolicy?.errorCode ?? null,
+      failureClassification: failurePolicy?.failureClassification ?? null,
+      failureRecovery: failurePolicy?.failureRecovery ?? null,
       updatedAt: run.updatedAt,
     }]
   })
 
   return [...fromImports, ...fromUploads, ...fromPreparation]
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
-}
-
-function teachingStorageRepairRequired(errorCode: string | null | undefined) {
-  return errorCode === 'TEACHING_PREPARATION_STORAGE_FAILED'
 }
 
 function latestPreparationByVersion(runs: PendingGuidePreparationRun[]) {

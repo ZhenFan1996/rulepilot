@@ -355,9 +355,8 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
     @Override
     public Reconciliation reconcileLaunched(int limit) {
         int checkedLimit = checkedClaimLimit(limit);
-        int restarted = 0;
         int settled = 0;
-        int exhausted = 0;
+        int failed = 0;
         for (var job : jobs.findUnreconciledLaunchedTeaching(checkedLimit)) {
             var handoff = job.teachingHandoff();
             ReuseAssessment assessment = teachingEvidenceFreshness.assess(
@@ -374,29 +373,28 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             } else if (assessment == ReuseAssessment.TERMINAL_FAILURE) {
                 if (jobs.failTeachingTerminal(
                         job.id(), handoff.preparationRunId(), "TEACHING_PREPARATION_INVALID_PLAN", Instant.now(clock))) {
-                    exhausted++;
+                    failed++;
                 }
             } else if (assessment == ReuseAssessment.EXTERNAL_REPAIR_REQUIRED) {
                 if (jobs.failTeachingTerminal(
                         job.id(), handoff.preparationRunId(), "TEACHING_PREPARATION_STORAGE_FAILED", Instant.now(clock))) {
-                    exhausted++;
+                    failed++;
                 }
             } else if (assessment == ReuseAssessment.REFRESH_REQUIRED
                     || assessment == ReuseAssessment.RETRYABLE_FAILURE) {
-                if (jobs.retryTeachingAutomatically(
-                        job.id(), handoff.preparationRunId(), Instant.now(clock))) {
-                    restarted++;
-                } else if (handoff.automaticRecoveryCount() == 1
-                        && jobs.failTeachingRecoveryExhausted(
-                                job.id(), handoff.preparationRunId(), Instant.now(clock))) {
-                    exhausted++;
+                if (jobs.failTeachingTerminal(
+                        job.id(),
+                        handoff.preparationRunId(),
+                        "TEACHING_PREPARATION_FAILED",
+                        Instant.now(clock))) {
+                    failed++;
                 }
             } else if (assessment == ReuseAssessment.REUSABLE
                     && jobs.markTeachingReconciled(job.id(), handoff.preparationRunId(), Instant.now(clock))) {
                 settled++;
             }
         }
-        return new Reconciliation(restarted, settled, exhausted);
+        return new Reconciliation(settled, failed);
     }
 
     private OfficialRulebookImportJob ensureTeachingRequested(

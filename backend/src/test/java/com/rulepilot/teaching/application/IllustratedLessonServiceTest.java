@@ -90,7 +90,7 @@ class IllustratedLessonServiceTest {
         TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
         AssistantRuns runs = mock(AssistantRuns.class);
         GroundedTeachingAgent agent = mock(GroundedTeachingAgent.class);
-        WorkloadDemand workload = new WorkloadDemand(95, 77);
+        WorkloadDemand workload = new WorkloadDemand(77);
         when(agent.workload(plan)).thenReturn(workload);
         DocumentVersionScopeLookup documents = mock(DocumentVersionScopeLookup.class);
         when(documents.findVersion(versionId))

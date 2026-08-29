@@ -73,7 +73,7 @@ describe('background work snapshot boundary', () => {
       run: {
         ...run, createdAt: '2026-08-13T00:00:00Z', completedAt: null, lastErrorCode: null,
       },
-      budget: { usedModelCalls: 2, maxModelCalls: 36 },
+      budget: { usedModelCalls: 2 },
       activities: [{
         sequence: 4, type: 'MODEL', operation: 'composeTeachingSection|3',
         summary: 'Writing chapter three', outcome: 'RUNNING', latencyMs: 120,

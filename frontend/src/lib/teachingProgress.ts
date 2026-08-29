@@ -45,11 +45,11 @@ export interface PlayerFacingTeachingActivity<
 
 export type TeachingVisualPageRuleGroupState =
   | 'directly-completed'
-  | 'completed-after-recovery'
+  | 'completed-after-correction'
   | 'processing'
-  | 'no-rule-groups'
+  | 'local-unavailable'
 
-export type TeachingVisualPageRuleGroupAttempt = 'direct' | 'repair' | 'temporary-retry'
+export type TeachingVisualPageRuleGroupAttempt = 'direct' | 'correction'
 export type TeachingVisualPageRuleGroupStage = 'grouping' | 'persistence'
 
 export interface TeachingVisualPageRuleGroupSummary {
@@ -72,7 +72,7 @@ export interface TeachingRunProgress {
     completedAt: string | null
     lastErrorCode: string | null
   }
-  budget: { usedModelCalls: number; maxModelCalls: number }
+  budget: { usedModelCalls: number }
   activities: TeachingActivity[]
 }
 
@@ -134,17 +134,15 @@ export function teachingActivityText(
       || activity.operation.startsWith('readRuleEvidencePages')) return `Reading the cited rulebook pages for ${target}`
     if (activity.operation.startsWith('searchRuleEvidence')) return `Finding rulebook support for ${target}`
     if (activity.operation.startsWith('composeTeachingSection')) return `Writing ${target} from the rulebook`
-    if (activity.operation.startsWith('correctTeachingSection')
-      || activity.operation.startsWith('reviseTeachingSection')
-      || activity.operation.startsWith('reviseTextTeachingSection')) return `Revising ${target} after its checks found a local issue`
-    if (isTeachingContractRepair(activity.operation)) return `Repairing the chapter structure for ${target}`
+    if (activity.operation.startsWith('continueTeachingSectionAfterRejection')) return `The same section Agent is generating a complete replacement for ${target} from the exact validation feedback`
+    if (activity.operation.startsWith('settleTeachingSectionNoProgress')) return `The section Agent returned the same invalid candidate again, so ${target} stopped locally; other published chapters remain available`
     if (activity.operation.startsWith('confirmGeneratedClaims')) return `Checking each rule claim in ${target}`
     if (activity.operation.startsWith('reviewGeneratedContent')) return `Reviewing rules and sources for ${target}`
     if (activity.operation.startsWith('reviewObjectiveCoverage')) return `Checking ${target} for missing key steps`
     if (activity.operation.startsWith('validateTeachingSection')) {
       return activity.outcome === 'SUCCEEDED'
         ? `${target} passed citation-ownership, rulebook-version, and structure checks`
-        : `${target} needs a local revision before publication`
+        : `${target}'s candidate was rejected; its complete candidate and exact error are being returned to the same Agent`
     }
     if (activity.operation.startsWith('publishTeachingSection')) {
       return activity.outcome === 'SUCCEEDED'
@@ -168,17 +166,15 @@ export function teachingActivityText(
   if (activity.operation.startsWith('composeTeachingSection')) {
     return `正在依据规则书编写${target}`
   }
-  if (activity.operation.startsWith('correctTeachingSection')
-    || activity.operation.startsWith('reviseTeachingSection')
-    || activity.operation.startsWith('reviseTextTeachingSection')) return `校验发现局部问题，正在修正${target}`
-  if (isTeachingContractRepair(activity.operation)) return `正在整理${target}的章节结构`
+  if (activity.operation.startsWith('continueTeachingSectionAfterRejection')) return `同一章节 Agent 正在依据完整候选和准确校验原因，重新生成${target}`
+  if (activity.operation.startsWith('settleTeachingSectionNoProgress')) return `同一章节 Agent 连续返回完全相同的无效候选，${target}已局部停止；其他已发布章节仍然保留`
   if (activity.operation.startsWith('confirmGeneratedClaims')) return `正在逐条复核${target}的规则陈述`
   if (activity.operation.startsWith('reviewGeneratedContent')) return `正在核对${target}的规则和出处`
   if (activity.operation.startsWith('reviewObjectiveCoverage')) return `正在检查${target}有没有漏讲关键步骤`
   if (activity.operation.startsWith('validateTeachingSection')) {
     return activity.outcome === 'SUCCEEDED'
       ? `${target}已完成引用归属、规则书版本与结构校验`
-      : `${target}需要局部修正后再发布`
+      : `${target}的候选未通过校验；完整候选和准确原因会返回同一 Agent`
   }
   if (activity.operation.startsWith('publishTeachingSection')) {
     return activity.outcome === 'SUCCEEDED'
@@ -230,8 +226,8 @@ export function recentTeachingPreparationActivitySteps<TOutcome extends Teaching
 }
 
 /**
- * Summarises the latest real page activity that leads to typed rule groups. Earlier attempts remain
- * available in the activity history; they do not override a later repair or temporary retry.
+ * Summarises the latest real page candidate settlement that leads to typed rule groups. Earlier candidates remain
+ * available in activity history; a later accepted candidate or local settlement is authoritative for that page.
  */
 export function summarizeTeachingVisualPageRuleGroups(
   activities: readonly TeachingActivitySummary<TeachingActivityDisplayOutcome>[],
@@ -258,6 +254,7 @@ export function summarizeTeachingVisualPageRuleGroups(
         progress.kind,
         attempt,
         !playerJourneyRunIsTerminal(preparationRunState),
+        progress.candidateState,
       ),
     })
   }
@@ -337,13 +334,17 @@ export function teachingRunStopReasonText(
       ? 'The run reached its wall-time deadline after bounded recovery. Already published chapters remain available.'
       : '本轮在有限恢复后到达总时限；已经发布的章节仍然保留。'
   }
+  if (code === 'AGENT_TOKEN_BUDGET') {
+    return locale === 'en'
+      ? 'The run exhausted its token budget. Already published chapters remain available.'
+      : '本轮用完了令牌预算；已经发布的章节仍然保留。'
+  }
   if (code === 'AGENT_STEP_BUDGET'
     || code === 'AGENT_TOOL_BUDGET'
-    || code === 'AGENT_MODEL_BUDGET'
-    || code === 'AGENT_TOKEN_BUDGET') {
+    || code === 'AGENT_MODEL_BUDGET') {
     return locale === 'en'
-      ? 'The run exhausted its bounded step, tool, model-call, or token budget. Already published chapters remain available.'
-      : '本轮用完了预先限定的步骤、工具、模型调用或令牌预算；已经发布的章节仍然保留。'
+      ? 'This historical run was stopped by a retired call-count limit. Current runs record these counts without treating them as a failure boundary. Already published chapters remain available.'
+      : '这是一条历史任务：它曾被现已取消的调用次数上限停止。当前任务只记录这些次数，不再据此判定失败；已经发布的章节仍然保留。'
   }
   if (code === 'TEACHING_COMPLETION_FAILED') {
     return locale === 'en'
@@ -459,21 +460,13 @@ function chapterForActivity(
   return null
 }
 
-function isTeachingContractRepair(operation: string) {
-  return operation.startsWith('repairTeachingSection')
-    || operation.startsWith('repairTextTeachingSection')
-    || operation.startsWith('repairCorrectedTeachingSection')
-}
-
 function isPlayerFacingTeachingOperation(operation: string) {
   return operation.startsWith('readTeachingSourcePages')
     || operation.startsWith('readRuleEvidencePages')
     || operation.startsWith('searchRuleEvidence')
     || operation.startsWith('composeTeachingSection')
-    || operation.startsWith('correctTeachingSection')
-    || operation.startsWith('reviseTeachingSection')
-    || operation.startsWith('reviseTextTeachingSection')
-    || isTeachingContractRepair(operation)
+    || operation.startsWith('continueTeachingSectionAfterRejection')
+    || operation.startsWith('settleTeachingSectionNoProgress')
     || operation.startsWith('validateTeachingSection')
     || operation.startsWith('publishTeachingSection')
     || operation.startsWith('settleVisualCandidateSelection')
@@ -481,12 +474,26 @@ function isPlayerFacingTeachingOperation(operation: string) {
 }
 
 function visualCandidateSelectionProgress(operation: string) {
-  const [kind, batchText, attemptText, reasonCode, ...extra] = operation.split('|')
+  const [kind, batchText, attemptText, reasonCode, stateText, ...extra] = operation.split('|')
   if (kind !== 'settleVisualCandidateSelection' || extra.length > 0 || !reasonCode) return null
   const batch = Number(batchText)
   const attempt = Number(attemptText)
-  if (!Number.isInteger(batch) || batch < 1 || (attempt !== 1 && attempt !== 2)) return null
-  return { batch, attempt, reasonCode }
+  if (!Number.isInteger(batch) || batch < 1 || !Number.isInteger(attempt) || attempt < 1) return null
+  const currentStates = ['correction-follows', 'no-progress', 'accepted', 'no-visual', 'local-unavailable'] as const
+  const state = currentStates.find(candidate => candidate === stateText)
+    ?? (stateText === undefined
+      ? outcomeForLegacyVisualSelection(reasonCode, attempt)
+      : null)
+  return state ? { batch, attempt, reasonCode, state } : null
+}
+
+function outcomeForLegacyVisualSelection(reasonCode: string, attempt: number) {
+  if (reasonCode === 'NONE') return 'accepted' as const
+  if (reasonCode === 'EXPLICIT_NO_REGION') return 'no-visual' as const
+  if (reasonCode === 'MALFORMED_JSON' || reasonCode === 'UNSUPPORTED_SCOPE') {
+    return attempt === 1 ? 'correction-follows' as const : 'local-unavailable' as const
+  }
+  return 'local-unavailable' as const
 }
 
 function latestVisualCandidateSelectionBefore(
@@ -517,10 +524,10 @@ function visualCandidateSelectionActivityText(
     return locale === 'en'
       ? progress.attempt === 1
         ? 'The visual candidate passed validation'
-        : 'The Agent’s one complete visual replacement passed validation'
+        : `The visual Agent’s complete replacement passed validation on candidate ${progress.attempt}`
       : progress.attempt === 1
         ? '配图候选已经通过校验'
-        : '视觉 Agent 的一次完整重选已经通过校验'
+        : `视觉 Agent 返回的第 ${progress.attempt} 个完整候选已经通过校验`
   }
   if (progress.reasonCode === 'EXPLICIT_NO_REGION' && outcome === 'SUCCEEDED') {
     return locale === 'en'
@@ -532,14 +539,19 @@ function visualCandidateSelectionActivityText(
       ? 'The candidate crop could not be prepared; only this optional visual is omitted and the cited text remains readable'
       : '候选截图无法生成；仅省略这张可选配图，已校验正文仍可阅读'
   }
-  if (progress.attempt === 1) {
+  if (progress.state === 'correction-follows') {
     return locale === 'en'
-      ? `${reason}; the same visual Agent is making one bounded complete replacement or retry. This is not a final visual failure.`
-      : `${reason}；同一个视觉 Agent 正在进行一次有限的完整重选或重试，这还不是最终配图失败。`
+      ? `${reason}; the complete candidate, exact error, JSON contract, and allowed identities returned to the same visual Agent. It may produce another complete candidate while the observation changes and resources remain.`
+      : `${reason}；完整候选、准确错误、JSON 合同和允许身份已返回同一个视觉 Agent。只要 observation 仍在变化且资源尚未耗尽，它可以继续返回新的完整候选。`
+  }
+  if (progress.state === 'no-progress') {
+    return locale === 'en'
+      ? `${reason}; the visual Agent repeated the same complete candidate and exact error, so this batch stopped for no progress. Only this optional visual is omitted and the cited text remains readable.`
+      : `${reason}；视觉 Agent 重复了相同完整候选和准确错误，这个批次因无进展停止。仅省略这张可选配图，已校验正文仍可阅读。`
   }
   return locale === 'en'
-    ? `${reason} after the one bounded complete replacement or retry; only this optional visual is omitted and the cited text remains readable.`
-    : `经过一次有限的完整重选或重试后，${reason}；仅省略这张可选配图，已校验正文仍可阅读。`
+    ? `${reason}; this is a local visual unavailability, so only this optional visual is omitted and the cited text remains readable.`
+    : `${reason}；这是局部配图不可用，仅省略这张可选配图，已校验正文仍可阅读。`
 }
 
 function visualCandidateSelectionReason(code: string, locale: AppLocale) {
@@ -558,8 +570,50 @@ function visualCandidateSelectionReason(code: string, locale: AppLocale) {
 function isPlayerFacingTeachingPreparationOperation(operation: string) {
   return visualPreparationPageProgress(operation) !== null
     || operation.startsWith('organizeTeachingOutline')
-    || operation.startsWith('refineTeachingOutlineCoverage')
-    || operation.startsWith('refineTeachingOutlineOwnership')
+}
+
+function outlineValidationProgress(operation: string) {
+  const [origin, kind, stageText, stateText, ...extra] = operation.split('|')
+  if (extra.length > 0
+    || kind !== 'validation'
+    || origin !== 'organizeTeachingOutline') return null
+  const localShard = stageText?.startsWith('local-')
+    ? Number(stageText.slice('local-'.length))
+    : null
+  const stage = stageText === 'whole' || stageText === 'global'
+    ? stageText
+    : localShard !== null && Number.isInteger(localShard) && localShard > 0
+      ? 'local' as const
+      : null
+  if (!stage) return null
+  if (stateText === 'no-progress') return { stage, state: 'no-progress' as const }
+  if (!stateText?.startsWith('candidate-')) return null
+  const candidateNumber = Number(stateText.slice('candidate-'.length))
+  return Number.isInteger(candidateNumber) && candidateNumber > 0
+    ? { stage, state: 'candidate-rejected' as const, candidateNumber }
+    : null
+}
+
+function outlineValidationActivityText(
+  progress: NonNullable<ReturnType<typeof outlineValidationProgress>>,
+  locale: AppLocale,
+) {
+  if (progress.state === 'candidate-rejected') {
+    return locale === 'en'
+      ? 'The chapter-plan candidate did not pass validation; its complete JSON, exact error, output contract, and allowed identities were returned to the same Agent, which may continue while the observation changes'
+      : '章节规划候选没有通过校验；完整 JSON、准确错误、输出契约和允许身份已退回同一个 Agent，只要 observation 仍在变化就会继续修正'
+  }
+  if (progress.stage === 'local') {
+    return locale === 'en'
+      ? 'The local rule-group Agent repeated the same rejected observation, so that shard fell back to independent source-owned units; sibling shards and global planning continue'
+      : '局部规则分组 Agent 重复了完全相同的无效 observation；该分片已回退为逐条来源单元，兄弟分片和全局规划继续'
+  }
+  const scope = progress.stage === 'global'
+    ? locale === 'en' ? 'global chapter plan' : '全局章节规划'
+    : locale === 'en' ? 'whole chapter plan' : '整份章节规划'
+  return locale === 'en'
+    ? `The ${scope} Agent repeated the same complete candidate and validation observation, so preparation stopped for no progress; no invalid plan is published`
+    : `${scope} Agent 重复了完全相同的完整候选和校验 observation；准备因无进展停止，不会发布不合格规划`
 }
 
 function teachingPreparationActivityText(
@@ -567,7 +621,7 @@ function teachingPreparationActivityText(
   locale: AppLocale,
 ) {
   const visualPageProgress = visualPreparationPageProgress(activity.operation)
-  if (activity.operation.startsWith('inspectTeachingVisual')) {
+  if (visualPageProgress?.kind === 'grouping') {
     return visualPageActivityText(activity.outcome, visualPageProgress, locale)
   }
   if (activity.operation.startsWith('persistTeachingVisualPage')) {
@@ -578,20 +632,17 @@ function teachingPreparationActivityText(
       ? 'The latest preparation activity has an unrecognized status; use the overall task state'
       : '最新讲解准备活动的状态无法识别，请以整条任务状态为准'
   }
-  const unsuccessful = activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
+  const outlineValidation = outlineValidationProgress(activity.operation)
+  if (outlineValidation && activity.outcome === 'REJECTED') {
+    return outlineValidationActivityText(outlineValidation, locale)
+  }
   if (locale === 'en') {
     if (activity.operation.startsWith('organizeTeachingOutline')) {
       if (activity.outcome === 'FAILED') return 'The chapter plan did not complete this time'
       if (activity.outcome === 'REJECTED') return 'The chapter plan did not pass validation this time'
       return activity.outcome === 'SUCCEEDED'
-        ? 'A whole-game view is ready and the rulebook is organized into teachable chapters'
+        ? 'A chapter-plan candidate has returned and is being checked for rulebook support, chapter ownership, and structure'
         : 'Reading across the rulebook to build a whole-game view before planning chapters'
-    }
-    if (activity.operation.startsWith('refineTeachingOutlineCoverage')) {
-      return unsuccessful ? 'Keeping the usable chapter plan' : 'Checking the chapter plan for omitted rulebook material'
-    }
-    if (activity.operation.startsWith('refineTeachingOutlineOwnership')) {
-      return unsuccessful ? 'Keeping the usable chapter boundaries' : 'Giving each rule one clear chapter home'
     }
     return 'The chapter plan is ready for writing'
   }
@@ -599,14 +650,8 @@ function teachingPreparationActivityText(
     if (activity.outcome === 'FAILED') return '讲解章节规划本次未完成'
     if (activity.outcome === 'REJECTED') return '讲解章节规划本次校验未通过'
     return activity.outcome === 'SUCCEEDED'
-      ? '已形成整局认识，并把规则书整理成可讲解的章节'
+      ? '章节规划候选已返回，正在校验规则依据、章节归属和结构'
       : '正在通读规则书，先形成整局认识再规划讲解章节'
-  }
-  if (activity.operation.startsWith('refineTeachingOutlineCoverage')) {
-    return unsuccessful ? '保留当前可用的章节规划' : '正在检查章节规划有没有漏掉规则内容'
-  }
-  if (activity.operation.startsWith('refineTeachingOutlineOwnership')) {
-    return unsuccessful ? '保留当前可用的章节边界' : '正在为每条规则安排清晰的讲解章节'
   }
   return '讲解章节规划已完成，准备编写正文'
 }
@@ -626,80 +671,112 @@ function visualPageActivityText(
       ? `The latest activity status for ${target} is unrecognized; use the overall task state`
       : `${target}的最新活动状态无法识别，请以整条任务状态为准`
   }
-  if (progress?.attempt === 'repair' && progress.repairCode) {
-    const reason = visualContractRepairReason(progress.repairCode, locale)
-    if (locale === 'en') {
-      const target = `visual rulebook page ${progress.page} of ${progress.total}`
-      if (outcome === 'RUNNING') return `${reason}; correcting the rule grouping for ${target}`
-      if (outcome === 'SUCCEEDED') return `Rule grouping correction generated for ${target}; saving it now`
-      if (outcome === 'FAILED') return `Rule grouping for ${target} still did not complete after one correction; only this page stays unavailable`
-      return `Rule grouping for ${target} still did not pass validation after one correction; only this page stays unavailable`
-    }
-    const target = `图像规则页第 ${progress.page} / ${progress.total} 页的规则整理`
-    if (outcome === 'RUNNING') return `${reason}，正在修正${target}`
-    if (outcome === 'SUCCEEDED') return `${target}修正结果已生成，正在保存`
-    if (outcome === 'FAILED') return `${target}经过一次修正后仍未完成；仅本页暂不可用，其他页面继续保留`
-    return `${target}经过一次修正后仍未通过校验；仅本页暂不可用，其他页面继续保留`
+  if (!progress || progress.kind !== 'grouping') {
+    return locale === 'en' ? 'The visual page candidate changed state' : '图像规则页候选状态已变化'
   }
-  if (locale === 'en') {
-    const label = 'Rule grouping'
-    const target = progress ? ` for visual rulebook page ${progress.page} of ${progress.total}` : ''
-    const subject = progress ? `${label}${target}` : 'Visual rulebook page grouping'
-    if (progress?.attempt === 'temporary-retry') {
-      if (outcome === 'RUNNING') return `A temporary service error occurred; retrying ${label.toLocaleLowerCase()}${target}`
-      if (outcome === 'SUCCEEDED') return `${label} retry generated a result after a temporary service error${target}; saving it now`
-      if (outcome === 'FAILED') return `${label} retry${target} still did not complete after a temporary service error`
-      return `${label} retry${target} did not pass validation after a temporary service error`
-    }
-    if (outcome === 'SUCCEEDED') return `${subject} generated a result; saving it now`
-    if (outcome === 'FAILED') return `${subject} did not complete this time`
-    if (outcome === 'REJECTED') return `${subject} did not pass validation this time`
-    return progress
-      ? `Organising the rules on visual rulebook page ${progress.page} of ${progress.total}`
-      : 'Organising the visual rulebook page into rule groups'
+  if (progress.legacyKind) {
+    const target = locale === 'en'
+      ? `visual rulebook page ${progress.page} of ${progress.total}`
+      : `图像规则页第 ${progress.page} / ${progress.total} 页`
+    if (outcome === 'RUNNING') return locale === 'en'
+      ? `Organising the rules on ${target}`
+      : `正在整理${target}的规则组`
+    if (outcome === 'SUCCEEDED') return locale === 'en'
+      ? `Rule grouping for ${target} generated a result; saving it now`
+      : `${target}的规则整理已生成结果，正在保存`
+    if (outcome === 'FAILED') return locale === 'en'
+      ? `Rule grouping for ${target} did not complete this time`
+      : `${target}的规则整理本次未完成`
+    return locale === 'en'
+      ? `Rule grouping for ${target} did not pass validation this time`
+      : `${target}的规则整理本次校验未通过`
   }
-  const subject = progress
-    ? `图像规则页第 ${progress.page} / ${progress.total} 页的规则整理`
-    : '图像规则页的规则整理'
-  if (progress?.attempt === 'temporary-retry') {
-    if (outcome === 'RUNNING') return `临时服务异常，正在重试${subject}`
-    if (outcome === 'SUCCEEDED') return `${subject}在临时服务异常后已生成结果，正在保存`
-    if (outcome === 'FAILED') return `${subject}在临时服务异常后重试仍未完成`
-    return `${subject}在临时服务异常后重试仍未通过校验`
+  const candidate = locale === 'en'
+    ? `candidate ${progress.candidateNumber}`
+    : `第 ${progress.candidateNumber} 个完整候选`
+  const target = locale === 'en'
+    ? `visual rulebook page ${progress.page} of ${progress.total}`
+    : `图像规则页第 ${progress.page} / ${progress.total} 页`
+  if (progress.candidateState === 'accepted') {
+    return locale === 'en'
+      ? `${candidate} for ${target} passed validation; saving its typed rule groups now`
+      : `${target}的${candidate}已通过校验，正在保存结构化规则组`
   }
-  if (outcome === 'SUCCEEDED') return `${subject}已生成结果，正在保存`
-  if (outcome === 'FAILED') return `${subject}本次未完成`
-  if (outcome === 'REJECTED') return `${subject}本次校验未通过`
-  return progress
-    ? `正在整理图像规则页第 ${progress.page} / ${progress.total} 页的规则组`
-    : '正在把图像规则页整理成规则组'
+  if (progress.candidateState === 'correction-follows') {
+    return locale === 'en'
+      ? `${candidate} for ${target} did not pass ${visualPageCandidateReason(progress.reasonCode, locale)}; its complete JSON, exact error, original contract, and allowed page IDs returned to the same Agent, which may continue while the observation changes and run resources remain`
+      : `${target}的${candidate}未通过${visualPageCandidateReason(progress.reasonCode, locale)}；完整结果、具体错误、格式要求和可用页码已交回同一个模型，只要返回内容仍在变化且本轮还有文字预算和有效工作时间，就会继续修正`
+  }
+  if (progress.candidateState === 'no-progress') {
+    return locale === 'en'
+      ? `${candidate} for ${target} repeated an earlier complete rejected observation; this page stopped for no progress, while successful sibling pages remain available`
+      : `${target}的${candidate}与此前已经拒绝的一份完整结果完全相同；为避免重复消耗，本页因无进展停止，其他成功页面继续保留`
+  }
+  if (progress.reasonCode === 'PROVIDER_FAILURE' || progress.reasonCode === 'PROVIDER_TIMEOUT') {
+    return locale === 'en'
+      ? `The provider did not complete ${candidate} for ${target}; this is a transport failure, not a JSON correction, and only this page is unavailable`
+      : `模型服务没有完成${target}的${candidate}；这不是格式校验失败，仅本页暂不可用`
+  }
+  if (progress.reasonCode === 'IMAGE_UNAVAILABLE') {
+    return locale === 'en'
+      ? `The source image for ${target} could not be read; only this page is unavailable and successful siblings remain`
+      : `${target}的原图无法读取；仅本页暂不可用，其他已成功页面继续保留`
+  }
+  return locale === 'en'
+    ? `${candidate} for ${target} became locally unavailable at the workflow boundary; successful sibling pages remain available`
+    : `${target}的${candidate}在当前处理阶段局部不可用；其他成功页面继续保留`
 }
 
 function visualPreparationPageProgress(operation: string) {
   const parts = operation.split('|')
-  const [kind, pageText, totalText, repairCode] = parts
-  const grouping = kind === 'inspectTeachingVisualPage'
+  const [kind, pageText, totalText, candidateText, candidateState, reasonCode] = parts
+  const legacyGrouping = kind === 'inspectTeachingVisualPage'
     || kind === 'inspectTeachingVisualRetry'
     || kind === 'inspectTeachingVisualRepair'
+  const grouping = kind === 'settleTeachingVisualPageCandidate'
   const persistence = kind === 'persistTeachingVisualPage'
-  if (!grouping && !persistence) return null
-  const groupingRepair = kind === 'inspectTeachingVisualRepair'
-  if (parts.length !== (groupingRepair ? 4 : 3)) return null
+  if (!grouping && !persistence && !legacyGrouping) return null
+  const legacyRepair = kind === 'inspectTeachingVisualRepair'
+  if (parts.length !== (grouping ? 6 : legacyRepair ? 4 : 3)) return null
   const page = Number(pageText)
   const total = Number(totalText)
   if (!Number.isInteger(page) || page < 1 || !Number.isInteger(total) || total < page) return null
-  const attempt: TeachingVisualPageRuleGroupAttempt = groupingRepair
-    ? 'repair'
-    : kind === 'inspectTeachingVisualRetry'
-      ? 'temporary-retry'
-      : 'direct'
-  if (groupingRepair && !repairCode) return null
-  return {
-    kind: grouping ? 'grouping' as const : 'persistence' as const,
+  if (legacyGrouping) return {
+    kind: 'grouping' as const,
     page,
     total,
-    attempt,
-    repairCode: groupingRepair ? repairCode ?? null : null,
+    attempt: legacyRepair || kind === 'inspectTeachingVisualRetry'
+      ? 'correction' as const
+      : 'direct' as const,
+    candidateNumber: legacyRepair || kind === 'inspectTeachingVisualRetry' ? 2 : 1,
+    candidateState: null,
+    reasonCode: legacyRepair ? candidateText ?? null : null,
+    legacyKind: kind,
+  }
+  if (persistence) return {
+    kind: 'persistence' as const,
+    page,
+    total,
+    attempt: 'direct' as TeachingVisualPageRuleGroupAttempt,
+    candidateNumber: null,
+    candidateState: null,
+    reasonCode: null,
+    legacyKind: null,
+  }
+  if (!candidateText?.startsWith('candidate-') || !reasonCode) return null
+  const candidateNumber = Number(candidateText.slice('candidate-'.length))
+  const states = ['correction-follows', 'no-progress', 'accepted', 'local-unavailable'] as const
+  const settledState = states.find(state => state === candidateState)
+  if (!Number.isInteger(candidateNumber) || candidateNumber < 1 || !settledState) return null
+  return {
+    kind: 'grouping' as const,
+    page,
+    total,
+    attempt: candidateNumber === 1 ? 'direct' as const : 'correction' as const,
+    candidateNumber,
+    candidateState: settledState,
+    reasonCode,
+    legacyKind: null,
   }
 }
 
@@ -708,16 +785,33 @@ function visualPageRuleGroupState(
   stage: TeachingVisualPageRuleGroupStage,
   attempt: TeachingVisualPageRuleGroupAttempt,
   runCanProgress: boolean,
+  candidateState: 'correction-follows' | 'no-progress' | 'accepted' | 'local-unavailable' | null,
 ): TeachingVisualPageRuleGroupState {
-  if (outcome === 'UNKNOWN') return 'no-rule-groups'
-  if (outcome === 'RUNNING') return runCanProgress ? 'processing' : 'no-rule-groups'
+  if (outcome === 'UNKNOWN') return 'local-unavailable'
+  if (stage === 'grouping' && candidateState === 'correction-follows') {
+    return runCanProgress ? 'processing' : 'local-unavailable'
+  }
+  if (outcome === 'RUNNING') return runCanProgress ? 'processing' : 'local-unavailable'
   if (outcome === 'SUCCEEDED') {
     if (stage === 'grouping') {
-      return runCanProgress ? 'processing' : 'no-rule-groups'
+      return runCanProgress ? 'processing' : 'local-unavailable'
     }
-    return attempt === 'direct' ? 'directly-completed' : 'completed-after-recovery'
+    return attempt === 'direct' ? 'directly-completed' : 'completed-after-correction'
   }
-  return 'no-rule-groups'
+  return 'local-unavailable'
+}
+
+function visualPageCandidateReason(code: string | null, locale: AppLocale) {
+  if (locale === 'en') {
+    if (code === 'MALFORMED_JSON') return 'JSON syntax validation'
+    if (code === 'DUPLICATE_RULE_GROUP') return 'duplicate rule-group validation'
+    if (code === 'PAGE_BINDING_MISMATCH') return 'page-identity validation'
+    return 'the V6 typed contract'
+  }
+  if (code === 'MALFORMED_JSON') return 'JSON 语法校验'
+  if (code === 'DUPLICATE_RULE_GROUP') return '重复规则组校验'
+  if (code === 'PAGE_BINDING_MISMATCH') return '页码身份校验'
+  return 'V6 typed 合同校验'
 }
 
 function visualPagePersistenceActivityText(
@@ -743,21 +837,6 @@ function visualPagePersistenceActivityText(
   if (outcome === 'SUCCEEDED') return `${target}的规则组已经保存`
   if (outcome === 'RUNNING') return `正在保存${target}的规则组`
   return `${target}的规则组没有保存成功`
-}
-
-function visualContractRepairReason(code: string, locale: AppLocale) {
-  if (locale === 'en') {
-    if (code === 'MALFORMED_JSON') return 'The returned format did not pass validation'
-    if (code === 'SCHEMA_MISMATCH') return 'This page returned fields that need correction; other pages are unaffected'
-    if (code === 'DUPLICATE_RULE_GROUP') return 'The returned result contained an exactly duplicated rule group'
-    if (code === 'PAGE_BINDING_MISMATCH') return 'The returned result was not safely bound to this page'
-    return 'The returned rule-group structure did not pass validation'
-  }
-  if (code === 'MALFORMED_JSON') return '返回格式没有通过校验'
-  if (code === 'SCHEMA_MISMATCH') return '这一页返回的字段需要修正，其他页面不受影响'
-  if (code === 'DUPLICATE_RULE_GROUP') return '返回结果含有完全重复的规则组'
-  if (code === 'PAGE_BINDING_MISMATCH') return '返回结果无法安全绑定到这一页'
-  return '返回的规则组结构没有通过校验'
 }
 
 function publishedPositions(activities: TeachingActivity[]) {

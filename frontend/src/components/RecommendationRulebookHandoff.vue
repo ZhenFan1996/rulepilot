@@ -184,7 +184,6 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。现有内容不会丢失。',
   missingChapterEvidence: (titles: string) => `“${titles}”对应的规则页没有提供足够依据，所以没有猜测并发布；其他已校验章节仍可阅读。`,
   invalidChapterEvidence: (titles: string) => `“${titles}”读取到的依据没有通过来源或规则书版本校验，因此没有进入正文生成；其他已校验章节仍可阅读。`,
-  invalidChapterAfterRetry: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验；后台已自动只重试这部分一次，仍未通过，因此保留其他已发布章节并停下。`,
   invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
   retry: '重试当前步骤', stop: '停止本次生成', restart: '从已完成内容重新开始', retryFailed: '本次重试没有启动，后台不会自动继续重试。请检查连接后再手动操作。', stopFailed: '本次停止请求没有完成，当前运行可能仍在继续。请检查连接后再操作。', remove: '删除讲解', removeConfirm: '确认删除这份讲解及其生成任务？规则书会保留，已生成章节会被删除。', removeYes: '确认删除', removeNo: '先保留', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；正在运行的下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。', safeStopped: '可以关闭这个小窗继续聊天；已确认内容会保留，已停止的任务不会在后台自行重新开始。页面上的“讲解状态”入口会一直显示。',
@@ -215,32 +214,32 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     TEACHING_CONTINUATION_ADMISSION_FAILED: '第一段带引用讲解已经可读；其余章节获得 worker 后未能持久接管。',
     TEACHING_WORKFLOW_FAILED: '失败发生在读取章节证据、生成正文或核对引用期间；已经发布的章节会保留。',
     TEACHING_COMPLETION_FAILED: '讲解内容已经生成，但保存最终完成状态失败；已有可读章节会保留。',
-    AGENT_STEP_BUDGET: '本轮在限定步骤内仍未完成；已确认内容会保留，系统不会无限继续。',
-    AGENT_TOOL_BUDGET: '本轮已用完允许的规则检索次数；已确认内容会保留。',
-    AGENT_MODEL_BUDGET: '本轮已用完允许的模型调用次数；已确认内容会保留。',
+    AGENT_STEP_BUDGET: '这是旧运行保留的“步骤次数”终止码；当时已确认内容仍保留。新运行不按步骤次数停止。',
+    AGENT_TOOL_BUDGET: '这是旧运行保留的“工具调用次数”终止码；当时已确认内容仍保留。新运行只记录调用数，不以它作为失败边界。',
+    AGENT_MODEL_BUDGET: '这是旧运行保留的“模型调用次数”终止码；当时已确认内容仍保留。新运行只记录调用数，不以它作为失败边界。',
     AGENT_TOKEN_BUDGET: '本轮达到文字处理预算；已确认内容会保留。',
     AGENT_TIMEOUT: '整轮讲解达到总时限后停止；已确认内容会保留。',
   },
   generationLocalFailureTitle: '局部降级：可用内容保留',
-  generationLocalFailure: '单页规则整理失败只会让该页暂不可用，局部配图失败只省略配图。格式、字段、重复内容或页码绑定错误只用原图修正当前页一次；其他页面和已发布章节继续保留。',
+  generationLocalFailure: '一页图片只会在这些局部情况下标为“本页不可用”：原图读不到；处理本页的模型请求失败或超时；系统无法形成一份完整的错误说明交回模型；或模型再次返回以前已被拒绝的同一份完整结果。格式不合格但结果仍在变化时，系统会把完整结果、具体错误、格式要求和可用页码交回同一个模型继续修正。你主动取消、整轮文字处理额度或有效工作时间用完，属于整轮停止，不会冒充成某一页失败。单页不可用不会让整份讲解失败；其他成功页面和已经发布的章节都会保留。',
   generationPreservedStopTitle: '保留已完成内容后停止',
-  generationPreservedStop: '至少一个必讲主题在有限检索与定向重试后仍找不到足够的可引用规则、整条任务的总预算或全局时限耗尽，或任务被取消时，当前任务停止；已确认页面和已发布章节保留。',
+  generationPreservedStop: '整份讲解只有在这些情况下才会停止：你取消；整轮文字预算或有效工作时间用尽；整份规则书都无法读取；找不到任何能核验的规则依据；最后没有一章可以安全发布；或模型服务、保存、身份、引用校验发生无法恢复的错误。已经确认的页面和已经发布的章节不会被删除。登录会话失效只停止当前页面刷新；后台任务保持持久状态，重新登录后会重新绑定并刷新。',
   generationRepairTitle: '需要你或运维修复后继续',
-  generationRepair: '权限/登录、非法参数或来源、章节规划结构不符合契约、服务持续不可用、未知异常或保存失败需先修复；界面只在有安全恢复动作时显示重试、换来源或上传。单个请求超时本身不归入这一类：它只影响当前请求，只有明确的临时异常会重试一次，不代表整条任务的全局时限已耗尽。',
+  generationRepair: '登录或权限、无效参数、错误来源，以及无法恢复的模型服务、保存、身份或引用问题，需要先修复再继续。界面只会在确实能安全恢复时显示“重试”“换来源”或“上传”。单次请求超时只代表这一次没有完成，不等于整份讲解已经失败；后台会依据剩余文字预算、有效工作时间和取消状态决定能否继续。',
   visualRuleGroupSummaryTitle: '每页规则组最新状态',
   visualRuleGroupSummaryHint: '只按每页已发出的最新真实活动汇总；还没有活动的页面不会计入，下方保留每次玩家可见尝试。',
   visualRuleGroupStatus: {
     'directly-completed': '直接完成',
-    'completed-after-recovery': '经修正 / 临时重试后完成',
+    'completed-after-correction': '经完整候选修正后完成',
     processing: '正在处理',
-    'no-rule-groups': '当前未形成规则组',
+    'local-unavailable': '本页局部不可用',
   } satisfies Record<TeachingVisualPageRuleGroupState, string>,
   visualRuleGroupCount: (count: number) => `${count} 页`,
   visualRuleGroupPages: (pages: readonly number[]) => `第 ${pages.join('、')} 页`,
   generationAttemptMarkerHint: '“!”表示这一条真实尝试未完成或未通过校验，“?”表示活动状态无法识别；两者都不代表整份讲解失败，请以上方每页最新状态和整条任务状态为准。',
   planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
-    '图片页直接生成带页码绑定的结构化规则事实，文字层直接读取原文；结构化契约未通过时只用原图修正当前页一次',
+    '图片页直接按原图和页码整理规则，文字页直接读取原文；如果完整结果格式不合格，具体错误会交回同一个模型继续修正，直到通过、重复此前同一错误，或本轮文字预算 / 有效工作时间用尽',
     '按页面整理规则组，并记录规则书要求的外部资料',
     '通读整本规则书，形成整局认识并规划章节',
     '读取当前章节绑定的规则页与引用',
@@ -307,7 +306,6 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. Existing content remains available.',
   missingChapterEvidence: (titles: string) => `The cited rulebook pages did not provide enough support for “${titles}”, so RulePilot did not guess or publish it. Other validated chapters remain readable.`,
   invalidChapterEvidence: (titles: string) => `The evidence read for “${titles}” did not pass source or rulebook-version validation, so chapter writing did not start. Other validated chapters remain readable.`,
-  invalidChapterAfterRetry: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks. The background run retried only that work once and stopped when it still did not pass; other published chapters remain readable.`,
   invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
   retry: 'Retry this step', stop: 'Stop this run', restart: 'Start a new run from completed work', retryFailed: 'This retry did not start. Nothing is retrying in the background; check your connection and try the action again.', stopFailed: 'The stop request did not complete, so this run may still be active. Check your connection and try again.', remove: 'Delete guide', removeConfirm: 'Delete this guide and its generation work? The rulebook stays, but published chapters are removed.', removeYes: 'Delete guide', removeNo: 'Keep it', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Downloads and guide runs that are still active will continue. The “Guide status” shortcut stays visible, and My guides is always available.', safeStopped: 'You may close this panel and keep chatting. Confirmed content remains available, and stopped work will not restart in the background. The “Guide status” shortcut stays visible.',
@@ -338,25 +336,25 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     TEACHING_CONTINUATION_ADMISSION_FAILED: 'The first cited section is already readable. The remaining chapters acquired a worker but could not durably claim the run.',
     TEACHING_WORKFLOW_FAILED: 'The failure occurred while retrieving chapter evidence, writing content, or checking citations. Published chapters remain available.',
     TEACHING_COMPLETION_FAILED: 'Guide content was generated, but its final completed state could not be saved. Readable chapters remain available.',
-    AGENT_STEP_BUDGET: 'This run stopped at its step limit. Confirmed content remains available, and work will not continue indefinitely.',
-    AGENT_TOOL_BUDGET: 'This run used its allowed rule-search calls. Confirmed content remains available.',
-    AGENT_MODEL_BUDGET: 'This run used its allowed model calls. Confirmed content remains available.',
+    AGENT_STEP_BUDGET: 'This code is retained for an older run that stopped at the retired step-count boundary. Its confirmed content remains available; new runs do not stop by step count.',
+    AGENT_TOOL_BUDGET: 'This code is retained for an older run that stopped at the retired tool-call boundary. Its confirmed content remains available; new runs observe tool-call counts but do not use them as a failure boundary.',
+    AGENT_MODEL_BUDGET: 'This code is retained for an older run that stopped at the retired model-call boundary. Its confirmed content remains available; new runs observe model-call counts but do not use them as a failure boundary.',
     AGENT_TOKEN_BUDGET: 'This run reached its text-processing budget. Confirmed content remains available.',
     AGENT_TIMEOUT: 'The whole guide run stopped at its overall deadline. Confirmed content remains available.',
   },
   generationLocalFailureTitle: 'Local degradation: usable content remains',
-  generationLocalFailure: 'A failed page rule-group read leaves only that page unavailable; a focused-visual failure omits only that visual. Formatting, field, duplicate-content, or page-binding errors receive one correction from the original page image. Other pages and published chapters remain available.',
+  generationLocalFailure: 'An image page is marked “locally unavailable” only when its source image cannot be read, that page’s model request fails or times out, the application cannot form complete correction feedback, or the model repeats an identical complete result that was already rejected. If a result has the wrong format but is still changing, the same model receives the complete result, exact error, required format, and allowed page IDs and may correct it again. Cancellation or exhausted whole-run text allowance or active-work time stops the run; it is never disguised as one failed page. One unavailable page does not fail the guide, and other successful pages and published chapters remain available.',
   generationPreservedStopTitle: 'Stop after preserving completed work',
-  generationPreservedStop: 'The current task stops if at least one required topic still lacks enough citable rules after bounded retrieval and its targeted retry, the whole task exhausts its total budget or global deadline, or the task is cancelled. Confirmed pages and published chapters remain available.',
+  generationPreservedStop: "The whole guide stops only when you cancel; the run exhausts its text budget or active-work time; the entire rulebook is unreadable; no rule source can be verified; no chapter can be published safely; or the model service, persistence, identity, or citation boundary fails without a safe recovery. Confirmed pages and published chapters are never removed. Sign-in expiry stops only this page's refresh. The background task keeps its durable state; sign in again to rebind and refresh.",
   generationRepairTitle: 'You or operations must repair this before continuing',
-  generationRepair: 'Authorization or sign-in issues, invalid parameters or sources, a chapter-plan structure that violates its contract, persistent service unavailability, unknown failures, and storage failures need repair first. The UI shows retry, source change, or upload only when that recovery is safe. A single request timeout is not this category by itself: it affects only that request, only an explicit temporary error retries once, and it does not mean the whole task exhausted its global deadline.',
+  generationRepair: 'Sign-in or authorization issues, invalid parameters, the wrong source, and nonrecoverable model-service, persistence, identity, or citation errors must be repaired before continuing. The UI shows Retry, Change source, or Upload only when that action is safe. One request timeout means only that attempt did not finish; it does not by itself mean the whole guide failed. Remaining text budget, active-work time, and cancellation state decide whether work can continue.',
   visualRuleGroupSummaryTitle: 'Latest rule-group state by page',
   visualRuleGroupSummaryHint: 'This uses only the latest real activity emitted for each page. Pages without an activity are not counted, and every player-visible attempt remains below.',
   visualRuleGroupStatus: {
     'directly-completed': 'Completed directly',
-    'completed-after-recovery': 'Completed after correction / temporary retry',
+    'completed-after-correction': 'Completed after full-candidate correction',
     processing: 'Processing',
-    'no-rule-groups': 'No rule groups formed yet',
+    'local-unavailable': 'Page locally unavailable',
   } satisfies Record<TeachingVisualPageRuleGroupState, string>,
   visualRuleGroupCount: (count: number) => `${count} ${count === 1 ? 'page' : 'pages'}`,
   visualRuleGroupPages: (pages: readonly number[]) => pages.length === 1
@@ -365,7 +363,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   generationAttemptMarkerHint: '“!” marks one real attempt that did not complete or pass validation, while “?” marks an unrecognized activity status. Neither means the entire guide failed; use the latest per-page state above and the overall run state.',
   planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
-    'Generate typed, page-bound rule facts directly from image pages and read text layers as source text; when the typed contract fails validation, correct only that page once from its original image',
+    'Build page-bound rule facts directly from image pages and read text layers as source text; if a complete result has the wrong format, the same model receives the exact error and may correct it until it passes, repeats a previous error, or the run exhausts its text budget or active-work time',
     'Organise each page into rule groups and record any external material the rulebook requires',
     'Read the whole rulebook, form a whole-game view, and plan the chapters',
     'Read the source pages and citations bound to the current chapter',
@@ -614,9 +612,9 @@ const journeyTeachingSteps = computed(() => {
 })
 const visualPageRuleGroupStates = [
   'directly-completed',
-  'completed-after-recovery',
+  'completed-after-correction',
   'processing',
-  'no-rule-groups',
+  'local-unavailable',
 ] as const satisfies readonly TeachingVisualPageRuleGroupState[]
 const visualPageRuleGroupSummary = computed(() => summarizeTeachingVisualPageRuleGroups(
   preparationRun.value?.activities ?? [],
@@ -1824,7 +1822,7 @@ onBeforeUnmount(() => {
                 class="rounded-md border px-2.5 py-2"
                 :class="bucket.state === 'directly-completed'
                   ? 'border-emerald-200 bg-emerald-50/70'
-                  : bucket.state === 'completed-after-recovery'
+                  : bucket.state === 'completed-after-correction'
                     ? 'border-indigo/20 bg-indigo/5'
                     : bucket.state === 'processing'
                       ? 'border-copper/20 bg-copper/5'

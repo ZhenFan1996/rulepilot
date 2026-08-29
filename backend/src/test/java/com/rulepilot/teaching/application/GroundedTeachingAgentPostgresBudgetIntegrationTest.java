@@ -95,7 +95,7 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
     }
 
     @Test
-    void enforcesTheNineteenSectionWorkloadThroughTheProductionPostgresBudget() {
+    void recordsTheNineteenSectionWorkloadWithoutTurningItsEstimateIntoACallLimit() {
         UUID versionId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         TeachingPlan plan = GroundedTeachingAgentWorkloadTest.plan(versionId);
@@ -123,21 +123,14 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         insertAssistantRun(runId, plan.id(), startedAt);
         execution.initialize(
                 runId,
-                new BudgetLimits(
-                        40,
-                        demand.requiredToolCalls(),
-                        demand.requiredModelCalls(),
-                        5_000_000,
-                        Duration.ofMinutes(5)),
+                new BudgetLimits(5_000_000, Duration.ofMinutes(5)),
                 startedAt);
 
         var lesson = agent.createBase(plan, runId, null, ignored -> {});
 
         BudgetSnapshot budget = execution.budget(runId);
         List<ActivitySnapshot> activities = execution.activities(runId);
-        // The durable admission covers the initial image interpretation plus one page-local repair or replay.
-        // This fixture's visual catalog is unavailable, so its lower actual usage remains asserted independently.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 247));
+        assertThat(demand).isEqualTo(new WorkloadDemand(57));
         assertThat(lesson.sections()).hasSize(19).allSatisfy(section ->
                 assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED));
         assertThat(model.maximumConcurrentCalls()).isOne();
@@ -150,13 +143,59 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         assertThat(tools.searches()).isEqualTo(57);
         assertThat(tools.visualPageReads()).isEqualTo(19);
         assertThat(tools.canonicalFallbackReads()).isOne();
-        assertThat(budget.maxToolCalls()).isEqualTo(demand.requiredToolCalls());
-        assertThat(budget.maxModelCalls()).isEqualTo(demand.requiredModelCalls());
-        assertThat(budget.usedToolCalls()).isEqualTo(77).isLessThanOrEqualTo(budget.maxToolCalls());
-        assertThat(budget.usedModelCalls()).isEqualTo(20).isLessThanOrEqualTo(budget.maxModelCalls());
+        assertThat(budget.usedToolCalls()).isEqualTo(77);
+        assertThat(budget.usedModelCalls()).isEqualTo(20);
         assertThat(activities).filteredOn(activity -> activity.type() == ActivityType.TOOL).hasSize(77);
         assertThat(activities).filteredOn(activity -> activity.type() == ActivityType.MODEL).hasSize(20);
         assertThat(activities).noneMatch(activity -> activity.type() == ActivityType.CRITIC);
+    }
+
+    @Test
+    void recordsAdditionalValidRepairsWhileTokenAndDeadlineResourcesRemain() {
+        UUID runId = UUID.randomUUID();
+        Instant startedAt = Instant.now();
+        insertAssistantRun(runId, UUID.randomUUID(), startedAt);
+        AgentExecutionControl execution = new TransactionalJpaExecutionControl(sessionFactory);
+        execution.initialize(runId, new BudgetLimits(10_000, Duration.ofMinutes(5)), startedAt);
+        List<String> repairs = List.of("initial-candidate", "schema-replacement", "evidence-replacement");
+
+        for (String operation : repairs) {
+            InvocationReservation reservation = execution.reserve(
+                    runId, ActivityType.MODEL, operation, 100);
+            execution.complete(
+                    reservation, ActivityOutcome.SUCCEEDED, 100, 1, "Complete candidate accepted");
+        }
+
+        BudgetSnapshot budget = execution.budget(runId);
+        assertThat(budget.usedModelCalls()).isEqualTo(repairs.size());
+        assertThat(budget.usedTokens()).isEqualTo(repairs.size() * 200);
+        assertThat(execution.activities(runId))
+                .extracting(ActivitySnapshot::operation)
+                .containsExactlyElementsOf(repairs);
+    }
+
+    @Test
+    void enforcesStepAndToolSafetyBudgetsDerivedFromTheTokenEnvelope() {
+        UUID runId = UUID.randomUUID();
+        Instant startedAt = Instant.now();
+        insertAssistantRun(runId, UUID.randomUUID(), startedAt);
+        AgentExecutionControl execution = new TransactionalJpaExecutionControl(sessionFactory);
+        execution.initialize(runId, new BudgetLimits(2, Duration.ofMinutes(5)), startedAt);
+
+        execution.assertStepAllowed(runId, 2);
+        assertThatThrownBy(() -> execution.assertStepAllowed(runId, 3))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue("reason", StopReason.STEP_BUDGET);
+
+        for (int call = 1; call <= 2; call++) {
+            InvocationReservation reservation = execution.reserve(
+                    runId, ActivityType.TOOL, "derived-tool-budget-" + call, 0);
+            execution.complete(reservation, ActivityOutcome.SUCCEEDED, 0, 1, "Bounded tool call completed");
+        }
+        assertThatThrownBy(() -> execution.reserve(
+                        runId, ActivityType.TOOL, "derived-tool-budget-3", 0))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue("reason", StopReason.TOOL_BUDGET);
     }
 
     @Test
@@ -164,7 +203,7 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         UUID runId = UUID.randomUUID();
         Instant createdAt = Instant.parse("2026-08-29T01:00:00Z");
         Instant admittedAt = Instant.parse("2026-08-29T01:10:00Z");
-        BudgetLimits limits = new BudgetLimits(40, 72, 72, 300_000, Duration.ofMinutes(30));
+        BudgetLimits limits = new BudgetLimits(300_000, Duration.ofMinutes(30));
         insertAssistantRun(runId, UUID.randomUUID(), createdAt);
         AgentExecutionControl execution = new TransactionalJpaExecutionControl(sessionFactory);
         execution.initialize(runId, limits, createdAt);
@@ -198,7 +237,7 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
     void admitsExactlyOneWorkerWhenDuplicateDeliveriesRace() throws Exception {
         UUID runId = UUID.randomUUID();
         Instant createdAt = Instant.parse("2026-08-29T01:00:00Z");
-        BudgetLimits limits = new BudgetLimits(40, 72, 72, 300_000, Duration.ofMinutes(30));
+        BudgetLimits limits = new BudgetLimits(300_000, Duration.ofMinutes(30));
         insertAssistantRun(runId, UUID.randomUUID(), createdAt);
         AgentExecutionControl execution = new TransactionalJpaExecutionControl(sessionFactory);
         execution.initialize(runId, limits, createdAt);
@@ -232,7 +271,7 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
     void aCommittedFinalizationMakesALateCancellationAnIdempotentNoOp() throws Exception {
         UUID runId = UUID.randomUUID();
         Instant createdAt = Instant.parse("2026-08-29T01:00:00Z");
-        BudgetLimits limits = new BudgetLimits(40, 72, 72, 300_000, Duration.ofMinutes(30));
+        BudgetLimits limits = new BudgetLimits(300_000, Duration.ofMinutes(30));
         insertAssistantRun(runId, UUID.randomUUID(), createdAt);
         new TransactionalJpaExecutionControl(sessionFactory).initialize(runId, limits, createdAt);
         CountDownLatch finalizationLocked = new CountDownLatch(1);
@@ -288,7 +327,7 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
     void cancellationThatWinsTheBoundaryPreventsLateFinalization() throws Exception {
         UUID runId = UUID.randomUUID();
         Instant createdAt = Instant.parse("2026-08-29T01:00:00Z");
-        BudgetLimits limits = new BudgetLimits(40, 72, 72, 300_000, Duration.ofMinutes(30));
+        BudgetLimits limits = new BudgetLimits(300_000, Duration.ofMinutes(30));
         insertAssistantRun(runId, UUID.randomUUID(), createdAt);
         new TransactionalJpaExecutionControl(sessionFactory).initialize(runId, limits, createdAt);
         CountDownLatch cancellationLocked = new CountDownLatch(1);

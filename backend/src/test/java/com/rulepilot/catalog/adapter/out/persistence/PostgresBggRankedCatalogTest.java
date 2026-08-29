@@ -117,6 +117,13 @@ class PostgresBggRankedCatalogTest {
         assertThat(repository.findExactNames(List.of("strategy 100%", "百变策略", "missing")))
                 .extracting(match -> match.matchedName() + ":" + match.game().bggId())
                 .containsExactly("strategy 100%:10", "百变策略:10");
+        List<String> everyNameHypothesis = java.util.stream.IntStream.rangeClosed(1, 65)
+                .mapToObj(index -> index == 65 ? "strategy 100%" : "missing-title-" + index)
+                .toList();
+        assertThat(repository.findExactNames(everyNameHypothesis))
+                .extracting(match -> match.matchedName() + ":" + match.game().bggId())
+                .containsExactly("strategy 100%:10");
+        assertThat(repository.findExactName("missing ".repeat(30))).isEmpty();
         assertThat(repository.find(new Query("", BggGameType.EXPANSION, Sort.RATING, 0, 20, List.of())).games())
                 .extracting(RankedGame::bggId)
                 .containsExactly(30);
@@ -151,6 +158,14 @@ class PostgresBggRankedCatalogTest {
         assertThat(repository.findByMetadataFilters(
                         List.of(), List.of(), List.of(), List.of("Table"), 20))
                 .as("metadata lookup is an exact relation, not a fuzzy prose search")
+                .isEmpty();
+        assertThat(repository.findByMetadataFilters(
+                        List.of(),
+                        List.of("Economic", "Missing 1", "Missing 2", "Missing 3", "Missing 4", "Missing 5"),
+                        List.of(),
+                        List.of(),
+                        20))
+                .as("all typed metadata filters reach the query instead of failing at the former five-item cap")
                 .isEmpty();
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(),

@@ -49,7 +49,7 @@ import org.springframework.data.redis.core.ValueOperations;
 @Tag("paid-recommendation-public-search-canary")
 class BoardGameRecommendationPublicSearchPaidCanaryTest {
 
-    private static final Duration RECOMMENDATION_TIMEOUT = Duration.ofSeconds(45);
+    private static final Duration RECOMMENDATION_TIMEOUT = Duration.ofMinutes(2);
     private static final Duration WEB_SEARCH_TIMEOUT = Duration.ofSeconds(25);
 
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
@@ -117,8 +117,7 @@ class BoardGameRecommendationPublicSearchPaidCanaryTest {
 
             assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
             assertThat(response.assistantMessage()).isNotBlank();
-            assertThat(response.harness().modelCalls())
-                    .isBetween(1, RecommendationReActLoop.MAX_MODEL_CALLS);
+            assertThat(response.harness().modelCalls()).isPositive();
             assertThat(response.harness().actions()).contains("DISCOVER_CANDIDATES");
             assertThat(response.researchSources())
                     .isNotEmpty()

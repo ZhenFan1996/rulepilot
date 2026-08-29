@@ -14,6 +14,7 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException.RejectedOutput;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -109,7 +110,7 @@ class AnswerDraftComposerTest {
     }
 
     @Test
-    void auditsOneCompleteReplacementAndExposesTheRepairToTheWorkflowBudget() {
+    void auditsEachCompleteReplacementUntilTheAgentReturnsAValidEnvelope() {
         UUID chunkId = UUID.randomUUID();
         ModelDraft replacement = answerableDraft(
                 "修正后的结论",
@@ -119,18 +120,33 @@ class AnswerDraftComposerTest {
                 "HIGH");
         AtomicInteger compositions = new AtomicInteger();
         AtomicInteger replacements = new AtomicInteger();
-        AtomicReference<String> diagnostic = new AtomicReference<>();
+        AtomicReference<RejectedOutput> feedback = new AtomicReference<>();
+        RejectedOutput firstRejection = new RejectedOutput(
+                "{\"answerable\":true}",
+                "Missing required creator property 'citationIds'",
+                "{\"type\":\"object\",\"required\":[\"citationIds\"]}",
+                Set.of(chunkId));
+        RejectedOutput secondRejection = new RejectedOutput(
+                "{\"answerable\":true,\"citationIds\":[\"unknown\"]}",
+                "citationIds[0] is not a UUID",
+                firstRejection.schema(),
+                Set.of(chunkId));
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
             public ModelDraft compose(ModelRequest request) {
                 compositions.incrementAndGet();
-                throw new RuleAnswerModelInvalidOutputException("invalid JSON envelope");
+                throw new RuleAnswerModelInvalidOutputException(
+                        "invalid JSON envelope", null, firstRejection);
             }
 
             @Override
-            public ModelDraft replaceInvalidOutput(ModelRequest request, String rejectionDiagnostic) {
-                replacements.incrementAndGet();
-                diagnostic.set(rejectionDiagnostic);
+            public ModelDraft replaceInvalidOutput(ModelRequest request, RejectedOutput rejectedOutput) {
+                int replacementNumber = replacements.incrementAndGet();
+                feedback.set(rejectedOutput);
+                if (replacementNumber == 1) {
+                    throw new RuleAnswerModelInvalidOutputException(
+                            "invalid replacement JSON envelope", null, secondRejection);
+                }
                 return replacement;
             }
         };
@@ -143,12 +159,15 @@ class AnswerDraftComposerTest {
 
         assertThat(result.ready()).isTrue();
         assertThat(result.draft()).isEqualTo(replacement);
-        assertThat(result.modelRepairs()).isEqualTo(1);
+        assertThat(result.modelRepairs()).isEqualTo(2);
         assertThat(compositions).hasValue(1);
-        assertThat(replacements).hasValue(1);
-        assertThat(diagnostic.get()).contains("RuleAnswerModelInvalidOutputException", "invalid JSON envelope");
+        assertThat(replacements).hasValue(2);
+        assertThat(feedback).hasValue(secondRejection);
         assertThat(invocations.operations)
-                .containsExactly("composeRuleAnswer", "replaceInvalidRuleAnswerOutput");
+                .containsExactly(
+                        "composeRuleAnswer",
+                        "replaceInvalidRuleAnswerOutput",
+                        "replaceInvalidRuleAnswerOutput");
     }
 
     @Test
@@ -239,7 +258,7 @@ class AnswerDraftComposerTest {
         AnswerDraftComposer composer = new AnswerDraftComposer(new AnswerModelGateway(
                 model, new PermissiveRateLimiter(), new ImmediateAuditedAgentInvocations()));
 
-        AnswerDraftComposer.Result result = composer.repairAfterPublicationFailure(
+        AnswerDraftComposer.Result result = composer.continueAfterValidationRejection(
                 UUID.randomUUID(),
                 "player",
                 null,
@@ -252,7 +271,7 @@ class AnswerDraftComposerTest {
         assertThat(result.modelRepairs()).isEqualTo(1);
         assertThat(revisions).hasValue(1);
         assertThat(String.join(" ", feedbackReceived.get()))
-                .contains("CITATION_OWNERSHIP", "COMPLETE replacement", "field patch");
+                .contains("CITATION_OWNERSHIP", "complete replacement", "patch");
     }
 
     private ModelRequest request(UUID chunkId) {

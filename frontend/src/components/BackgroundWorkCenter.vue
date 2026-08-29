@@ -34,7 +34,7 @@ import {
 import { mergeDocumentProgress } from '@/lib/documentProgress'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
-import { playerJourneyRunIsTerminal } from '@/lib/playerJourney'
+import { playerJourneyRunIsTerminal, typedFailurePolicy } from '@/lib/playerJourney'
 import {
   playerWorkStatus,
   type PlayerCapability,
@@ -65,7 +65,7 @@ const emit = defineEmits<{
 const dialog = ref<HTMLElement | null>(null)
 const requestedRestoreTarget = ref<HTMLElement | null>(null)
 
-type WorkState = 'active' | 'complete' | 'failed'
+type WorkState = 'active' | 'complete' | 'failed' | 'cancelled'
 interface WorkItem {
   id: string
   kind: 'download' | 'rulebook' | 'lesson'
@@ -126,9 +126,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   chunking: '正在整理规则内容', embedding: '正在整理规则内容', indexing: '正在完成规则书读取', teaching: '正在组织讲解',
   rulebookFailed: '规则书读取失败，讲解无法开始',
   waitingForTeaching: '规则书已保存，读取完成后会自动开始讲解', launchingTeaching: '规则书已就绪，正在启动讲解任务',
-  teachingLaunched: '规则书已保存，讲解任务已交给后台', teachingLaunchFailed: '规则书已保存，但自动讲解没有启动',
+  teachingLaunched: '规则书已保存，讲解任务已交给后台',
   preparationReceived: '正在等待讲解 worker；普通任务最多排队 2 分钟，图片规则书最多 30 分钟，超时可重试', preparationReading: '正在确认规则书可以用于讲解',
-  preparationPlanning: '正在整理讲解结构', preparationFailed: '讲解准备没有完成，可在讲解中心重试',
+  preparationPlanning: '正在整理讲解结构', preparationFailed: '讲解准备已经停止，请在讲解中心查看失败原因',
+  preparationRetryable: '讲解准备没有完成，可在讲解中心手动重试',
   teachingPlanningEvidence: '正在确定各章节需要核对的规则', teachingRetrieving: '正在查找各章节需要的规则依据',
   teachingVerifying: '正在逐条核对讲解与规则依据', teachingComposing: '正在把规则整理成可读的讲解',
   teachingPackaging: '正在补充规则页与图示', teachingReviewing: '正在复核讲解中的规则结论',
@@ -140,10 +141,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     : `已处理 ${done} 章`,
   rejectedChapters: (done: number) => `${done} 章未发布`,
   noPublishedChapter: '尚未发布可读章节',
-  recoveringMissingResult: '准备任务已经结束，但还没有找到可读章节；后台正在自动恢复',
-  automaticRecovery: '上一次任务没有留下可读章节，正在进行第 1 / 1 次自动恢复',
-  recoveryExhausted: '自动恢复后仍没有生成可读章节',
-  recoveryExhaustedContext: '已完成第 1 / 1 次自动恢复；请打开讲解中心重试',
+  recoveringMissingResult: '准备任务已经结束，但还没有找到可读章节',
   failureCode: (code: string) => `失败记录：${code}`,
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`,
   browserRequired: '需要在来源网站刷新链接或登录',
@@ -159,9 +157,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   chunking: 'Organizing rulebook content', embedding: 'Organizing rulebook content', indexing: 'Finishing rulebook reading', teaching: 'Organizing the guide',
   rulebookFailed: 'Rulebook reading failed, so the guide could not start',
   waitingForTeaching: 'Rulebook saved; the guide will start automatically when reading completes', launchingTeaching: 'Rulebook ready; starting the guide task',
-  teachingLaunched: 'Rulebook saved; guide work was handed to the background', teachingLaunchFailed: 'Rulebook saved, but the automatic guide did not start',
+  teachingLaunched: 'Rulebook saved; guide work was handed to the background',
   preparationReceived: 'Waiting for a guide worker: up to 2 minutes ordinarily or 30 minutes for image rulebooks; a timeout is retryable', preparationReading: 'Confirming that the rulebook is ready for a guide',
-  preparationPlanning: 'Organizing the guide structure', preparationFailed: 'Guide preparation did not finish; retry from the guide center',
+  preparationPlanning: 'Organizing the guide structure', preparationFailed: 'Guide preparation stopped; open the guide center for the failure reason',
+  preparationRetryable: 'Guide preparation did not finish; retry it manually from the guide center',
   teachingPlanningEvidence: 'Deciding which rules each section must verify', teachingRetrieving: 'Finding rule evidence for each section',
   teachingVerifying: 'Checking each guide claim against the rules', teachingComposing: 'Turning the rules into a readable guide',
   teachingPackaging: 'Adding rule pages and visual references', teachingReviewing: 'Reviewing the guide\'s rule claims',
@@ -173,10 +172,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     : `${done} chapters processed`,
   rejectedChapters: (done: number) => `${done} chapters not published`,
   noPublishedChapter: 'No readable chapter has been published yet',
-  recoveringMissingResult: 'Preparation ended without a readable chapter; background recovery is running',
-  automaticRecovery: 'The previous task left no readable chapter; automatic recovery 1 of 1 is running',
-  recoveryExhausted: 'Automatic recovery still produced no readable chapter',
-  recoveryExhaustedContext: 'Automatic recovery 1 of 1 finished; open the lesson center to retry',
+  recoveringMissingResult: 'Preparation ended without a readable chapter',
   failureCode: (code: string) => `Failure record: ${code}`,
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`,
   browserRequired: 'Refresh the link or sign in on the source site',
@@ -229,15 +225,12 @@ function formatBytes(value: number) {
 function importStage(job: RulebookImportJob) {
   if (job.stage === 'COMPLETED') {
     if (job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED') return copy.value.rulebookFailed
-    if (job.teachingErrorCode === 'TEACHING_RECOVERY_EXHAUSTED') return copy.value.recoveryExhausted
-    if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') return job.teachingAutomaticRecoveryCount
-      ? copy.value.automaticRecovery
-      : copy.value.waitingForTeaching
-    if (job.teachingHandoffState === 'LAUNCHING') return job.teachingAutomaticRecoveryCount
-      ? copy.value.automaticRecovery
-      : copy.value.launchingTeaching
+    if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') return copy.value.waitingForTeaching
+    if (job.teachingHandoffState === 'LAUNCHING') return copy.value.launchingTeaching
     if (job.teachingHandoffState === 'LAUNCHED') return copy.value.teachingLaunched
-    if (job.teachingHandoffState === 'FAILED') return copy.value.teachingLaunchFailed
+    if (job.teachingHandoffState === 'FAILED') return importTeachingRetryable(job)
+      ? copy.value.preparationRetryable
+      : copy.value.preparationFailed
   }
   return {
     QUEUED: copy.value.queued,
@@ -249,6 +242,24 @@ function importStage(job: RulebookImportJob) {
     COMPLETED: copy.value.done,
     FAILED: copy.value.failed,
   }[job.stage]
+}
+
+function importTeachingRetryable(job: RulebookImportJob) {
+  if (job.teachingHandoffState !== 'FAILED' || !job.teachingErrorCode) return false
+  return typedFailurePolicy(
+    job.teachingErrorCode,
+    job.teachingNextAction === 'RETRY_TEACHING' ? 'PREPARE_TEACHING' : null,
+    job.teachingNextAction === 'RETRY_TEACHING',
+  ).retryAction === 'PREPARE_TEACHING'
+}
+
+function uploadedTeachingRetryable(handoff: UploadedTeachingHandoff) {
+  if (handoff.state !== 'FAILED' || !handoff.errorCode) return false
+  return typedFailurePolicy(
+    handoff.errorCode,
+    handoff.nextAction === 'RETRY_TEACHING' ? 'PREPARE_TEACHING' : null,
+    handoff.nextAction === 'RETRY_TEACHING',
+  ).retryAction === 'PREPARE_TEACHING'
 }
 
 function importState(job: RulebookImportJob, documentFailed: boolean): WorkState {
@@ -353,6 +364,44 @@ function teachingProgressContext(item: BackgroundTeachingItem) {
   return details.join(' · ')
 }
 
+function finishedTeachingPresentation(item: BackgroundTeachingItem) {
+  const terminalState = item.terminalState ?? 'COMPLETED'
+  const readableChapters = item.readableChapterCount
+    ?? supportedTeachingChapterCount(teachingRunDetails.value[item.runId] ?? null)
+  const preservedCapability = readableChapters > 0 ? 'guide' : 'rulebook'
+  if (terminalState === 'COMPLETED') {
+    return {
+      status: workStatus('GUIDE_COMPLETE', 'guide', 'complete', 'terminal'),
+      state: 'complete' as WorkState,
+      progress: 100,
+    }
+  }
+  if (terminalState === 'DEGRADED') {
+    return {
+      status: workStatus('GUIDE_READABLE', 'guide', 'usable', 'terminal'),
+      state: 'complete' as WorkState,
+      progress: null,
+    }
+  }
+  if (terminalState === 'CANCELLED') {
+    return {
+      status: workStatus('CANCELLED', preservedCapability, 'usable', 'terminal', 'cancelled'),
+      state: 'cancelled' as WorkState,
+      progress: null,
+    }
+  }
+  const errorCode = item.lastErrorCode ?? terminalState
+  const policy = typedFailurePolicy(errorCode, 'GENERATE_LESSON', false)
+  const retryable = policy.retryAction === 'GENERATE_LESSON'
+  return {
+    status: retryable
+      ? workStatus('NEEDS_ACTION', preservedCapability, 'usable', 'terminal', 'needs-action')
+      : workStatus('FAILED', preservedCapability, 'usable', 'terminal', 'failed'),
+    state: 'failed' as WorkState,
+    progress: null,
+  }
+}
+
 function documentStage(progress: DocumentProgress | undefined, status: string) {
   const stage = progress?.stage ?? status
   return {
@@ -397,9 +446,7 @@ const workItems = computed<WorkItem[]>(() => {
       const progress = job.stage === 'DOWNLOADING' && job.totalBytes
         ? Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
         : job.stage === 'COMPLETED' ? 100 : null
-      const context = job.teachingErrorCode === 'TEACHING_RECOVERY_EXHAUSTED'
-        ? copy.value.recoveryExhaustedContext
-        : job.stage === 'FAILED' && job.errorCode === 'SOURCE_BROWSER_REQUIRED'
+      const context = job.stage === 'FAILED' && job.errorCode === 'SOURCE_BROWSER_REQUIRED'
         ? copy.value.browserRequired
         : job.stage === 'DOWNLOADING' && job.downloadedBytes > 0
         ? job.totalBytes
@@ -407,12 +454,17 @@ const workItems = computed<WorkItem[]>(() => {
           : formatBytes(job.downloadedBytes)
         : job.sourceDomain
       const state = importState(job, documentFailed)
+      const retryableTeaching = importTeachingRetryable(job)
       return {
-        id: `import:${job.id}`, kind: 'download', title: job.title,
+        id: `import:${job.id}`, kind: job.teachingHandoffState === 'FAILED' ? 'lesson' : 'download', title: job.title,
         status: importPlayerStatus(job, document?.latestVersion.status, state),
         detail: documentFailed ? copy.value.rulebookFailed : importStage(job), context,
         state,
-        progress, target: { name: 'teach', query: { importJob: job.id } }, updatedAt: job.updatedAt,
+        progress,
+        target: retryableTeaching
+          ? { name: 'lessons' }
+          : { name: 'teach', query: { importJob: job.id } },
+        updatedAt: job.updatedAt,
       }
     })
   const importVersionIds = new Set(imports.value
@@ -444,16 +496,17 @@ const workItems = computed<WorkItem[]>(() => {
   }))
   const finishedTeachingItems = completedTeaching.value
     .filter(item => !dismissedTeachingRunIds.value.has(item.runId))
-    .map((item): WorkItem => ({
-    id: `teaching-finished:${item.runId}`, kind: 'lesson', title: item.gameTitle,
-    status: item.terminalState && item.terminalState !== 'COMPLETED'
-      ? workStatus('NEEDS_ACTION', 'rulebook', 'usable', 'terminal', 'needs-action')
-      : workStatus('GUIDE_COMPLETE', 'guide', 'complete', 'terminal'),
-    detail: latestTeachingDetail(item), context: teachingProgressContext(item),
-    state: item.terminalState && item.terminalState !== 'COMPLETED' ? 'failed' : 'complete',
-    progress: item.terminalState && item.terminalState !== 'COMPLETED' ? null : 100,
-    target: { name: 'lessons' },
-  }))
+    .map((item): WorkItem => {
+      const presentation = finishedTeachingPresentation(item)
+      return {
+        id: `teaching-finished:${item.runId}`, kind: 'lesson', title: item.gameTitle,
+        status: presentation.status,
+        detail: latestTeachingDetail(item), context: teachingProgressContext(item),
+        state: presentation.state,
+        progress: presentation.progress,
+        target: { name: 'lessons' },
+      }
+    })
   const preparationTransitionItems = preparationTeachingTransitions.value.map((transition): WorkItem => ({
       id: `teaching-transition:${transition.id}`,
       kind: 'lesson',
@@ -504,7 +557,9 @@ const workItems = computed<WorkItem[]>(() => {
       const detail = documentFailed || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
         ? copy.value.rulebookFailed
         : failed
-          ? copy.value.preparationFailed
+          ? uploadedTeachingRetryable(handoff)
+            ? copy.value.preparationRetryable
+            : copy.value.preparationFailed
           : handoff.state === 'WAITING_FOR_DOCUMENT'
             ? documentStage(documentSnapshot, documentStatus)
             : handoff.state === 'LAUNCHING'
@@ -651,7 +706,7 @@ async function loadTeachingSnapshot(
   const previous = activeTeaching.value
   const activePlanIds = new Set(active.map(item => item.planId))
   const missing = previous.filter(item => !activePlanIds.has(item.planId))
-  const confirmedTerminalStates = new Map<string, BackgroundTeachingItem['terminalState']>()
+  const confirmedTerminal = new Map<string, Partial<BackgroundTeachingItem>>()
   const confirmations = await Promise.all(missing.map(async (item) => {
     try {
       const details = await responseJson<unknown>(`/api/v1/assistant-runs/${encodeURIComponent(item.runId)}`, signal)
@@ -671,7 +726,12 @@ async function loadTeachingSnapshot(
       }
       states[item.runId] = run.state
       if (playerJourneyRunIsTerminal(run.state)) {
-        confirmedTerminalStates.set(item.planId, run.state as BackgroundTeachingItem['terminalState'])
+        const progress = runDetails[item.runId]
+        confirmedTerminal.set(item.planId, {
+          terminalState: run.state as BackgroundTeachingItem['terminalState'],
+          lastErrorCode: progress?.run.lastErrorCode ?? item.lastErrorCode ?? null,
+          readableChapterCount: supportedTeachingChapterCount(progress ?? null),
+        })
         return null
       }
       return item
@@ -692,7 +752,7 @@ async function loadTeachingSnapshot(
     if (dismissedTeachingRunIds.value.has(item.runId)) continue
     notices.set(item.planId, {
       ...item,
-      terminalState: confirmedTerminalStates.get(item.planId) ?? item.terminalState,
+      ...confirmedTerminal.get(item.planId),
     })
   }
   return {
@@ -919,6 +979,8 @@ async function bridgeCompletedPreparations(
           planId,
           gameTitle,
           terminalState: run.state as BackgroundTeachingItem['terminalState'],
+          lastErrorCode: teaching.runDetails[run.id]?.run.lastErrorCode ?? null,
+          readableChapterCount: supportedTeachingChapterCount(teaching.runDetails[run.id] ?? null),
         })
         return
       }
@@ -1328,7 +1390,7 @@ function safelyStore(key: string, value: unknown) {
           <ol v-else class="stack-y-md">
             <li v-for="item in workItems" :key="item.id" class="tabletop-panel p-4">
               <div class="flex items-start gap-3">
-                <span class="mt-0.5 grid size-9 shrink-0 place-items-center rounded-full" :class="item.state === 'failed' ? 'bg-red-100 text-red-700' : item.state === 'complete' ? 'bg-emerald-100 text-emerald-800' : 'bg-copper/12 text-copper'">
+                <span class="mt-0.5 grid size-9 shrink-0 place-items-center rounded-full" :class="item.state === 'failed' ? 'bg-red-100 text-red-700' : item.state === 'complete' ? 'bg-emerald-100 text-emerald-800' : item.state === 'cancelled' ? 'bg-ink/8 text-ink/55' : 'bg-copper/12 text-copper'">
                   <TabletopGlyph :name="item.kind === 'download' ? 'arrow' : item.kind === 'rulebook' ? 'rulebook' : 'cards'" :size="18" />
                 </span>
                 <div class="min-w-0 flex-1">

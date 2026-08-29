@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Produces one prepared, evidence-backed answer draft through the bounded model and repair workflow.
+ * Produces one prepared, evidence-backed answer draft through the model's adaptive correction loop.
  *
  * <p>It cannot retrieve evidence, publish an answer, cache a result, or ask the post-publication Critic.</p>
  */
@@ -31,24 +31,10 @@ final class AnswerDraftComposer {
         ModelDraft draft;
         int modelRepairs = 0;
         try {
-            try {
-                draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
-                if (draft == null) {
-                    throw new RuleAnswerModelInvalidOutputException("answer model returned no structured output");
-                }
-            } catch (RuleAnswerModelInvalidOutputException initialInvalidOutput) {
-                modelRepairs = 1;
-                draft = modelGateway.replaceInvalidOutput(
-                        assistantRunId,
-                        username,
-                        gameSessionId,
-                        modelRequest,
-                        boundedDiagnostic(initialInvalidOutput));
-                if (draft == null) {
-                    throw new RuleAnswerModelInvalidOutputException(
-                            "answer model replacement returned no structured output");
-                }
-            }
+            AnswerModelGateway.Composition composition =
+                    modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
+            draft = composition.draft();
+            modelRepairs = composition.replacements();
         } catch (RuleAnswerModelUnavailableException exception) {
             return Result.failure(
                     AnswerStatus.MODEL_UNAVAILABLE,
@@ -60,22 +46,12 @@ final class AnswerDraftComposer {
         } catch (RuleAnswerModelInvalidOutputException exception) {
             return Result.failure(
                     AnswerStatus.INVALID_MODEL_OUTPUT,
-                    "答疑模型已返回完整替代结果，但结构或引用标识仍未通过校验。");
+                    "答疑模型返回的完整结构或引用标识未通过校验，且没有新的可修正信息。");
         }
-        draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
-        if (!draft.answerable()) {
-            return Result.failure(
-                    AnswerStatus.INSUFFICIENT_EVIDENCE,
-                    "现有证据未能直接回答这个问题。");
-        }
-        AnswerDraftPublicationPolicy.Preparation preparation = AnswerDraftPublicationPolicy.prepare(modelRequest, draft);
-        if (!preparation.ready()) {
-            return Result.failure(preparation.failureStatus(), preparation.failureMessage());
-        }
-        return Result.ready(preparation.draft(), preparation.warnings(), modelRepairs);
+        return prepare(modelRequest, draft, modelRepairs);
     }
 
-    Result repairAfterPublicationFailure(
+    Result continueAfterValidationRejection(
             UUID assistantRunId,
             String username,
             UUID gameSessionId,
@@ -83,21 +59,19 @@ final class AnswerDraftComposer {
             ModelDraft rejectedDraft,
             RuntimeException rejection) {
         ModelDraft revised;
+        int replacements;
         try {
-            revised = modelGateway.revise(
+            AnswerModelGateway.Composition composition = modelGateway.continueAfterValidationRejection(
                     assistantRunId,
                     username,
                     gameSessionId,
                     modelRequest,
                     rejectedDraft,
-                    List.of(
-                            "The final schema or citation validator rejected the previous answer: "
-                                    + boundedDiagnostic(rejection),
-                            "Return one COMPLETE replacement answer using only the supplied evidence and its typed citationIds.",
-                            "Correct the stated validation failure, keep every player-facing rule claim directly supported, and preserve independently valid meaning where the evidence allows it.",
-                            "Do not return a field patch and do not rely on the application to combine this response with the rejected answer."),
-                    "repairPublicationValidation",
-                    "Final citation validation returned as one complete replacement");
+                    diagnostic(rejection),
+                    "replaceValidationRejectedRuleAnswer",
+                    "Validation-rejected answer returned as one complete replacement");
+            revised = composition.draft();
+            replacements = composition.replacements();
         } catch (RuleAnswerModelUnavailableException exception) {
             return Result.failure(
                     AnswerStatus.MODEL_UNAVAILABLE,
@@ -109,63 +83,43 @@ final class AnswerDraftComposer {
         } catch (RuleAnswerModelInvalidOutputException exception) {
             return Result.failure(
                     AnswerStatus.INVALID_MODEL_OUTPUT,
-                    "答疑模型已返回修订结果，但完整结构或引用标识仍未通过校验。");
+                    "答疑模型返回的完整修订结构或引用标识未通过校验，且没有新的可修正信息。");
         }
-        if (revised == null || !revised.answerable()) {
+        return prepare(modelRequest, revised, replacements);
+    }
+
+    private Result prepare(ModelRequest modelRequest, ModelDraft draft, int replacements) {
+        if (draft == null) {
             return Result.failure(
                     AnswerStatus.INVALID_MODEL_OUTPUT,
-                    "回答修订结果未通过结构或引用校验。");
+                    "答疑模型没有返回完整回答对象。");
         }
-        AnswerDraftPublicationPolicy.Preparation preparation =
-                AnswerDraftPublicationPolicy.prepare(modelRequest, revised);
-        return preparation.ready()
-                ? Result.ready(preparation.draft(), preparation.warnings())
-                : Result.failure(preparation.failureStatus(), preparation.failureMessage());
+        draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
+        if (!draft.answerable()) {
+            return Result.failure(
+                    AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    "现有证据未能直接回答这个问题。");
+        }
+        AnswerDraftPublicationPolicy.Preparation preparation = AnswerDraftPublicationPolicy.prepare(modelRequest, draft);
+        if (!preparation.ready()) {
+            return Result.failure(preparation.failureStatus(), preparation.failureMessage());
+        }
+        return Result.ready(preparation.draft(), preparation.warnings(), replacements);
     }
 
-    private String boundedDiagnostic(RuntimeException rejection) {
+    static String diagnostic(RuntimeException rejection) {
         if (rejection == null) return "validation rejected the answer without a diagnostic";
-        String message = rejection.getMessage();
-        String diagnostic = rejection.getClass().getSimpleName()
-                + (message == null || message.isBlank() ? "" : ": " + message.strip());
-        return diagnostic.length() <= 600 ? diagnostic : diagnostic.substring(0, 600);
-    }
-
-    Result repairAfterCalculationFailure(
-            UUID assistantRunId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft rejectedDraft) {
-        ModelDraft revised;
-        try {
-            revised = modelGateway.revise(
-                    assistantRunId,
-                    username,
-                    gameSessionId,
-                    modelRequest,
-                    rejectedDraft,
-                    List.of(
-                            "A requested arithmetic derivation used an unsupported operand or invalid expression.",
-                            "Use only +, -, *, /, parentheses, floor, ceil, min, or max.",
-                            "Every numeric operand must appear in the current player question or cited evidence, and at least one operand must come from the current question.",
-                            "If no grounded arithmetic is needed, return an empty calculations list and remove unsupported computed totals."),
-                    "repairRuleCalculation",
-                    "Unsupported rule calculation repaired");
-        } catch (RuleAnswerModelUnavailableException exception) {
-            return Result.failure(AnswerStatus.MODEL_UNAVAILABLE, "答疑模型或其配置暂时不可用，未能完成规则计算修订。");
-        } catch (RuleAnswerModelTimeoutException exception) {
-            return Result.failure(AnswerStatus.MODEL_TIMEOUT, "规则计算修订超时，可以稍后重试或直接查看规则引用。");
-        } catch (RuleAnswerModelInvalidOutputException exception) {
-            return Result.failure(AnswerStatus.INVALID_MODEL_OUTPUT, "规则计算未通过输入来源或表达式校验。");
+        StringBuilder detail = new StringBuilder();
+        Throwable current = rejection;
+        while (current != null) {
+            if (!detail.isEmpty()) detail.append(" caused by ");
+            detail.append(current.getClass().getSimpleName());
+            String message = current.getMessage();
+            if (message != null && !message.isBlank()) detail.append(": ").append(message.strip());
+            if (current.getCause() == current) break;
+            current = current.getCause();
         }
-        if (revised == null || !revised.answerable()) {
-            return Result.failure(AnswerStatus.INVALID_MODEL_OUTPUT, "规则计算未通过输入来源或表达式校验。");
-        }
-        AnswerDraftPublicationPolicy.Preparation preparation = AnswerDraftPublicationPolicy.prepare(modelRequest, revised);
-        return preparation.ready()
-                ? Result.ready(preparation.draft(), preparation.warnings())
-                : Result.failure(preparation.failureStatus(), preparation.failureMessage());
+        return detail.toString();
     }
 
     record Result(
@@ -176,7 +130,7 @@ final class AnswerDraftComposer {
             int modelRepairs) {
 
         static Result ready(ModelDraft draft, List<AnswerWarning> warnings) {
-            return ready(draft, warnings, 1);
+            return ready(draft, warnings, 0);
         }
 
         static Result ready(ModelDraft draft, List<AnswerWarning> warnings, int modelRepairs) {

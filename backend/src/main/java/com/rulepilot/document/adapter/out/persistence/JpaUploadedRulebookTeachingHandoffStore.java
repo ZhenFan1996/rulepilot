@@ -327,41 +327,6 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean retryAutomatically(UUID handoffId, UUID expectedPreparationRunId, Instant now) {
-        return entityManager
-                .createQuery(
-                        """
-                        update UploadedRulebookTeachingHandoffEntity handoff
-                        set handoff.state = 'WAITING_FOR_DOCUMENT',
-                            handoff.preparationRunId = null,
-                            handoff.errorCode = null,
-                            handoff.reconciledAt = null,
-                            handoff.automaticRecoveryCount = handoff.automaticRecoveryCount + 1,
-                            handoff.updatedAt = :now
-                        where handoff.id = :handoffId
-                          and handoff.state = 'LAUNCHED'
-                          and handoff.preparationRunId = :expectedRunId
-                          and handoff.automaticRecoveryCount = 0
-                        """)
-                .setParameter("handoffId", handoffId)
-                .setParameter("expectedRunId", expectedPreparationRunId)
-                .setParameter("now", now)
-                .executeUpdate() == 1;
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean failRecoveryExhausted(UUID handoffId, UUID expectedPreparationRunId, Instant now) {
-        return failLaunched(
-                handoffId,
-                expectedPreparationRunId,
-                "TEACHING_RECOVERY_EXHAUSTED",
-                now,
-                "and handoff.automaticRecoveryCount = 1");
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean failTerminal(
             UUID handoffId, UUID expectedPreparationRunId, String errorCode, Instant now) {
         if (errorCode == null || errorCode.isBlank() || errorCode.length() > 64) {

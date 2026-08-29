@@ -10,7 +10,7 @@ public record AnswerRetrievalQuestion(
         List<String> terms) {
 
     public AnswerRetrievalQuestion {
-        if (currentQuestion == null || currentQuestion.isBlank() || currentQuestion.length() > 800
+        if (currentQuestion == null || currentQuestion.isBlank()
                 || normalizedQuestion == null || normalizedQuestion.isBlank() || type == null || terms == null) {
             throw new IllegalArgumentException("answer retrieval question is invalid");
         }

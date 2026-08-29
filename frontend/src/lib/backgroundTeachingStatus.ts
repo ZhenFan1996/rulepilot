@@ -5,6 +5,8 @@ export interface BackgroundTeachingItem {
   planId: string
   gameTitle: string
   terminalState?: 'COMPLETED' | 'INSUFFICIENT_EVIDENCE' | 'DEGRADED' | 'FAILED' | 'CANCELLED'
+  lastErrorCode?: string | null
+  readableChapterCount?: number
 }
 
 export interface BackgroundTeachingTransition {
@@ -57,6 +59,11 @@ export function parseBackgroundTeachingItems(value: string | null) {
         && bounded(candidate.gameTitle, 160)
         && (candidate.terminalState === undefined
           || playerJourneyRunIsTerminal(candidate.terminalState))
+        && (candidate.lastErrorCode === undefined
+          || candidate.lastErrorCode === null
+          || bounded(candidate.lastErrorCode, 160))
+        && (candidate.readableChapterCount === undefined
+          || Number.isSafeInteger(candidate.readableChapterCount) && candidate.readableChapterCount >= 0)
     })
   } catch {
     return []

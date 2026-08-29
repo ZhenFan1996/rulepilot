@@ -59,8 +59,18 @@ the product must commit or fail them atomically.
 - A replay diagnoses a defect but may not add sample vocabulary, aliases, prompt clauses, schemas, expected answers, or
   special routes to production. Deterministic heuristics must express input-independent invariants.
 - Page images are first-class evidence. OCR is optional and fail-open for usable page evidence.
-- Enforce step, token, timeout, and tool-call budgets. Never expose private reasoning, prompts, credentials, or sensitive
-  parameters. Real or paid models are opt-in and never run in normal CI.
+- Enforce persisted token and active-work deadlines, tool allow-lists, cancellation, and genuine resource boundaries.
+  Step and tool-call safety ceilings must be derived from the persisted token envelope, never from a hand-written
+  workflow length; model-call counts remain observational. Never expose private reasoning, prompts, credentials, or
+  sensitive parameters. Real or paid models are opt-in and never run in normal CI.
+- Never invent a fixed product-content, response-length, chapter, page, candidate, model-call, or long-task ceiling.
+  A limit is allowed only when it is derived from a measured external protocol, physical resource, cost, or safety
+  constraint and its owner and evidence are documented. Prefer adaptive chunking, concurrency backpressure, and
+  workload-derived admission; reaching capacity must preserve completed work and localize optional failure.
+- Structured-output validation is feedback to the same Agent, not permission for application-authored repair. On a
+  rejected candidate, return the complete candidate, exact validation error, original schema, and allowed identities;
+  let the Agent conditionally generate a new complete object. Do not crop, parse prose patches, splice fields, or
+  force a repair call when the first candidate is valid.
 
 ## Complexity and retirement
 
@@ -88,6 +98,8 @@ If a distinct production failure cannot be named, delete the test. Own a risk at
 layers prove wiring, not the same permutations, mock choreography, source shape, copy, or helper implementation.
 Journey tests cover one independently recoverable outcome. Delete tests with the protocol they exercised. A skipped
 test needs a named opt-in command and live release risk or it is retired.
+Do not add tests whose only purpose is to freeze an arbitrary numeric ceiling, call count, operation string, prompt
+wording, or retry choreography. Test the user-visible completion, recovery, evidence, or resource-safety outcome.
 
 Use focused unit/contract tests while editing. PostgreSQL uses Testcontainers, not H2; Redis Lua, MQ idempotency, and
 database concurrency use integration tests. Run Modulith, ArchUnit, full Playwright journeys, and the complete suite at

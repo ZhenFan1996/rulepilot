@@ -19,17 +19,40 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
     private EntityManager entityManager;
 
     @Override
+    public int canonicalChunkCount(UUID documentVersionId) {
+        Number count = (Number) entityManager.createNativeQuery("""
+                        SELECT count(*)
+                        FROM rule_chunk
+                        WHERE document_version_id = :versionId
+                        """)
+                .setParameter("versionId", documentVersionId)
+                .getSingleResult();
+        return Math.toIntExact(count.longValue());
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+        return findByChunkIds(documentVersionId, chunkIds, 0, chunkIds.size());
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<RuleEvidenceHit> findByChunkIds(
+            UUID documentVersionId, Set<UUID> chunkIds, int offset, int limit) {
         String sql = """
                 SELECT id, document_version_id, section_type, heading, content, page_from, page_to, content_kind
                 FROM rule_chunk
                 WHERE document_version_id = :versionId
                   AND id IN (:chunkIds)
+                ORDER BY chunk_index
+                LIMIT :limit OFFSET :offset
                 """;
         List<Object[]> rows = entityManager.createNativeQuery(sql)
                 .setParameter("versionId", documentVersionId)
                 .setParameter("chunkIds", chunkIds)
+                .setParameter("limit", limit)
+                .setParameter("offset", offset)
                 .getResultList();
         return rows.stream()
                 .map(row -> new RuleEvidenceHit(
@@ -42,6 +65,14 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
     @Override
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+        int corpusRows = canonicalChunkCount(documentVersionId);
+        return corpusRows == 0 ? List.of() : findByPageNumbers(documentVersionId, pageNumbers, 0, corpusRows);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<RuleEvidenceHit> findByPageNumbers(
+            UUID documentVersionId, Set<Integer> pageNumbers, int offset, int limit) {
         String sql = """
                 SELECT id, document_version_id, section_type, heading, content, page_from, page_to, content_kind
                 FROM rule_chunk
@@ -49,10 +80,13 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
                   AND page_from = page_to
                   AND page_from IN (:pageNumbers)
                 ORDER BY page_from, chunk_index
+                LIMIT :limit OFFSET :offset
                 """;
         List<Object[]> rows = entityManager.createNativeQuery(sql)
                 .setParameter("versionId", documentVersionId)
                 .setParameter("pageNumbers", pageNumbers)
+                .setParameter("limit", limit)
+                .setParameter("offset", offset)
                 .getResultList();
         return rows.stream()
                 .map(row -> new RuleEvidenceHit(
@@ -66,6 +100,21 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> findAdjacent(
             UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
+        int corpusRows = canonicalChunkCount(documentVersionId);
+        return corpusRows == 0
+                ? List.of()
+                : findAdjacent(documentVersionId, anchorChunkIds, radius, sectionTypes, 0, corpusRows);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<RuleEvidenceHit> findAdjacent(
+            UUID documentVersionId,
+            Set<UUID> anchorChunkIds,
+            int radius,
+            Set<String> sectionTypes,
+            int offset,
+            int limit) {
         String sectionPredicate = sectionTypes.isEmpty() ? "" : "AND c.section_type IN (:sectionTypes)";
         String sql = """
                 WITH anchors AS (
@@ -77,16 +126,21 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
                 SELECT DISTINCT c.id, c.document_version_id, c.section_type, c.heading,
                        c.content, c.page_from, c.page_to, c.chunk_index, c.content_kind
                 FROM rule_chunk c
-                JOIN anchors a ON c.chunk_index BETWEEN a.chunk_index - :radius AND a.chunk_index + :radius
+                JOIN anchors a ON c.chunk_index::bigint
+                    BETWEEN a.chunk_index::bigint - CAST(:radius AS bigint)
+                        AND a.chunk_index::bigint + CAST(:radius AS bigint)
                 WHERE c.document_version_id = :versionId
                   AND c.id NOT IN (:anchorIds)
                   %s
                 ORDER BY c.chunk_index
+                LIMIT :limit OFFSET :offset
                 """.formatted(sectionPredicate);
         var query = entityManager.createNativeQuery(sql)
                 .setParameter("versionId", documentVersionId)
                 .setParameter("anchorIds", anchorChunkIds)
-                .setParameter("radius", radius);
+                .setParameter("radius", radius)
+                .setParameter("limit", limit)
+                .setParameter("offset", offset);
         if (!sectionTypes.isEmpty()) query.setParameter("sectionTypes", sectionTypes);
         List<Object[]> rows = query.getResultList();
         return rows.stream()

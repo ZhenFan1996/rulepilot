@@ -44,7 +44,7 @@ const copy = {
     description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…', workingReply: '正在回复', workingSearch: '正在查找桌游', workingRecommendation: '正在整理推荐', replyingDetail: '正在生成回复…',
-    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', failureTimeBudget: '失败原因：查找、核对或生成没有在本轮时间上限内完成。', failureModelResponse: '失败原因：模型这次没有返回完整、可执行的结构，因此未发布临时文字。', failureServiceConfiguration: '失败原因：推荐模型或所需能力当前没有可用配置。', failureActionBudget: '失败原因：在限定步骤内仍未形成可安全发布的结果。', failurePublicationBoundary: '失败原因：最终结果没有在安全发布边界内完整交付。', failureService: '失败原因：推荐服务没有完成本轮请求。', failureTimeLimit: '失败原因：整轮总时限已用完，模型或检索仍未形成完整结果。', failureModelNotConfigured: '失败原因：当前账号没有可用的推荐模型配置。', failureProviderCall: '失败原因：推荐模型连接失败或提前中断；这不代表没有匹配候选。', failureProviderProtocol: '失败原因：模型返回的工具协议无法安全解析，因此没有执行不确定动作。', failureProviderTruncated: '失败原因：模型输出达到长度上限，回答或工具参数不完整。', failureEmptyModel: '失败原因：模型既没有自然回答也没有选择工具；系统没有伪造回复或强制再调用一次。', failureRepeatedParallel: '失败原因：模型在看到逐步执行提示后，仍重复同一组并行动作。', failureRepeatedInvalid: '失败原因：模型在看到参数错误后，仍重复完全相同的无效动作。', failureBudgetExhausted: '失败原因：Agent 已用完本轮安全预算，但仍未自然结束或提交可发布结果。', failurePublicationRejected: '失败原因：候选、证据归属或完整回复没有通过发布校验，因此未展示未经支持的推荐。', failureUnclassified: '失败原因：推荐服务遇到未能归类的运行故障，没有写入未完成结果。', retry: '重试', profile: '这次想找',
+    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', modelConfigurationError: '这次推荐没有完成，也没有写入对话结果。你刚才的请求仍保留；请先配置并保存推荐模型。当前配置不变时，同一请求不会成功，也不会自动重试。', failureTimeBudget: '失败原因：查找、核对或生成没有在本轮时间上限内完成。', failureModelResponse: '失败原因：模型这次没有返回完整、可执行的结构，因此未发布临时文字。', failureServiceConfiguration: '失败原因：推荐模型或所需能力当前没有可用配置。', failureActionBudget: '失败原因：模型在收到逐步执行或参数校验反馈后，仍重复不兼容或无效动作。', failurePublicationBoundary: '失败原因：最终结果没有在安全发布边界内完整交付。', failureService: '失败原因：推荐服务没有完成本轮请求。', failureTimeLimit: '失败原因：整轮总时限已用完，模型或检索仍未形成完整结果。', failureModelNotConfigured: '失败原因：当前账号没有可用的推荐模型配置。', failureProviderCall: '失败原因：推荐模型连接失败或提前中断；这不代表没有匹配候选。', failureProviderProtocol: '失败原因：模型返回的工具协议无法安全解析，因此没有执行不确定动作。', failureProviderTruncated: '失败原因：模型输出达到长度上限，回答或工具参数不完整。', failureEmptyModel: '失败原因：模型既没有自然回答也没有选择工具；系统没有伪造回复或强制再调用一次。', failureRepeatedParallel: '失败原因：模型在看到逐步执行提示后，仍重复同一组并行动作。', failureRepeatedInvalid: '失败原因：模型在看到参数错误后，仍重复完全相同的无效动作。', failurePublicationRejected: '失败原因：候选、证据归属或完整回复没有通过发布校验，因此未展示未经支持的推荐。', failureUnclassified: '失败原因：推荐服务遇到未能归类的运行故障，没有写入未完成结果。', retry: '重试', modelSettings: '前往模型设置', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '可核对的 BGG 资料 · 从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     researchSources: '资料来源',
@@ -68,7 +68,7 @@ const copy = {
     description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
-    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', failureTimeBudget: 'Why it failed: search, verification, or generation did not finish within this turn’s time limit.', failureModelResponse: 'Why it failed: the model did not return a complete executable structure, so provisional text was not published.', failureServiceConfiguration: 'Why it failed: the recommendation model or a required capability is not currently configured.', failureActionBudget: 'Why it failed: the bounded steps ended before a result was safe to publish.', failurePublicationBoundary: 'Why it failed: the final result did not complete inside the safe publication boundary.', failureService: 'Why it failed: the recommendation service did not complete this turn.', failureTimeLimit: 'Why it failed: the total turn time limit expired before the model or retrieval produced a complete result.', failureModelNotConfigured: 'Why it failed: this account has no available recommendation-model configuration.', failureProviderCall: 'Why it failed: the recommendation-model request failed or disconnected; this does not mean no candidate matched.', failureProviderProtocol: 'Why it failed: the model returned a tool protocol that could not be parsed safely, so no uncertain action ran.', failureProviderTruncated: 'Why it failed: the model reached its output limit, leaving the answer or action arguments incomplete.', failureEmptyModel: 'Why it failed: the model returned neither a natural reply nor an action; the app did not invent text or force another call.', failureRepeatedParallel: 'Why it failed: after a step-by-step observation, the model repeated the same parallel action set.', failureRepeatedInvalid: 'Why it failed: after a parameter error, the model repeated the identical invalid action.', failureBudgetExhausted: 'Why it failed: the Agent used its safety budget without ending naturally or submitting a publishable result.', failurePublicationRejected: 'Why it failed: the candidates, evidence ownership, or complete reply failed publication checks, so no unsupported recommendation was shown.', failureUnclassified: 'Why it failed: the recommendation service hit an unclassified runtime fault and did not save an incomplete result.', retry: 'Retry', profile: 'Looking for',
+    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', modelConfigurationError: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; first configure and save a recommendation model. With the configuration unchanged, the same request cannot succeed and will not retry automatically.', failureTimeBudget: 'Why it failed: search, verification, or generation did not finish within this turn’s time limit.', failureModelResponse: 'Why it failed: the model did not return a complete executable structure, so provisional text was not published.', failureServiceConfiguration: 'Why it failed: the recommendation model or a required capability is not currently configured.', failureActionBudget: 'Why it failed: after receiving step-by-step or argument-validation feedback, the model repeated an incompatible or invalid action.', failurePublicationBoundary: 'Why it failed: the final result did not complete inside the safe publication boundary.', failureService: 'Why it failed: the recommendation service did not complete this turn.', failureTimeLimit: 'Why it failed: the total turn time limit expired before the model or retrieval produced a complete result.', failureModelNotConfigured: 'Why it failed: this account has no available recommendation-model configuration.', failureProviderCall: 'Why it failed: the recommendation-model request failed or disconnected; this does not mean no candidate matched.', failureProviderProtocol: 'Why it failed: the model returned a tool protocol that could not be parsed safely, so no uncertain action ran.', failureProviderTruncated: 'Why it failed: the model reached its output limit, leaving the answer or action arguments incomplete.', failureEmptyModel: 'Why it failed: the model returned neither a natural reply nor an action; the app did not invent text or force another call.', failureRepeatedParallel: 'Why it failed: after a step-by-step observation, the model repeated the same parallel action set.', failureRepeatedInvalid: 'Why it failed: after an argument error, the model repeated the identical invalid action.', failurePublicationRejected: 'Why it failed: the candidates, evidence ownership, or complete reply failed publication checks, so no unsupported recommendation was shown.', failureUnclassified: 'Why it failed: the recommendation service hit an unclassified runtime fault and did not save an incomplete result.', retry: 'Retry', modelSettings: 'Open model settings', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Verifiable BGG details · Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     researchSources: 'Sources',
@@ -198,13 +198,13 @@ function playerSafeFailureBoundary(value: unknown): RecommendationFailureBoundar
 function playerSafeFailureReason(value: unknown): RecommendationFailureReason | null {
   return value === 'time_limit'
     || value === 'model_not_configured'
+    || value === 'resource_budget_exhausted'
     || value === 'provider_call_failed'
     || value === 'provider_protocol_invalid'
     || value === 'provider_output_truncated'
     || value === 'empty_model_response'
     || value === 'repeated_incompatible_actions'
     || value === 'repeated_invalid_action'
-    || value === 'action_budget_exhausted'
     || value === 'publication_rejected'
     || value === 'service_failure'
     ? value
@@ -507,7 +507,7 @@ const failureBoundaryCopy: Record<RecommendationFailureBoundary, CopyKey> = {
   publication_boundary: 'failurePublicationBoundary',
   service_failure: 'failureService',
 }
-const failureReasonCopy: Record<RecommendationFailureReason, CopyKey> = {
+const failureReasonCopy: Record<Exclude<RecommendationFailureReason, 'resource_budget_exhausted'>, CopyKey> = {
   time_limit: 'failureTimeLimit',
   model_not_configured: 'failureModelNotConfigured',
   provider_call_failed: 'failureProviderCall',
@@ -516,15 +516,37 @@ const failureReasonCopy: Record<RecommendationFailureReason, CopyKey> = {
   empty_model_response: 'failureEmptyModel',
   repeated_incompatible_actions: 'failureRepeatedParallel',
   repeated_invalid_action: 'failureRepeatedInvalid',
-  action_budget_exhausted: 'failureBudgetExhausted',
   publication_rejected: 'failurePublicationRejected',
   service_failure: 'failureUnclassified',
 }
+const resourceBudgetRecoveryCopy = {
+  'zh-CN': {
+    summary: '这次推荐没有完成，也没有写入对话结果。你刚才的请求仍保留；请缩小问题后重新发送，或建立新对话后再试。',
+    explanation: '失败原因：本轮 token 安全预算，或由它派生的 step/tool 安全预算已用尽；系统已停止继续执行，不会发布未完成结果。',
+    action: '缩小问题后再发送',
+  },
+  en: {
+    summary: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; narrow it and send a new turn, or retry from a new conversation.',
+    explanation: 'Why it failed: this turn exhausted its token safety budget or the step/tool safety budgets derived from it. Execution stopped without publishing an incomplete result.',
+    action: 'Narrow the request and send again',
+  },
+} as const
+const requiresModelConfiguration = computed(() => unavailableFailure.value
+  && failureReason.value === 'model_not_configured')
+const requiresChangedRequest = computed(() => unavailableFailure.value
+  && failureReason.value === 'resource_budget_exhausted')
 const failureMessage = computed(() => {
   const responseLocale = failedTurnLocale.value ?? locale.value
-  const summary = translated(responseLocale, unavailableFailure.value ? 'unavailableError' : 'error')
-  const explanation = unavailableFailure.value && failureReason.value
-    ? translated(responseLocale, failureReasonCopy[failureReason.value])
+  const summary = requiresModelConfiguration.value
+    ? translated(responseLocale, 'modelConfigurationError')
+    : requiresChangedRequest.value
+      ? resourceBudgetRecoveryCopy[responseLocale].summary
+      : translated(responseLocale, unavailableFailure.value ? 'unavailableError' : 'error')
+  const reason = failureReason.value
+  const explanation = requiresChangedRequest.value
+    ? resourceBudgetRecoveryCopy[responseLocale].explanation
+    : unavailableFailure.value && reason && reason !== 'resource_budget_exhausted'
+      ? translated(responseLocale, failureReasonCopy[reason])
     : unavailableFailure.value && failureBoundary.value
       ? translated(responseLocale, failureBoundaryCopy[failureBoundary.value])
       : ''
@@ -533,6 +555,8 @@ const failureMessage = computed(() => {
 const visibleFailedAssistantMessage = computed(() => failedAssistantMessage.value
   || (failed.value ? translated(failedTurnLocale.value ?? locale.value, 'failureReply') : ''))
 const retryLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'retry'))
+const modelSettingsLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'modelSettings'))
+const resourceBudgetActionLabel = computed(() => resourceBudgetRecoveryCopy[failedTurnLocale.value ?? locale.value].action)
 const loginLocale = computed(() => activeTurnLocale.value ?? locale.value)
 
 const profileLabels = computed(() => {
@@ -810,10 +834,8 @@ async function submitPendingTurn(
       ...parsed.games.map(entry => entry.game),
       ...(parsed.comparison?.candidates.map(candidate => candidate.game) ?? []),
     ]
-    seenBggIds.value = [...new Set([...seenBggIds.value, ...responseGames.map(game => game.bggId)])].slice(-60)
-    knownGames.value = [...responseGames, ...knownGames.value]
-      .filter((game, index, games) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
-      .slice(0, 60)
+    seenBggIds.value = [...new Set([...seenBggIds.value, ...responseGames.map(game => game.bggId)])]
+    knownGames.value = uniqueRecommendationGames([...responseGames, ...knownGames.value])
     rememberedKnownGames.value = minimalKnownGames()
     messages.value.push({
       id: ++messageId,
@@ -1044,6 +1066,7 @@ function changeJourneyGame() {
 }
 
 function retry() {
+  if (requiresModelConfiguration.value || requiresChangedRequest.value) return
   const pending = lastRequest.value
   if (!pending) return
   const retried = unavailableFailure.value
@@ -1053,24 +1076,40 @@ function retry() {
   void submitPendingTurn(retried)
 }
 
+function focusNarrowerRequest() {
+  recommendationInput.value?.focus({ preventScroll: true })
+}
+
 function playerConversationTranscript() {
   return messages.value
-    .slice(-24)
     .map(({ id, role, text }) => ({ id, role, text }))
 }
 
 function minimalKnownGames() {
-  return [
+  const games = [
     ...knownGames.value.map(game => ({ bggId: game.bggId, name: game.name, originalName: game.originalName })),
     ...rememberedKnownGames.value,
   ]
-    .filter((game, index, games) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
-    .slice(0, 60)
+  const seen = new Set<number>()
+  return games.filter(game => {
+    if (seen.has(game.bggId)) return false
+    seen.add(game.bggId)
+    return true
+  })
+}
+
+function uniqueRecommendationGames(games: RecommendationGame[]) {
+  const seen = new Set<number>()
+  return games.filter(game => {
+    if (seen.has(game.bggId)) return false
+    seen.add(game.bggId)
+    return true
+  })
 }
 
 function explicitSessionOwner(value: string | null | undefined) {
   if (typeof value !== 'string') return null
-  const owner = value.normalize('NFKC').trim().toLowerCase().slice(0, 320)
+  const owner = value.normalize('NFKC').trim().toLowerCase()
   return owner || null
 }
 
@@ -1649,7 +1688,9 @@ onBeforeUnmount(() => {
             <div v-if="clarification?.options.length && !loading && !failed" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert">
               <p>{{ failureMessage }}</p>
-              <button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button>
+              <RouterLink v-if="requiresModelConfiguration" data-testid="recommendation-model-settings" :to="{ name: 'model-settings' }" class="mt-2 inline-flex min-h-11 items-center font-semibold underline underline-offset-4">{{ modelSettingsLabel }}</RouterLink>
+              <button v-else-if="requiresChangedRequest" data-testid="recommendation-revise-after-budget" type="button" class="mt-2 min-h-11 font-semibold underline" @click="focusNarrowerRequest">{{ resourceBudgetActionLabel }}</button>
+              <button v-else type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button>
             </div>
             <div v-if="loginGateVisible" class="mx-4 mb-3 rounded-xl border border-copper/25 bg-copper/5 p-4 text-sm leading-6 text-ink/72 sm:mx-6" role="status">
               <p>{{ loginT('loginRequired') }}</p>

@@ -13,6 +13,7 @@ import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,6 +31,8 @@ public class BggRankedCatalogService
         implements BggRankedCatalog, BoardGameRecommendationCatalog, CatalogGameSelectionLookup {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BggRankedCatalogService.class);
+    /** One metadata-hydration batch; the recommendation port composes larger logical lookups. */
+    private static final int METADATA_LOOKUP_BATCH_SIZE = 12;
     private final BggRankedCatalogRepository repository;
     private final BoardGameGeekCatalog bgg;
     private final BggMetadataCache metadataCache;
@@ -206,7 +209,20 @@ public class BggRankedCatalogService
 
     @Override
     public List<BoardGameRecommendationCatalog.Game> findGamesByIds(List<Integer> bggIds) {
-        return browseIds(bggIds).stream().map(this::recommendationGame).toList();
+        List<Integer> ids = bggIds == null
+                ? List.of()
+                : bggIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty() || ids.stream().anyMatch(id -> id <= 0)) {
+            throw new IllegalArgumentException("BGG lookup requires positive ids");
+        }
+        List<BoardGameRecommendationCatalog.Game> games = new ArrayList<>();
+        for (int start = 0; start < ids.size(); start += METADATA_LOOKUP_BATCH_SIZE) {
+            int end = Math.min(start + METADATA_LOOKUP_BATCH_SIZE, ids.size());
+            detailedGames(ids.subList(start, end)).stream()
+                    .map(this::recommendationGame)
+                    .forEach(games::add);
+        }
+        return List.copyOf(games);
     }
 
     @Override
@@ -246,9 +262,6 @@ public class BggRankedCatalogService
         if (value == null) return null;
         String checked = value.strip().replaceAll("\\s+", " ");
         if (checked.isBlank()) return null;
-        if (checked.length() > 240) {
-            throw new IllegalArgumentException("BGG text query is invalid");
-        }
         return checked;
     }
 
@@ -260,9 +273,7 @@ public class BggRankedCatalogService
                 .filter(value -> !value.isBlank())
                 .distinct()
                 .toList();
-        if (checked.size() != values.size()
-                || checked.size() > 5
-                || checked.stream().anyMatch(value -> value.length() > 120)) {
+        if (checked.size() != values.size()) {
             throw new IllegalArgumentException("BGG " + label + " filters are invalid");
         }
         return checked;
@@ -277,9 +288,7 @@ public class BggRankedCatalogService
                         .map(this::checkedSearch)
                         .distinct()
                         .toList();
-        if (checked.isEmpty() || checked.size() > 8) {
-            throw new IllegalArgumentException("BGG name search requires one to eight names");
-        }
+        if (checked.isEmpty()) throw new IllegalArgumentException("BGG name search requires a name");
         LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
         for (String name : checked) {
             List<RankedGame> exact = localExactMatches(name);
@@ -388,7 +397,7 @@ public class BggRankedCatalogService
 
     private void addReferenceAlias(LinkedHashSet<String> aliases, String value) {
         String checked = value == null ? "" : value.strip().replaceAll("\\s+", " ");
-        if (!checked.isBlank() && checked.length() <= 120) aliases.add(checked);
+        if (!checked.isBlank()) aliases.add(checked);
     }
 
     @Override
@@ -627,9 +636,6 @@ public class BggRankedCatalogService
     private String checkedSearch(String search) {
         if (search == null || search.isBlank()) return "";
         String checked = search.strip().replaceAll("\\s+", " ");
-        if (checked.length() > 120) {
-            throw new IllegalArgumentException("search must contain at most 120 characters");
-        }
         return checked;
     }
 

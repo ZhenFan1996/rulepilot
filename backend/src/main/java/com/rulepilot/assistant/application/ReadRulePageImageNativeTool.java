@@ -44,14 +44,17 @@ public class ReadRulePageImageNativeTool implements NativeAgentTool {
     }
 
     @Override public String inputSchema() { return INPUT_SCHEMA; }
-    @Override public String schemaVersion() { return "1"; }
+    @Override public String schemaVersion() { return "2"; }
     @Override public Set<Role> allowedRoles() { return Set.of(Role.VISUAL); }
 
     @Override
     public ToolObservation execute(String argumentsJson, ToolScope scope) {
         Arguments arguments = parse(argumentsJson);
-        if (arguments.evidenceId() == null || arguments.pageNumber() < 1) {
-            throw new IllegalArgumentException("visual page arguments are invalid");
+        if (arguments.evidenceId() == null) {
+            throw new IllegalArgumentException("evidenceId must be an active-rulebook UUID");
+        }
+        if (arguments.pageNumber() < 1) {
+            throw new IllegalArgumentException("pageNumber must be a positive exact page");
         }
         return visualEvidence.readPage(
                         scope.documentVersionId(), arguments.evidenceId(), arguments.pageNumber())
@@ -80,7 +83,7 @@ public class ReadRulePageImageNativeTool implements NativeAgentTool {
                     .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .readValue(json);
         } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException("visual page arguments are invalid", exception);
+            throw new IllegalArgumentException("visual page arguments JSON could not be decoded", exception);
         }
     }
 

@@ -61,7 +61,58 @@ class TeachingWholeGameUnderstandingPolicyTest {
 
         assertThatThrownBy(() -> TeachingSourceCoverageContract.requireCompleteModelContract(request(), invalid))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("no matching sourced slot");
+                .hasMessageContaining("conceptId='misbound-change', sourceIdentifier='R-beta'")
+                .hasMessageContaining("relatedTopicKeys=[observe-state]")
+                .hasMessageContaining("matchingOwnerTopicKeys=[apply-change]");
+    }
+
+    @Test
+    void reportsEverySourceBindingFailureWithTheRejectedValueAndExactReplacementContract() {
+        OutlineDraft valid = completeOutline();
+        List<GlobalConceptDraft> invalidConcepts = List.of(
+                new GlobalConceptDraft(
+                        "unknown-source",
+                        "未知来源",
+                        "引用不存在的来源标识。",
+                        List.of("R-gamma"),
+                        List.of(1),
+                        List.of("observe-state"),
+                        List.of()),
+                new GlobalConceptDraft(
+                        "wrong-owner",
+                        "错误章节",
+                        "来源存在，但不属于关联章节。",
+                        List.of("R-beta"),
+                        List.of(2),
+                        List.of("observe-state"),
+                        List.of()),
+                new GlobalConceptDraft(
+                        "missing-page",
+                        "缺少页码",
+                        "来源和章节正确，但没有覆盖来源槽要求的页码。",
+                        List.of("R-alpha"),
+                        List.of(2),
+                        List.of("observe-state"),
+                        List.of()));
+        OutlineDraft invalid = new OutlineDraft(
+                valid.gameTitle(),
+                valid.premise(),
+                valid.topics(),
+                valid.sourceCoverageSlots(),
+                true,
+                new com.rulepilot.teaching.TeachingOutlineModel.WholeGameUnderstandingDraft(
+                        valid.wholeGameUnderstanding().summary(), invalidConcepts, List.of()));
+
+        assertThatThrownBy(() -> TeachingSourceCoverageContract.requireCompleteModelContract(request(), invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("whole-game source binding validation failed")
+                .hasMessageContaining("conceptId='unknown-source', sourceIdentifier='R-gamma'")
+                .hasMessageContaining("allowedSourcedIdentifiers=[R-alpha, R-beta]")
+                .hasMessageContaining("conceptId='wrong-owner', sourceIdentifier='R-beta'")
+                .hasMessageContaining("matchingOwnerTopicKeys=[apply-change]")
+                .hasMessageContaining("conceptId='missing-page', sourceIdentifier='R-alpha'")
+                .hasMessageContaining("sourcePageNumbers=[2]")
+                .hasMessageContaining("requiredSourcePageNumbers=[1]");
     }
 
     @Test

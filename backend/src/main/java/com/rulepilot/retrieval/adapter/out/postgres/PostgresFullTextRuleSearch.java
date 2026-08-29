@@ -20,11 +20,16 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
     @Override
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> search(UUID documentVersionId, String query, int limit) {
-        return execute(documentVersionId, query, limit);
+        return execute(documentVersionId, query, 0, limit);
+    }
+
+    @Override
+    public List<RuleEvidenceHit> search(UUID documentVersionId, String query, int offset, int limit) {
+        return execute(documentVersionId, query, offset, limit);
     }
 
     @SuppressWarnings("unchecked")
-    private List<RuleEvidenceHit> execute(UUID documentVersionId, String query, int limit) {
+    private List<RuleEvidenceHit> execute(UUID documentVersionId, String query, int offset, int limit) {
         String sql = """
                 WITH search_query AS (
                     SELECT websearch_to_tsquery('simple', :query) AS value
@@ -39,12 +44,13 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
                 WHERE c.document_version_id = :versionId
                   AND c.content_tsv @@ q.value
                 ORDER BY score DESC, c.chunk_index ASC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """;
         List<Object[]> rows = entityManager.createNativeQuery(sql)
                 .setParameter("query", query)
                 .setParameter("versionId", documentVersionId)
                 .setParameter("limit", limit)
+                .setParameter("offset", offset)
                 .getResultList();
         return rows.stream().map(this::toHit).toList();
     }

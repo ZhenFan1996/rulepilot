@@ -10,7 +10,12 @@ import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
-import { playerJourneyRunIsTerminal } from '@/lib/playerJourney'
+import {
+  playerJourneyFailurePresentation,
+  playerJourneyRunIsTerminal,
+  typedFailurePolicy,
+  type PlayerJourneyFailurePolicy,
+} from '@/lib/playerJourney'
 import { guideWorkStatus, playerWorkStatus } from '@/lib/playerWorkStatus'
 import {
   buildPendingGuideJourneys,
@@ -70,6 +75,7 @@ const loading = ref(true)
 const errorMessage = ref('')
 const loginRequired = ref(false)
 const launchingPlanId = ref('')
+const launchErrors = ref<Record<string, string>>({})
 const deletingPlanId = ref('')
 const deletingJourneyId = ref('')
 const cleanupLoading = ref(false)
@@ -160,7 +166,7 @@ const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '已进入我的讲解', title: '正在准备的讲解',
   detail: '这些条目来自持久化下载、规则书读取或讲解准备任务；刷新、离开页面或换入口都不会丢失。',
   rulebook: '规则书', downloading: '正在下载并核验来源文件', reading: '正在整理规则文字和原文页面',
-  preparing: '规则书已可读，正在准备讲解', failed: '任务没有完成，可以安全重试',
+  preparing: '规则书已可读，正在准备讲解', failed: '任务已经停止，请按下面的恢复说明处理',
   progress: '已确认下载进度', openRulebook: '先读规则书', openSource: '查看任务入口',
   retryPreparation: '重新准备讲解', retryingPreparation: '正在重新启动…',
   retryFailed: '没有成功启动新的讲解准备任务，请稍后再试。',
@@ -168,7 +174,7 @@ const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: 'In My Guides', title: 'Guides being prepared',
   detail: 'These entries come from persisted download, rulebook-reading, or guide-preparation work. Refreshing, leaving, or switching entry points will not lose them.',
   rulebook: 'Rulebook', downloading: 'Downloading and verifying the source file', reading: 'Organizing rule text and original pages',
-  preparing: 'The rulebook is readable while the guide is prepared', failed: 'This task did not finish and can be retried safely',
+  preparing: 'The rulebook is readable while the guide is prepared', failed: 'This task stopped; follow the recovery guidance below',
   progress: 'Confirmed download progress', openRulebook: 'Read rulebook now', openSource: 'Open task entry',
   retryPreparation: 'Retry guide preparation', retryingPreparation: 'Restarting…',
   retryFailed: 'A new guide-preparation task could not be started. Please try again shortly.',
@@ -219,9 +225,27 @@ function stateOf(planId: string) {
   return 'PLANNED'
 }
 
+function planFailurePolicy(planId: string): PlayerJourneyFailurePolicy | null {
+  const run = progress.value[planId]?.run?.run
+  if (!run || run.state === 'COMPLETED' || !playerJourneyRunIsTerminal(run.state)) return null
+  return typedFailurePolicy(run.lastErrorCode ?? run.state, 'GENERATE_LESSON', false)
+}
+
+function failureGuidance(policy: PlayerJourneyFailurePolicy) {
+  const presentation = playerJourneyFailurePresentation(policy, locale.value)
+  const separator = locale.value === 'en' ? '. ' : '。'
+  return `${presentation.title}${separator}${presentation.detail}`
+}
+
+function planFailurePresentation(planId: string) {
+  const policy = planFailurePolicy(planId)
+  return policy ? playerJourneyFailurePresentation(policy, locale.value) : null
+}
+
 function planWorkStatus(planId: string) {
   const state = stateOf(planId)
   const lesson = progress.value[planId]?.lesson
+  const failurePolicy = planFailurePolicy(planId)
   if (state === 'GENERATING') {
     const readable = hasReadableLesson(lesson)
     return guideWorkStatus(
@@ -247,6 +271,11 @@ function planWorkStatus(planId: string) {
   }
   if (state === 'INCOMPLETE') {
     const readable = hasReadableLesson(lesson)
+    if (readable && failurePolicy?.failureClassification === 'local-degradation') {
+      return playerWorkStatus('GUIDE_READABLE', {
+        capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+      }, locale.value)
+    }
     return playerWorkStatus('NEEDS_ACTION', {
       capability: readable ? 'guide' : 'rulebook',
       readiness: 'usable',
@@ -255,6 +284,11 @@ function planWorkStatus(planId: string) {
     }, locale.value)
   }
   if (state === 'FAILED' || state === 'NEEDS_ATTENTION') {
+    if (failurePolicy?.failureClassification === 'local-degradation') {
+      return playerWorkStatus('RULEBOOK_READY', {
+        capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+      }, locale.value)
+    }
     return playerWorkStatus('NEEDS_ACTION', {
       capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'needs-action',
     }, locale.value)
@@ -266,11 +300,14 @@ function planWorkStatus(planId: string) {
 
 function stateClass(planId: string) {
   const state = stateOf(planId)
+  const failurePolicy = planFailurePolicy(planId)
   if (state === 'COMPLETE' || state === 'DRAFT_READY'
     || state === 'GENERATING' && progress.value[planId]?.lesson?.status === 'DRAFT_READY') {
     return 'bg-emerald-50 text-emerald-800'
   }
   if (state === 'GENERATING') return 'bg-indigo/10 text-indigo'
+  if (failurePolicy?.failureClassification === 'local-degradation') return 'bg-emerald-50 text-emerald-800'
+  if (failurePolicy?.failureClassification === 'preserved-stop') return 'bg-amber-50 text-amber-800'
   if (state === 'FAILED' || state === 'NEEDS_ATTENTION') return 'bg-red-50 text-red-800'
   return 'bg-amber-50 text-amber-800'
 }
@@ -361,20 +398,29 @@ function recentActivities(plan: TeachingPlan) {
 function progressText(plan: TeachingPlan) {
   const item = progress.value[plan.id]
   const state = stateOf(plan.id)
+  const failurePolicy = planFailurePolicy(plan.id)
   if (state === 'GENERATING') {
     if (item?.lesson?.status === 'DRAFT_READY') {
       return t('lessons.progress.draftReviewing', { elapsed: elapsedLabel(plan) })
     }
     return t('lessons.progress.generating', { activity: activityText(plan, item!.run!.activities.at(-1)), elapsed: elapsedLabel(plan) })
   }
-  if (state === 'DRAFT_READY') return t('lessons.progress.draftReady')
+  if (state === 'DRAFT_READY') {
+    const detail = t('lessons.progress.draftReady')
+    return failurePolicy ? `${detail} ${failureGuidance(failurePolicy)}` : detail
+  }
   if (state === 'INCOMPLETE') {
     const supported = item?.lesson?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0
-    return t('lessons.progress.incomplete', { supported })
+    const detail = t('lessons.progress.incomplete', { supported })
+    return failurePolicy ? `${detail} ${failureGuidance(failurePolicy)}` : detail
   }
-  if (state === 'FAILED') return t('lessons.progress.failed')
-  if (state === 'NEEDS_ATTENTION') return t('lessons.progress.needsAttention')
-  if (state === 'COMPLETE') return t('lessons.progress.complete')
+  if ((state === 'FAILED' || state === 'NEEDS_ATTENTION') && failurePolicy) {
+    return failureGuidance(failurePolicy)
+  }
+  if (state === 'COMPLETE') {
+    const detail = t('lessons.progress.complete')
+    return failurePolicy ? `${detail} ${failureGuidance(failurePolicy)}` : detail
+  }
   return t('lessons.progress.planned')
 }
 
@@ -384,13 +430,21 @@ function createdLabel(value: string) {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
-function pendingPhaseDetail(phase: (typeof pendingJourneys.value)[number]['phase']) {
+function pendingPhaseDetail(journey: (typeof pendingJourneys.value)[number]) {
+  if (journey.state === 'failed' && journey.failureClassification) {
+    return failureGuidance({
+      errorCode: journey.errorCode ?? 'UNKNOWN',
+      retryAction: journey.retryAction,
+      failureClassification: journey.failureClassification,
+      failureRecovery: journey.failureRecovery,
+    })
+  }
   return {
     DOWNLOADING: pendingCopy.value.downloading,
     READING_RULEBOOK: pendingCopy.value.reading,
     PREPARING_GUIDE: pendingCopy.value.preparing,
     FAILED: pendingCopy.value.failed,
-  }[phase]
+  }[journey.phase]
 }
 
 function pendingWorkStatus(journey: (typeof pendingJourneys.value)[number]) {
@@ -409,6 +463,14 @@ function pendingWorkStatus(journey: (typeof pendingJourneys.value)[number]) {
       capability: journey.canReadRulebook ? 'rulebook' : 'none',
       readiness: journey.canReadRulebook ? 'usable' : 'unavailable',
       terminality: 'active',
+      outcome: 'none',
+    }, locale.value)
+  }
+  if (journey.failureClassification === 'local-degradation') {
+    return playerWorkStatus('RULEBOOK_READY', {
+      capability: journey.canReadRulebook ? 'rulebook' : 'none',
+      readiness: journey.canReadRulebook ? 'usable' : 'unavailable',
+      terminality: 'terminal',
       outcome: 'none',
     }, locale.value)
   }
@@ -651,6 +713,7 @@ async function loadPlans(background = false) {
       lesson: mergeLessonProgress(progress.value[plan.id]?.lesson ?? null, plan.lesson ?? null),
     }]))
     progressErrors.value = Object.fromEntries(Object.entries(progressErrors.value).filter(([planId]) => currentPlanIds.has(planId)))
+    launchErrors.value = Object.fromEntries(Object.entries(launchErrors.value).filter(([planId]) => currentPlanIds.has(planId)))
     for (const planId of [...knownRunIds.keys()]) if (!currentPlanIds.has(planId)) knownRunIds.delete(planId)
     if (startedPlanId.value && startedRunId.value && currentPlanIds.has(startedPlanId.value)) {
       knownRunIds.set(startedPlanId.value, startedRunId.value)
@@ -692,31 +755,54 @@ function isCurrentListRequest(request: number, controller: AbortController) {
 }
 
 async function launch(planId: string) {
-  if (launchingPlanId.value) return
+  if (launchingPlanId.value || !canLaunchPlan(planId)) return
+  const plan = plans.value.find((candidate) => candidate.id === planId)
+  if (!plan) return
   launchingPlanId.value = planId
-  errorMessage.value = ''
+  const nextErrors = { ...launchErrors.value }
+  delete nextErrors[planId]
+  launchErrors.value = nextErrors
   try {
     const csrfResponse = await checkedFetch('/api/auth/csrf')
     if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
     const csrf = await csrfResponse.json() as CsrfResponse
-    const response = await checkedFetch(`/api/v1/teaching-plans/${planId}/illustrated-lessons`, {
+    const response = await checkedFetch(`/api/v1/teaching-plans/${encodeURIComponent(planId)}/illustrated-lessons`, {
       method: 'POST',
       headers: { [csrf.headerName]: csrf.token },
     })
     if (!response.ok) throw new Error(t('lessons.error.launch'))
     const launch = await response.json() as TeachingLaunch
+    if (typeof launch.assistantRunId !== 'string' || !launch.assistantRunId.trim()) {
+      throw new Error(t('lessons.error.launch'))
+    }
     knownRunIds.set(planId, launch.assistantRunId)
     terminalSettlingReads.delete(planId)
-    const plan = plans.value.find((candidate) => candidate.id === planId)!
     notifyTeachingLaunched({ planId, runId: launch.assistantRunId, gameTitle: displayPlanTitle(plan) })
     localStorage.setItem('rulepilot:last-plan-id', planId)
     await loadProgress(plan, latestListRequest).catch(() => undefined)
     scheduleProgressRefresh(1000)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('lessons.error.launchShort')
+    launchErrors.value = {
+      ...launchErrors.value,
+      [planId]: error instanceof Error ? error.message : t('lessons.error.launchShort'),
+    }
   } finally {
     launchingPlanId.value = ''
   }
+}
+
+function canLaunchPlan(planId: string) {
+  if (stateOf(planId) === 'GENERATING') return false
+  const failurePolicy = planFailurePolicy(planId)
+  if (hasReadableLesson(progress.value[planId]?.lesson)) {
+    return failurePolicy?.retryAction === 'GENERATE_LESSON'
+  }
+  return !failurePolicy || failurePolicy.retryAction === 'GENERATE_LESSON'
+}
+
+function planLaunchLabel(planId: string) {
+  if (launchingPlanId.value === planId) return t('lessons.action.launching')
+  return planFailurePresentation(planId)?.actionLabel ?? t('lessons.action.generate')
 }
 
 async function retryPendingJourney(journey: (typeof pendingJourneys.value)[number]) {
@@ -945,6 +1031,7 @@ function clearPlanSessionState() {
   guideCatalog.value = []
   progress.value = {}
   progressErrors.value = {}
+  launchErrors.value = {}
   knownRunIds.clear()
   requestVersions.clear()
   terminalSettlingReads.clear()
@@ -1037,7 +1124,7 @@ onBeforeUnmount(() => {
         <h2 class="mt-1 font-display text-2xl font-semibold">{{ pendingCopy.title }}</h2>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-ink/55">{{ pendingCopy.detail }}</p>
         <ol class="mt-5 grid gap-4 md:grid-cols-2">
-          <li v-for="journey in pendingJourneys" :key="journey.id" data-testid="pending-guide-journey" class="rounded-xl border bg-paper p-4" :class="journey.state === 'failed' ? 'border-red-200' : 'border-indigo/15'">
+          <li v-for="journey in pendingJourneys" :key="journey.id" data-testid="pending-guide-journey" :data-failure-classification="journey.failureClassification ?? undefined" :data-failure-recovery="journey.failureRecovery ?? undefined" class="rounded-xl border bg-paper p-4" :class="journey.state === 'failed' ? 'border-red-200' : 'border-indigo/15'">
             <div class="flex items-start justify-between gap-4">
               <div class="min-w-0">
                 <h3 class="truncate font-display text-xl font-semibold">{{ journey.title }}</h3>
@@ -1047,7 +1134,7 @@ onBeforeUnmount(() => {
                   class="mt-3 text-sm font-semibold"
                   :class="journey.state === 'failed' ? 'text-red-700' : 'text-indigo'"
                 />
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ pendingPhaseDetail(journey.phase) }}</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ pendingPhaseDetail(journey) }}</p>
               </div>
               <span v-if="journey.state === 'active'" class="mt-1 size-3 shrink-0 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
             </div>
@@ -1093,7 +1180,7 @@ onBeforeUnmount(() => {
       </div>
 
       <ol v-else-if="displayedPlans.length" class="score-track mt-10 grid gap-5 md:grid-cols-2">
-        <li v-for="plan in displayedPlans" :key="plan.id" class="tabletop-panel player-board relative overflow-hidden p-6" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
+        <li v-for="plan in displayedPlans" :key="plan.id" :data-failure-classification="planFailurePolicy(plan.id)?.failureClassification ?? undefined" :data-failure-recovery="planFailurePolicy(plan.id)?.failureRecovery ?? undefined" class="tabletop-panel player-board relative overflow-hidden p-6" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
           <div class="flex items-start justify-between gap-4">
             <div class="flex min-w-0 items-start gap-3">
               <span class="score-token shrink-0" aria-hidden="true" />
@@ -1134,16 +1221,17 @@ onBeforeUnmount(() => {
           <p v-else class="mt-4 min-h-12 text-sm leading-6 text-ink/60" aria-live="polite">{{ progressText(plan) }}</p>
           <p v-if="progressErrors[plan.id]" class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800" role="status">{{ t('lessons.live.retrying') }}</p>
           <p v-if="!showingAllVersions && versionCount(plan.id) > 1" class="mt-3 text-xs leading-5 text-ink/45">{{ t('lessons.history.hidden', { count: versionCount(plan.id) - 1 }) }}</p>
-          <div class="mt-6 flex items-center justify-between gap-3">
+          <div class="mt-6 flex flex-wrap items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">{{ t('lessons.lastOpened') }}</span>
             <span v-else class="text-xs text-ink/35">{{ t('lessons.chapterCount', { count: plan.sections.length }) }}</span>
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center justify-end gap-2">
               <RouterLink v-if="hasReadableLesson(progress[plan.id]?.lesson)" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.action.readFull') : stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
-              <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id || Boolean(deletingPlanId)" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? t('lessons.action.launching') : stateOf(plan.id) === 'FAILED' || stateOf(plan.id) === 'NEEDS_ATTENTION' ? t('lessons.action.regenerate') : t('lessons.action.generate') }}</button>
-              <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />{{ t('lessons.action.background') }}</span>
-              <button type="button" :disabled="Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
+              <button v-if="canLaunchPlan(plan.id)" type="button" :disabled="Boolean(launchingPlanId) || Boolean(deletingPlanId)" :aria-busy="launchingPlanId === plan.id" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="launch(plan.id)">{{ planLaunchLabel(plan.id) }}</button>
+              <span v-else-if="stateOf(plan.id) === 'GENERATING'" class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />{{ t('lessons.action.background') }}</span>
+              <button type="button" :disabled="Boolean(launchingPlanId) || Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
             </div>
           </div>
+          <p v-if="launchErrors[plan.id]" data-testid="lesson-launch-error" class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs leading-5 text-red-800" role="alert">{{ launchErrors[plan.id] }}</p>
         </li>
       </ol>
 

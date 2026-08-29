@@ -29,6 +29,7 @@ public class AssistantRunService implements AssistantRuns {
     private final BudgetLimits answerLimits;
     private final BudgetLimits teachingLimits;
     private final BudgetLimits visualEnrichmentLimits;
+    private final int teachingModelCallCapacityBaseline;
     private final Duration teachingMaxWorkloadTimeout;
     private final int teachingMaxWorkloadTokens;
     private final Clock clock = Clock.systemUTC();
@@ -37,33 +38,28 @@ public class AssistantRunService implements AssistantRuns {
     public AssistantRunService(
             AssistantRunRepository repository,
             AgentExecutionControl execution,
-            @Value("${rulepilot.agent.max-steps:40}") int maxSteps,
-            @Value("${rulepilot.agent.max-tool-calls:24}") int maxToolCalls,
-            @Value("${rulepilot.agent.max-model-calls:16}") int maxModelCalls,
             @Value("${rulepilot.agent.max-tokens:24000}") int maxTokens,
             @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout,
-            @Value("${rulepilot.answer.agent.timeout:PT30S}") Duration answerTimeout,
-            @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int teachingMaxToolCalls,
-            @Value("${rulepilot.teaching.agent.max-model-calls:72}") int teachingMaxModelCalls,
+            @Value("${rulepilot.teaching.agent.model-call-capacity-baseline:72}")
+                    int teachingModelCallCapacityBaseline,
             @Value("${rulepilot.teaching.agent.max-tokens:300000}") int teachingMaxTokens,
             @Value("${rulepilot.teaching.agent.timeout:PT30M}") Duration teachingTimeout,
             @Value("${rulepilot.teaching.agent.max-workload-timeout:PT16H}")
                     Duration teachingMaxWorkloadTimeout,
             @Value("${rulepilot.teaching.agent.max-workload-tokens:16000000}")
                     int teachingMaxWorkloadTokens,
-            @Value("${rulepilot.teaching.visual-enrichment.agent.max-model-calls:192}")
-                    int visualEnrichmentMaxModelCalls,
             @Value("${rulepilot.teaching.visual-enrichment.agent.max-tokens:600000}")
                     int visualEnrichmentMaxTokens,
             @Value("${rulepilot.teaching.visual-enrichment.agent.timeout:PT30M}")
                     Duration visualEnrichmentTimeout) {
         this.repository = repository;
         this.execution = execution;
-        Duration boundedAnswerTimeout = answerTimeout.compareTo(timeout) < 0 ? answerTimeout : timeout;
-        this.answerLimits = new BudgetLimits(
-                maxSteps, maxToolCalls, maxModelCalls, maxTokens, boundedAnswerTimeout);
-        this.teachingLimits = new BudgetLimits(
-                maxSteps, teachingMaxToolCalls, teachingMaxModelCalls, teachingMaxTokens, teachingTimeout);
+        this.answerLimits = new BudgetLimits(maxTokens, timeout);
+        this.teachingLimits = new BudgetLimits(teachingMaxTokens, teachingTimeout);
+        if (teachingModelCallCapacityBaseline < 1) {
+            throw new IllegalArgumentException("teaching model-call capacity baseline must be positive");
+        }
+        this.teachingModelCallCapacityBaseline = teachingModelCallCapacityBaseline;
         if (teachingMaxWorkloadTimeout == null
                 || teachingMaxWorkloadTimeout.isZero()
                 || teachingMaxWorkloadTimeout.isNegative()
@@ -77,12 +73,7 @@ public class AssistantRunService implements AssistantRuns {
                     "teaching maximum workload tokens must be positive and no lower than the teaching token budget");
         }
         this.teachingMaxWorkloadTokens = teachingMaxWorkloadTokens;
-        this.visualEnrichmentLimits = new BudgetLimits(
-                maxSteps,
-                teachingMaxToolCalls,
-                visualEnrichmentMaxModelCalls,
-                visualEnrichmentMaxTokens,
-                visualEnrichmentTimeout);
+        this.visualEnrichmentLimits = new BudgetLimits(visualEnrichmentMaxTokens, visualEnrichmentTimeout);
     }
 
     @Override
@@ -271,8 +262,10 @@ public class AssistantRunService implements AssistantRuns {
             String stepSummary) {
         execution.assertFinalizationAllowed(runId);
         AssistantRun current = require(runId, expectedRevision);
-        if (current.mode() != AssistantRunMode.TEACHING) {
-            throw new IllegalArgumentException("post-work finalization is only available to teaching runs");
+        if (current.mode() != AssistantRunMode.TEACHING
+                && current.mode() != AssistantRunMode.QUESTION_ANSWER) {
+            throw new IllegalArgumentException(
+                    "post-work finalization is only available to teaching and question-answer runs");
         }
         AssistantRun changed = current.advance(nextState, Instant.now(clock));
         persist(current, changed, stepSummary);
@@ -419,22 +412,19 @@ public class AssistantRunService implements AssistantRuns {
             throw new IllegalArgumentException("a workload demand is only available to teaching runs");
         }
         return new BudgetLimits(
-                configured.maxSteps(),
-                Math.max(1, workloadDemand.requiredToolCalls()),
-                workloadDemand.requiredModelCalls(),
                 workloadAwareTeachingTokens(configured, workloadDemand),
                 workloadAwareTeachingTimeout(configured, workloadDemand));
     }
 
     private int workloadAwareTeachingTokens(BudgetLimits configured, WorkloadDemand workloadDemand) {
-        if (workloadDemand.requiredModelCalls() <= configured.maxModelCalls()) {
+        if (workloadDemand.estimatedModelCalls() <= teachingModelCallCapacityBaseline) {
             return configured.maxTokens();
         }
         try {
             long numerator = Math.multiplyExact(
-                    (long) configured.maxTokens(), workloadDemand.requiredModelCalls());
-            long projected = numerator / configured.maxModelCalls();
-            if (numerator % configured.maxModelCalls() != 0) projected++;
+                    (long) configured.maxTokens(), workloadDemand.estimatedModelCalls());
+            long projected = numerator / teachingModelCallCapacityBaseline;
+            if (numerator % teachingModelCallCapacityBaseline != 0) projected++;
             return (int) Math.min(projected, teachingMaxWorkloadTokens);
         } catch (ArithmeticException overflow) {
             return teachingMaxWorkloadTokens;
@@ -442,18 +432,16 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     private Duration workloadAwareTeachingTimeout(BudgetLimits configured, WorkloadDemand workloadDemand) {
-        if (workloadDemand.requiredModelCalls() <= configured.maxModelCalls()) {
+        if (workloadDemand.estimatedModelCalls() <= teachingModelCallCapacityBaseline) {
             return configured.timeout();
         }
         Duration projected;
         try {
-            // The configured timeout/model-call pair is the ordinary Teaching capacity baseline. WorkloadDemand
-            // counts the complete admitted call graph, including bounded model retries, after the owning workflow has
-            // collapsed independent work off its serial critical path. Scale the ordinary allowance without teaching
-            // this lifecycle boundary about provider-specific stages; the maximum remains only the final hard stop.
+            // The model-call estimate sizes active-work capacity; it is never persisted as a call limit. Recovery may
+            // exceed the estimate while the run still has wall time and tokens.
             projected = configured.timeout()
-                    .multipliedBy(workloadDemand.requiredModelCalls())
-                    .dividedBy(configured.maxModelCalls());
+                    .multipliedBy(workloadDemand.estimatedModelCalls())
+                    .dividedBy(teachingModelCallCapacityBaseline);
         } catch (ArithmeticException overflow) {
             return teachingMaxWorkloadTimeout;
         }
@@ -470,7 +458,7 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     private void validateSummary(String summary) {
-        if (summary == null || summary.isBlank() || summary.length() > 240) {
+        if (summary == null || summary.isBlank()) {
             throw new IllegalArgumentException("assistant run step summary is invalid");
         }
     }

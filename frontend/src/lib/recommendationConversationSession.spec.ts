@@ -39,14 +39,14 @@ const snapshot: RecommendationConversationSnapshot = {
 describe('recommendation conversation session', () => {
   beforeEach(() => sessionStorage.clear())
 
-  it('round-trips bounded context for one normalized account without leaking it to another', () => {
+  it('round-trips context for one normalized account without leaking it to another', () => {
     rememberRecommendationConversation(sessionStorage, ' Alice ', snapshot)
 
     expect(readRecommendationConversation(sessionStorage, 'alice')).toEqual(snapshot)
     expect(readRecommendationConversation(sessionStorage, 'bob')).toBeNull()
   })
 
-  it('bounds growing context and rejects corrupt or oversized browser data', () => {
+  it('retains every validated turn and candidate identity instead of silently slicing growing context', () => {
     rememberRecommendationConversation(sessionStorage, 'alice', {
       ...snapshot,
       transcript: Array.from({ length: 30 }, (_, index) => ({
@@ -66,18 +66,57 @@ describe('recommendation conversation session', () => {
       knownGames: expect.any(Array),
       shownBggIds: expect.any(Array),
     })
-    expect(readRecommendationConversation(sessionStorage, 'alice')?.transcript).toHaveLength(24)
-    expect(readRecommendationConversation(sessionStorage, 'alice')?.knownGames).toHaveLength(60)
-    expect(readRecommendationConversation(sessionStorage, 'alice')?.shownBggIds).toHaveLength(60)
+    expect(readRecommendationConversation(sessionStorage, 'alice')?.transcript).toHaveLength(30)
+    expect(readRecommendationConversation(sessionStorage, 'alice')?.knownGames).toHaveLength(70)
+    expect(readRecommendationConversation(sessionStorage, 'alice')?.shownBggIds).toHaveLength(70)
+  })
+
+  it('rejects structurally corrupt browser data without treating a valid long snapshot as corrupt', () => {
+    rememberRecommendationConversation(sessionStorage, 'alice', snapshot)
 
     const key = sessionStorage.key(0)!
     sessionStorage.setItem(key, JSON.stringify({ ...snapshot, transcript: [{ role: 'system', text: '<script>' }] }))
     expect(readRecommendationConversation(sessionStorage, 'alice')).toBeNull()
     expect(sessionStorage.getItem(key)).toBeNull()
 
-    sessionStorage.setItem(key, 'x'.repeat(200_001))
-    expect(readRecommendationConversation(sessionStorage, 'alice')).toBeNull()
-    expect(sessionStorage.getItem(key)).toBeNull()
+    const longTurn = '完整条件'.repeat(60_000)
+    sessionStorage.setItem(key, JSON.stringify({
+      ...snapshot,
+      transcript: [{ role: 'user', text: longTurn }],
+    }))
+    expect(readRecommendationConversation(sessionStorage, 'alice')?.transcript[0]?.text).toBe(longTurn)
+  })
+
+  it('keeps the previous versioned snapshot when the browser refuses a larger atomic write', () => {
+    class QuotaStorage implements Storage {
+      private readonly values = new Map<string, string>()
+      maximumLength = Number.POSITIVE_INFINITY
+
+      get length() { return this.values.size }
+      clear() { this.values.clear() }
+      getItem(key: string) { return this.values.get(key) ?? null }
+      key(index: number) { return [...this.values.keys()][index] ?? null }
+      removeItem(key: string) { this.values.delete(key) }
+      setItem(key: string, value: string) {
+        if (value.length > this.maximumLength) throw new DOMException('quota exceeded', 'QuotaExceededError')
+        this.values.set(key, value)
+      }
+    }
+    const storage = new QuotaStorage()
+    rememberRecommendationConversation(storage, 'alice', snapshot)
+    const prior = readRecommendationConversation(storage, 'alice')
+
+    rememberRecommendationConversation(storage, 'alice', { ...snapshot, shownBggIds: [1, -2] })
+    expect(readRecommendationConversation(storage, 'alice')).toEqual(prior)
+
+    storage.maximumLength = 1
+
+    rememberRecommendationConversation(storage, 'alice', {
+      ...snapshot,
+      transcript: [...snapshot.transcript, { role: 'user', text: '新条件'.repeat(10_000) }],
+    })
+
+    expect(readRecommendationConversation(storage, 'alice')).toEqual(prior)
   })
 
   it('deletes only the requested account snapshot', () => {

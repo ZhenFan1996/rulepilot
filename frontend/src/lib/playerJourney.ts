@@ -246,14 +246,19 @@ const EXTERNAL_REPAIR_CODES = new Set([
   'TEACHING_PREPARATION_INVALID_PLAN',
   'TEACHING_PREPARATION_STORAGE_FAILED',
   'TEACHING_HANDOFF_INVALID',
-  'TEACHING_RECOVERY_EXHAUSTED',
 ])
 
-interface FailurePolicy {
+export interface PlayerJourneyFailurePolicy {
   errorCode: string
   retryAction: PlayerJourneyRetryAction
   failureClassification: PlayerJourneyFailureClassification
   failureRecovery: PlayerJourneyFailureRecovery
+}
+
+export interface PlayerJourneyFailurePresentation {
+  title: string
+  detail: string
+  actionLabel: string | null
 }
 
 export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyProjection {
@@ -464,7 +469,7 @@ function projection(input: ProjectionInput): PlayerJourneyProjection {
 }
 
 function failed(
-  policy: FailurePolicy,
+  policy: PlayerJourneyFailurePolicy,
   availableSections: number,
   totalSections: number | null,
   latestActivity: string | null,
@@ -498,7 +503,7 @@ function lessonProgress(availableSections: number, totalSections: number | null)
   return Math.min(100, Math.round(Math.min(1, availableSections / totalSections) * 100))
 }
 
-function importFailurePolicy(job: PlayerJourneyImportJob): FailurePolicy {
+function importFailurePolicy(job: PlayerJourneyImportJob): PlayerJourneyFailurePolicy {
   const errorCode = job.errorCode ?? 'RULEBOOK_IMPORT_FAILED'
   if (job.recovery?.canRetryOriginalSource) {
     return preservedFailure(errorCode, 'IMPORT_RULEBOOK', 'retry-step')
@@ -519,16 +524,16 @@ function importFailurePolicy(job: PlayerJourneyImportJob): FailurePolicy {
 function runFailurePolicy(
   run: PlayerJourneyRun,
   retryAction: Exclude<PlayerJourneyRetryAction, null>,
-): FailurePolicy {
+): PlayerJourneyFailurePolicy {
   const errorCode = run.run.lastErrorCode ?? run.run.state
   return typedFailurePolicy(errorCode, retryAction, false)
 }
 
-function typedFailurePolicy(
+export function typedFailurePolicy(
   errorCode: string,
   requestedRetryAction: PlayerJourneyRetryAction,
   serverAuthorizedRetry: boolean,
-): FailurePolicy {
+): PlayerJourneyFailurePolicy {
   if (LOCAL_DEGRADATION_CODES.has(errorCode)) {
     return {
       errorCode,
@@ -566,12 +571,72 @@ function preservedFailure(
   errorCode: string,
   retryAction: PlayerJourneyRetryAction,
   failureRecovery: PlayerJourneyFailureRecovery,
-): FailurePolicy {
+): PlayerJourneyFailurePolicy {
   return {
     errorCode,
     retryAction,
     failureClassification: 'preserved-stop',
     failureRecovery,
+  }
+}
+
+/** Keeps recovery guidance aligned with the same typed policy used to authorize retry actions. */
+export function playerJourneyFailurePresentation(
+  policy: Pick<PlayerJourneyFailurePolicy, 'failureClassification' | 'failureRecovery'>,
+  locale: 'zh-CN' | 'en' = 'zh-CN',
+): PlayerJourneyFailurePresentation {
+  const english = locale === 'en'
+  if (policy.failureClassification === 'local-degradation') {
+    return {
+      title: english ? 'Only local content is unavailable' : '只有局部内容不可用',
+      detail: english
+        ? 'Only the affected page, chapter, or visual is unavailable. Other confirmed pages and published chapters remain; the whole guide does not need to be regenerated.'
+        : '只有对应页面、章节或配图不可用；其他已确认页面和已发布章节仍然保留，不需要重新生成整份讲解。',
+      actionLabel: null,
+    }
+  }
+  if (policy.failureRecovery === 'retry-step') {
+    return {
+      title: english ? 'This step can be retried' : '可以重试当前步骤',
+      detail: english
+        ? 'This step did not finish, but confirmed work remains. Retrying this step creates a fresh attempt without discarding completed content.'
+        : '当前步骤没有完成，但已确认内容仍然保留；可以安全地为这一步启动一次新任务，不会丢弃已完成内容。',
+      actionLabel: english ? 'Retry this step' : '重试当前步骤',
+    }
+  }
+  if (policy.failureRecovery === 'restart-from-completed') {
+    return {
+      title: english ? 'The run stopped with completed work preserved' : '本轮已停止，完成内容已保留',
+      detail: english
+        ? 'The run stopped at a whole-run boundary. Confirmed pages and published chapters remain, and a new run can continue from that durable work.'
+        : '本轮在整任务边界停止；已确认页面和已发布章节仍然保留，可以从这些持久化内容启动新一轮。',
+      actionLabel: english ? 'Restart from completed work' : '从已完成内容重新开始',
+    }
+  }
+  if (policy.failureRecovery === 'choose-source') {
+    return {
+      title: english ? 'Choose a usable rulebook source' : '需要选择可用的规则书来源',
+      detail: english
+        ? 'The current source cannot continue safely. Choose another source, upload the rulebook, or use the offered browser handoff.'
+        : '当前来源无法安全继续；请换一个来源、上传规则书，或使用界面提供的浏览器操作。',
+      actionLabel: null,
+    }
+  }
+  if (policy.failureClassification === 'external-repair') {
+    return {
+      title: english ? 'Repair is required before continuing' : '需要先修复后再继续',
+      detail: english
+        ? 'Retrying unchanged is not safe. Repair the invalid input, source, authorization, service, or persistence boundary first; the rulebook and published chapters remain available.'
+        : '这不是可以安全原样重试的失败；请先修复无效输入、来源、权限、服务或保存边界，再继续。规则书和已发布章节仍然保留。',
+      actionLabel: null,
+    }
+  }
+  return {
+    title: english ? 'The run stopped with verified work preserved' : '本轮已停止，已核验内容保留',
+    detail: english
+      ? 'The available evidence was not enough to publish more guidance. Retrying unchanged will not add evidence; provide a better source or more specific input before continuing.'
+      : '现有依据不足以发布更多讲解；原样重试不会增加依据，请补充更合适的来源或更具体的信息后再继续。',
+    actionLabel: null,
   }
 }
 

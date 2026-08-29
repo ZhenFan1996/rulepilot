@@ -117,13 +117,13 @@ export type RecommendationFailureBoundary =
 export type RecommendationFailureReason =
   | 'time_limit'
   | 'model_not_configured'
+  | 'resource_budget_exhausted'
   | 'provider_call_failed'
   | 'provider_protocol_invalid'
   | 'provider_output_truncated'
   | 'empty_model_response'
   | 'repeated_incompatible_actions'
   | 'repeated_invalid_action'
-  | 'action_budget_exhausted'
   | 'publication_rejected'
   | 'service_failure'
 

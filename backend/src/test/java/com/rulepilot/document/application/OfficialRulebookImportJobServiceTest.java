@@ -588,7 +588,7 @@ class OfficialRulebookImportJobServiceTest {
     }
 
     @Test
-    void reconcilesCompletedHandoffsByRestartingOnlyMissingTeachingResults() {
+    void exposesMissingTeachingResultsForTypedManualRetryWithoutLaunchingAReplacement() {
         FakeJobs jobs = new FakeJobs();
         UUID editionId = automaticTeachingCommand().editionId();
         UUID brokenVersionId = UUID.randomUUID();
@@ -614,32 +614,16 @@ class OfficialRulebookImportJobServiceTest {
 
         var result = service.reconcileLaunched(4);
 
-        assertThat(result.restarted()).isEqualTo(1);
         assertThat(result.settled()).isEqualTo(1);
-        assertThat(result.exhausted()).isZero();
-        assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().state())
-                .isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
-        assertThat(jobs.findOwned(usable.id(), "alice").orElseThrow().teachingHandoff().state())
-                .isEqualTo(TeachingHandoffState.LAUNCHED);
-        assertThat(jobs.reconciled).containsExactly(usable.id());
-
-        UUID recoveredRunId = UUID.randomUUID();
-        jobs.claimReadyTeachingForDocument(brokenVersionId, 1, NOW.plusSeconds(1));
-        jobs.completeTeachingLaunch(broken.id(), recoveredRunId, NOW.plusSeconds(2));
-        when(freshness.assess(brokenVersionId, recoveredRunId, "alice"))
-                .thenReturn(ReuseAssessment.REFRESH_REQUIRED);
-
-        var secondPass = service.reconcileLaunched(4);
-
-        assertThat(secondPass.restarted()).isZero();
-        assertThat(secondPass.settled()).isZero();
-        assertThat(secondPass.exhausted()).isOne();
+        assertThat(result.failed()).isOne();
         assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().state())
                 .isEqualTo(TeachingHandoffState.FAILED);
         assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().errorCode())
-                .isEqualTo("TEACHING_RECOVERY_EXHAUSTED");
+                .isEqualTo("TEACHING_PREPARATION_FAILED");
         assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().preparationRunId())
-                .isEqualTo(recoveredRunId);
+                .isEqualTo(brokenRunId);
+        assertThat(jobs.findOwned(usable.id(), "alice").orElseThrow().teachingHandoff().state())
+                .isEqualTo(TeachingHandoffState.LAUNCHED);
         assertThat(jobs.reconciled).containsExactly(usable.id());
     }
 
@@ -665,13 +649,11 @@ class OfficialRulebookImportJobServiceTest {
 
         var result = service.reconcileLaunched(4);
 
-        assertThat(result.restarted()).isZero();
-        assertThat(result.exhausted()).isOne();
+        assertThat(result.failed()).isOne();
         var handoff = jobs.findOwned(failed.id(), "alice").orElseThrow().teachingHandoff();
         assertThat(handoff.state()).isEqualTo(TeachingHandoffState.FAILED);
         assertThat(handoff.preparationRunId()).isEqualTo(failedRunId);
         assertThat(handoff.errorCode()).isEqualTo("TEACHING_PREPARATION_INVALID_PLAN");
-        assertThat(jobs.automaticallyRecovered).doesNotContain(failed.id());
     }
 
     @Test
@@ -696,13 +678,11 @@ class OfficialRulebookImportJobServiceTest {
 
         var result = service.reconcileLaunched(4);
 
-        assertThat(result.restarted()).isZero();
-        assertThat(result.exhausted()).isOne();
+        assertThat(result.failed()).isOne();
         var handoff = jobs.findOwned(failed.id(), "alice").orElseThrow().teachingHandoff();
         assertThat(handoff.state()).isEqualTo(TeachingHandoffState.FAILED);
         assertThat(handoff.preparationRunId()).isEqualTo(failedRunId);
         assertThat(handoff.errorCode()).isEqualTo("TEACHING_PREPARATION_STORAGE_FAILED");
-        assertThat(jobs.automaticallyRecovered).doesNotContain(failed.id());
 
         var reused = service.enqueue(automaticTeachingCommand(), "alice");
 
@@ -710,7 +690,6 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(reused.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.FAILED);
         assertThat(reused.job().teachingHandoff().errorCode())
                 .isEqualTo("TEACHING_PREPARATION_STORAGE_FAILED");
-        assertThat(jobs.automaticallyRecovered).doesNotContain(failed.id());
     }
 
     @Test
@@ -735,11 +714,9 @@ class OfficialRulebookImportJobServiceTest {
 
         var result = service.reconcileLaunched(4);
 
-        assertThat(result.restarted()).isZero();
         assertThat(result.settled()).isOne();
         assertThat(jobs.findOwned(cancelled.id(), "alice").orElseThrow().teachingHandoff().state())
                 .isEqualTo(TeachingHandoffState.NOT_REQUESTED);
-        assertThat(jobs.automaticallyRecovered).doesNotContain(cancelled.id());
     }
 
     private OfficialRulebookImportJob launchedJob(
@@ -1051,7 +1028,6 @@ class OfficialRulebookImportJobServiceTest {
         private final Map<UUID, OfficialRulebookImportJob> values = new LinkedHashMap<>();
         private final List<OfficialRulebookImportJob.Stage> stages = new ArrayList<>();
         private final List<UUID> reconciled = new ArrayList<>();
-        private final java.util.Set<UUID> automaticallyRecovered = new java.util.HashSet<>();
 
         private long downloadWriteCount() {
             return stages.stream().filter(stage -> stage == OfficialRulebookImportJob.Stage.DOWNLOADING).count();
@@ -1134,56 +1110,10 @@ class OfficialRulebookImportJobServiceTest {
                             && java.util.Objects.equals(
                                     job.teachingHandoff().preparationRunId(), expectedPreparationRunId);
             if (!eligible) return false;
-            automaticallyRecovered.remove(jobId);
             reconciled.remove(jobId);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(),
                     TeachingHandoff.requested(job.teachingHandoff().learningGoal(), now),
-                    now, job.completedAt()));
-            return true;
-        }
-
-        @Override
-        public boolean retryTeachingAutomatically(UUID jobId, UUID expectedPreparationRunId, Instant now) {
-            var job = values.get(jobId);
-            if (job == null
-                    || automaticallyRecovered.contains(jobId)
-                    || job.teachingHandoff().state() != TeachingHandoffState.LAUNCHED
-                    || !java.util.Objects.equals(job.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
-                return false;
-            }
-            automaticallyRecovered.add(jobId);
-            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
-                    job.documentVersionId(), job.duplicate(), job.errorCode(),
-                    new TeachingHandoff(
-                            TeachingHandoffState.WAITING_FOR_DOCUMENT,
-                            job.teachingHandoff().learningGoal(),
-                            null,
-                            null,
-                            1,
-                            now),
-                    now, job.completedAt()));
-            return true;
-        }
-
-        @Override
-        public boolean failTeachingRecoveryExhausted(UUID jobId, UUID expectedPreparationRunId, Instant now) {
-            var job = values.get(jobId);
-            if (job == null
-                    || job.teachingHandoff().state() != TeachingHandoffState.LAUNCHED
-                    || job.teachingHandoff().automaticRecoveryCount() != 1
-                    || !java.util.Objects.equals(job.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
-                return false;
-            }
-            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
-                    job.documentVersionId(), job.duplicate(), job.errorCode(),
-                    new TeachingHandoff(
-                            TeachingHandoffState.FAILED,
-                            job.teachingHandoff().learningGoal(),
-                            expectedPreparationRunId,
-                            "TEACHING_RECOVERY_EXHAUSTED",
-                            1,
-                            now),
                     now, job.completedAt()));
             return true;
         }
@@ -1249,7 +1179,6 @@ class OfficialRulebookImportJobServiceTest {
                     TeachingHandoff.notRequested(),
                     now,
                     job.completedAt()));
-            automaticallyRecovered.remove(jobId);
             reconciled.remove(jobId);
             return true;
         }

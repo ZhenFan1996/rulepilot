@@ -79,6 +79,6 @@ class AgentInvocationDeadlineTest {
     }
 
     private BudgetSnapshot budget(Instant deadline, Instant cancellation) {
-        return new BudgetSnapshot(40, 24, 16, 24_000, 0, 0, 0, deadline, cancellation);
+        return new BudgetSnapshot(24_000, 0, 0, 0, deadline, cancellation);
     }
 }

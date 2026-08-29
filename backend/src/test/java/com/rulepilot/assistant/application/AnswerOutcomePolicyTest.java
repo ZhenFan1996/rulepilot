@@ -493,7 +493,7 @@ class AnswerOutcomePolicyTest {
     }
 
     @Test
-    void exposesBoundedSourcesForInsufficiencyWithoutPublishingAConclusion() {
+    void exposesVerifiedSourcesForInsufficiencyWithoutPublishingAConclusion() {
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(), documentVersionId, "RULES", "相关规则", "规则原文。", 3, 3, 0.8);
 

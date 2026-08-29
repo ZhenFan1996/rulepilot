@@ -20,7 +20,14 @@ import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehen
 import { useLessonReaderProgress } from '@/composables/useLessonReaderProgress'
 import { acceptProgressiveLesson, teachingLessonNeedsFinalSnapshot } from '@/lib/liveLesson'
 import { loadOfflineKnowledge, type OfflineKnowledgeEntry } from '@/lib/offlineKnowledge'
+import {
+  playerJourneyFailurePresentation,
+  playerJourneyRunIsTerminal,
+  typedFailurePolicy,
+  type PlayerJourneyFailurePolicy,
+} from '@/lib/playerJourney'
 import { playerWorkStatus, type PlayerWorkStatus } from '@/lib/playerWorkStatus'
+import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 import type { CatalogGamePresentation } from '@/lib/catalogGamePresentation'
 import {
   mergeTeachingRunProgress,
@@ -110,6 +117,9 @@ const catalogCoverUnavailable = ref(false)
 const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
 const generationIdentityBlocked = ref(false)
+const generationRestarting = ref(false)
+const generationRestartError = ref('')
+const launchedGenerationRunId = ref('')
 const generationNow = ref(Date.now())
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let lessonViewDisposed = false
@@ -196,6 +206,7 @@ function terminalWorkStatus(kind: LessonTerminalKind, readable: boolean) {
 function terminalGenerationPresentation(
   state: string,
   candidate: IllustratedLesson,
+  failurePolicy: PlayerJourneyFailurePolicy | null,
 ): LessonTerminalPresentation | null {
   const readableCount = candidate.sections.filter(
     section => section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT',
@@ -210,12 +221,12 @@ function terminalGenerationPresentation(
     message = locale.value === 'en'
       ? readable
         ? readableCount === 1
-          ? 'This guide generation run failed. A readable chapter draft is preserved and can be completed later.'
-          : `This guide generation run failed. ${readableCount} readable chapter drafts are preserved and can be completed later.`
-        : 'This guide generation run failed without a readable chapter. Retry from My Guides.'
+          ? 'This guide generation run failed. A readable chapter draft is preserved.'
+          : `This guide generation run failed. ${readableCount} readable chapter drafts are preserved.`
+        : 'This guide generation run failed without a readable chapter.'
       : readable
-        ? `本轮讲解生成失败；已保留 ${readableCount} 章可读讲解草稿，可以稍后重试补全。`
-        : '本轮讲解生成失败，目前还没有可读章节；请在“我的讲解”中重试。'
+        ? `本轮讲解生成失败；已保留 ${readableCount} 章可读讲解草稿。`
+        : '本轮讲解生成失败，目前还没有可读章节。'
   } else if (state === 'CANCELLED') {
     kind = 'CANCELLED'
     message = locale.value === 'en'
@@ -242,13 +253,33 @@ function terminalGenerationPresentation(
       : `本轮生成已经结束；已保留 ${readableCount} 章可读讲解草稿，证据不足或未完成复核的部分没有作为完整讲解发布。`
   } else if (state === 'COMPLETED' || state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
     kind = 'NEEDS_ACTION'
-    message = t('lesson.generation.finished.noReadable')
+    message = locale.value === 'en'
+      ? 'This generation run finished without a chapter backed by usable rulebook evidence.'
+      : '本轮生成已经结束，目前还没有可读章节；没有章节具备可用规则依据。'
   } else {
     return null
   }
 
+  if (failurePolicy) {
+    const guidance = playerJourneyFailurePresentation(failurePolicy, locale.value)
+    const separator = locale.value === 'en' ? '. ' : '。'
+    message = `${message} ${guidance.title}${separator}${guidance.detail}`
+  }
+
   return { message, workStatus: terminalWorkStatus(kind, readable) }
 }
+
+const generationFailurePolicy = computed(() => {
+  const run = teachingRun.value?.run
+  if (!run || run.state === 'COMPLETED' || !playerJourneyRunIsTerminal(run.state)) return null
+  return typedFailurePolicy(run.lastErrorCode ?? run.state, 'GENERATE_LESSON', false)
+})
+
+const generationRestartPresentation = computed(() => {
+  const policy = generationFailurePolicy.value
+  if (policy?.retryAction !== 'GENERATE_LESSON') return null
+  return playerJourneyFailurePresentation(policy, locale.value)
+})
 
 const generationTerminalPresentation = computed(() => {
   if (!lesson.value || !teachingRun.value) return null
@@ -257,6 +288,7 @@ const generationTerminalPresentation = computed(() => {
   const presentation = terminalGenerationPresentation(
     state,
     lesson.value,
+    generationFailurePolicy.value,
   )
   if (!presentation) return null
   const stopReason = teachingRunStopReasonText(teachingRun.value, locale.value)
@@ -455,6 +487,9 @@ async function loadLesson() {
   generationStatusUnknown.value = false
   generationRefreshError.value = ''
   generationIdentityBlocked.value = false
+  generationRestarting.value = false
+  generationRestartError.value = ''
+  launchedGenerationRunId.value = ''
   clearSupportingContent()
   if (!targetPlanId) {
     await router.replace({ name: 'lessons' })
@@ -544,10 +579,14 @@ async function refreshGeneration() {
   const controller = new AbortController()
   activeGenerationController = controller
   const wasActive = generationActive.value
-  const activityCursor = teachingActivityCursor(teachingRun.value)
+  const expectedRunId = launchedGenerationRunId.value
+  const activityCursor = expectedRunId ? '' : teachingActivityCursor(teachingRun.value)
+  const runPath = expectedRunId
+    ? `/api/v1/assistant-runs/${encodeURIComponent(expectedRunId)}`
+    : `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}${activityCursor}`
   try {
     const [runResponse, lessonResponse] = await Promise.all([
-      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}${activityCursor}`, {
+      fetch(runPath, {
         credentials: 'include', signal: controller.signal,
       }),
       fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest`, {
@@ -570,7 +609,8 @@ async function refreshGeneration() {
       lessonResponse.json() as Promise<IllustratedLesson>,
     ])
     if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController)) return
-    if (!responseMatchesPlan(targetPlanId, incomingLesson, incomingRun)) {
+    if (!responseMatchesPlan(targetPlanId, incomingLesson, incomingRun)
+      || (expectedRunId && incomingRun?.run.id !== expectedRunId)) {
       throw new Error()
     }
     const acceptedRun = mergeTeachingRunProgress(teachingRun.value, incomingRun)
@@ -618,6 +658,70 @@ async function csrfToken() {
   }
   if (!response.ok) throw new Error(t('lesson.reader.error.secureSession'))
   return (await response.json()) as CsrfResponse
+}
+
+async function restartLessonGeneration() {
+  const targetPlanId = planId.value
+  const targetPlan = plan.value
+  if (generationRestarting.value
+    || generationFailurePolicy.value?.retryAction !== 'GENERATE_LESSON'
+    || !targetPlanId
+    || !targetPlan
+    || !online.value
+    || lessonViewDisposed) return
+  generationRestarting.value = true
+  generationRestartError.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(
+      `/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { [csrf.headerName]: csrf.token },
+      },
+    )
+    if (response.status === 401 || response.status === 403) {
+      notifyLoginRequired()
+      throw new Error(t('lesson.reader.error.loginRequired'))
+    }
+    if (!response.ok) throw new Error(t('lessons.error.launch'))
+    const launch = await response.json() as TeachingLaunch
+    if (typeof launch.assistantRunId !== 'string' || !launch.assistantRunId.trim()
+      || typeof launch.state !== 'string' || !launch.state.trim()) {
+      throw new Error(t('lessons.error.launch'))
+    }
+    if (lessonViewDisposed || targetPlanId !== planId.value) return
+    const startedAt = new Date().toISOString()
+    launchedGenerationRunId.value = launch.assistantRunId
+    teachingRun.value = {
+      run: {
+        id: launch.assistantRunId,
+        subjectId: targetPlanId,
+        state: launch.state,
+        createdAt: startedAt,
+        updatedAt: startedAt,
+        completedAt: null,
+        lastErrorCode: null,
+      },
+      budget: { usedModelCalls: 0 },
+      activities: [],
+    }
+    generationStatusUnknown.value = false
+    generationRefreshError.value = ''
+    generationIdentityBlocked.value = false
+    notifyTeachingLaunched({
+      planId: targetPlanId,
+      runId: launch.assistantRunId,
+      gameTitle: targetPlan.gameTitle,
+    })
+    localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
+    generationPolling.schedule(0)
+  } catch (error) {
+    if (lessonViewDisposed || targetPlanId !== planId.value) return
+    generationRestartError.value = error instanceof Error ? error.message : t('lessons.error.launchShort')
+  } finally {
+    if (!lessonViewDisposed && targetPlanId === planId.value) generationRestarting.value = false
+  }
 }
 
 function updateOnlineStatus() {
@@ -692,6 +796,8 @@ onUnmounted(() => {
       <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">{{ t('lesson.reader.offline.banner') }}</p>
       <LessonGenerationStatus
         :active="generationActive"
+        :data-failure-classification="generationFailurePolicy?.failureClassification ?? undefined"
+        :data-failure-recovery="generationFailurePolicy?.failureRecovery ?? undefined"
         :status-unknown="generationStatusUnknown"
         :status-text="currentGenerationText"
         :draft-ready="draftReady"
@@ -707,6 +813,24 @@ onUnmounted(() => {
         :finished-message="generationTerminalPresentation?.message ?? ''"
         :finished-status="generationTerminalPresentation?.workStatus ?? null"
       />
+      <section
+        v-if="generationRestartPresentation"
+        data-testid="lesson-generation-restart"
+        class="border-b border-amber-200 bg-amber-50 px-5 py-3 text-amber-950"
+      >
+        <div class="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3">
+          <p v-if="generationRestartError" data-testid="lesson-generation-restart-error" class="text-sm font-semibold" role="alert">{{ generationRestartError }}</p>
+          <button
+            type="button"
+            :disabled="generationRestarting || !online"
+            :aria-busy="generationRestarting"
+            class="ml-auto min-h-10 rounded-xl bg-indigo px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+            @click="restartLessonGeneration"
+          >
+            {{ generationRestarting ? t('lessons.action.launching') : generationRestartPresentation.actionLabel }}
+          </button>
+        </div>
+      </section>
       <p
         v-if="lesson"
         data-testid="lesson-generation-failure-boundary"

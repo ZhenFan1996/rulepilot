@@ -50,7 +50,7 @@ describe('playerAnswerContract', () => {
     })).not.toBeNull()
     expect(parsePlayerFacingRuleAnswer({
       ...answered,
-      warnings: [{ type: 'LOW_CONFIDENCE' }],
+      warnings: [{ type: 'SOURCE_COVERAGE_PARTIAL' }],
     })).not.toBeNull()
   })
 

@@ -106,15 +106,15 @@ class AnswerVisualEvidenceEnricherTest {
     }
 
     @Test
-    void retainsPriorityPagesBeforeHigherScoringVisualMatches() {
+    void retainsPriorityOrderingWithoutSilentlyDroppingOtherVerifiedVisualMatches() {
         RuleEvidenceHit priority = source(UUID.randomUUID(), 2, "Priority page text");
         RuleEvidenceHit highScore = source(UUID.randomUUID(), 8, "High-score page text");
         RuleEvidenceHit second = source(UUID.randomUUID(), 3, "Second page text");
         RuleEvidenceHit third = source(UUID.randomUUID(), 4, "Third page text");
         RuleEvidenceHit fourth = source(UUID.randomUUID(), 5, "Fourth page text");
-        RuleEvidenceHit omitted = source(UUID.randomUUID(), 6, "Omitted page text");
+        RuleEvidenceHit fifth = source(UUID.randomUUID(), 6, "Fifth page text");
         Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
-        AnswerVisualEvidenceEnricher enricher = enricher(List.of(priority, highScore, second, third, fourth, omitted));
+        AnswerVisualEvidenceEnricher enricher = enricher(List.of(priority, highScore, second, third, fourth, fifth));
 
         enricher.enrich(
                 UUID.randomUUID(),
@@ -125,7 +125,7 @@ class AnswerVisualEvidenceEnricherTest {
                         3, fact(3, "Second"),
                         4, fact(4, "Third"),
                         5, fact(5, "Fourth"),
-                        6, fact(6, "Omitted"),
+                        6, fact(6, "Fifth"),
                         8, new PageFactMatch(
                                 8,
                                 "High-score",
@@ -135,8 +135,9 @@ class AnswerVisualEvidenceEnricherTest {
                                 RuleFactStatus.CURRENT_RULE_FACTS)),
                 Set.of(2));
 
-        assertThat(evidence).containsKeys(priority.chunkId(), highScore.chunkId(), second.chunkId(), third.chunkId());
-        assertThat(evidence).doesNotContainKeys(fourth.chunkId(), omitted.chunkId());
+        assertThat(evidence).containsKeys(
+                priority.chunkId(), highScore.chunkId(), second.chunkId(), third.chunkId(),
+                fourth.chunkId(), fifth.chunkId());
     }
 
     private AnswerVisualEvidenceEnricher enricher(List<RuleEvidenceHit> sources) {

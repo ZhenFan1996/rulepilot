@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { useLocale } from '@/lib/locale'
 import { playerWorkStatus } from '@/lib/playerWorkStatus'
-import type {
-  AnswerTurn,
-  ConfirmedRuling,
-  LearningIntent,
-  StructuredRuleAnswer,
+import {
+  answerFailureRetrySuitability,
+  type AnswerFailureRecovery,
+  type AnswerTurn,
+  type ConfirmedRuling,
+  type LearningIntent,
+  type StructuredRuleAnswer,
 } from '@/composables/useLessonAnswers'
 import type { AnswerAgentTraceItem } from '@/lib/answerAgentTrace'
 
@@ -22,6 +24,7 @@ const props = withDefaults(defineProps<{
   activeLearningIntent: LearningIntent | null
   answerLoading: boolean
   answerError: string
+  answerFailureRecovery?: AnswerFailureRecovery | null
   answerOutcome: 'none' | 'failed' | 'cancelled'
   answerElapsedSeconds?: number
   answerSoftBudgetReached?: boolean
@@ -42,6 +45,7 @@ const props = withDefaults(defineProps<{
   streamedAnswerParts: () => ({ verdict: '', explanation: '' }),
   answerElapsedSeconds: 0,
   answerSoftBudgetReached: false,
+  answerFailureRecovery: null,
   clearThreadDisabled: false,
   showHeader: true,
 })
@@ -86,6 +90,21 @@ defineExpose({
 const resolvedQuestion = ref('')
 const answerResolved = computed(() => resolvedQuestion.value === props.answeredQuestion && !!props.answeredQuestion)
 const { locale, t } = useLocale()
+const failedQuestionFingerprint = ref('')
+
+watch(() => props.answerFailureRecovery, (recovery) => {
+  failedQuestionFingerprint.value = recovery ? questionFingerprint(props.question) : ''
+}, { immediate: true })
+
+const failedQuestionIsUnchanged = computed(() => !!failedQuestionFingerprint.value
+  && failedQuestionFingerprint.value === questionFingerprint(props.question))
+const answerContextMustBeRestored = computed(() =>
+  props.answerFailureRecovery?.code === 'answer_context_invalid')
+const failedQuestionRequiresEdit = computed(() => props.answerFailureRecovery?.canRetryUnchanged === false
+  && failedQuestionIsUnchanged.value)
+const answerSubmissionBlocked = computed(() => answerContextMustBeRestored.value
+  || failedQuestionRequiresEdit.value)
+const answerContextRefreshHref = window.location.href
 const answerWorkStatus = computed(() => playerWorkStatus('CHECKING_ANSWER', {
   capability: props.answerTurns.length > 0 ? 'answer' : 'rulebook',
   readiness: props.answerTurns.length > 0 ? 'usable' : 'unavailable',
@@ -102,6 +121,10 @@ const answerErrorStatus = computed(() => playerWorkStatus(
   },
   locale.value,
 ))
+const answerErrorRetrySuitability = computed(() => {
+  const recovery = props.answerFailureRecovery
+  return recovery ? answerFailureRetrySuitability(recovery, locale.value) : ''
+})
 const latestPriorAnswer = computed(() => props.answerTurns.at(-1) ?? null)
 const softBudgetCopy = computed(() => {
   const responseLocale = locale.value
@@ -121,6 +144,25 @@ const softBudgetCopy = computed(() => {
 async function focusQuestionForMoreDetail() {
   await nextTick()
   questionInput.value?.focus()
+}
+
+function questionFingerprint(question: string) {
+  return question.trim()
+}
+
+async function submitQuestion() {
+  if (answerContextMustBeRestored.value) return
+  if (failedQuestionRequiresEdit.value) {
+    await focusQuestionForMoreDetail()
+    return
+  }
+  emit('ask')
+}
+
+function retryFailedQuestionUnchanged() {
+  if (!props.answerFailureRecovery?.canRetryUnchanged || !failedQuestionIsUnchanged.value
+    || props.answerLoading || !props.online || !props.question.trim()) return
+  emit('ask')
 }
 
 async function prepareFeedbackFollowUp(intent: 'SIMPLIFY' | 'VERIFY') {
@@ -495,7 +537,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
         :class="answer ? 'grid lg:grid-cols-[minmax(17rem,0.68fr)_minmax(0,1.32fr)] lg:items-start lg:gap-6' : 'mx-auto max-w-3xl'"
       >
         <div class="min-w-0 lg:sticky lg:top-24">
-          <form class="rounded-2xl border border-ink/10 bg-canvas p-4" @submit.prevent="emit('ask')">
+          <form class="rounded-2xl border border-ink/10 bg-canvas p-4" @submit.prevent="submitQuestion">
             <div class="mb-3 flex flex-wrap items-start gap-3">
               <button
                 type="button"
@@ -521,7 +563,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               <p class="text-xs text-ink/45">{{ t('lesson.answer.counter', { count: question.length }) }}</p>
               <button
                 type="submit"
-                :disabled="answerLoading || !online || !question.trim()"
+                :disabled="answerLoading || !online || !question.trim() || answerSubmissionBlocked"
                 class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {{ answerLoading ? t('lesson.answer.loading') : online ? t('lesson.answer.submit') : t('lesson.answer.offline') }}
@@ -540,6 +582,45 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               class="text-sm font-semibold"
             />
             <p class="mt-1 text-xs leading-5">{{ answerError }}</p>
+            <p
+              v-if="answerFailureRecovery"
+              data-testid="answer-failure-retry-guidance"
+              :data-retry-unchanged="answerFailureRecovery.canRetryUnchanged"
+              class="mt-2 text-xs font-semibold leading-5"
+            >
+              <span>{{ answerFailureRecovery.actionLabel }}:</span>
+              {{ answerErrorRetrySuitability }}
+            </p>
+            <div v-if="answerFailureRecovery" class="mt-3 flex flex-wrap gap-2">
+              <a
+                v-if="answerContextMustBeRestored"
+                data-testid="answer-failure-restore-context"
+                :href="answerContextRefreshHref"
+                class="inline-flex min-h-10 items-center rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800"
+              >
+                {{ answerFailureRecovery.actionLabel }}
+              </a>
+              <button
+                v-else-if="answerFailureRecovery.canRetryUnchanged && failedQuestionIsUnchanged"
+                type="button"
+                data-testid="answer-failure-retry-unchanged"
+                :disabled="answerLoading || !online || !question.trim()"
+                class="min-h-10 rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
+                @click="retryFailedQuestionUnchanged"
+              >
+                {{ answerFailureRecovery.actionLabel }}
+              </button>
+              <button
+                v-else-if="failedQuestionRequiresEdit"
+                type="button"
+                data-testid="answer-failure-edit-question"
+                :disabled="answerLoading || !online"
+                class="min-h-10 rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
+                @click="focusQuestionForMoreDetail"
+              >
+                {{ locale === 'en' ? 'Edit the question' : '修改问题' }}
+              </button>
+            </div>
           </div>
           <div v-else-if="answerLoading" class="mt-5 stack-y-md rounded-2xl border border-ink/8 p-5" aria-live="polite">
             <div class="flex items-center gap-3">

@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 class RecommendationAgentStateTest {
 
     @Test
-    void admitsFreshlyVerifiedEvidenceWhenRestoredMemoryIsAlreadyFull() {
-        List<Game> restoredNewestFirst = java.util.stream.IntStream.rangeClosed(1, 8)
+    void retainsEveryRestoredAndFreshlyVerifiedCandidate() {
+        List<Game> restoredNewestFirst = java.util.stream.IntStream.rangeClosed(1, 12)
                 .mapToObj(this::game)
                 .toList();
         RecommendationAgentState state = new RecommendationAgentState(
@@ -31,16 +31,37 @@ class RecommendationAgentStateTest {
                         restoredNewestFirst),
                 System.nanoTime(),
                 null,
-                false,
-                3);
+                false);
 
-        state.addVerified(game(9));
+        state.addVerified(game(13));
 
-        assertThat(state.verified.keySet()).contains(9).doesNotContain(8).hasSize(8);
+        assertThat(state.verified.keySet()).containsExactlyElementsOf(
+                java.util.stream.IntStream.rangeClosed(1, 13).boxed().toList());
         assertThat(state.verifiedForAgent())
                 .extracting(value -> value.ranking().bggId())
-                .startsWith(9)
-                .containsExactly(9, 1, 2, 3, 4, 5, 6, 7);
+                .startsWith(13)
+                .containsExactly(13, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    }
+
+    @Test
+    void retainsEveryObservedCandidateIdentityInsteadOfSilentlyDroppingTheTail() {
+        RecommendationAgentState state = new RecommendationAgentState(
+                new ConversationRequest(RecommendationProfile.empty(), "比较这些候选"),
+                System.nanoTime(),
+                null,
+                false);
+
+        java.util.stream.IntStream.rangeClosed(1, 24)
+                .forEach(id -> state.observeCandidate(id, "Game " + id));
+
+        assertThat(state.legalIds).hasSize(24);
+        assertThat(state.candidateNames).hasSize(24).containsEntry(24, "Game 24");
+        assertThat(new RecommendationAgentState.PublicationSeed(
+                        java.util.stream.IntStream.rangeClosed(1, 12).boxed().toList(),
+                        List.of(),
+                        12)
+                .requestedCount())
+                .isEqualTo(12);
     }
 
     private Game game(int id) {

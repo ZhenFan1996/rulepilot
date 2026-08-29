@@ -79,6 +79,50 @@ describe('buildPendingGuideJourneys', () => {
 
     expect(journeys).toEqual([expect.objectContaining({
       title: '花砖物语', phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
+      errorCode: 'TEACHING_PREPARATION_FAILED',
+      failureClassification: 'preserved-stop', failureRecovery: 'retry-step',
+    })])
+  })
+
+  it.each([
+    ['TEACHING_PREPARATION_INVALID_PLAN', 'external-repair', 'manual-repair'],
+    ['INSUFFICIENT_EVIDENCE', 'preserved-stop', null],
+  ] as const)('does not offer a blind preparation retry for %s', (
+    errorCode,
+    failureClassification,
+    failureRecovery,
+  ) => {
+    const journeys = buildPendingGuideJourneys([], [], [{
+      id: 'prep-1', subjectId: 'version-1', state: errorCode === 'INSUFFICIENT_EVIDENCE' ? errorCode : 'FAILED',
+      lastErrorCode: errorCode === 'INSUFFICIENT_EVIDENCE' ? null : errorCode,
+      updatedAt: '2026-08-10T10:01:00Z',
+    }], [{
+      document: { gameEditionId: null, title: 'rules.pdf' },
+      latestVersion: { id: 'version-1', status: 'READY' },
+    }], [])
+
+    expect(journeys).toEqual([expect.objectContaining({
+      errorCode,
+      failureClassification,
+      failureRecovery,
+      retryAction: null,
+    })])
+  })
+
+  it('keeps a real queue-admission failure retryable through the shared policy', () => {
+    const journeys = buildPendingGuideJourneys([], [], [{
+      id: 'prep-1', subjectId: 'version-1', state: 'FAILED',
+      lastErrorCode: 'TEACHING_PREPARATION_QUEUE_TIMEOUT', updatedAt: '2026-08-10T10:01:00Z',
+    }], [{
+      document: { gameEditionId: null, title: 'rules.pdf' },
+      latestVersion: { id: 'version-1', status: 'READY' },
+    }], [])
+
+    expect(journeys).toEqual([expect.objectContaining({
+      errorCode: 'TEACHING_PREPARATION_QUEUE_TIMEOUT',
+      failureClassification: 'preserved-stop',
+      failureRecovery: 'retry-step',
+      retryAction: 'PREPARE_TEACHING',
     })])
   })
 
@@ -106,9 +150,15 @@ describe('buildPendingGuideJourneys', () => {
       latestVersion: { id: 'version-3', status: 'READY' },
     }], [])
 
-    expect(official).toEqual([expect.objectContaining({ retryAction: null, state: 'failed' })])
-    expect(uploaded).toEqual([expect.objectContaining({ retryAction: null, state: 'failed' })])
-    expect(direct).toEqual([expect.objectContaining({ retryAction: null, state: 'failed' })])
+    expect(official).toEqual([expect.objectContaining({
+      retryAction: null, state: 'failed', failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+    })])
+    expect(uploaded).toEqual([expect.objectContaining({
+      retryAction: null, state: 'failed', failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+    })])
+    expect(direct).toEqual([expect.objectContaining({
+      retryAction: null, state: 'failed', failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+    })])
   })
 
   it('keeps a newer retry run authoritative over an older failed handoff run', () => {

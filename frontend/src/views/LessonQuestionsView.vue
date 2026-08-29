@@ -79,6 +79,7 @@ const {
   activeLearningIntent,
   answerLoading,
   answerError,
+  answerFailureRecovery,
   answerOutcome,
   agentTrace,
   streamedAnswerParts,
@@ -451,6 +452,7 @@ onUnmounted(() => {
             :active-learning-intent="activeLearningIntent"
             :answer-loading="answerLoading"
             :answer-error="answerError"
+            :answer-failure-recovery="answerFailureRecovery"
             :answer-outcome="answerOutcome"
             :answer-elapsed-seconds="answerElapsedSeconds"
             :answer-soft-budget-reached="answerSoftBudgetReached"

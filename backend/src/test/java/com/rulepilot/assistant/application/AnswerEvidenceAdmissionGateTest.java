@@ -48,10 +48,14 @@ class AnswerEvidenceAdmissionGateTest {
                 documentVersionId, result(List.of(), AnswerEvidenceRetriever.State.UNAVAILABLE));
         AnswerEvidenceAdmissionGate.Admission empty = gate.admit(
                 documentVersionId, result(List.of(), AnswerEvidenceRetriever.State.READY));
+        AnswerEvidenceAdmissionGate.Admission partialEmpty = gate.admit(
+                documentVersionId, result(List.of(), AnswerEvidenceRetriever.State.PARTIAL));
 
         assertThat(unavailable.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(empty.failureStatus()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(empty.failureMessage()).isEqualTo("没有找到可引用的规则依据。");
+        assertThat(partialEmpty.failureStatus()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(partialEmpty.failureMessage()).contains("部分规则检索来源暂时不可用");
         assertThat(verified).isFalse();
     }
 

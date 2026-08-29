@@ -7,13 +7,11 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Reads a small batch of rendered rulebook pages before lesson planning. Its output is a page-scoped retrieval aid,
- * never player-facing lesson prose or an uncited rule answer.
+ * Reads rendered rulebook pages before lesson planning. Its output is a page-scoped retrieval aid, never
+ * player-facing lesson prose or an uncited rule answer. The application owns provider- and storage-aware batching;
+ * this contract must not reject a complete result merely because a caller used a different batch size.
  */
 public interface VisualRulebookPageCatalogModel {
-
-    /** A teaching-start request stays bounded so an unbounded PDF cannot exhaust model context or response budget. */
-    int MAX_PAGES_PER_REQUEST = 8;
 
     CatalogDraft summarize(CatalogRequest request);
 
@@ -26,11 +24,13 @@ public interface VisualRulebookPageCatalogModel {
     }
 
     /**
-     * Performs one changed, validator-owned repair request for a typed Teaching catalog violation. The repair code is
-     * the complete input contract: raw model output and exception prose must never be copied into the next prompt.
+     * Returns a complete replacement after the same page Agent observes the complete rejected candidate, the exact
+     * validation error, the original output contract, and every allowed page identity. The application decides
+     * whether that observation is new; this port never owns an arbitrary correction-count limit.
      */
-    default CatalogDraft repairTeachingCatalog(CatalogRequest request, TeachingCatalogRepairCode repairCode) {
-        throw new UnsupportedOperationException("visual Teaching catalog repair is unavailable");
+    default CatalogDraft correctTeachingCatalog(
+            CatalogRequest request, TeachingCatalogRejection rejection) {
+        throw new UnsupportedOperationException("visual Teaching catalog correction is unavailable");
     }
 
     enum TeachingCatalogRepairCode {
@@ -40,21 +40,57 @@ public interface VisualRulebookPageCatalogModel {
         PAGE_BINDING_MISMATCH
     }
 
+    record TeachingCatalogRejection(
+            String candidateJson,
+            String validationError,
+            String outputContract,
+            Set<Integer> allowedPageIds) {
+
+        public TeachingCatalogRejection {
+            if (candidateJson == null
+                    || validationError == null
+                    || validationError.isBlank()
+                    || outputContract == null
+                    || outputContract.isBlank()
+                    || allowedPageIds == null
+                    || allowedPageIds.isEmpty()
+                    || allowedPageIds.stream().anyMatch(page -> page == null || page < 1)) {
+                throw new IllegalArgumentException("visual Teaching catalog rejection is incomplete");
+            }
+            validationError = validationError.strip();
+            outputContract = outputContract.strip();
+            allowedPageIds = Set.copyOf(allowedPageIds);
+        }
+    }
+
     final class TeachingCatalogContractViolation extends IllegalArgumentException {
 
         private final TeachingCatalogRepairCode repairCode;
+        private final TeachingCatalogRejection rejection;
 
         public TeachingCatalogContractViolation(TeachingCatalogRepairCode repairCode) {
-            this(repairCode, null);
+            this(repairCode, null, null);
         }
 
         public TeachingCatalogContractViolation(TeachingCatalogRepairCode repairCode, Throwable cause) {
+            this(repairCode, null, cause);
+        }
+
+        public TeachingCatalogContractViolation(
+                TeachingCatalogRepairCode repairCode,
+                TeachingCatalogRejection rejection,
+                Throwable cause) {
             super(violationMessage(repairCode, cause), cause);
             this.repairCode = repairCode;
+            this.rejection = rejection;
         }
 
         public TeachingCatalogRepairCode repairCode() {
             return repairCode;
+        }
+
+        public Optional<TeachingCatalogRejection> rejection() {
+            return Optional.ofNullable(rejection);
         }
 
         private static TeachingCatalogRepairCode requireRepairCode(TeachingCatalogRepairCode repairCode) {
@@ -99,7 +135,7 @@ public interface VisualRulebookPageCatalogModel {
         }
 
         public CatalogRequest {
-            if (pages == null || pages.isEmpty() || pages.size() > MAX_PAGES_PER_REQUEST) {
+            if (pages == null || pages.isEmpty()) {
                 throw new IllegalArgumentException("visual page catalog request is invalid");
             }
             pages = List.copyOf(pages);
@@ -112,7 +148,7 @@ public interface VisualRulebookPageCatalogModel {
 
     record CatalogDraft(List<PageSummary> pages) {
         public CatalogDraft {
-            if (pages == null || pages.isEmpty() || pages.size() > MAX_PAGES_PER_REQUEST) {
+            if (pages == null || pages.isEmpty()) {
                 throw new IllegalArgumentException("visual page catalog draft is invalid");
             }
             pages = List.copyOf(pages);

@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,8 +18,6 @@ import org.slf4j.LoggerFactory;
 final class AnswerVisualEvidenceEnricher {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AnswerVisualEvidenceEnricher.class);
-    private static final int MAX_VISUAL_SOURCE_PAGES = 4;
-
     private final RuleEvidenceLookup evidenceLookup;
     private final AnswerRetrievalInvocations invocations;
 
@@ -65,9 +62,7 @@ final class AnswerVisualEvidenceEnricher {
                         .thenComparingInt(PageFactMatch::pageNumber))
                 .map(PageFactMatch::pageNumber)
                 .forEach(pages::add);
-        return pages.stream()
-                .limit(MAX_VISUAL_SOURCE_PAGES)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return java.util.Collections.unmodifiableSet(pages);
     }
 
     private Set<UUID> mergePageSources(

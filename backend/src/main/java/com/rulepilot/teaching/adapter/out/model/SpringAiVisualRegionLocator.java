@@ -44,7 +44,7 @@ import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
-/** One bounded vision call selects immutable application-owned crops; the model never authors page geometry. */
+/** A resource-bounded visual Agent loop selects immutable application-owned crops; the model never authors geometry. */
 @Component
 public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
@@ -59,7 +59,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             visibleDescription, and supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL.
             ACCEPT_CANDIDATE requires one offered candidateId, a short literal label and visibleDescription, and one
             or more offered C references belonging to that step whose sourcePages contain the candidate page.
-            label is at most 80 characters and visibleDescription is at most 240 characters.
             NO_VISUAL requires candidateId, label, and visibleDescription to be null and supportedClaimRefs to be an
             empty array. A step may accept several different candidates. Select every useful candidate needed for the
             lesson; do not target a fixed count. The same candidate may never be selected twice or shared across steps.
@@ -84,7 +83,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             action, candidateId, label, visibleDescription,
             supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
             literal label/description, and only C refs for that step whose sourcePages contain the candidate page.
-            label is at most 80 characters and visibleDescription is at most 240 characters.
             NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Never select
             one candidate twice. Select all useful candidates without targeting a fixed count. Images prove appearance
             only. Add no fields. Structured rejection feedback requires one complete replacement object, never a field
@@ -145,21 +143,43 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         try {
             attachments = candidateAttachments(request);
         } catch (RuntimeException candidatePreparationFailure) {
-            GuideAttempt unavailable = unavailable(Rejection.CANDIDATE_PREPARATION_FAILED);
-            recordSelectionResult(request, unavailable, 1, false);
+            GuideAttempt unavailable = unavailable(
+                    Rejection.CANDIDATE_PREPARATION_FAILED,
+                    "",
+                    "Application-owned candidate images could not be prepared: "
+                            + candidatePreparationFailure.getClass().getSimpleName());
+            recordSelectionResult(request, unavailable, 1, false, false);
             return unavailable.guide();
         }
-        GuideAttempt first = invokeGuideAttemptSafely(request, owner, "", attachments, 1);
-        recordSelectionResult(request, first, 1, first.rejection().retryable());
-        if (!first.rejection().retryable()) return first.guide();
-        GuideAttempt replacement = invokeGuideAttemptSafely(
-                request,
-                owner,
-                VisualLocatorResponsePolicy.completeReplacementFeedback(first.rejection()),
-                attachments,
-                2);
-        recordSelectionResult(request, replacement, 2, false);
-        return replacement.guide();
+        Set<RejectedVisualCandidate> rejectedCandidates = new LinkedHashSet<>();
+        String correction = "";
+        for (int attemptNumber = 1; ; attemptNumber++) {
+            GuideAttempt attempt = invokeGuideAttemptSafely(
+                    request, owner, correction, attachments, attemptNumber);
+            if (!attempt.rejection().retryable()) {
+                recordSelectionResult(request, attempt, attemptNumber, false, false);
+                return attempt.guide();
+            }
+            RejectedVisualCandidate rejected = new RejectedVisualCandidate(
+                    attempt.candidate(), attempt.validationError(), attempt.rejection());
+            boolean newInformation = rejectedCandidates.add(rejected);
+            recordSelectionResult(request, attempt, attemptNumber, newInformation, !newInformation);
+            if (!newInformation) return attempt.guide();
+            correction = VisualLocatorResponsePolicy.completeReplacementFeedback(
+                    attempt.rejection(),
+                    attempt.candidate(),
+                    attempt.validationError(),
+                    request.candidates().stream().map(Candidate::candidateId).toList(),
+                    request.claims().stream()
+                            .map(VisualRegionLocator.Claim::stepPosition)
+                            .filter(position -> position > 0)
+                            .distinct()
+                            .toList(),
+                    IntStream.range(0, request.claims().size())
+                            .filter(index -> request.claims().get(index).stepPosition() > 0)
+                            .mapToObj(index -> "C" + (index + 1))
+                            .toList());
+        }
     }
 
     private GuideAttempt invokeGuideAttemptSafely(
@@ -176,7 +196,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException providerFailure) {
-            return unavailable(Rejection.PROVIDER_FAILURE);
+            return unavailable(
+                    Rejection.PROVIDER_FAILURE,
+                    "",
+                    "Visual provider call failed: " + providerFailure.getClass().getSimpleName());
         }
     }
 
@@ -184,7 +207,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             VisualLocationRequest request,
             GuideAttempt attempt,
             int attemptNumber,
-            boolean completeReplacementFollows) {
+            boolean completeReplacementFollows,
+            boolean noProgress) {
         if (request.runId() == null || invocations == null) return;
         Rejection rejection = attempt.rejection();
         ActivityOutcome outcome = switch (rejection) {
@@ -196,15 +220,30 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 request.runId(),
                 ActivityType.VALIDATION,
                 "settleVisualCandidateSelection|" + request.batchNumber() + "|" + attemptNumber + "|"
-                        + rejection.name(),
+                        + rejection.name() + "|" + selectionState(rejection, completeReplacementFollows, noProgress),
                 outcome,
-                selectionResultSummary(attempt, attemptNumber, completeReplacementFollows));
+                selectionResultSummary(attempt, attemptNumber, completeReplacementFollows, noProgress));
+    }
+
+    private String selectionState(
+            Rejection rejection,
+            boolean completeReplacementFollows,
+            boolean noProgress) {
+        if (completeReplacementFollows) return "correction-follows";
+        if (noProgress) return "no-progress";
+        return switch (rejection) {
+            case NONE -> "accepted";
+            case EXPLICIT_NO_REGION -> "no-visual";
+            case MALFORMED_JSON, UNSUPPORTED_SCOPE, PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED ->
+                "local-unavailable";
+        };
     }
 
     private String selectionResultSummary(
             GuideAttempt attempt,
             int attemptNumber,
-            boolean completeReplacementFollows) {
+            boolean completeReplacementFollows,
+            boolean noProgress) {
         if (attempt.rejection() == Rejection.NONE) {
             return attemptNumber == 1
                     ? "视觉候选已通过校验"
@@ -215,9 +254,13 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
         if (completeReplacementFollows) {
             return "视觉候选本次未通过（" + attempt.rejection().name()
-                    + "）；正在请求一次完整重选，这不是最终配图失败";
+                    + "）；完整候选、精确原因和允许身份已交回同一 Agent，这不是最终配图失败";
         }
-        return "视觉候选在有限处理后仍不可用（" + attempt.rejection().name()
+        if (noProgress) {
+            return "视觉 Agent 重复了相同完整候选和相同错误（" + attempt.rejection().name()
+                    + "）；该候选批次已无新进展，仅省略本地配图，正文保持不变";
+        }
+        return "视觉候选不可用（" + attempt.rejection().name()
                 + "）；仅省略本章配图，正文保持不变";
     }
 
@@ -240,7 +283,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 estimatedInputTokens(request, attachments),
                 "视觉候选批次已完成检查",
                 () -> locateGuideOnce(request, owner, correction, attachments),
-                ignored -> 1_000,
+                attempt -> estimateTokens(attempt.candidate()),
                 this::attemptSummary);
     }
 
@@ -258,7 +301,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private String attemptSummary(GuideAttempt attempt) {
         if (attempt.rejection().retryable()) {
-            return "视觉候选批次本次未通过，准备一次完整重选";
+            return "视觉候选批次本次未通过，准备基于完整反馈重新选择";
         }
         if (attempt.guide().regions().isEmpty()) {
             return "视觉候选批次未采用图片：" + attempt.guide().diagnostic().name();
@@ -307,11 +350,16 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .call()
                 .content();
         Optional<ModelGuide> parsed = VisualLocatorResponsePolicy.parseModelGuide(content);
-        if (parsed.isEmpty()) return unavailable(Rejection.MALFORMED_JSON);
-        return admit(parsed.get(), request);
+        if (parsed.isEmpty()) {
+            return unavailable(
+                    Rejection.MALFORMED_JSON,
+                    content == null ? "" : content,
+                    VisualLocatorResponsePolicy.malformedValidationError(content));
+        }
+        return admit(parsed.get(), request, content == null ? "" : content);
     }
 
-    private GuideAttempt admit(ModelGuide guide, VisualLocationRequest request) {
+    private GuideAttempt admit(ModelGuide guide, VisualLocationRequest request, String candidateJson) {
         BatchAction batchAction = request.hasMoreCandidates() ? guide.batchAction() : BatchAction.STOP;
 
         Set<Integer> offeredSteps = request.claims().stream()
@@ -329,20 +377,31 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         List<LocatedRegion> accepted = new ArrayList<>();
 
         for (ModelReview review : guide.reviews()) {
-            if (!offeredSteps.contains(review.stepPosition())) return unavailable(Rejection.UNSUPPORTED_SCOPE);
+            if (!offeredSteps.contains(review.stepPosition())) {
+                return unsupported(candidateJson, "stepPosition " + review.stepPosition()
+                        + " is not one of the offered step identities " + offeredSteps);
+            }
             if (review.action() == ModelAction.NO_VISUAL) {
                 if (!rejectedSteps.add(review.stepPosition()) || acceptedSteps.contains(review.stepPosition())) {
-                    return unavailable(Rejection.UNSUPPORTED_SCOPE);
+                    return unsupported(candidateJson,
+                            "A step may be reviewed only once as NO_VISUAL and cannot also accept a candidate");
                 }
                 continue;
             }
             if (rejectedSteps.contains(review.stepPosition()) || !selectedIds.add(review.candidateId())) {
-                return unavailable(Rejection.UNSUPPORTED_SCOPE);
+                return unsupported(candidateJson,
+                        "A candidate identity cannot be selected twice or attached to a step already marked NO_VISUAL");
             }
             Candidate candidate = candidates.get(review.candidateId());
-            if (candidate == null) return unavailable(Rejection.UNSUPPORTED_SCOPE);
+            if (candidate == null) {
+                return unsupported(candidateJson, "candidateId " + review.candidateId()
+                        + " is not one of the offered identities " + candidates.keySet());
+            }
             List<VisualRegionLocator.Claim> claims = ownedClaims(review, candidate, request);
-            if (claims.isEmpty()) return unavailable(Rejection.UNSUPPORTED_SCOPE);
+            if (claims.isEmpty()) {
+                return unsupported(candidateJson,
+                        "supportedClaimRefs must belong to the selected step and include the candidate page");
+            }
             Rectangle rectangle = candidate.rectangle();
             accepted.add(new LocatedRegion(
                     candidate.pageNumber(),
@@ -359,11 +418,21 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             acceptedSteps.add(review.stepPosition());
         }
         if (!accepted.isEmpty()) {
-            return new GuideAttempt(LocateGuideResult.found(accepted, batchAction), Rejection.NONE);
+            return new GuideAttempt(
+                    LocateGuideResult.found(accepted, batchAction), Rejection.NONE, candidateJson, "");
+        }
+        if (guide.hasOnlyNoVisual()) {
+            return unavailable(
+                    Rejection.EXPLICIT_NO_REGION,
+                    batchAction,
+                    candidateJson,
+                    "The Agent explicitly selected NO_VISUAL for the offered step(s)");
         }
         return unavailable(
-                guide.hasOnlyNoVisual() ? Rejection.EXPLICIT_NO_REGION : Rejection.UNSUPPORTED_SCOPE,
-                batchAction);
+                Rejection.UNSUPPORTED_SCOPE,
+                batchAction,
+                candidateJson,
+                "The complete selection contains no admissible candidate or explicit NO_VISUAL decision");
     }
 
     List<VisualRegionLocator.Claim> ownedClaims(
@@ -464,21 +533,38 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     }
 
     private GuideAttempt unavailable(Rejection rejection) {
-        return unavailable(rejection, BatchAction.STOP);
+        return unavailable(rejection, "", rejection.name());
     }
 
-    private GuideAttempt unavailable(Rejection rejection, BatchAction batchAction) {
+    private GuideAttempt unavailable(Rejection rejection, String candidate, String validationError) {
+        return unavailable(rejection, BatchAction.STOP, candidate, validationError);
+    }
+
+    private GuideAttempt unavailable(
+            Rejection rejection,
+            BatchAction batchAction,
+            String candidate,
+            String validationError) {
         return new GuideAttempt(
                 LocateGuideResult.unavailable(
                         VisualLocatorResponsePolicy.diagnosticFor(rejection), batchAction),
-                rejection);
+                rejection,
+                candidate == null ? "" : candidate,
+                validationError == null || validationError.isBlank() ? rejection.name() : validationError.strip());
+    }
+
+    private GuideAttempt unsupported(String candidate, String validationError) {
+        return unavailable(Rejection.UNSUPPORTED_SCOPE, candidate, validationError);
+    }
+
+    private int estimateTokens(String value) {
+        return value == null || value.isEmpty() ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName) {
         return OpenAiChatOptions.builder()
                 .model(modelName)
                 .temperature(0.0)
-                .maxTokens(1_000)
                 .extraBody(Map.of("enable_thinking", false))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
     }
@@ -500,5 +586,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
     }
 
-    private record GuideAttempt(LocateGuideResult guide, Rejection rejection) {}
+    private record GuideAttempt(
+            LocateGuideResult guide,
+            Rejection rejection,
+            String candidate,
+            String validationError) {}
+
+    private record RejectedVisualCandidate(
+            String candidate,
+            String validationError,
+            Rejection rejection) {}
 }

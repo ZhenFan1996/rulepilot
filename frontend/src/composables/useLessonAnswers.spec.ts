@@ -9,14 +9,14 @@ function answerStreamResponse(result: unknown) {
   })
 }
 
-function createAnswers() {
+function createAnswers(locale: 'zh-CN' | 'en' = 'en') {
   return useLessonAnswers({
     currentContext: () => ({
       planId: 'plan-1',
       documentVersionId: 'document-1',
       playerCount: 4,
       section: { topicKey: 'ACTIONS', title: 'Actions', coverageTags: [] },
-      locale: 'en',
+      locale,
     }),
     currentLessonRequest: () => 1,
     isCurrentLessonLoad: () => true,
@@ -47,17 +47,24 @@ describe('useLessonAnswers', () => {
     setLocale('zh-CN')
   })
 
-  it('uses the explicit answer-context locale for a secure-session failure', async () => {
+  it('requires the signed-in rulebook context to be restored before retrying a rejected request', async () => {
     setLocale('zh-CN')
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 403 })))
     const answers = createAnswers()
     answers.question.value = 'When does this resolve?'
 
     await answers.submitQuestion(answers.question.value, null)
 
     expect(answers.answerError.value).toBe(
-      "I couldn't establish a secure session. Your question is still here; review it and try again.",
+      'This question no longer matches the current signed-in rulebook context. Refresh or reopen the rulebook or session before sending it again.',
     )
+    expect(answers.answerFailureRecovery.value).toEqual({
+      code: 'answer_context_invalid',
+      message: answers.answerError.value,
+      actionLabel: 'Restore the answer context',
+      draft: '',
+      canRetryUnchanged: false,
+    })
     expect(answers.answerOutcome.value).toBe('failed')
     expect(answers.question.value).toBe('When does this resolve?')
   })
@@ -72,8 +79,27 @@ describe('useLessonAnswers', () => {
     await answers.submitQuestion('When does this resolve?', null)
 
     expect(answers.answerError.value).toBe(
-      'The rules answer service is unavailable right now. Your question is still here; review it and try again.',
+      'The rules answer service is temporarily unavailable. Your question is still here; after the service recovers, the same question can be retried unchanged.',
     )
+    expect(answers.answerFailureRecovery.value?.canRetryUnchanged).toBe(true)
+    expect(answers.answerFailureRecovery.value?.code).toBe('answer_service_unavailable')
+  })
+
+  it('treats HTTP 429 as a temporary rate boundary instead of an invalid answer context', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      .mockResolvedValueOnce(new Response(null, { status: 429 })))
+    const answers = createAnswers('zh-CN')
+
+    await answers.submitQuestion('这个效果何时结算？', null)
+
+    expect(answers.answerFailureRecovery.value).toMatchObject({
+      code: 'answer_rate_limited',
+      canRetryUnchanged: true,
+    })
+    expect(answers.answerError.value).toContain('等待限流解除')
+    expect(answers.answerError.value).toContain('原样重试同一个问题')
+    expect(answers.answerError.value).not.toContain('上下文已不匹配')
   })
 
   it('rejects a malformed answer envelope without exposing schema or runtime diagnostics', async () => {
@@ -92,10 +118,79 @@ describe('useLessonAnswers', () => {
     expect(answers.answer.value).toBeNull()
     expect(answers.answerTurns.value).toEqual([])
     expect(answers.answerError.value).toBe(
-      'The rules answer service is unavailable right now. Your question is still here; review it and try again.',
+      'The returned answer did not pass the completeness check, so it was not shown. Keep the question, but review its context or wording before trying again.',
     )
     expect(answers.answerError.value).not.toMatch(/schema|citations|PlayerFacingRuleAnswer|undefined/i)
+    expect(answers.answerFailureRecovery.value).toMatchObject({
+      code: 'answer_result_invalid',
+      canRetryUnchanged: false,
+    })
     expect(answers.question.value).toBe('Can the cobalt spindle move now?')
+  })
+
+  it('preserves a typed server recovery message instead of replacing it with a generic retry promise', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      .mockResolvedValueOnce(new Response([
+        'event: error',
+        'data: {"code":"answer_context_invalid","recovery":{"message":"当前规则书版本已变化，请重新打开后再提问。","actionLabel":"重新打开规则书","draft":"请核对新版规则后回答：","canRetryUnchanged":false}}',
+        '',
+        '',
+      ].join('\n'), { headers: { 'Content-Type': 'text/event-stream' } })))
+    const answers = createAnswers('zh-CN')
+
+    await answers.submitQuestion('这个效果何时结算？', null)
+
+    expect(answers.answerError.value).toBe('当前规则书版本已变化，请重新打开后再提问。')
+    expect(answers.answerFailureRecovery.value).toEqual({
+      code: 'answer_context_invalid',
+      message: '当前规则书版本已变化，请重新打开后再提问。',
+      actionLabel: '重新打开规则书',
+      draft: '请核对新版规则后回答：',
+      canRetryUnchanged: false,
+    })
+  })
+
+  it('treats a malformed stream failure as non-retryable and clears it with answer feedback', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      .mockResolvedValueOnce(new Response(
+        'event: error\ndata: {"code":"answer_timeout"}\n\n',
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      )))
+    const answers = createAnswers('zh-CN')
+
+    await answers.submitQuestion('这个效果何时结算？', null)
+
+    expect(answers.answerFailureRecovery.value).toMatchObject({
+      code: 'answer_request_failed',
+      canRetryUnchanged: false,
+    })
+    expect(answers.answerError.value).not.toContain('直接重试')
+
+    answers.clearAnswerFeedback()
+    expect(answers.answerError.value).toBe('')
+    expect(answers.answerFailureRecovery.value).toBeNull()
+  })
+
+  it('clears a prior failure when a new request starts and keeps it cleared after reset', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
+    const answers = createAnswers()
+    await answers.submitQuestion('When does this resolve?', null)
+    expect(answers.answerFailureRecovery.value?.code).toBe('answer_service_unavailable')
+
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })))
+    const pending = answers.submitQuestion('When does this resolve?', null)
+
+    expect(answers.answerError.value).toBe('')
+    expect(answers.answerFailureRecovery.value).toBeNull()
+    answers.resetConversation(false)
+    await pending
+    expect(answers.answerFailureRecovery.value).toBeNull()
+    expect(answers.answerOutcome.value).toBe('none')
   })
 
   it('aborts a slow answer while preserving the editable question and prior thread', async () => {
@@ -130,7 +225,11 @@ describe('useLessonAnswers', () => {
     expect(answers.answerLoading.value).toBe(false)
     expect(answers.question.value).toBe('What if scoring is interrupted?')
     expect(answers.answerTurns.value).toHaveLength(1)
-    expect(answers.answerError.value).toBe('Stopped waiting. This unfinished result will not replace the current page. You can edit the question and send it again.')
+    expect(answers.answerError.value).toBe('Stopped waiting. This unfinished result will not replace the current page. Edit or review the question before sending a new request.')
+    expect(answers.answerFailureRecovery.value).toMatchObject({
+      code: 'answer_cancelled',
+      canRetryUnchanged: false,
+    })
     expect(answers.answerOutcome.value).toBe('cancelled')
     expect(answers.agentTrace.value).toEqual([])
   })

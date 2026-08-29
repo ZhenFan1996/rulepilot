@@ -40,13 +40,27 @@ public interface NativeAgentTool {
             String ownerUsername,
             UUID documentVersionId,
             UUID runId,
-            Instant deadlineAt) {
+            Instant deadlineAt,
+            int maxObservationTokens) {
+
+        /**
+         * Compatibility constructor for direct tool tests and non-Agent callers. Production Agent execution replaces
+         * this fallback with the current run's remaining context envelope before every tool invocation.
+         */
+        public ToolScope(String ownerUsername, UUID documentVersionId, UUID runId, Instant deadlineAt) {
+            this(ownerUsername, documentVersionId, runId, deadlineAt, 4_096);
+        }
+
         public ToolScope {
-            if (ownerUsername == null || ownerUsername.isBlank() || ownerUsername.length() > 160
-                    || documentVersionId == null || runId == null || deadlineAt == null) {
+            if (ownerUsername == null || ownerUsername.isBlank()
+                    || documentVersionId == null || runId == null || deadlineAt == null || maxObservationTokens < 0) {
                 throw new IllegalArgumentException("native tool scope is invalid");
             }
             ownerUsername = ownerUsername.strip();
+        }
+
+        public ToolScope withMaxObservationTokens(int tokens) {
+            return new ToolScope(ownerUsername, documentVersionId, runId, deadlineAt, tokens);
         }
     }
 
@@ -65,8 +79,8 @@ public interface NativeAgentTool {
         }
 
         public ToolObservation {
-            if (status == null || code == null || code.isBlank() || code.length() > 80
-                    || data == null || evidenceCount < 0 || media == null || media.size() > 2) {
+            if (status == null || code == null || code.isBlank()
+                    || data == null || evidenceCount < 0 || media == null) {
                 throw new IllegalArgumentException("native tool observation is invalid");
             }
             code = code.strip();
@@ -92,7 +106,7 @@ public interface NativeAgentTool {
         public ToolMedia {
             if (mediaType == null || !Set.of("image/png", "image/jpeg", "image/webp").contains(mediaType)
                     || content == null || content.length == 0 || content.length > 12_000_000
-                    || label == null || label.isBlank() || label.length() > 160
+                    || label == null || label.isBlank()
                     || width < 1 || height < 1) {
                 throw new IllegalArgumentException("native tool media is invalid");
             }

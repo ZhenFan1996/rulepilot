@@ -139,27 +139,35 @@ class UploadedRulebookTeachingHandoffServiceTest {
     }
 
     @Test
-    void retriesOneTransientUploadedPreparationAndThenStopsTheSameFailure() {
+    void exposesATransientUploadedPreparationForTypedManualRetryWithoutLaunchingAReplacement() {
         UploadedRulebookTeachingHandoffStore store = mock(UploadedRulebookTeachingHandoffStore.class);
         RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
         RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
         UUID handoffId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
-        UUID firstRunId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
         when(store.findUnreconciledLaunched(4)).thenReturn(List.of(
                 new UploadedRulebookTeachingHandoffStore.RecoveryCandidate(
-                        handoffId, versionId, "alice", firstRunId, 0)));
-        when(freshness.assess(versionId, firstRunId, "alice"))
+                        handoffId, versionId, "alice", failedRunId, 1)));
+        when(freshness.assess(versionId, failedRunId, "alice"))
                 .thenReturn(ReuseAssessment.RETRYABLE_FAILURE);
-        when(store.retryAutomatically(handoffId, firstRunId, NOW)).thenReturn(true);
+        when(store.failTerminal(
+                        handoffId,
+                        failedRunId,
+                        "TEACHING_PREPARATION_FAILED",
+                        NOW))
+                .thenReturn(true);
         var service = new UploadedRulebookTeachingHandoffService(
                 store, documents, freshness, Clock.fixed(NOW, ZoneOffset.UTC));
 
         var result = service.reconcileLaunched(4);
 
-        assertThat(result.restarted()).isOne();
-        assertThat(result.exhausted()).isZero();
-        verify(store).retryAutomatically(handoffId, firstRunId, NOW);
+        assertThat(result.failed()).isOne();
+        verify(store).failTerminal(
+                handoffId,
+                failedRunId,
+                "TEACHING_PREPARATION_FAILED",
+                NOW);
     }
 
     @Test
@@ -186,14 +194,12 @@ class UploadedRulebookTeachingHandoffServiceTest {
 
         var result = service.reconcileLaunched(4);
 
-        assertThat(result.restarted()).isZero();
-        assertThat(result.exhausted()).isOne();
+        assertThat(result.failed()).isOne();
         verify(store).failTerminal(
                 handoffId,
                 failedRunId,
                 "TEACHING_PREPARATION_STORAGE_FAILED",
                 NOW);
-        verify(store, never()).retryAutomatically(handoffId, failedRunId, NOW);
     }
 
     @Test
@@ -215,7 +221,6 @@ class UploadedRulebookTeachingHandoffServiceTest {
 
         var result = service.reconcileLaunched(4);
 
-        assertThat(result.restarted()).isZero();
         assertThat(result.settled()).isOne();
         verify(store).dismissCancelled(handoffId, cancelledRunId);
     }

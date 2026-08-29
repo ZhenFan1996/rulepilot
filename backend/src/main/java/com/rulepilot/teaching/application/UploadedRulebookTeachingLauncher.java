@@ -48,15 +48,10 @@ public class UploadedRulebookTeachingLauncher {
             LOGGER.warn("Failed {} uploaded-rulebook teaching handoffs whose documents could not be processed", unusable);
         }
         var reconciliation = handoffs.reconcileLaunched(batchSize);
-        if (reconciliation.restarted() > 0) {
+        if (reconciliation.failed() > 0) {
             LOGGER.warn(
-                    "Restarted {} uploaded-rulebook teaching handoffs whose persisted Teaching result was missing or transiently failed",
-                    reconciliation.restarted());
-        }
-        if (reconciliation.exhausted() > 0) {
-            LOGGER.warn(
-                    "Stopped {} uploaded-rulebook teaching handoffs after bounded recovery was exhausted",
-                    reconciliation.exhausted());
+                    "Exposed {} uploaded-rulebook teaching handoffs for typed player recovery after their durable runs stopped",
+                    reconciliation.failed());
         }
         launch(handoffs.claimReady(batchSize));
     }

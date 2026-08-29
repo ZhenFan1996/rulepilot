@@ -108,6 +108,16 @@ class RulePilotMcpToolsTest {
                 .hasMessage("MCP authentication is required");
     }
 
+    @Test
+    void rejectsRuleSearchLimitsOutsideThePublishedMcpContract() {
+        assertThatThrownBy(() -> tools.searchRules(sessionId, "How do I score?", 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("rule search limit must be between 1 and 20");
+        assertThatThrownBy(() -> tools.searchRules(sessionId, "How do I score?", 21))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("rule search limit must be between 1 and 20");
+    }
+
     private SessionContext context() {
         return new SessionContext(
                 sessionId, editionId, versionId, Set.of(expansionId), 4, 3, "SCORING", 2, "ACTIVE");

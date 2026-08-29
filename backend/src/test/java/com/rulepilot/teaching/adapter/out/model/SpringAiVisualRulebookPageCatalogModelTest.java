@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -19,6 +18,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRejection;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
@@ -148,13 +148,12 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void disablesSamplingForReplayableQwenVisualCatalogDecisions() {
-        var options = SpringAiVisualRulebookPageCatalogModel.qwenJsonOptions("qwen3-vl-235b-a22b-instruct", 1_000)
-                .build();
+    void usesProviderOutputCapacityForReplayableQwenVisualCatalogDecisions() {
+        var options = SpringAiVisualRulebookPageCatalogModel.qwenJsonOptions("qwen3-vl-235b-a22b-instruct").build();
 
         assertThat(options.getModel()).isEqualTo("qwen3-vl-235b-a22b-instruct");
         assertThat(options.getTemperature()).isEqualTo(0.0);
-        assertThat(options.getMaxTokens()).isEqualTo(1_000);
+        assertThat(options.getMaxTokens()).isNull();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
     }
 
@@ -200,7 +199,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void repairUsesOneFixedExhaustiveInstructionPerCodeWithoutRawOutputOrExceptionText() throws IOException {
+    void correctionReceivesTheCompleteRejectedCandidateExactErrorOriginalContractAndAllowedPageIds()
+            throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
@@ -222,34 +222,29 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 List.of(new PageImageInput(1, "image/png", png())),
                 "owner",
                 "Example Game");
-        String rawFailure = "RAW_PROVIDER_OUTPUT_MUST_NOT_ENTER_REPAIR";
-
-        for (TeachingCatalogRepairCode code : TeachingCatalogRepairCode.values()) {
-            TeachingCatalogContractViolation violation =
-                    new TeachingCatalogContractViolation(code, new IllegalArgumentException(rawFailure));
-            model.repairTeachingCatalog(request, violation.repairCode());
-        }
+        var rejection = new TeachingCatalogRejection(
+                "{\"pages\":[{\"pageNumber\":1,\"ruleGroups\":\"invalid\"}]}",
+                "visual teaching catalog ruleGroups must be an array",
+                "ORIGINAL V6 JSON CONTRACT: pages[] has exact pageNumber and ruleGroups[] fields",
+                java.util.Set.of(1));
+        model.correctTeachingCatalog(request, rejection);
 
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel, times(4)).call(prompts.capture());
-        List<String> repairPrompts = prompts.getAllValues().stream()
-                .map(prompt -> prompt.getInstructions().stream()
-                        .map(message -> message.getText())
-                        .collect(java.util.stream.Collectors.joining("\n")))
-                .toList();
-        assertThat(repairPrompts).noneMatch(text -> text.contains(rawFailure));
-        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
-                "exactly one syntactically valid JSON object"));
-        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
-                "exactly the declared root, page, rule-group, dependency, and quantity-span fields"));
-        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
-                "each exact identifier-and-fact tuple at most once"));
-        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
-                "copy its supplied pageNumber exactly"));
+        verify(chatModel).call(prompts.capture());
+        String correctionPrompt = prompts.getValue().getInstructions().stream()
+                .map(message -> message.getText())
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertThat(correctionPrompt).contains(
+                rejection.candidateJson(),
+                rejection.validationError(),
+                rejection.outputContract(),
+                "Allowed PDF page IDs:",
+                "[1]",
+                "Return one complete replacement JSON object");
     }
 
     @Test
-    void routesQwenPageFactsToTheFastStructuredVisualModel() throws IOException {
+    void routesDenseQwenPageFactsToTheFastStructuredVisualModelWithoutAnApplicationOutputCap() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
@@ -260,14 +255,19 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
         when(chatModel.getDefaultOptions()).thenReturn(defaults);
         when(chatModel.getOptions()).thenReturn(defaults);
-        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
-                new AssistantMessage("""
-                        {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],
-                         "keywords":["setup","card"],
-                         "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"SETUP",
-                         "fact":"Each player takes a card.","quantitySpans":[]}],
-                         "ruleGroupInventoryComplete":true}]}
-                        """)))));
+        String denseFact = "规则".repeat(180);
+        String denseRuleGroups = java.util.stream.IntStream.rangeClosed(1, 40)
+                .mapToObj(index -> """
+                        {"identifier":"RULE-%d","fact":"%s","quantitySpans":[]}
+                        """.formatted(index, denseFact).strip())
+                .collect(java.util.stream.Collectors.joining(","));
+        String denseResponse = """
+                {"pages":[{"pageNumber":1,"printedTerms":["RULE"],
+                 "keywords":["rule"],"externalDocumentDependencies":[],"ruleGroups":[%s],
+                 "ruleGroupInventoryComplete":true}]}
+                """.formatted(denseRuleGroups);
+        assertThat(denseResponse.codePointCount(0, denseResponse.length())).isGreaterThan(4_800);
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(denseResponse));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
 
         CatalogRequest request = new CatalogRequest(
@@ -275,7 +275,10 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         CatalogDraft teachingDraft = model.summarizeForTeaching(request);
 
         assertThat(teachingDraft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.ruleGroupIdentifiers()).containsExactly("page-1-group-1");
+            assertThat(page.ruleGroupIdentifiers()).hasSize(40);
+            assertThat(page.ruleGroupFacts())
+                    .hasSize(40)
+                    .allSatisfy(fact -> assertThat(fact.fact()).isEqualTo(denseFact));
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
         });
 
@@ -284,7 +287,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         assertThat(prompt.getValue().getOptions()).isInstanceOf(OpenAiChatOptions.class);
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getModel()).isEqualTo("qwen3-vl-flash");
-        assertThat(options.getMaxTokens()).isEqualTo(4_800);
+        assertThat(options.getMaxTokens()).isNull();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getTemperature()).isZero();
@@ -379,8 +382,21 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThatThrownBy(() -> model.summarizeForTeaching(new CatalogRequest(
                         List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("quantitySpans");
+                .isInstanceOf(TeachingCatalogContractViolation.class)
+                .hasMessageContaining("quantitySpans")
+                .satisfies(failure -> {
+                    TeachingCatalogContractViolation violation =
+                            (TeachingCatalogContractViolation) failure;
+                    assertThat(violation.rejection()).hasValueSatisfying(rejection -> {
+                        assertThat(rejection.candidateJson()).contains(
+                                "\"quantitySpans\":[{\"total\":1,\"originalSpan\":\"one pawn\"}]");
+                        assertThat(rejection.validationError()).contains("quantitySpans");
+                        assertThat(rejection.outputContract()).contains(
+                                "Inspect only the supplied page images",
+                                "ruleGroupInventoryComplete");
+                        assertThat(rejection.allowedPageIds()).containsExactly(1);
+                    });
+                });
         verify(chatModel).call(any(Prompt.class));
     }
 
@@ -423,7 +439,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getModel()).isEqualTo("qwen3-vl-flash");
-        assertThat(options.getMaxTokens()).isEqualTo(4_800);
     }
 
     @Test
@@ -493,7 +508,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void productionCatalogKeepsExactRuleEvidenceAcrossTheBoundedKeywordRange() {
+    void productionCatalogKeepsExactRuleEvidenceAcrossAKeywordDensePage() {
         String ledger = """
                 {"pages":[{"pageNumber":7,"printedTerms":["ΚΥΚΛΟΣ"],"keywords":%s,
                 "externalDocumentDependencies":[],"ruleGroups":[
@@ -505,11 +520,11 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 ledger.formatted("[]"));
         var oneKeyword = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
                 ledger.formatted("[\"ΚΥΚΛΟΣ\"]"));
-        String sixteenKeywords = java.util.stream.IntStream.rangeClosed(1, 16)
+        String fortyKeywords = java.util.stream.IntStream.rangeClosed(1, 40)
                 .mapToObj(index -> "\"term-" + index + "\"")
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
         var denseKeywords = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
-                ledger.formatted(sixteenKeywords));
+                ledger.formatted(fortyKeywords));
 
         assertThat(noKeywords.pages()).singleElement().satisfies(page -> {
             assertThat(page.keywords()).containsExactly("page 7");
@@ -521,13 +536,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
         });
         assertThat(denseKeywords.pages()).singleElement().satisfies(page -> {
-            assertThat(page.keywords()).hasSize(16);
+            assertThat(page.keywords()).hasSize(40);
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
         });
     }
 
     @Test
-    void productionCatalogBoundsOptionalMetadataWithoutDiscardingValidatedRuleGroups() {
+    void productionCatalogRetainsCompleteOptionalMetadataWithoutDiscardingValidatedRuleGroups() {
         String fifteenPrintedTerms = java.util.stream.IntStream.rangeClosed(1, 15)
                 .mapToObj(index -> "\"printed-" + index + "\"")
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
@@ -543,11 +558,11 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         """.formatted(fifteenPrintedTerms, twentyKeywords));
 
         assertThat(accepted.pages()).singleElement().satisfies(page -> {
-            assertThat(page.printedTerms()).isEqualTo(java.util.stream.IntStream.rangeClosed(1, 12)
+            assertThat(page.printedTerms()).isEqualTo(java.util.stream.IntStream.rangeClosed(1, 15)
                     .mapToObj(index -> "printed-" + index)
                     .collect(java.util.stream.Collectors.joining("; ")));
             assertThat(page.keywords()).containsExactlyElementsOf(
-                    java.util.stream.IntStream.rangeClosed(1, 16).mapToObj(index -> "term-" + index).toList());
+                    java.util.stream.IntStream.rangeClosed(1, 20).mapToObj(index -> "term-" + index).toList());
             assertThat(page.ruleGroupFacts()).singleElement().satisfies(fact -> {
                 assertThat(fact.label()).isEqualTo("CYCLE");
                 assertThat(fact.fact()).isEqualTo("玩家执行这一项可见流程。");
@@ -557,7 +572,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void productionCatalogDeduplicatesOptionalMetadataButKeepsItsTypeAndAbuseBoundaries() {
+    void productionCatalogDeduplicatesOptionalMetadataAndKeepsEveryTypedItem() {
         String ledger = """
                 {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"," CYCLE ","TURN"],"keywords":%s,
                 "externalDocumentDependencies":[],"ruleGroups":[
@@ -585,10 +600,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         String abusiveKeywords = java.util.stream.IntStream.rangeClosed(1, 65)
                 .mapToObj(index -> "\"term-" + index + "\"")
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
-                        ledger.formatted(abusiveKeywords)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("keywords exceeds the absolute metadata item limit");
+        var manyKeywords = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted(abusiveKeywords));
+        assertThat(manyKeywords.pages()).singleElement().satisfies(page ->
+                assertThat(page.keywords()).containsExactlyElementsOf(
+                        java.util.stream.IntStream.rangeClosed(1, 65)
+                                .mapToObj(index -> "term-" + index)
+                                .toList()));
     }
 
     @Test
@@ -638,8 +656,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         return new SpringAiVisualRulebookPageCatalogModel(
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
-                new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt"),
-                4_800);
+                new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt"));
     }
 
     private ChatResponse response(String content) {
@@ -691,24 +708,17 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void boundsMultiImageCatalogRequestsAtOneShortRulebook() {
-        List<PageImageInput> eightPages = java.util.stream.IntStream.rangeClosed(1, 8)
+    void leavesProviderAndStorageAwarePageBatchingToTheCatalogWorkflow() {
+        List<PageImageInput> twentyPages = java.util.stream.IntStream.rangeClosed(1, 20)
                 .mapToObj(page -> new PageImageInput(page, "image/jpeg", new byte[] {(byte) page}))
                 .toList();
 
-        assertThat(new CatalogRequest(eightPages, "owner").pages()).hasSize(8);
-        assertThat(new CatalogDraft(eightPages.stream()
+        assertThat(new CatalogRequest(twentyPages, "owner").pages()).hasSize(20);
+        assertThat(new CatalogDraft(twentyPages.stream()
                         .map(page -> new PageSummary(
                                 page.pageNumber(), "PAGE", "Visible fact.", List.of("page")))
                         .toList()).pages())
-                .hasSize(8);
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new CatalogRequest(
-                        java.util.stream.IntStream.rangeClosed(1, 9)
-                                .mapToObj(page -> new PageImageInput(page, "image/jpeg", new byte[] {(byte) page}))
-                                .toList(),
-                        "owner"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("catalog request is invalid");
+                .hasSize(20);
     }
 
     private static String jsonString(String value) {

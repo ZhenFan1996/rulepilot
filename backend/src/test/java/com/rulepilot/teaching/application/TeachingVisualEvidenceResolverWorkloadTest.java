@@ -27,7 +27,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     void countsEveryBoundPageEvenWhenASectionBindsMoreThanOneReadBatch() {
         TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)));
 
-        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(12);
+        assertThat(TeachingVisualEvidenceResolver.estimatedCatalogModelCalls(plan)).isEqualTo(6);
         assertThat(TeachingSectionEvidenceRetriever.maximumToolCalls(plan.sections().getFirst(), 3))
                 .isEqualTo(3);
         assertThat(TeachingSourcePageEvidenceRefiner.maximumToolCalls(plan.sections().getFirst()))
@@ -80,7 +80,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     }
 
     @Test
-    void delegatesOneTransientReplayToThePageCatalogOwner() {
+    void localizesAVisualProviderFailureWithoutAHiddenReplay() {
         UUID versionId = UUID.randomUUID();
         AtomicInteger interpretations = new AtomicInteger();
         AssistantReadTools tools = new AssistantReadTools() {
@@ -105,20 +105,8 @@ class TeachingVisualEvidenceResolverWorkloadTest {
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                if (interpretations.incrementAndGet() == 1) {
-                    throw new org.springframework.ai.retry.TransientAiException("temporary visual response failure");
-                }
-                return new CatalogDraft(List.of(new PageSummary(
-                        1,
-                        "TURN",
-                        "TURN: Perform the visible action.",
-                        List.of("turn"),
-                        List.of(),
-                        List.of(),
-                        List.of("turn"),
-                        true,
-                        List.of(),
-                        List.of(new RuleGroupFact("turn", "Turn", "Perform the visible action.")))));
+                interpretations.incrementAndGet();
+                throw new org.springframework.ai.retry.TransientAiException("temporary visual response failure");
             }
 
             @Override
@@ -157,11 +145,12 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 List.of(visualPage(versionId, 1, false)),
                 UUID.randomUUID());
 
-        assertThat(interpretations).hasValue(2);
+        assertThat(interpretations).hasValue(1);
         assertThat(resolution.toolCalls()).isOne();
         assertThat(resolution.evidence()).singleElement().satisfies(source -> {
-            assertThat(source.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
-            assertThat(source.excerpt()).contains("Perform the visible action");
+            assertThat(source.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
+            assertThat(source.excerpt()).isEqualTo("Image-only page 1");
+            assertThat(source.pageImages()).singleElement();
         });
     }
 
@@ -194,8 +183,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 facts,
                 new ImmediateAuditedAgentInvocations(),
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
         AssistantReadTools tools = new AssistantReadTools() {
             @Override
             public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
@@ -301,8 +289,8 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     void countsVisualInterpretationFromTheImmutablePageBindings() {
         TeachingPlan plan = plan(List.of(List.of(1), List.of(2), List.of(3)));
 
-        // Reserve the initial image interpretation plus either one contract repair or one transient replay.
-        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(6);
+        // Corrections remain governed by the durable run rather than inflating admission with a fixed retry count.
+        assertThat(TeachingVisualEvidenceResolver.estimatedCatalogModelCalls(plan)).isEqualTo(3);
     }
 
     private TeachingPlan plan(List<List<Integer>> sourcePages) {

@@ -63,7 +63,7 @@ public interface NativeToolModel {
         }
 
         public ConversationMessage {
-            if (role == null || content == null || toolCalls == null || media == null || media.size() > 2) {
+            if (role == null || content == null || toolCalls == null || media == null) {
                 throw new IllegalArgumentException("native tool conversation message is invalid");
             }
             toolCalls = List.copyOf(toolCalls);
@@ -104,11 +104,10 @@ public interface NativeToolModel {
             Role role,
             ToolScope scope,
             List<ConversationMessage> conversation,
-            List<ToolSpec> tools,
-            int maxOutputTokens) {
+            List<ToolSpec> tools) {
         public ModelRequest {
             if (role == null || scope == null || conversation == null || conversation.isEmpty()
-                    || tools == null || maxOutputTokens < 1) {
+                    || tools == null) {
                 throw new IllegalArgumentException("native tool model request is invalid");
             }
             conversation = List.copyOf(conversation);

@@ -7,7 +7,13 @@ import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonModeNav from '@/components/LessonModeNav.vue'
-import type { LearningIntent } from '@/composables/useLessonAnswers'
+import {
+  answerFailureRecoveryFor,
+  answerFailureRecoveryForHttpStatus,
+  answerFailureRetrySuitability,
+  type AnswerFailureRecovery,
+  type LearningIntent,
+} from '@/composables/useLessonAnswers'
 import { groundedLearningPrompt } from '@/lib/groundedLearningPrompt'
 import { useLocale } from '@/lib/locale'
 import { publicLessonTitle } from '@/lib/lessonPresentation'
@@ -77,7 +83,7 @@ interface PublicAnswer {
     conceptComparisons?: Array<{ leftConcept: string; leftDefinition: string; rightConcept: string; rightDefinition: string; commonGround: string; keyDifference: string; practicalBoundary: string; basis: 'ACTION_WINDOW' | 'RESOURCE_FUNCTION' | 'STORAGE_STATUS' | 'RULE_SCOPE' | 'DEFINITION_BOUNDARY' }>
     ruleOptions?: Array<{ decisionContext: string; selectionRule: string; optionName: string; availabilityCondition: string; result: string; basis: 'SOURCE_SELECTION' | 'TIMING_CATALOG' | 'ALTERNATIVE_ACTION' | 'EXCLUSIVE_CHOICE' }>
     clarification: string | null
-    warnings: Array<{ type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE' }>
+    warnings: Array<{ type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'SOURCE_COVERAGE_PARTIAL' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE' }>
   }
   visualAids: Array<{ visualFocus: VisualFocus; relatedStep: string }>
   examples: Array<{ heading: string; text: string; sourcePages: number[] }>
@@ -121,6 +127,8 @@ const publicAnswerElapsedSeconds = ref(0)
 const publicAnswerSoftBudgetReached = computed(() =>
   publicAnswerLoading.value && publicAnswerElapsedSeconds.value >= PUBLIC_ANSWER_SOFT_BUDGET_SECONDS)
 const publicAnswerError = ref('')
+const publicAnswerFailureRecovery = ref<AnswerFailureRecovery | null>(null)
+const failedPublicQuestionFingerprint = ref('')
 const publicAnswerNotice = ref('')
 const publicResetDialogOpen = ref(false)
 const restorePublicQuestionAfterReset = ref(false)
@@ -146,6 +154,19 @@ const heroEyebrow = computed(() => questionMode.value ? t('questions.eyebrow') :
 const heroDescription = computed(() => questionMode.value ? t('public.question.description') : t('public.hero.description'))
 const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
 const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
+const publicAnswerRetryGuidance = computed(() => publicAnswerFailureRecovery.value
+  ? answerFailureRetrySuitability(publicAnswerFailureRecovery.value, locale.value)
+  : '')
+const failedPublicQuestionIsUnchanged = computed(() => !!failedPublicQuestionFingerprint.value
+  && failedPublicQuestionFingerprint.value === questionFingerprint(publicQuestion.value))
+const publicAnswerContextMustBeRestored = computed(() =>
+  publicAnswerFailureRecovery.value?.code === 'answer_context_invalid')
+const publicAnswerNeedsNewContext = computed(() => publicAnswerContextMustBeRestored.value
+  || publicAnswerFailureRecovery.value?.code === 'public_lesson_unavailable')
+const failedPublicQuestionRequiresEdit = computed(() => publicAnswerFailureRecovery.value?.canRetryUnchanged === false
+  && failedPublicQuestionIsUnchanged.value)
+const publicAnswerSubmissionBlocked = computed(() => publicAnswerNeedsNewContext.value
+  || failedPublicQuestionRequiresEdit.value)
 const publicAnswerSoftBudgetCopy = computed(() => {
   const english = locale.value === 'en'
   const elapsed = english ? `${publicAnswerElapsedSeconds.value} seconds` : `${publicAnswerElapsedSeconds.value} 秒`
@@ -288,6 +309,8 @@ function confirmClearPublicAnswerTurns() {
   const storageKey = answerThreadStorageKey()
   publicAnswerTurns.value = []
   publicAnswerError.value = ''
+  publicAnswerFailureRecovery.value = null
+  failedPublicQuestionFingerprint.value = ''
   publicAnswerNotice.value = ''
   if (storageKey) {
     try {
@@ -469,6 +492,7 @@ function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status
 function isAnswerWarning(value: unknown): value is PublicAnswer['answer']['warnings'][number] {
   return isRecord(value) && (value.type === 'INDIRECT_CITATION'
     || value.type === 'LOW_CONFIDENCE'
+    || value.type === 'SOURCE_COVERAGE_PARTIAL'
     || value.type === 'REVIEW_UNRESOLVED'
     || value.type === 'REVIEW_UNAVAILABLE')
 }
@@ -608,6 +632,7 @@ function publishesConclusion(status: PublicAnswer['answer']['status']) {
 function answerWarningMessage(warning: PublicAnswer['answer']['warnings'][number]) {
   if (warning.type === 'INDIRECT_CITATION') return t('lesson.answer.warning.INDIRECT_CITATION')
   if (warning.type === 'LOW_CONFIDENCE') return t('lesson.answer.warning.LOW_CONFIDENCE')
+  if (warning.type === 'SOURCE_COVERAGE_PARTIAL') return t('lesson.answer.warning.SOURCE_COVERAGE_PARTIAL')
   if (warning.type === 'REVIEW_UNRESOLVED') return t('lesson.answer.warning.REVIEW_UNRESOLVED')
   return t('lesson.answer.warning.REVIEW_UNAVAILABLE')
 }
@@ -678,8 +703,44 @@ function publicRecoveryCopy(turn: PublicAnswerTurn) {
 }
 
 async function submitPublicQuestion() {
+  if (publicAnswerNeedsNewContext.value) return
+  if (failedPublicQuestionRequiresEdit.value) {
+    await focusPublicQuestionForRecovery()
+    return
+  }
   const question = publicQuestion.value.trim()
   await sendPublicQuestion(question, null)
+}
+
+function questionFingerprint(question: string) {
+  return question.trim()
+}
+
+async function focusPublicQuestionForRecovery() {
+  await nextTick()
+  const input = document.getElementById('public-question')
+  input?.focus()
+  input?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+}
+
+async function restorePublicAnswerContext() {
+  if (loading.value || publicAnswerLoading.value) return
+  const requestedPlanId = planId.value
+  const requestedLocale = locale.value
+  await load()
+  if (publicLesson.value?.teachingPlanId !== requestedPlanId
+    || loadedLessonLocale !== requestedLocale) return
+  publicAnswerError.value = ''
+  publicAnswerFailureRecovery.value = null
+  failedPublicQuestionFingerprint.value = ''
+  publicAnswerNotice.value = requestedLocale === 'en'
+    ? 'The guide and answer context were refreshed. You can now send the preserved question.'
+    : '讲解和答疑上下文已刷新；现在可以发送保留的问题。'
+}
+
+async function retryPublicQuestionUnchanged() {
+  if (!publicAnswerFailureRecovery.value?.canRetryUnchanged || !failedPublicQuestionIsUnchanged.value) return
+  await submitPublicQuestion()
 }
 
 async function sendPublicQuestion(question: string, learningIntent: LearningIntent | null) {
@@ -692,11 +753,12 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
   const requestedReaderScopeGeneration = readerScopeGeneration
   const answerRequest = ++latestPublicAnswerRequest
   const controller = new AbortController()
-  let failureKind: PublicAnswerRequestFailure = 'unavailable'
+  let failureRecovery = answerFailureRecoveryFor('request', requestedLocale)
   activePublicAnswerController = controller
   publicAnswerLoading.value = true
   startPublicAnswerClock()
   publicAnswerError.value = ''
+  publicAnswerFailureRecovery.value = null
   publicAnswerNotice.value = ''
   try {
     const previousTurn = publicAnswerTurns.value.at(-1)
@@ -715,13 +777,19 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
     )) return
     if (response.status === 404) {
-      failureKind = 'missing'
+      failureRecovery = missingPublicLessonRecovery(requestedLocale)
       throw new Error('public lesson is not readable')
     }
-    if (!response.ok) throw new Error('public answer unavailable')
+    if (!response.ok) {
+      const httpRecovery = answerFailureRecoveryForHttpStatus(response.status, requestedLocale)
+      failureRecovery = httpRecovery.code === 'answer_context_invalid'
+        ? publicAnswerContextRecovery(requestedLocale)
+        : httpRecovery
+      throw new Error('public answer unavailable')
+    }
     const received = parsePublicAnswer(await response.json() as unknown)
     if (!received) {
-      failureKind = 'invalid'
+      failureRecovery = answerFailureRecoveryFor('invalid-result', requestedLocale)
       throw new Error('public answer response is invalid')
     }
     if (!isCurrentPublicAnswerRequest(
@@ -731,6 +799,7 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
     publicAnswerTurns.value = nextTurns
     rememberPublicAnswerTurns(nextTurns, requestedReaderScope, requestedPlanId, requestedLocale)
     publicQuestion.value = ''
+    failedPublicQuestionFingerprint.value = ''
     await nextTick()
     if (!isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
@@ -742,7 +811,9 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
     if (!isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
     ) || controller.signal.aborted) return
-    publicAnswerError.value = publicAnswerRequestFailureCopy(failureKind, requestedLocale)
+    failedPublicQuestionFingerprint.value = questionFingerprint(question)
+    publicAnswerFailureRecovery.value = failureRecovery
+    publicAnswerError.value = failureRecovery.message
   } finally {
     const requestStillCurrent = isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
@@ -769,21 +840,28 @@ function stopPublicAnswerClock() {
   publicAnswerClock = null
 }
 
-type PublicAnswerRequestFailure = 'missing' | 'unavailable' | 'invalid'
-
-function publicAnswerRequestFailureCopy(failure: PublicAnswerRequestFailure, replyLanguage: 'zh-CN' | 'en') {
-  if (replyLanguage === 'en') {
-    if (failure === 'missing') {
-      return 'This guide is no longer public, so it cannot answer this question. Your question is still here.'
-    }
-    if (failure === 'invalid') {
-      return "I couldn't verify the answer response. Your question is still here; review it and try again."
-    }
-    return "I couldn't send this question. It is still here; review it and try again."
+function missingPublicLessonRecovery(replyLanguage: 'zh-CN' | 'en'): AnswerFailureRecovery {
+  return {
+    code: 'public_lesson_unavailable',
+    message: replyLanguage === 'en'
+      ? 'This guide is no longer public, so it cannot answer this question. Your question is still here.'
+      : '这份讲解已不再公开，无法继续答疑；你的问题仍保留在这里。',
+    actionLabel: replyLanguage === 'en' ? 'Choose a public guide' : '选择公开讲解',
+    draft: '',
+    canRetryUnchanged: false,
   }
-  if (failure === 'missing') return '这份讲解已不再公开，无法继续答疑；你的问题仍保留在这里。'
-  if (failure === 'invalid') return '这次答复没有通过完整性核对。问题仍保留在这里；检查后可以直接重试。'
-  return '这次没有成功发送问题。问题仍保留在这里；检查后可以直接重试。'
+}
+
+function publicAnswerContextRecovery(replyLanguage: 'zh-CN' | 'en'): AnswerFailureRecovery {
+  return {
+    code: 'answer_context_invalid',
+    message: replyLanguage === 'en'
+      ? 'This guide\'s answer context changed. Editing the question cannot repair it; refresh the guide or return to the guide before asking again.'
+      : '这份讲解的答疑上下文已经变化。修改问题不能修复它；请先刷新讲解或返回讲解，再重新提问。',
+    actionLabel: replyLanguage === 'en' ? 'Refresh the answer context' : '刷新答疑上下文',
+    draft: '',
+    canRetryUnchanged: false,
+  }
 }
 
 function publicLearningAnchorQuestion() {
@@ -822,13 +900,24 @@ function isCurrentPublicAnswerRequest(
 
 function abandonPublicAnswer(showNotice = false) {
   stopPublicAnswerClock()
-  if (!publicAnswerLoading.value && !activePublicAnswerController) return
+  if (!publicAnswerLoading.value && !activePublicAnswerController) {
+    if (!showNotice) {
+      publicAnswerError.value = ''
+      publicAnswerFailureRecovery.value = null
+      failedPublicQuestionFingerprint.value = ''
+      publicAnswerNotice.value = ''
+    }
+    return
+  }
   latestPublicAnswerRequest++
   activePublicAnswerController?.abort()
   activePublicAnswerController = null
   publicAnswerLoading.value = false
   publicAnswerError.value = ''
-  publicAnswerNotice.value = showNotice ? t('public.question.stopped') : ''
+  const recovery = showNotice ? answerFailureRecoveryFor('cancelled', locale.value) : null
+  publicAnswerFailureRecovery.value = recovery
+  failedPublicQuestionFingerprint.value = recovery ? questionFingerprint(publicQuestion.value) : ''
+  publicAnswerNotice.value = recovery?.message ?? ''
 }
 
 onMounted(() => {
@@ -932,8 +1021,71 @@ onUnmounted(() => {
           </div>
           <p class="mt-3 text-xs leading-5 text-ink/45">{{ t('public.question.private') }}</p>
 
-          <p v-if="publicAnswerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ publicAnswerError }}</p>
-          <p v-else-if="publicAnswerNotice" class="mt-4 rounded-2xl bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">{{ publicAnswerNotice }}</p>
+          <div
+            v-if="publicAnswerError || publicAnswerNotice"
+            class="mt-4 rounded-2xl px-4 py-3 text-sm"
+            :class="publicAnswerError ? 'bg-red-50 text-red-700' : 'bg-indigo/5 text-indigo'"
+            :role="publicAnswerError ? 'alert' : 'status'"
+          >
+            <p>{{ publicAnswerError || publicAnswerNotice }}</p>
+            <p
+              v-if="publicAnswerFailureRecovery"
+              data-testid="public-answer-failure-retry-guidance"
+              :data-retry-unchanged="publicAnswerFailureRecovery.canRetryUnchanged"
+              class="mt-2 text-xs font-semibold leading-5"
+            >
+              <span>{{ publicAnswerFailureRecovery.actionLabel }}:</span>
+              {{ publicAnswerRetryGuidance }}
+            </p>
+            <div v-if="publicAnswerFailureRecovery" class="mt-3 flex flex-wrap gap-2">
+              <template v-if="publicAnswerContextMustBeRestored">
+                <button
+                  type="button"
+                  data-testid="public-answer-failure-refresh-context"
+                  :disabled="loading || publicAnswerLoading"
+                  class="min-h-10 rounded-xl border border-red-300 bg-paper px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
+                  @click="restorePublicAnswerContext"
+                >
+                  {{ publicAnswerFailureRecovery.actionLabel }}
+                </button>
+                <RouterLink
+                  data-testid="public-answer-failure-return-guide"
+                  :to="{ name: 'public-lesson', params: { planId } }"
+                  class="inline-flex min-h-10 items-center rounded-xl border border-red-300 bg-paper px-3 text-xs font-semibold text-red-800"
+                >
+                  {{ locale === 'en' ? 'Return to the guide' : '返回讲解' }}
+                </RouterLink>
+              </template>
+              <RouterLink
+                v-else-if="publicAnswerFailureRecovery.code === 'public_lesson_unavailable'"
+                data-testid="public-answer-failure-new-context"
+                :to="{ name: 'public-library' }"
+                class="inline-flex min-h-10 items-center rounded-xl border border-red-300 bg-paper px-3 text-xs font-semibold text-red-800"
+              >
+                {{ publicAnswerFailureRecovery.actionLabel }}
+              </RouterLink>
+              <button
+                v-else-if="publicAnswerFailureRecovery.canRetryUnchanged && failedPublicQuestionIsUnchanged"
+                type="button"
+                data-testid="public-answer-failure-retry-unchanged"
+                :disabled="publicAnswerLoading || !readerScopeReady || !publicQuestion.trim()"
+                class="min-h-10 rounded-xl border border-red-300 bg-paper px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
+                @click="retryPublicQuestionUnchanged"
+              >
+                {{ publicAnswerFailureRecovery.actionLabel }}
+              </button>
+              <button
+                v-else-if="failedPublicQuestionRequiresEdit"
+                type="button"
+                data-testid="public-answer-failure-edit-question"
+                :disabled="publicAnswerLoading || !readerScopeReady"
+                class="min-h-10 rounded-xl border border-red-300 bg-paper px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
+                @click="focusPublicQuestionForRecovery"
+              >
+                {{ locale === 'en' ? 'Edit the question' : '修改问题' }}
+              </button>
+            </div>
+          </div>
           <div v-else-if="publicAnswerLoading" class="mt-5 rounded-2xl border border-indigo/12 bg-paper p-5" role="status" aria-live="polite">
             <div class="flex items-center gap-3"><span class="size-3 animate-pulse rounded-full bg-copper" /><p class="text-sm font-semibold">{{ t('public.question.waiting') }}</p></div>
             <p class="mt-2 text-xs leading-5 text-ink/50">{{ t('public.question.waitingDetail') }}</p>
@@ -1014,7 +1166,7 @@ onUnmounted(() => {
             <textarea id="public-question" v-model="publicQuestion" rows="3" :disabled="publicAnswerLoading || !readerScopeReady" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
             <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
               <p class="text-xs text-ink/45">{{ t('public.question.counter', { count: publicQuestion.length }) }}</p>
-              <button type="submit" :disabled="publicAnswerLoading || !readerScopeReady || !publicQuestion.trim()" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>
+              <button type="submit" :disabled="publicAnswerLoading || !readerScopeReady || !publicQuestion.trim() || publicAnswerSubmissionBlocked" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>
             </div>
           </form>
         </section>

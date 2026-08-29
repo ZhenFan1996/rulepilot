@@ -585,6 +585,118 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   })
 
+  it('keeps a stale answer context blocked after edits and exposes a real page refresh', async () => {
+    const wrapper = mount(LessonAnswerPanel, {
+      attachTo: document.body,
+      props: {
+        ...baseProps,
+        question: '这个效果什么时候解析？',
+        answerError: '当前规则书版本已变化，请重新打开后再提问。',
+        answerOutcome: 'failed',
+        answerFailureRecovery: {
+          code: 'answer_context_invalid',
+          message: '当前规则书版本已变化，请重新打开后再提问。',
+          actionLabel: '重新打开规则书',
+          draft: '',
+          canRetryUnchanged: false,
+        },
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    const guidance = wrapper.get('[data-testid="answer-failure-retry-guidance"]')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('false')
+    expect(guidance.text()).toContain('重新打开规则书')
+    expect(guidance.text()).toContain('修改问题不能修复已经失效的答疑上下文')
+
+    const submit = wrapper.get('button[type="submit"]')
+    expect(submit.attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('ask')).toBeUndefined()
+
+    const restoreContext = wrapper.get('[data-testid="answer-failure-restore-context"]')
+    expect(restoreContext.attributes('href')).toBe(window.location.href)
+    expect(restoreContext.text()).toBe('重新打开规则书')
+    expect(wrapper.find('[data-testid="answer-failure-edit-question"]').exists()).toBe(false)
+
+    await wrapper.setProps({ question: '这个效果在行动结束时解析吗？' })
+    expect(submit.attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('ask')).toBeUndefined()
+
+    await wrapper.setProps({
+      answerFailureRecovery: {
+        code: 'answer_result_invalid',
+        message: '返回的答案没有通过完整性检查。',
+        actionLabel: '检查问题',
+        draft: '',
+        canRetryUnchanged: false,
+      },
+    })
+    expect(wrapper.find('[data-testid="answer-failure-restore-context"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="answer-failure-edit-question"]').exists()).toBe(true)
+    await wrapper.setProps({ question: '这个效果在最终计分时解析吗？' })
+    expect(submit.attributes('disabled')).toBeUndefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('ask')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('offers a real unchanged retry after a temporary service failure has recovered', async () => {
+    setLocale('en')
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        question: 'When does this effect resolve?',
+        answerError: 'The rules answer service is temporarily unavailable.',
+        answerOutcome: 'failed',
+        answerFailureRecovery: {
+          code: 'answer_service_unavailable',
+          message: 'The rules answer service is temporarily unavailable.',
+          actionLabel: 'Retry after recovery',
+          draft: '',
+          canRetryUnchanged: true,
+        },
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    const guidance = wrapper.get('[data-testid="answer-failure-retry-guidance"]')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('true')
+    expect(guidance.text()).toContain('Retry after recovery')
+    expect(guidance.text()).toContain('After the service recovers')
+    expect(guidance.text()).toContain('unchanged')
+
+    await wrapper.get('[data-testid="answer-failure-retry-unchanged"]').trigger('click')
+    expect(wrapper.emitted('ask')).toHaveLength(1)
+  })
+
+  it('explains that a timed-out run stopped and should be narrowed if the same retry also times out', () => {
+    setLocale('en')
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answerError: 'This answer attempt timed out.',
+        answerOutcome: 'failed',
+        answerFailureRecovery: {
+          code: 'answer_timeout',
+          message: 'This answer attempt timed out.',
+          actionLabel: 'Retry this question',
+          draft: '',
+          canRetryUnchanged: true,
+        },
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    const guidance = wrapper.get('[data-testid="answer-failure-retry-guidance"]')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('true')
+    expect(guidance.text()).toContain('This run has stopped')
+    expect(guidance.text()).toContain('retry the same question unchanged')
+    expect(guidance.text()).toContain('narrow its scope')
+    expect(guidance.text()).not.toContain('service recovers')
+  })
+
   it('marks the soft budget without presenting the unfinished answer as a result', async () => {
     const prior = {
       ...answered,

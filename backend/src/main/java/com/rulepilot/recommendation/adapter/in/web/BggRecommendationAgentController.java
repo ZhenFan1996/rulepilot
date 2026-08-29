@@ -373,11 +373,11 @@ public class BggRecommendationAgentController {
             if (reason == null) return "service_failure";
             return switch (reason) {
                 case TIME_LIMIT -> "time_budget";
+                case RESOURCE_BUDGET_EXHAUSTED -> "action_budget";
                 case MODEL_NOT_CONFIGURED -> "service_configuration";
                 case PROVIDER_PROTOCOL_INVALID, PROVIDER_OUTPUT_TRUNCATED, EMPTY_MODEL_RESPONSE ->
                     "model_response";
-                case REPEATED_INCOMPATIBLE_ACTIONS, REPEATED_INVALID_ACTION, ACTION_BUDGET_EXHAUSTED ->
-                    "action_budget";
+                case REPEATED_INCOMPATIBLE_ACTIONS, REPEATED_INVALID_ACTION -> "action_budget";
                 case PUBLICATION_REJECTED -> "publication_boundary";
                 case PROVIDER_CALL_FAILED, SERVICE_FAILURE -> "service_failure";
             };

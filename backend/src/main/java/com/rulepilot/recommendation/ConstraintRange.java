@@ -10,8 +10,6 @@ public record ConstraintRange<T extends Comparable<? super T>>(
         String sourceText,
         int confirmedTurn) {
 
-    private static final int MAX_SOURCE_CODE_POINTS = 160;
-
     public ConstraintRange {
         if (minimum == null && maximum == null) {
             throw new IllegalArgumentException("at least one constraint bound is required");
@@ -21,9 +19,6 @@ public record ConstraintRange<T extends Comparable<? super T>>(
         }
         strength = Objects.requireNonNull(strength, "constraint strength is required");
         sourceText = (sourceText == null ? "" : sourceText).strip();
-        if (sourceText.codePointCount(0, sourceText.length()) > MAX_SOURCE_CODE_POINTS) {
-            throw new IllegalArgumentException("constraint source text is too long");
-        }
         if (confirmedTurn < 0) throw new IllegalArgumentException("confirmed turn must not be negative");
     }
 

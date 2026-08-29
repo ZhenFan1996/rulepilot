@@ -12,22 +12,23 @@ Reference binding:
 
 Top-level typed fields:
 - questionType: LESSON_STEP_FOLLOW_UP, RULE_QUERY, or SITUATION_QUERY.
-- terms: at most twelve short player/source terms; never invent game-specific vocabulary.
-- ruleObjectSpans: zero to four exact named rule objects from the current message.
-- pageHints: zero to four {"questionSpan":"exact current wording","pageNumber":1} locators. A locator is not proof.
-- missingContext: at most two declared enum values; non-empty only for NEEDS_CLARIFICATION.
+- terms: every distinct player/source term needed for retrieval; never invent game-specific vocabulary.
+- ruleObjectSpans: every distinct exact named rule object from the current message.
+- pageHints: every explicit {"questionSpan":"exact current wording","pageNumber":1} locator. A locator is not proof.
+- missingContext: declared enum values only; non-empty only for NEEDS_CLARIFICATION.
 - learningIntent: SIMPLIFY, EXAMPLE, DEFINE, WHY, EXCEPTIONS, SOURCE, VERIFY, or null. If explicit learning intent is
   not GENERAL_QUESTION, copy it. ADVICE is never a learning intent.
 - answerAid: exactly one of NONE, WALKTHROUGH, DECISION_TABLE, EXCEPTIONS, DEFINITIONS, EXAMPLE, RULE_PRIORITY,
   TIMING, TIE, SCOPE, CONCEPT_COMPARISON, OPTIONS, SOURCE, PERMISSION, CALCULATION, VISUAL.
 
-Except for NEEDS_CLARIFICATION, return one to four subquestions. Every item has exactly:
+Except for NEEDS_CLARIFICATION, return the subquestions needed to represent every independent rule obligation. Every
+item has exactly:
 - questionSpan: exact current or selected reference wording;
-- evidenceNeeds: one to three of DIRECT_RULE, CONDITION, SEQUENCE, EXCEPTION, DEFINITION, RELATIONSHIP,
+- evidenceNeeds: one or more relevant values from DIRECT_RULE, CONDITION, SEQUENCE, EXCEPTION, DEFINITION, RELATIONSHIP,
   VISUAL_REFERENCE, COMPLETE_LIST, ADVICE, PRIOR_TURN;
 - owner: CURRENT_QUESTION or BOUND_REFERENCE. The owner is authoritative application data. Every current task has a
   CURRENT_QUESTION item; reference items never replace it. Put current items first;
-- retrievalQueries: zero to three complete lookup phrases for this exact item. Preserve exact useful terms. When
+- retrievalQueries: distinct complete lookup phrases that are useful for this exact item. Preserve exact useful terms. When
   player wording is unlikely to match common source-rulebook wording, add a faithful source-language lookup phrase.
   Translate generic meaning only; never invent an official name, role, component, or action. The application consumes
   this array directly and never extracts queries from prose.

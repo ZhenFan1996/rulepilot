@@ -18,19 +18,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Mutable state for one bounded recommendation conversation turn. */
+/** Mutable state for one recommendation conversation turn. */
 final class RecommendationAgentState {
-
-    static final int MAX_VERIFIED_GAMES = 8;
-    static final int MAX_OBSERVED_CANDIDATES = 16;
-    static final int MIN_RECOMMENDATION_REPLY_CODE_POINTS = 1;
-    static final int MAX_RECOMMENDATION_REPLY_CODE_POINTS = 1_200;
-    static final int MIN_CARD_REPLY_CODE_POINTS = 1;
-    static final int MAX_CARD_REPLY_CODE_POINTS = 400;
 
     final long startedAtNanos;
     final String modelConfigurationOwner;
-    final int maximumRecommendationResults;
+    final RecommendationRunBudget budget;
     RecommendationProfile profile;
     final Set<Integer> excludedIds;
     final Set<Integer> previouslyShownIds = new LinkedHashSet<>();
@@ -75,13 +68,26 @@ final class RecommendationAgentState {
             ConversationRequest request,
             long startedAtNanos,
             String modelConfigurationOwner,
+            boolean webResearchConfigured) {
+        this(
+                request,
+                startedAtNanos,
+                modelConfigurationOwner,
+                webResearchConfigured,
+                BoardGameRecommendationProperties.DEFAULT_MAX_TOKENS);
+    }
+
+    RecommendationAgentState(
+            ConversationRequest request,
+            long startedAtNanos,
+            String modelConfigurationOwner,
             boolean webResearchConfigured,
-            int maximumRecommendationResults) {
+            int maxTokens) {
         this.startedAtNanos = startedAtNanos;
         this.modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                 ? null
                 : modelConfigurationOwner.strip();
-        this.maximumRecommendationResults = maximumRecommendationResults;
+        budget = new RecommendationRunBudget(maxTokens);
         profile = request.profile();
         excludedIds = new LinkedHashSet<>(request.excludedBggIds());
         previouslyShownIds.addAll(request.shownBggIds());
@@ -99,19 +105,6 @@ final class RecommendationAgentState {
         if (game == null || game.details() == null) return;
         observeCandidate(game.ranking().bggId(), game.ranking().sourceName());
         int bggId = game.ranking().bggId();
-        if (!verified.containsKey(bggId) && verified.size() >= MAX_VERIFIED_GAMES) {
-            Integer oldestRestored = null;
-            for (Integer candidateId : verified.keySet()) {
-                if (!freshVerifiedIds.contains(candidateId)) oldestRestored = candidateId;
-            }
-            if (oldestRestored == null) {
-                oldestRestored = verified.keySet().iterator().next();
-            }
-            if (oldestRestored != null) {
-                verified.remove(oldestRestored);
-                freshVerifiedIds.remove(oldestRestored);
-            }
-        }
         verified.put(bggId, game);
         freshVerifiedIds.add(bggId);
     }
@@ -127,7 +120,7 @@ final class RecommendationAgentState {
     }
 
     private void restoreVerified(Game game) {
-        if (game == null || game.details() == null || verified.size() >= MAX_VERIFIED_GAMES) return;
+        if (game == null || game.details() == null) return;
         observeCandidate(game.ranking().bggId(), game.ranking().sourceName());
         verified.putIfAbsent(game.ranking().bggId(), game);
     }
@@ -144,9 +137,7 @@ final class RecommendationAgentState {
 
     void observeCandidate(int bggId, String name) {
         legalIds.add(bggId);
-        if (candidateNames.containsKey(bggId) || candidateNames.size() < MAX_OBSERVED_CANDIDATES) {
-            candidateNames.put(bggId, name == null ? "" : name);
-        }
+        candidateNames.put(bggId, name == null ? "" : name);
     }
 
     void disableWebResearch(String code) {
@@ -244,57 +235,11 @@ final class RecommendationAgentState {
                     || candidateBggIds.stream().distinct().count() != candidateBggIds.size()
                     || referenceBggIds.stream().anyMatch(id -> id == null || id <= 0)
                     || referenceBggIds.stream().distinct().count() != referenceBggIds.size()
-                    || requestedCount < 1
-                    || requestedCount > MAX_VERIFIED_GAMES) {
+                    || requestedCount < 1) {
                 throw new IllegalArgumentException("recommendation publication seed is invalid");
             }
         }
 
     }
 
-    record RecommendationReplyDraft(String text, List<String> evidenceIds) {
-        RecommendationReplyDraft {
-            if (text == null || text.isBlank()) {
-                throw new IllegalArgumentException("recommendation reply draft text is invalid");
-            }
-            evidenceIds = evidenceIds == null ? List.of() : List.copyOf(evidenceIds);
-            if (evidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
-                    || evidenceIds.stream().distinct().count() != evidenceIds.size()) {
-                throw new IllegalArgumentException("recommendation reply draft evidence is invalid");
-            }
-        }
-    }
-
-    record CandidateReplyDraft(
-            int bggId,
-            RecommendationReplyDraft why,
-            RecommendationReplyDraft tradeoff) {
-        CandidateReplyDraft {
-            if (bggId <= 0 || why == null) {
-                throw new IllegalArgumentException("candidate reply draft is invalid");
-            }
-        }
-    }
-
-    record PublicationDraft(
-            String playerReply,
-            List<String> playerReplyEvidenceIds,
-            List<CandidateReplyDraft> candidates) {
-        PublicationDraft {
-            if (playerReply == null || playerReply.isBlank()) {
-                throw new IllegalArgumentException("recommendation publication reply is invalid");
-            }
-            playerReplyEvidenceIds = playerReplyEvidenceIds == null
-                    ? List.of()
-                    : List.copyOf(playerReplyEvidenceIds);
-            candidates = candidates == null ? List.of() : List.copyOf(candidates);
-            if (playerReplyEvidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
-                    || playerReplyEvidenceIds.stream().distinct().count() != playerReplyEvidenceIds.size()
-                    || candidates.isEmpty()
-                    || candidates.stream().map(CandidateReplyDraft::bggId).distinct().count()
-                            != candidates.size()) {
-                throw new IllegalArgumentException("recommendation publication candidates are invalid");
-            }
-        }
-    }
 }

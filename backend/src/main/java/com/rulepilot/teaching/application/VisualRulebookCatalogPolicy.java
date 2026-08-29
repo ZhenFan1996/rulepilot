@@ -20,6 +20,8 @@ import java.util.stream.Stream;
 /** Deterministic visual-page catalog transformations; model and storage work stay in the caller. */
 final class VisualRulebookCatalogPolicy {
 
+    static final String VISUAL_CATALOG_PREFIX = "[Visual page catalog; verify against page image]";
+
     private VisualRulebookCatalogPolicy() {}
 
     static Set<Integer> missingPages(Set<Integer> requestedPages, List<PageFact> cached) {
@@ -307,7 +309,7 @@ final class VisualRulebookCatalogPolicy {
         if (fact == null) {
             return new PageInput(
                     pageNumber,
-                    TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
+                    VISUAL_CATALOG_PREFIX
                             + "\nPrinted terms: unavailable because visual interpretation did not finish."
                             + "\nVisible facts: No factual visual claim is available for this page. Keep its source binding"
                             + " and verify the original page image before teaching any detail."
@@ -323,7 +325,7 @@ final class VisualRulebookCatalogPolicy {
         boolean exactCompleteLedger = hasReusableCompleteRuleLedger(fact);
         return new PageInput(
                 pageNumber,
-                TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
+                VISUAL_CATALOG_PREFIX
                         + "\nPrinted terms: "
                         + fact.printedTerms()
                         + "\nVisible facts: "

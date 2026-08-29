@@ -104,6 +104,43 @@ class NativeAgentToolRegistryTest {
         assertThat(receivedScope.get()).isNull();
     }
 
+    @Test
+    void returnsTheExactArgumentErrorAndCurrentSchemaToTheSameAgent() {
+        NativeAgentTool valid = tool("search_rule_evidence", Set.of(Role.ANSWER), new AtomicReference<>());
+        NativeAgentTool rejecting = new DelegatingTool(valid) {
+            @Override
+            public ToolObservation execute(String input, ToolScope scope) {
+                throw new IllegalArgumentException("limit must be a positive requested candidate count");
+            }
+        };
+        NativeAgentToolRegistry registry = registry(List.of(rejecting));
+
+        var result = registry.execute(Role.ANSWER, rejecting.name(), "{\"limit\":0}", scope());
+
+        assertThat(result.observation().code()).isEqualTo("INVALID_ARGUMENT");
+        assertThat(result.observation().data())
+                .containsEntry("validationError", "limit must be a positive requested candidate count")
+                .containsEntry("inputSchema", rejecting.inputSchema())
+                .containsEntry("schemaHash", result.specification().schemaHash())
+                .containsEntry("allowedToolName", rejecting.name());
+        assertThat(result.observation().data().toString()).doesNotContain("{\"limit\":0}");
+
+        NativeAgentTool search = new SearchRuleEvidenceNativeTool(
+                request -> List.of(), JsonMapper.builder().build());
+        var malformed = registry(List.of(search)).execute(
+                Role.ANSWER, search.name(), "{\"query\":", scope());
+        assertThat(malformed.observation().data().get("validationError").toString())
+                .contains("search arguments JSON could not be decoded", "line 1", "column");
+        assertThat(malformed.observation().data().get("validationError").toString())
+                .doesNotContain("Unexpected end-of-input", "query");
+
+        var blank = registry(List.of(search)).execute(Role.ANSWER, search.name(), " ", scope());
+        assertThat(blank.observation().data())
+                .containsEntry("validationError", "argumentsJson must contain one JSON object")
+                .containsEntry("inputSchema", search.inputSchema())
+                .containsEntry("allowedToolName", search.name());
+    }
+
     private NativeAgentToolRegistry registry(List<NativeAgentTool> tools) {
         return new NativeAgentToolRegistry(tools, JsonMapper.builder().build(), ignored -> true);
     }

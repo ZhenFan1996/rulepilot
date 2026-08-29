@@ -101,9 +101,6 @@ rulepilot:
     api-enabled: true
     worker-enabled: true
   agent:
-    max-steps: ${AGENT_MAX_STEPS:40}
-    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:24}
-    max-model-calls: ${AGENT_MAX_MODEL_CALLS:16}
     max-tokens: ${AGENT_MAX_TOKENS:24000}
     timeout: ${AGENT_TIMEOUT:PT2M}
   document:
@@ -148,19 +145,16 @@ rulepilot:
       # Claiming persisted READY intents must not wait behind Rabbit publisher confirms or queue metrics.
       scheduler-pool-size: ${TEACHING_IMPORT_HANDOFF_SCHEDULER_POOL_SIZE:1}
     agent:
-      # Legacy fallback for non-plan callers. Ordinary lessons replace these with the exact bounded call graph of
-      # their immutable Teaching plan; account quota and administrator entitlement are separate concerns.
-      max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:72}
-      # Preparation may use one initial visual call plus one audited recovery call per page before the bounded
-      # outline work. Keep this aligned with the service default; every scaled budget keeps its own hard cap.
-      max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:72}
+      # Workload estimates scale tokens and active time relative to this ordinary-capacity baseline. It is not a call
+      # limit: valid recovery can continue while the persisted token envelope and deadline still allow work.
+      model-call-capacity-baseline: ${TEACHING_AGENT_MODEL_CALL_CAPACITY_BASELINE:72}
       max-tokens: ${TEACHING_AGENT_MAX_TOKENS:300000}
       timeout: ${TEACHING_AGENT_TIMEOUT:PT30M}
-      # Exact plan-sized call graphs extend the ordinary wall budget proportionally. Sixteen hours is an active-work
-      # boundary, not a promise that every source fits provider context or available account quota.
+      # Estimated workloads extend the ordinary wall budget proportionally. Sixteen hours is an active-work boundary,
+      # not a call-count limit or a promise that every source fits provider context or available account quota.
       max-workload-timeout: ${TEACHING_AGENT_MAX_WORKLOAD_TIMEOUT:PT16H}
-      # Scale the ordinary execution-token envelope with the admitted call graph; provider account quota remains an
-      # independent entitlement boundary. The cap prevents an oversized workload from authorizing unbounded usage.
+      # Scale the execution-token envelope with estimated work; provider account quota remains an independent
+      # entitlement boundary. The cap prevents an oversized workload from authorizing unbounded token usage.
       max-workload-tokens: ${TEACHING_AGENT_MAX_WORKLOAD_TOKENS:16000000}
     background:
       core-pool-size: ${TEACHING_BACKGROUND_CORE_POOL_SIZE:1}
@@ -188,7 +182,6 @@ rulepilot:
     visual-enrichment:
       # Retained only to read historical VISUAL_ENRICHMENT runs. New crops are bounded chapter work inside TEACHING.
       agent:
-        max-model-calls: ${VISUAL_ENRICHMENT_AGENT_MAX_MODEL_CALLS:192}
         max-tokens: ${VISUAL_ENRICHMENT_AGENT_MAX_TOKENS:600000}
         timeout: ${VISUAL_ENRICHMENT_AGENT_TIMEOUT:PT30M}
     # First-pass chapters use the planner's rulebook-language terms. Supplemental searches belong to
@@ -210,9 +203,6 @@ rulepilot:
     request-parallelism: ${VISUAL_REQUEST_PARALLELISM:10}
     # Structured rule interpretation is heavier and retains the measured four-request provider headroom.
     semantic-request-parallelism: ${VISUAL_SEMANTIC_REQUEST_PARALLELISM:4}
-    # Inspect only a small distributed sample of unowned sparse-text pages before coverage refinement. A cataloged
-    # page still needs a concrete gameplay observation before it can create a teaching topic.
-    coverage-probe-pages: ${VISUAL_COVERAGE_PROBE_PAGES:4}
     location-timeout: ${VISUAL_LOCATION_TIMEOUT:PT45S}
     # Legacy callers without an observable Agent run still share one workflow wall deadline across every candidate
     # batch. This bounds elapsed time without imposing a final image or section count.
@@ -225,8 +215,6 @@ rulepilot:
   answer:
     provider: ${ANSWER_PROVIDER:fake}
     model-provider: ${ANSWER_MODEL_PROVIDER:gemini}
-    agent:
-      timeout: ${ANSWER_AGENT_TIMEOUT:PT30S}
     temperature: ${ANSWER_TEMPERATURE:0.15}
     interpretation-temperature: ${ANSWER_INTERPRETATION_TEMPERATURE:0.0}
     cache-retention: ${ANSWER_CACHE_RETENTION:PT6H}
@@ -320,7 +308,10 @@ rulepilot:
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
-      timeout: ${BGG_RECOMMENDATION_AGENT_TIMEOUT:PT45S}
+      timeout: ${AGENT_TIMEOUT:PT2M}
+      # One complete recommendation turn owns this aggregate resource envelope. Step/tool safety ceilings derive from
+      # it; the remaining tokens also bound each provider response without imposing a model-call count.
+      max-tokens: ${BGG_RECOMMENDATION_AGENT_MAX_TOKENS:64000}
       web-research:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
         api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}

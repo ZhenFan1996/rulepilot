@@ -23,30 +23,10 @@ public interface TeachingOutlineModel {
                 TeachingOutlineModel::estimateTokens);
     }
 
-    /**
-     * Rebuilds an otherwise usable outline when its broad flow chapter steals detail owned by later chapters.
-     * Implementations must preserve the supplied draft when refinement cannot complete.
-     */
-    default OutlineDraft refineChapterOwnership(OutlineRequest request, OutlineDraft current, String feedback) {
-        return current;
-    }
-
-    default OutlineDraft refineChapterOwnership(
-            OutlineRequest request,
-            OutlineDraft current,
-            String feedback,
-            ModelCallExecutor calls) {
-        return calls.invoke(
-                new ModelCall(
-                        "refineTeachingOutlineOwnership",
-                        estimateTokens(current) + estimateTokens(feedback),
-                        "Lesson chapters separated so each detailed rule has one home"),
-                () -> refineChapterOwnership(request, current, feedback),
-                TeachingOutlineModel::estimateTokens);
-    }
-
     interface ModelCallExecutor {
         <T> T invoke(ModelCall call, Supplier<T> invocation, ToIntFunction<T> outputTokens);
+
+        default void recordRejection(String operation, String summary) {}
 
         static ModelCallExecutor direct() {
             return new ModelCallExecutor() {
@@ -450,15 +430,33 @@ public interface TeachingOutlineModel {
             List<String> coverageTags,
             List<Integer> sourcePageNumbers) {
         public TopicDraft {
-            if (key == null || key.isBlank()
-                    || !key.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
-                    || title == null || title.isBlank()
-                    || objective == null || objective.isBlank()
-                    || (retrievalQueries != null && retrievalQueries.stream()
-                            .anyMatch(query -> query == null || query.isBlank()))
-                    || (sourcePageNumbers != null && sourcePageNumbers.stream()
-                            .anyMatch(pageNumber -> pageNumber == null || pageNumber < 1))) {
-                throw new IllegalArgumentException("teaching outline topic is invalid");
+            if (key == null || key.isBlank()) {
+                throw new IllegalArgumentException("teaching outline topic key must be non-blank lowercase kebab-case");
+            }
+            if (!key.matches("[a-z0-9]+(?:-[a-z0-9]+)*")) {
+                throw new IllegalArgumentException(
+                        "teaching outline topic key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$; rejected key=" + key);
+            }
+            if (title == null || title.isBlank()) {
+                throw new IllegalArgumentException("teaching outline topic title must be non-blank");
+            }
+            if (objective == null || objective.isBlank()) {
+                throw new IllegalArgumentException("teaching outline topic objective must be non-blank");
+            }
+            if (retrievalQueries != null && retrievalQueries.stream()
+                    .anyMatch(query -> query == null || query.isBlank())) {
+                throw new IllegalArgumentException(
+                        "teaching outline topic retrievalQueries must contain only non-blank strings");
+            }
+            if (coverageTags != null && coverageTags.stream()
+                    .anyMatch(tag -> tag == null || tag.isBlank())) {
+                throw new IllegalArgumentException(
+                        "teaching outline topic coverageTags must contain only non-blank strings");
+            }
+            if (sourcePageNumbers != null && sourcePageNumbers.stream()
+                    .anyMatch(pageNumber -> pageNumber == null || pageNumber < 1)) {
+                throw new IllegalArgumentException(
+                        "teaching outline topic sourcePageNumbers must contain only positive page identities");
             }
             retrievalQueries = retrievalQueries == null ? List.of() : List.copyOf(retrievalQueries);
             coverageTags = coverageTags == null ? List.of() : List.copyOf(coverageTags);

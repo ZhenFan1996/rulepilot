@@ -3,7 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.teaching.domain.TeachingPlan;
 
-/** Counts the complete bounded call graph before a Teaching run receives its durable execution budget. */
+/** Estimates the ordinary useful path for workload admission; recovery remains governed by the durable run. */
 final class TeachingRunWorkloadPolicy {
 
     private final int maxRetrievalQueriesPerSection;
@@ -19,21 +19,15 @@ final class TeachingRunWorkloadPolicy {
         if (plan == null || plan.sections().isEmpty()) {
             throw new IllegalArgumentException("teaching plan needs a countable workload");
         }
-        long toolCalls = 0;
-        for (TeachingPlan.PlannedSection section : plan.sections()) {
-            toolCalls += TeachingSectionEvidenceRetriever.maximumToolCalls(
-                    section, maxRetrievalQueriesPerSection);
-            toolCalls += TeachingSourcePageEvidenceRefiner.maximumToolCalls(section);
-        }
-        long modelCalls = Math.addExact(
-                Math.multiplyExact((long) plan.sections().size(), TeachingModelCallBudget.maximumSectionCalls()),
+        long estimatedModelCalls = Math.addExact(
+                (long) plan.sections().size(),
                 Math.addExact(
-                        (long) TeachingVisualEvidenceResolver.maximumModelCalls(plan),
-                        VisualLessonEnricher.maximumTeachingRunModelCalls(plan)));
-        if (toolCalls > Integer.MAX_VALUE || modelCalls > Integer.MAX_VALUE) {
+                        (long) TeachingVisualEvidenceResolver.estimatedCatalogModelCalls(plan),
+                        VisualLessonEnricher.estimatedTeachingRunModelCalls(plan)));
+        if (estimatedModelCalls > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("teaching workload is too large");
         }
-        return new WorkloadDemand((int) toolCalls, (int) modelCalls);
+        return new WorkloadDemand((int) estimatedModelCalls);
     }
 
     int maxRetrievalQueriesPerSection() {

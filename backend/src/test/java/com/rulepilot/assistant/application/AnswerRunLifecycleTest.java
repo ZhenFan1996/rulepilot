@@ -41,7 +41,7 @@ class AnswerRunLifecycleTest {
         RunSnapshot completed = lifecycle.finish(
                 received, answered(), AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING);
 
-        assertThat(runs.advances()).extracting(Advance::nextState).containsExactly(
+        assertThat(runs.postWorkAdvances()).extracting(Advance::nextState).containsExactly(
                 AssistantRunState.QUESTION_UNDERSTANDING,
                 AssistantRunState.RETRIEVAL_PLANNING,
                 AssistantRunState.RETRIEVING,
@@ -49,7 +49,9 @@ class AnswerRunLifecycleTest {
                 AssistantRunState.ANSWER_COMPOSITION,
                 AssistantRunState.CRITIQUING,
                 AssistantRunState.COMPLETED);
-        assertThat(runs.advances()).extracting(Advance::expectedRevision).containsExactly(1L, 2L, 3L, 4L, 5L, 6L, 7L);
+        assertThat(runs.postWorkAdvances()).extracting(Advance::expectedRevision)
+                .containsExactly(1L, 2L, 3L, 4L, 5L, 6L, 7L);
+        assertThat(runs.advances()).isEmpty();
         assertThat(completed.state()).isEqualTo(AssistantRunState.COMPLETED);
         assertThat(completed.revision()).isEqualTo(8);
     }
@@ -115,6 +117,7 @@ class AnswerRunLifecycleTest {
     private static final class RecordingRuns implements AssistantRuns {
 
         private final List<Advance> advances = new ArrayList<>();
+        private final List<Advance> postWorkAdvances = new ArrayList<>();
         private final List<Failure> failures = new ArrayList<>();
         private RuntimeException failException;
         private Start start;
@@ -144,7 +147,19 @@ class AnswerRunLifecycleTest {
 
         @Override
         public RunSnapshot advanceAfterWork(UUID runId, long expectedRevision, AssistantRunState nextState, String stepSummary) {
-            throw new UnsupportedOperationException("not used by answer runs");
+            postWorkAdvances.add(new Advance(expectedRevision, nextState, stepSummary));
+            Instant now = Instant.parse("2026-07-24T04:00:00Z");
+            return new RunSnapshot(
+                    runId,
+                    AssistantRunMode.QUESTION_ANSWER,
+                    UUID.randomUUID(),
+                    "player",
+                    nextState,
+                    expectedRevision + 1,
+                    now,
+                    now,
+                    nextState.terminal() ? now : null,
+                    null);
         }
 
         @Override
@@ -201,6 +216,10 @@ class AnswerRunLifecycleTest {
 
         List<Advance> advances() {
             return List.copyOf(advances);
+        }
+
+        List<Advance> postWorkAdvances() {
+            return List.copyOf(postWorkAdvances);
         }
 
         List<Failure> failures() {

@@ -5,6 +5,7 @@ import {
   acceptJourneyRun,
   derivePlayerJourney,
   playerJourneyPollDelay,
+  typedFailurePolicy,
   type PlayerJourneyImportJob,
   type PlayerJourneyRun,
 } from './playerJourney'
@@ -19,6 +20,32 @@ describe('playerJourneyPollDelay', () => {
 
   it('keeps transient failures on the slower retry cadence', () => {
     expect(playerJourneyPollDelay(true, true)).toBe(3_000)
+  })
+})
+
+describe('typedFailurePolicy', () => {
+  it.each([
+    ['TEACHING_PREPARATION_INVALID_PLAN', 'external-repair', 'manual-repair', null],
+    ['TEACHING_RECOVERY_EXHAUSTED', 'preserved-stop', 'retry-step', 'PREPARE_TEACHING'],
+    ['INSUFFICIENT_EVIDENCE', 'preserved-stop', null, null],
+    ['TEACHING_PREPARATION_QUEUE_TIMEOUT', 'preserved-stop', 'retry-step', 'PREPARE_TEACHING'],
+    ['TEACHING_MODEL_PROVIDER_FAILED', 'preserved-stop', 'restart-from-completed', 'GENERATE_LESSON'],
+  ] as const)('owns retry authorization for %s', (
+    errorCode,
+    failureClassification,
+    failureRecovery,
+    retryAction,
+  ) => {
+    const requestedRetryAction = errorCode === 'TEACHING_MODEL_PROVIDER_FAILED'
+      ? 'GENERATE_LESSON'
+      : 'PREPARE_TEACHING'
+
+    expect(typedFailurePolicy(errorCode, requestedRetryAction, true)).toEqual({
+      errorCode,
+      retryAction,
+      failureClassification,
+      failureRecovery,
+    })
   })
 })
 

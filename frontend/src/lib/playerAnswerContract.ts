@@ -27,7 +27,7 @@ export interface PlayerFacingRuleAnswer {
     canRetryUnchanged: boolean
   } | null
   warnings: Array<{
-    type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE'
+    type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'SOURCE_COVERAGE_PARTIAL' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE'
   }>
   calculations?: Array<{
     expression: string
@@ -439,6 +439,7 @@ function isRecovery(value: unknown) {
 function isWarning(value: unknown) {
   return isRecord(value) && (value.type === 'INDIRECT_CITATION'
     || value.type === 'LOW_CONFIDENCE'
+    || value.type === 'SOURCE_COVERAGE_PARTIAL'
     || value.type === 'REVIEW_UNRESOLVED'
     || value.type === 'REVIEW_UNAVAILABLE')
 }

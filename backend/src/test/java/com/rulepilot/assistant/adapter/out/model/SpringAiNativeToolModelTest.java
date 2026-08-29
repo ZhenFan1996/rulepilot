@@ -60,8 +60,7 @@ class SpringAiNativeToolModelTest {
                         "Search evidence",
                         "{\"type\":\"object\"}",
                         "1",
-                        "hash")),
-                256));
+                        "hash"))));
 
         assertThat(turn.toolCalls()).singleElement().satisfies(call -> {
             assertThat(call.id()).isEqualTo("call-1");
@@ -74,6 +73,7 @@ class SpringAiNativeToolModelTest {
         assertThat(((OpenAiChatOptions) options).getExtraBody())
                 .containsEntry("thinking", java.util.Map.of("type", "disabled"));
         assertThat(((OpenAiChatOptions) options).getParallelToolCalls()).isFalse();
+        assertThat(options.getMaxTokens()).isNull();
         assertThat(options.getToolCallbacks()).singleElement().satisfies(callback ->
                 assertThat(callback.getToolDefinition().name()).isEqualTo("search_rule_evidence"));
         assertThat(options.getToolContext()).containsEntry("ownerUsername", "player")
@@ -104,8 +104,7 @@ class SpringAiNativeToolModelTest {
                                 "Page observation",
                                 List.of(new ToolMedia(
                                         "image/png", new byte[] {1, 2, 3}, "page", 10, 20)))),
-                List.of(),
-                256));
+                List.of()));
 
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
@@ -139,8 +138,7 @@ class SpringAiNativeToolModelTest {
                 List.of(
                         ConversationMessage.system("Compose from prior observations."),
                         ConversationMessage.user("Return the final JSON now.")),
-                List.of(),
-                256));
+                List.of()));
 
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());

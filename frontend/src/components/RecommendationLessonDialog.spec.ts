@@ -43,7 +43,7 @@ function section(position: number, title: string, evidenceStatus: EvidenceStatus
 function run(state: string, updatedAt: string) {
   return {
     run: { id: 'run-1', subjectId: 'plan-1', state, createdAt: '2026-08-10T00:00:00Z', updatedAt, completedAt: state === 'COMPLETED' ? updatedAt : null, lastErrorCode: null },
-    budget: { usedModelCalls: 1, maxModelCalls: 10 }, activities: [],
+    budget: { usedModelCalls: 1 }, activities: [],
   }
 }
 
@@ -154,12 +154,24 @@ describe('RecommendationLessonDialog', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('登录会话已失效，已停止刷新')
+    expect(wrapper.text()).toContain('登录会话已失效，只停止当前页面刷新')
+    expect(wrapper.text()).toContain('后台任务保持持久状态')
+    expect(wrapper.text()).toContain('重新登录后会重新绑定并刷新')
+    const failureBoundary = wrapper.get('[data-testid="recommendation-lesson-failure-boundary"]')
+    expect(failureBoundary.text()).toContain('登录失效只停止当前页面刷新')
+    expect(failureBoundary.text()).not.toContain('用户取消或登录失效')
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('登录前已发布章节')
     const requestsAtStop = fetchMock.mock.calls.length
     await vi.advanceTimersByTimeAsync(60_000)
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(requestsAtStop)
+
+    setLocale('en')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain("Only this page's refresh has stopped")
+    expect(wrapper.text()).toContain('the background task keeps its durable state')
+    expect(wrapper.text()).toContain('Sign in again to rebind and refresh')
+    expect(failureBoundary.text()).not.toContain('cancellation or sign-in expiry')
     wrapper.unmount()
   })
 
@@ -212,7 +224,9 @@ describe('RecommendationLessonDialog', () => {
       .toContain('background-color: var(--color-canvas); opacity: 1')
     expect(wrapper.text()).toContain('已有 1 / 3 章完成引用归属、规则书版本与结构校验')
     expect(wrapper.get('[data-testid="recommendation-lesson-failure-boundary"]').text())
-      .toContain('一次返回被拒或一次服务调用失败')
+      .toContain('格式校验没通过不等于整轮失败')
+    expect(wrapper.get('[data-testid="recommendation-lesson-failure-boundary"]').text())
+      .toContain('再次给出一模一样、且已经被拒绝的结果')
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
 
     await vi.advanceTimersByTimeAsync(1_500)
@@ -432,16 +446,18 @@ describe('RecommendationLessonDialog', () => {
   })
 
   it.each([
-    ['zh-CN', 'FAILED', null, '本轮讲解生成失败', '失败'],
-    ['zh-CN', 'FAILED', 'AGENT_CANCELLED', '本轮讲解生成已取消', '已取消'],
-    ['en', 'FAILED', null, 'This guide generation run failed', 'failed'],
-    ['en', 'FAILED', 'AGENT_CANCELLED', 'This guide generation run was cancelled', 'cancelled'],
+    ['zh-CN', 'FAILED', null, '本轮讲解生成失败', '失败', 'manual-repair', '这不是可以安全原样重试的失败'],
+    ['zh-CN', 'FAILED', 'AGENT_CANCELLED', '本轮讲解生成已取消', '已取消', 'restart-from-completed', '从这些持久化内容启动新一轮'],
+    ['en', 'FAILED', null, 'This guide generation run failed', 'failed', 'manual-repair', 'Retrying unchanged is not safe'],
+    ['en', 'FAILED', 'AGENT_CANCELLED', 'This guide generation run was cancelled', 'cancelled', 'restart-from-completed', 'continue from that durable work'],
   ] as const)('prioritizes an authoritative %s %s outcome over a retained cited draft', async (
     appLocale,
     state,
     lastErrorCode,
     expectedStatus,
     expectedOutcomeWord,
+    expectedRecovery,
+    expectedGuidance,
   ) => {
     setLocale(appLocale)
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -471,6 +487,9 @@ describe('RecommendationLessonDialog', () => {
     const statusText = wrapper.get('[data-testid="recommendation-lesson-teaching-status-text"]')
     expect(statusText.text()).toContain(expectedStatus)
     expect(statusText.text().toLocaleLowerCase()).toContain(expectedOutcomeWord.toLocaleLowerCase())
+    expect(statusText.text()).toContain(expectedGuidance)
+    expect(wrapper.get('[data-testid="recommendation-lesson-teaching-status"]')
+      .attributes('data-failure-recovery')).toBe(expectedRecovery)
     expect(statusText.classes()).toContain('text-amber-800')
     expect(statusText.classes()).not.toContain('text-emerald-700')
     const citedDraftStatus = wrapper.get('[data-testid="recommendation-lesson-cited-draft-status"]')
@@ -480,8 +499,8 @@ describe('RecommendationLessonDialog', () => {
       .toContain(appLocale === 'en' ? 'readable chapter draft' : '可读草稿')
     expect(wrapper.get('[data-testid="recommendation-lesson-failure-boundary"]').text())
       .toContain(appLocale === 'en'
-        ? 'One rejected response or service call starts a bounded correction or retry'
-        : '一次返回被拒或一次服务调用失败')
+        ? 'A format check is not a failed run'
+        : '格式校验没通过不等于整轮失败')
     wrapper.unmount()
   })
 
@@ -516,7 +535,14 @@ describe('RecommendationLessonDialog', () => {
     wrapper.unmount()
   })
 
-  it.each(['DEGRADED', 'INSUFFICIENT_EVIDENCE'])('keeps a readable subset local when the authoritative run ends as %s', async (state) => {
+  it.each([
+    ['DEGRADED', 'local-degradation', '不需要重新生成整份讲解'],
+    ['INSUFFICIENT_EVIDENCE', 'preserved-stop', '原样重试不会增加依据'],
+  ] as const)('keeps a readable subset and explains the %s terminal boundary', async (
+    state,
+    expectedClassification,
+    expectedGuidance,
+  ) => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
@@ -541,6 +567,11 @@ describe('RecommendationLessonDialog', () => {
     const statusText = wrapper.get('[data-testid="recommendation-lesson-teaching-status-text"]')
     expect(statusText.text()).toContain('已保留 1 章可读内容')
     expect(statusText.text()).toContain('证据不足的章节未作为完整规则讲解发布')
+    expect(statusText.text()).toContain(expectedGuidance)
+    expect(wrapper.get('[data-testid="recommendation-lesson-teaching-status"]')
+      .attributes('data-failure-classification')).toBe(expectedClassification)
+    expect(wrapper.get('[data-testid="recommendation-lesson-teaching-status"]')
+      .attributes('data-failure-recovery')).toBeUndefined()
     expect(statusText.classes()).toContain('text-amber-800')
     expect(statusText.classes()).not.toContain('text-emerald-700')
     expect(wrapper.text()).not.toContain('完整讲解已经生成')

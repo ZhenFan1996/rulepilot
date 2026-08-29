@@ -25,9 +25,11 @@ final class AnswerEvidenceRefinementPolicy {
             AnswerQuestionPlan plan,
             AnswerEvidenceRetriever.Result deterministic) {
         if (question == null || context == null || plan == null || deterministic == null
-                || deterministic.state() != AnswerEvidenceRetriever.State.READY) {
+                || (deterministic.state() != AnswerEvidenceRetriever.State.READY
+                        && deterministic.state() != AnswerEvidenceRetriever.State.PARTIAL)) {
             return false;
         }
+        if (deterministic.state() == AnswerEvidenceRetriever.State.PARTIAL) return true;
         if (deterministic.evidence().isEmpty()) return true;
         if (!plan.agentPlanned()
                 && plan.evidenceNeeds().stream().noneMatch(need ->

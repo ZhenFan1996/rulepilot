@@ -3,6 +3,8 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
@@ -76,6 +78,32 @@ class AnswerPostPublicationReviewerTest {
 
         assertThat(result.shortVerdict()).isEqualTo(answer.shortVerdict());
         assertThat(result.explanation()).isEqualTo(answer.explanation());
+        assertThat(result.warnings())
+                .extracting(AnswerWarning::type)
+                .contains(AnswerWarning.Type.REVIEW_UNRESOLVED);
+    }
+
+    @Test
+    void stoppedOptionalCriticDoesNotEraseTheValidatedAnswer() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = source(versionId);
+        StructuredRuleAnswer answer = answer(versionId, source);
+        AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer((request, risk) -> {
+            throw new AgentExecutionStoppedException(StopReason.TOKEN_BUDGET);
+        });
+
+        StructuredRuleAnswer result = reviewer.review(
+                UUID.randomUUID(),
+                understood(versionId),
+                new QuestionContext(versionId),
+                "player",
+                request(source),
+                answer,
+                List.of(new HybridEvidenceHit(source, 0.1, 1, null, false)));
+
+        assertThat(result.shortVerdict()).isEqualTo(answer.shortVerdict());
+        assertThat(result.explanation()).isEqualTo(answer.explanation());
+        assertThat(result.citations()).isEqualTo(answer.citations());
         assertThat(result.warnings())
                 .extracting(AnswerWarning::type)
                 .contains(AnswerWarning.Type.REVIEW_UNRESOLVED);

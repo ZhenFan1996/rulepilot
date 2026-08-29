@@ -12,9 +12,9 @@ Planning autonomy:
 - Preserve every material rule supported by the supplied pages. Do not invent from outside knowledge, familiar game
   patterns, component names, or page order. Decorative, credits, and purely repeated summary material need no topic.
 - Respect the optional player learning goal as a preference about emphasis or order, never as rule evidence.
-- Keep the plan operationally compact: return at most nine topics. Combine an official example and strategy advice with
-  the chapter whose decisions they demonstrate when they do not require an independent prerequisite or procedure.
-  This is an output reliability boundary, not a preset chapter template.
+- Keep the plan operationally coherent: use as many topics as this document's independently teachable decisions and
+  procedures require. Combine an official example or strategy note with the chapter whose decisions it demonstrates
+  when it does not require an independent prerequisite or procedure; never omit material rules to hit an item count.
 
 Whole-game understanding before chapter fan-out:
 - Before choosing final chapter boundaries, form one shared wholeGameUnderstanding from the complete active page set
@@ -34,21 +34,20 @@ Whole-game understanding before chapter fan-out:
   topic order. Return an empty list when no cross-chapter dependency is useful; never invent a chain for symmetry.
 - This global model is source-bound orientation for every later concurrent chapter. It does not authorize a chapter to
   make claims without that chapter's own direct evidence.
-- Keep the global orientation compact enough to finish reliably: use no more than ten concepts, one concise
-  sentence per concept explanation, and the smallest representative set of one to four direct sourceIdentifiers that
-  grounds each concept. Connect all genuinely related topics through relatedTopicKeys instead of duplicating one
-  concept per chapter. This is an output budget, not a preset list of what the game must contain.
+- Keep the global orientation concise without imposing an item count: return the smallest set of concepts and direct
+  sourceIdentifiers that still explains every material cross-chapter relationship. Connect all genuinely related
+  topics through relatedTopicKeys instead of duplicating one concept per chapter.
 
 Source and unit contract:
 - Return sourceCoverageInventoryComplete=true only after auditing every supplied substantive page. Return the smallest
-  complete set of sourceCoverageSlots that later prose must not silently omit, at most 36 for this request. A slot is
+  complete set of sourceCoverageSlots that later prose must not silently omit. A slot is
   a coherent source section or independently teachable relation, not one slot per sentence, setup bullet, component,
   role example, or list item. One exact heading or rule opening may anchor the tightly coupled facts taught together in
   one unit; split only when a different owner, availability boundary, decision, procedure, or exception requires it.
 - A slot has exactly slotId, role, sourceIdentifier, sourcePageNumbers, ownerTopicKey, teachingUnitId, and availability.
   slotId and teachingUnitId are short ASCII kebab-case values. Copy sourceIdentifier as one concise exact contiguous
-  source-language heading, action label, named procedure step, rule opening, or external-source title (maximum 160
-  characters). Bind only pages that directly contain that anchor. Never start or end an identifier at an omission
+  source-language heading, action label, named procedure step, rule opening, or external-source title. Bind only pages
+  that directly contain that anchor. Never start or end an identifier at an omission
   marker or copy a partial first/last word from an excerpt boundary; choose a complete nearby heading or clause instead.
 - teachingUnitId records your own teaching-granularity decision. Give closely coupled slots the same teachingUnitId
   only when one coherent explanation can naturally teach them together. Give independent decisions, operations,
@@ -62,17 +61,17 @@ Source and unit contract:
   intentionally incomplete inventory, in which case sourceCoverageInventoryComplete must be false.
 - Every slot has exactly one topic owner. The owner topic's sourcePageNumbers include all slot pages. Its
   retrievalQueries are optional planning hints and may be empty; the application derives the canonical retrieval
-  contract from the owned slots, so do not duplicate source text merely to fill that field. A topic may own up to 32 concise source anchors grouped into at most 16
-  teaching units. Split it when more independent units would overload one lesson chapter; do not split merely because
-  a coherent unit needs several source anchors.
+  contract from the owned slots, so do not duplicate source text merely to fill that field. Let a topic own every
+  source anchor needed by its coherent teaching units. Split it when independently teachable units need different
+  prerequisites or procedures; do not split merely because a coherent unit needs several source anchors.
 - Mark an owner required when omitting that source-owned unit would leave this lesson unable to meet its own stated
   learning contract. Optional examples or supplementary variants may remain optional when the document supports that.
 
 Presentation planning:
 - Return natural Simplified-Chinese gameTitle, premise, topic title, and objective. Preserve exact printed terms in
   sourceIdentifier so later evidence retrieval can find it.
-- Give every topic one to five direct sourcePageNumbers and zero to 32 optional retrievalQueries. Titles are at most 160
-  characters; objectives at most 600 characters; queries at most 300 characters.
+- Give every topic all direct sourcePageNumbers that actually support it and only useful optional retrievalQueries.
+  Keep titles, objectives, and queries concise enough to use at the table without dropping a necessary distinction.
 - Set visualEvidenceRecommended=true only when page layout, icon mapping, component appearance, spatial arrangement,
   diagram, table, or worked-example layout is necessary to teach the unit reliably. Printed prose alone uses false.
 - Flexible coverageTags are descriptive audit labels derived from this plan. They may name document-specific concepts;

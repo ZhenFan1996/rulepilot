@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/** Bounded source obligations that retrieval may satisfy without receiving an assistant model contract. */
+/** Source obligations that retrieval may satisfy without receiving an assistant model contract. */
 public record AnswerRetrievalPlan(
         List<Subquestion> subquestions,
         boolean calculationCoverageRequired,
@@ -14,7 +14,7 @@ public record AnswerRetrievalPlan(
         List<PageHint> pageHints) {
 
     public AnswerRetrievalPlan {
-        if (subquestions == null || subquestions.isEmpty() || subquestions.size() > 4) {
+        if (subquestions == null || subquestions.isEmpty()) {
             throw new IllegalArgumentException("answer retrieval plan is invalid");
         }
         subquestions = List.copyOf(subquestions);
@@ -26,10 +26,7 @@ public record AnswerRetrievalPlan(
                 ? List.of()
                 : currentRuleObjectSpans.stream().map(String::strip).distinct().toList();
         pageHints = pageHints == null ? List.of() : pageHints.stream().distinct().toList();
-        if (currentRuleObjectSpans.size() > 4
-                || currentRuleObjectSpans.stream()
-                        .anyMatch(value -> value.isBlank() || value.length() > 120)
-                || pageHints.size() > 4) {
+        if (currentRuleObjectSpans.stream().anyMatch(String::isBlank)) {
             throw new IllegalArgumentException("answer retrieval focus is invalid");
         }
     }
@@ -73,11 +70,10 @@ public record AnswerRetrievalPlan(
             QuestionOwner owner,
             List<String> retrievalQueries) {
         public Subquestion {
-            if (text == null || text.isBlank() || text.length() > 300
-                    || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3
-                    || owner == null || retrievalQueries == null || retrievalQueries.size() > 3
-                    || retrievalQueries.stream()
-                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 200)) {
+            if (text == null || text.isBlank()
+                    || evidenceNeeds == null || evidenceNeeds.isEmpty()
+                    || owner == null || retrievalQueries == null
+                    || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank())) {
                 throw new IllegalArgumentException("answer retrieval subquestion is invalid");
             }
             text = text.strip();
@@ -108,8 +104,7 @@ public record AnswerRetrievalPlan(
     /** Scoped page locator from the current question; the locator itself carries no rule authority. */
     public record PageHint(String questionSpan, int pageNumber) {
         public PageHint {
-            if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 120
-                    || pageNumber < 1 || pageNumber > 10_000) {
+            if (questionSpan == null || questionSpan.isBlank() || pageNumber < 1) {
                 throw new IllegalArgumentException("answer retrieval page hint is invalid");
             }
             questionSpan = questionSpan.strip();

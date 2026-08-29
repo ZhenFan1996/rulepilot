@@ -33,7 +33,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                 .setParameter("runId", runId)
                 .setParameter("maxSteps", limits.maxSteps())
                 .setParameter("maxTools", limits.maxToolCalls())
-                .setParameter("maxModels", limits.maxModelCalls())
+                .setParameter("maxModels", Integer.MAX_VALUE)
                 .setParameter("maxTokens", limits.maxTokens())
                 .setParameter("deadline", startedAt.plus(limits.timeout()))
                 .executeUpdate();
@@ -164,6 +164,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void assertStepAllowed(UUID runId, long nextStep) {
+        if (nextStep < 1) throw new IllegalArgumentException("agent step sequence is invalid");
         BudgetRow budget = lockBudget(runId);
         StopReason stopped = stopped(budget, Instant.now());
         if (stopped != null) throw new AgentExecutionStoppedException(stopped);
@@ -181,10 +182,10 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
         BudgetRow budget = lockBudget(runId);
         StopReason stopped = stopped(budget, Instant.now());
         if (stopped != null) throw new AgentExecutionStoppedException(stopped);
-        int tools = budget.usedToolCalls + (type == ActivityType.TOOL ? 1 : 0);
-        int models = budget.usedModelCalls + (type == ActivityType.MODEL || type == ActivityType.CRITIC ? 1 : 0);
+        int tools = Math.addExact(budget.usedToolCalls, type == ActivityType.TOOL ? 1 : 0);
+        int models = Math.addExact(
+                budget.usedModelCalls, type == ActivityType.MODEL || type == ActivityType.CRITIC ? 1 : 0);
         if (tools > budget.maxToolCalls) throw new AgentExecutionStoppedException(StopReason.TOOL_BUDGET);
-        if (models > budget.maxModelCalls) throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
         if ((long) budget.usedTokens + estimatedInputTokens > budget.maxTokens) {
             throw new AgentExecutionStoppedException(StopReason.TOKEN_BUDGET);
         }
@@ -266,7 +267,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
         InvocationReservation diagnostic =
                 new InvocationReservation(UUID.randomUUID(), runId, type, operation.strip(), 0);
         if (outcome == ActivityOutcome.RUNNING) {
-            if (summary == null || summary.isBlank() || summary.length() > 240) {
+            if (summary == null || summary.isBlank()) {
                 throw new IllegalArgumentException("running diagnostic summary is invalid");
             }
         } else {
@@ -291,8 +292,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void stopRunning(UUID runId, String operation, ActivityOutcome outcome, String summary) {
         if (runId == null || outcome == null || outcome == ActivityOutcome.RUNNING
-                || summary == null || summary.isBlank()
-                || summary.length() > 240 || (operation != null && operation.isBlank())) {
+                || summary == null || summary.isBlank() || (operation != null && operation.isBlank())) {
             throw new IllegalArgumentException("running activity stop is invalid");
         }
         String normalizedOperation = operation == null ? null : operation.strip();
@@ -397,15 +397,15 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Transactional(readOnly = true)
     public BudgetSnapshot budget(UUID runId) {
         Object[] row = (Object[]) entityManager.createNativeQuery("""
-                        select max_steps, max_tool_calls, max_model_calls, max_tokens,
-                               used_tool_calls, used_model_calls, used_tokens, deadline_at, cancellation_requested_at
+                        select max_tokens, used_tool_calls, used_model_calls, used_tokens,
+                               deadline_at, cancellation_requested_at
                         from assistant_run_budget where assistant_run_id = :runId
                         """)
                 .setParameter("runId", runId)
                 .getSingleResult();
         return new BudgetSnapshot(
-                number(row[0]), number(row[1]), number(row[2]), number(row[3]), number(row[4]), number(row[5]),
-                number(row[6]), (Instant) row[7], (Instant) row[8]);
+                number(row[0]), number(row[1]), number(row[2]), number(row[3]),
+                (Instant) row[4], (Instant) row[5]);
     }
 
     @Override
@@ -435,7 +435,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
 
     private BudgetRow lockBudget(UUID runId) {
         Object[] row = (Object[]) entityManager.createNativeQuery("""
-                        select max_steps, max_tool_calls, max_model_calls, max_tokens,
+                        select max_steps, max_tool_calls, max_tokens,
                                used_tool_calls, used_model_calls, used_tokens, deadline_at,
                                cancellation_requested_at, activated_at, activation_id
                         from assistant_run_budget where assistant_run_id = :runId for update
@@ -444,7 +444,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                 .getSingleResult();
         return new BudgetRow(
                 number(row[0]), number(row[1]), number(row[2]), number(row[3]), number(row[4]), number(row[5]),
-                number(row[6]), (Instant) row[7], (Instant) row[8], (Instant) row[9], (UUID) row[10]);
+                (Instant) row[6], (Instant) row[7], (Instant) row[8], (UUID) row[9]);
     }
 
     private StopReason stopped(BudgetRow budget, Instant now) {
@@ -462,7 +462,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     }
 
     private void validateInvocation(ActivityType type, String operation, int tokens) {
-        if (type == null || operation == null || operation.isBlank() || operation.length() > 80 || tokens < 0) {
+        if (type == null || operation == null || operation.isBlank() || tokens < 0) {
             throw new IllegalArgumentException("agent invocation reservation is invalid");
         }
     }
@@ -470,8 +470,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     private void validateCompletion(
             InvocationReservation reservation, ActivityOutcome outcome, int tokens, long latency, String summary) {
         if (reservation == null || outcome == null || outcome == ActivityOutcome.RUNNING
-                || tokens < 0 || latency < 0 || summary == null
-                || summary.isBlank() || summary.length() > 240) {
+                || tokens < 0 || latency < 0 || summary == null || summary.isBlank()) {
             throw new IllegalArgumentException("agent invocation completion is invalid");
         }
     }
@@ -486,7 +485,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     }
 
     private record BudgetRow(
-            int maxSteps, int maxToolCalls, int maxModelCalls, int maxTokens,
+            int maxSteps, int maxToolCalls, int maxTokens,
             int usedToolCalls, int usedModelCalls, int usedTokens,
             Instant deadlineAt, Instant cancellationRequestedAt, Instant activatedAt, UUID activationId) {}
 }

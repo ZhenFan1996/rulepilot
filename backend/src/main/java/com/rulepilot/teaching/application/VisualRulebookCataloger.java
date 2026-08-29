@@ -8,19 +8,15 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.shared.AsyncContextPropagation;
-import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRejection;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
-import java.io.InterruptedIOException;
-import java.net.SocketTimeoutException;
-import java.net.http.HttpTimeoutException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -34,22 +30,22 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.IntFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.retry.TransientAiException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -74,7 +70,6 @@ class VisualRulebookCataloger {
     private final VisualRulebookPageFacts visualFacts;
     private final AuditedAgentInvocations invocations;
     private final Duration visualCatalogTimeout;
-    private final int visualCoverageProbePages;
     private final int visualRequestParallelism;
     private final int teachingSemanticRequestParallelism;
     private final ObservationRegistry observations;
@@ -92,7 +87,6 @@ class VisualRulebookCataloger {
             VisualRulebookPageFacts visualFacts,
             AuditedAgentInvocations invocations,
             @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout,
-            @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages,
             @Value("${rulepilot.visual.request-parallelism:10}") int visualRequestParallelism,
             @Value("${rulepilot.visual.semantic-request-parallelism:4}") int teachingSemanticRequestParallelism,
             ObservationRegistry observations) {
@@ -102,7 +96,6 @@ class VisualRulebookCataloger {
                 visualFacts,
                 invocations,
                 visualCatalogTimeout,
-                visualCoverageProbePages,
                 visualRequestParallelism,
                 teachingSemanticRequestParallelism,
                 observations,
@@ -117,7 +110,6 @@ class VisualRulebookCataloger {
             VisualRulebookPageFacts visualFacts,
             AuditedAgentInvocations invocations,
             Duration visualCatalogTimeout,
-            int visualCoverageProbePages,
             int visualRequestParallelism,
             int teachingSemanticRequestParallelism,
             ObservationRegistry observations,
@@ -130,10 +122,6 @@ class VisualRulebookCataloger {
         this.invocations = invocations;
         if (visualCatalogTimeout == null || visualCatalogTimeout.isZero() || visualCatalogTimeout.isNegative()) {
             throw new IllegalArgumentException("visual catalog timeout must be positive");
-        }
-        if (visualCoverageProbePages < 1 || visualCoverageProbePages > VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES) {
-            throw new IllegalArgumentException("visual coverage probe pages must be between one and "
-                    + VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES);
         }
         if (visualRequestParallelism < 1 || visualRequestParallelism > 10) {
             throw new IllegalArgumentException("visual request parallelism must be between one and ten");
@@ -149,7 +137,6 @@ class VisualRulebookCataloger {
             throw new IllegalArgumentException("Teaching run-attempt retention is invalid");
         }
         this.visualCatalogTimeout = visualCatalogTimeout;
-        this.visualCoverageProbePages = visualCoverageProbePages;
         this.visualRequestParallelism = visualRequestParallelism;
         this.teachingSemanticRequestParallelism = teachingSemanticRequestParallelism;
         this.observations = observations == null ? ObservationRegistry.NOOP : observations;
@@ -163,7 +150,6 @@ class VisualRulebookCataloger {
             VisualRulebookPageFacts visualFacts,
             AuditedAgentInvocations invocations,
             Duration visualCatalogTimeout,
-            int visualCoverageProbePages,
             int visualRequestParallelism,
             int teachingSemanticRequestParallelism) {
         this(
@@ -172,7 +158,6 @@ class VisualRulebookCataloger {
                 visualFacts,
                 invocations,
                 visualCatalogTimeout,
-                visualCoverageProbePages,
                 visualRequestParallelism,
                 teachingSemanticRequestParallelism,
                 ObservationRegistry.NOOP);
@@ -184,7 +169,6 @@ class VisualRulebookCataloger {
             VisualRulebookPageFacts visualFacts,
             AuditedAgentInvocations invocations,
             Duration visualCatalogTimeout,
-            int visualCoverageProbePages,
             int visualRequestParallelism) {
         this(
                 pageImages,
@@ -192,7 +176,6 @@ class VisualRulebookCataloger {
                 visualFacts,
                 invocations,
                 visualCatalogTimeout,
-                visualCoverageProbePages,
                 visualRequestParallelism,
                 visualRequestParallelism);
     }
@@ -277,53 +260,6 @@ class VisualRulebookCataloger {
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
         return VisualRulebookCatalogPolicy.pageInputs(documentPages, teachingFacts);
-    }
-
-    List<PageFact> inspectUnownedSparseVisualPages(
-            UUID documentVersionId,
-            TeachingOutlineModel.OutlineDraft outline,
-            List<DocumentProcessing.PageView> documentPages,
-            String rulebookTitle,
-            String owner,
-            UUID assistantRunId) {
-        Set<Integer> selected = VisualOutlineEvidencePolicy.unownedSparseVisualCoveragePageNumbers(
-                outline, documentPages, visualCoverageProbePages);
-        if (selected.isEmpty()) return List.of();
-        List<PageFact> cached = findVisualFacts(documentVersionId, selected);
-        Set<Integer> cachedPages = cached.stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
-                .map(PageFact::pageNumber)
-                .collect(Collectors.toSet());
-        Set<Integer> missing = selected.stream()
-                .filter(page -> !cachedPages.contains(page))
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        List<PageFact> fresh;
-        try {
-            fresh = missing.isEmpty()
-                    ? List.of()
-                    : catalogTeachingPageFacts(
-                            documentVersionId,
-                            missing,
-                            sourcePageTotal(documentPages),
-                            rulebookTitle,
-                            owner,
-                            assistantRunId);
-        } catch (RuntimeException visualFailure) {
-            log.warn(
-                    "Sparse-page visual coverage probe skipped for document {} pages {}",
-                    documentVersionId,
-                    missing,
-                    visualFailure);
-            return cached;
-        }
-        if (!fresh.isEmpty()) {
-            mergeVisualFacts(documentVersionId, fresh);
-            log.info(
-                    "Sparse-page visual coverage probe stored document {} pages {}",
-                    documentVersionId,
-                    fresh.stream().map(PageFact::pageNumber).toList());
-        }
-        return VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
     }
 
     /** Builds the minimum durable, page-bound evidence ledger needed by outline and lesson composition. */
@@ -482,244 +418,405 @@ class VisualRulebookCataloger {
         if (totalPageCount < orderedPages.getLast()) {
             throw new IllegalArgumentException("rulebook page total cannot be lower than a requested page number");
         }
-        // A vision-capable request already receives the complete source image. Contract repair reuses that image
-        // with the validator-owned error code; a second OCR model would duplicate the read without repairing JSON.
-        Map<Integer, TeachingCatalogRepairCode> contractViolations = new LinkedHashMap<>();
-        Set<Integer> transientFailures = new LinkedHashSet<>();
-        List<Integer> missingPages = inspectTeachingBatches(
-                documentVersionId,
-                batches,
-                owner,
-                rulebookTitle,
-                assistantRunId,
-                totalPageCount,
-                index -> "inspectTeachingVisualPage|" + orderedPages.get(index) + "|" + totalPageCount,
-                Map.of(),
-                contractViolations,
-                transientFailures,
-                "single_call");
-        List<Integer> repairPages = missingPages.stream()
-                .filter(contractViolations::containsKey)
-                .distinct()
-                .sorted()
-                .toList();
-        if (!repairPages.isEmpty()) {
-            inspectTeachingBatches(
+        long compatibilityWorkflowDeadline = assistantRunId == null
+                ? catalogWindowDeadline(visualCatalogTimeout)
+                : Long.MAX_VALUE;
+        int parallelism = Math.min(teachingSemanticRequestParallelism, batches.size());
+        for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
+            List<Integer> windowPages = batches.subList(
+                            windowStart, Math.min(windowStart + parallelism, batches.size()))
+                    .stream()
+                    .flatMap(List::stream)
+                    .toList();
+            Map<Integer, PageImageInput> imagesByPage = readTeachingWindowImages(
+                    documentVersionId, windowPages, assistantRunId, totalPageCount);
+            List<TeachingPageCandidateState> activePages = windowPages.stream()
+                    .map(imagesByPage::get)
+                    .filter(java.util.Objects::nonNull)
+                    .map(TeachingPageCandidateState::new)
+                    .collect(Collectors.toCollection(ArrayList::new));
+            inspectTeachingPagesUntilSettled(
                     documentVersionId,
-                    repairPages.stream().map(List::of).toList(),
+                    activePages,
                     owner,
                     rulebookTitle,
                     assistantRunId,
                     totalPageCount,
-                    index -> "inspectTeachingVisualRepair|" + repairPages.get(index) + "|" + totalPageCount + "|"
-                            + contractViolations.get(repairPages.get(index)),
-                    contractViolations,
-                    new LinkedHashMap<>(),
-                    new LinkedHashSet<>(),
-                    "contract_repair");
-        }
-        List<Integer> retryPages = missingPages.stream()
-                .filter(transientFailures::contains)
-                .distinct()
-                .sorted()
-                .toList();
-        if (!retryPages.isEmpty()) {
-            inspectTeachingBatches(
-                    documentVersionId,
-                    retryPages.stream().map(List::of).toList(),
-                    owner,
-                    rulebookTitle,
-                    assistantRunId,
-                    totalPageCount,
-                    index -> "inspectTeachingVisualRetry|" + retryPages.get(index) + "|" + totalPageCount,
-                    Map.of(),
-                    new LinkedHashMap<>(),
-                    new LinkedHashSet<>(),
-                    "transient_replay");
+                    compatibilityWorkflowDeadline);
         }
         return findVisualFacts(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
     }
 
-    private List<Integer> inspectTeachingBatches(
+    private Map<Integer, PageImageInput> readTeachingWindowImages(
             UUID documentVersionId,
-            List<List<Integer>> batches,
+            List<Integer> windowPages,
+            UUID assistantRunId,
+            int totalPageCount) {
+        try {
+            return readTeachingPageImages(documentVersionId, windowPages).stream()
+                    .collect(Collectors.toMap(
+                            PageImageInput::pageNumber,
+                            image -> image,
+                            (first, ignored) -> first,
+                            LinkedHashMap::new));
+        } catch (RuntimeException windowReadFailure) {
+            log.warn(
+                    "Teaching-start page-image window {} could not be read for document {}; isolating pages",
+                    windowPages,
+                    documentVersionId,
+                    windowReadFailure);
+            Map<Integer, PageImageInput> available = new LinkedHashMap<>();
+            for (int pageNumber : windowPages) {
+                try {
+                    readTeachingPageImages(documentVersionId, List.of(pageNumber)).stream()
+                            .findFirst()
+                            .ifPresent(image -> available.put(pageNumber, image));
+                } catch (RuntimeException pageReadFailure) {
+                    log.warn(
+                            "Teaching-start page image {} is locally unavailable for document {}",
+                            pageNumber,
+                            documentVersionId,
+                            pageReadFailure);
+                }
+                if (!available.containsKey(pageNumber)) {
+                    recordTeachingPageSettlement(
+                            assistantRunId,
+                            pageNumber,
+                            totalPageCount,
+                            1,
+                            "local-unavailable",
+                            "IMAGE_UNAVAILABLE",
+                            ActivityOutcome.FAILED,
+                            "Visual rulebook page image is locally unavailable; sibling pages continue");
+                }
+            }
+            return available;
+        }
+    }
+
+    private void inspectTeachingPagesUntilSettled(
+            UUID documentVersionId,
+            List<TeachingPageCandidateState> activePages,
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
             int totalPageCount,
-            IntFunction<String> operationForIndex,
-            Map<Integer, TeachingCatalogRepairCode> requestedRepairs,
-            Map<Integer, TeachingCatalogRepairCode> contractViolations,
-            Set<Integer> transientFailures,
-            String retryKind) {
-        List<Integer> missingPages = new ArrayList<>();
-        int parallelism = Math.min(teachingSemanticRequestParallelism, batches.size());
-        for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
-            int windowEnd = Math.min(windowStart + parallelism, batches.size());
-            List<Integer> windowPages = batches.subList(windowStart, windowEnd).stream()
-                    .flatMap(List::stream)
-                    .distinct()
-                    .toList();
-            Map<Integer, PageImageInput> windowImages;
-            boolean isolatePageReads;
-            try {
-                windowImages = readTeachingPageImages(documentVersionId, windowPages).stream()
-                        .collect(Collectors.toMap(
-                                PageImageInput::pageNumber,
-                                image -> image,
-                                (first, ignored) -> first,
-                                LinkedHashMap::new));
-                isolatePageReads = false;
-            } catch (RuntimeException windowReadFailure) {
-                // A corrupt or temporarily unreadable page must not erase independent page work. Retry the active
-                // window as page-owned reads so the ordinary batched storage path stays fast while the exact bad page
-                // becomes an unavailable ledger entry and its neighbours can still complete.
-                log.warn(
-                        "Teaching-start page-image window {} could not be read for document {}; isolating pages",
-                        windowPages,
-                        documentVersionId,
-                        windowReadFailure);
-                windowImages = Map.of();
-                isolatePageReads = true;
-            }
-            Map<Integer, PageImageInput> prefetchedImages = windowImages;
-            boolean readEachPage = isolatePageReads;
-            ExecutorService executor = AsyncContextPropagation.executorService(
-                    Executors.newFixedThreadPool(windowEnd - windowStart));
-            try {
-                List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
-                for (int index = windowStart; index < windowEnd; index++) {
-                    int batchIndex = index;
-                    futures.add(executor.submit(() -> observeStage("semantic", retryKind, () -> {
-                        List<Integer> batch = batches.get(batchIndex);
-                        Map<Integer, PageImageInput> sourceImagesByPage = readEachPage
-                                ? readTeachingPageImages(documentVersionId, batch).stream()
-                                        .collect(Collectors.toMap(
-                                                PageImageInput::pageNumber,
-                                                image -> image,
-                                                (first, ignored) -> first,
-                                                LinkedHashMap::new))
-                                : prefetchedImages;
-                        return catalogTeachingBatch(
-                                batch,
-                                owner,
-                                rulebookTitle,
-                                assistantRunId,
-                                operationForIndex.apply(batchIndex),
-                                requestedRepairs.get(batch.getFirst()),
-                                sourceImagesByPage);
-                    })));
+            long compatibilityWorkflowDeadline) {
+        if (activePages.isEmpty()) return;
+        ExecutorService executor = AsyncContextPropagation.executorService(
+                Executors.newFixedThreadPool(activePages.size()));
+        try {
+            while (!activePages.isEmpty()) {
+                if (assistantRunId == null && System.nanoTime() >= compatibilityWorkflowDeadline) {
+                    activePages.forEach(state -> recordTeachingPageSettlement(
+                            null,
+                            state.pageNumber(),
+                            totalPageCount,
+                            state.candidateNumber(),
+                            "local-unavailable",
+                            "WORKFLOW_DEADLINE",
+                            ActivityOutcome.FAILED,
+                            "Visual rulebook page workflow reached its deadline; sibling pages remain durable"));
+                    return;
                 }
-                long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
-                for (int offset = 0; offset < futures.size(); offset++) {
-                    int batchIndex = windowStart + offset;
-                    List<Integer> batch = batches.get(batchIndex);
-                    List<VisualRulebookPageCatalogModel.PageSummary> completed;
-                    try {
-                        var draft = awaitCatalogBefore(
-                                futures.get(offset), visualCatalogTimeout, windowDeadlineNanos);
-                        Map<Integer, Long> returnedCounts = draft.pages().stream().collect(Collectors.groupingBy(
-                                VisualRulebookPageCatalogModel.PageSummary::pageNumber,
-                                Collectors.counting()));
-                        completed = draft.pages().stream()
-                                .filter(summary -> batch.contains(summary.pageNumber()))
-                                .filter(summary -> returnedCounts.get(summary.pageNumber()) == 1)
-                                .map(VisualRulebookCatalogPolicy::teachingStartupFact)
-                                .sorted(java.util.Comparator.comparingInt(
-                                        summary -> batch.indexOf(summary.pageNumber())))
-                                .toList();
-                    } catch (AgentExecutionStoppedException stopped) {
-                        throw stopped;
-                    } catch (TeachingCatalogContractViolation violation) {
-                        batch.forEach(page -> contractViolations.put(page, violation.repairCode()));
+                CompletionService<TeachingPageCandidateAttempt> completions =
+                        new ExecutorCompletionService<>(executor);
+                Map<Future<TeachingPageCandidateAttempt>, TeachingPageCandidateState> pending = new LinkedHashMap<>();
+                for (TeachingPageCandidateState state : activePages) {
+                    Future<TeachingPageCandidateAttempt> future = completions.submit(() -> observeStage(
+                            "semantic",
+                            state.rejection() == null ? "candidate" : "correction",
+                            () -> invokeTeachingPageCandidate(state, owner, rulebookTitle, assistantRunId, totalPageCount),
+                            attempt -> attempt.providerFailure() != null
+                                    ? "provider_failed"
+                                    : attempt.violation() != null ? "rejected" : "accepted"));
+                    pending.put(future, state);
+                }
+                long attemptDeadline = assistantRunId == null
+                        ? compatibilityWorkflowDeadline
+                        : catalogWindowDeadline(visualCatalogTimeout);
+                while (!pending.isEmpty()) {
+                    Future<TeachingPageCandidateAttempt> completedFuture = pollCandidate(completions, attemptDeadline);
+                    if (completedFuture == null) {
+                        pending.keySet().forEach(future -> future.cancel(true));
+                        pending.values().forEach(state -> recordTeachingPageSettlement(
+                                assistantRunId,
+                                state.pageNumber(),
+                                totalPageCount,
+                                state.candidateNumber(),
+                                "local-unavailable",
+                                assistantRunId == null ? "WORKFLOW_DEADLINE" : "PROVIDER_TIMEOUT",
+                                ActivityOutcome.FAILED,
+                                "Visual rulebook page candidate did not complete before its deadline; sibling pages continue"));
+                        activePages.removeAll(pending.values());
+                        break;
+                    }
+                    TeachingPageCandidateState state = pending.remove(completedFuture);
+                    TeachingPageCandidateAttempt attempt = completedCandidate(completedFuture);
+                    if (attempt.providerFailure() != null) {
                         log.warn(
-                                "Teaching-start visual interpretation rejected batch {} for document {} with repair code {}",
-                                batch,
+                                "Teaching-start visual provider left page {} locally unavailable for document {}",
+                                state.pageNumber(),
                                 documentVersionId,
-                                violation.repairCode());
-                        missingPages.addAll(batch);
-                        continue;
-                    } catch (RuntimeException failedBatch) {
-                        if (catalogInterrupted(failedBatch)) throw failedBatch;
-                        if (catalogTimedOut(failedBatch)) {
-                            if (assistantRunId != null) {
-                                invocations.stopRunning(
-                                        assistantRunId,
-                                        operationForIndex.apply(batchIndex),
-                                        ActivityOutcome.FAILED,
-                                        "Teaching visual batch timed out; retaining completed page facts");
-                            }
-                        } else if (catalogTransient(failedBatch)) transientFailures.addAll(batch);
-                        log.warn(
-                                "Teaching-start visual interpretation skipped failed batch {} for document {}",
-                                batch,
-                                documentVersionId,
-                                failedBatch);
-                        missingPages.addAll(batch);
+                                attempt.providerFailure());
+                        recordTeachingPageSettlement(
+                                assistantRunId,
+                                state.pageNumber(),
+                                totalPageCount,
+                                state.candidateNumber(),
+                                "local-unavailable",
+                                "PROVIDER_FAILURE",
+                                ActivityOutcome.FAILED,
+                                state.rejection() == null
+                                        ? "Visual provider did not return the page candidate; sibling pages continue"
+                                        : "Visual provider did not return the requested correction; only this page is unavailable");
+                        activePages.remove(state);
                         continue;
                     }
-                    // Storage owns a separate failure boundary. Once the paid response has passed the typed contract,
-                    // a write failure must propagate instead of repeating the model call.
-                    observeStage("persist", retryKind, () -> {
-                        persistCompletedFacts(documentVersionId, completed);
+                    if (attempt.violation() != null) {
+                        settleRejectedTeachingPageCandidate(
+                                activePages, state, attempt.violation(), assistantRunId, totalPageCount);
+                        continue;
+                    }
+                    VisualRulebookPageCatalogModel.PageSummary summary = acceptedPageSummary(
+                            state.pageNumber(), attempt.draft());
+                    recordTeachingPageSettlement(
+                            assistantRunId,
+                            state.pageNumber(),
+                            totalPageCount,
+                            state.candidateNumber(),
+                            "accepted",
+                            "NONE",
+                            ActivityOutcome.SUCCEEDED,
+                            "Visual rulebook page candidate passed typed validation and is being persisted");
+                    observeStage("persist", state.rejection() == null ? "candidate" : "correction", () -> {
+                        persistCompletedFacts(documentVersionId, List.of(summary));
                         return null;
                     });
                     if (assistantRunId != null) {
-                        completed.forEach(summary -> invocations.record(
+                        invocations.record(
                                 assistantRunId,
                                 ActivityType.VALIDATION,
                                 "persistTeachingVisualPage|" + summary.pageNumber() + "|" + totalPageCount,
                                 ActivityOutcome.SUCCEEDED,
-                                "Stored typed rule groups for visual page " + summary.pageNumber()));
+                                "Stored typed rule groups for visual page " + summary.pageNumber());
                     }
-                    Set<Integer> completedPages = completed.stream()
-                            .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
-                            .collect(Collectors.toSet());
-                    batch.stream().filter(page -> !completedPages.contains(page)).forEach(page -> {
-                        missingPages.add(page);
-                        contractViolations.put(page, TeachingCatalogRepairCode.PAGE_BINDING_MISMATCH);
-                    });
+                    activePages.remove(state);
                 }
-            } finally {
-                executor.shutdownNow();
             }
+        } finally {
+            executor.shutdownNow();
         }
-        return missingPages;
     }
 
-    private VisualRulebookPageCatalogModel.CatalogDraft catalogTeachingBatch(
-            List<Integer> batch,
+    private TeachingPageCandidateAttempt invokeTeachingPageCandidate(
+            TeachingPageCandidateState state,
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
-            String operation,
-            TeachingCatalogRepairCode repairCode,
-            Map<Integer, PageImageInput> sourceImagesByPage) {
-        List<PageImageInput> images = batch.stream()
-                .map(sourceImagesByPage::get)
-                .filter(java.util.Objects::nonNull)
-                .toList();
-        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
-        return invokeModel(
+            int totalPageCount) {
+        var request = new VisualRulebookPageCatalogModel.CatalogRequest(
+                List.of(state.image()), owner, rulebookTitle);
+        String operation = "inspectTeachingVisualPageCandidate|" + state.pageNumber() + "|" + totalPageCount
+                + "|candidate-" + state.candidateNumber();
+        try {
+            return invokeModel(
+                    assistantRunId,
+                    operation,
+                    600,
+                    teachingStartupSuccessSummary(owner),
+                    () -> {
+                        try {
+                            VisualRulebookPageCatalogModel.CatalogDraft draft = state.rejection() == null
+                                    ? visualCatalog.summarizeForTeaching(request)
+                                    : visualCatalog.correctTeachingCatalog(request, state.rejection());
+                            return TeachingPageCandidateAttempt.accepted(draft);
+                        } catch (TeachingCatalogContractViolation violation) {
+                            return TeachingPageCandidateAttempt.rejected(violation);
+                        }
+                    },
+                    this::candidateOutputTokens);
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException providerFailure) {
+            if (catalogInterrupted(providerFailure)) throw providerFailure;
+            return TeachingPageCandidateAttempt.providerFailed(providerFailure);
+        }
+    }
+
+    private void settleRejectedTeachingPageCandidate(
+            List<TeachingPageCandidateState> activePages,
+            TeachingPageCandidateState state,
+            TeachingCatalogContractViolation violation,
+            UUID assistantRunId,
+            int totalPageCount) {
+        Optional<TeachingCatalogRejection> rejection = violation.rejection();
+        if (rejection.isEmpty()) {
+            recordTeachingPageSettlement(
+                    assistantRunId,
+                    state.pageNumber(),
+                    totalPageCount,
+                    state.candidateNumber(),
+                    "local-unavailable",
+                    "INCOMPLETE_REJECTION_CONTEXT",
+                    ActivityOutcome.REJECTED,
+                    "Visual page validation could not return the complete rejected observation; sibling pages continue");
+            activePages.remove(state);
+            return;
+        }
+        TeachingCatalogRejection observation = rejection.orElseThrow();
+        if (!state.observe(observation)) {
+            recordTeachingPageSettlement(
+                    assistantRunId,
+                    state.pageNumber(),
+                    totalPageCount,
+                    state.candidateNumber(),
+                    "no-progress",
+                    violation.repairCode().name(),
+                    ActivityOutcome.REJECTED,
+                    "The page Agent repeated an earlier complete rejected observation; only this page stopped");
+            activePages.remove(state);
+            return;
+        }
+        recordTeachingPageSettlement(
                 assistantRunId,
-                operation,
-                Math.max(1, images.size() * 600),
-                teachingStartupSuccessSummary(owner),
-                () -> repairCode == null
-                        ? visualCatalog.summarizeForTeaching(request)
-                        : visualCatalog.repairTeachingCatalog(request, repairCode),
-                this::catalogOutputTokens);
+                state.pageNumber(),
+                totalPageCount,
+                state.candidateNumber(),
+                "correction-follows",
+                violation.repairCode().name(),
+                ActivityOutcome.REJECTED,
+                "The complete rejected candidate, exact validation error, original contract, and allowed page identities returned to the same page Agent");
+        state.continueFrom(observation);
     }
 
-    private String teachingStartupSuccessSummary(String owner) {
-        return visualCatalog.teachingStartupExecutionIdentity(owner)
-                .map(identity -> "Teaching-start page facts interpreted via " + identity.auditLabel())
-                .orElse("Teaching-start page facts interpreted");
+    private void recordTeachingPageSettlement(
+            UUID assistantRunId,
+            int pageNumber,
+            int totalPageCount,
+            int candidateNumber,
+            String state,
+            String reason,
+            ActivityOutcome outcome,
+            String summary) {
+        if (assistantRunId == null) return;
+        invocations.record(
+                assistantRunId,
+                ActivityType.VALIDATION,
+                "settleTeachingVisualPageCandidate|" + pageNumber + "|" + totalPageCount + "|candidate-"
+                        + candidateNumber + "|" + state + "|" + reason,
+                outcome,
+                summary);
     }
 
-    /**
+    private static Future<TeachingPageCandidateAttempt> pollCandidate(
+            CompletionService<TeachingPageCandidateAttempt> completions, long deadlineNanos) {
+        try {
+            long remainingNanos = Math.max(0L, deadlineNanos - System.nanoTime());
+            return completions.poll(remainingNanos, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("visual rulebook catalog was interrupted", interrupted);
+        }
+    }
+
+    private static TeachingPageCandidateAttempt completedCandidate(
+            Future<TeachingPageCandidateAttempt> future) {
+        try {
+            return future.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("visual rulebook catalog was interrupted", interrupted);
+        } catch (ExecutionException failed) {
+            Throwable cause = failed.getCause();
+            if (cause instanceof AgentExecutionStoppedException stopped) throw stopped;
+            if (cause instanceof RuntimeException runtime) {
+                catalogInterrupted(runtime);
+                throw runtime;
+            }
+            if (cause instanceof Error error) throw error;
+            throw new IllegalStateException("visual rulebook catalog failed", cause);
+        }
+    }
+
+    private static VisualRulebookPageCatalogModel.PageSummary acceptedPageSummary(
+            int pageNumber, VisualRulebookPageCatalogModel.CatalogDraft draft) {
+        if (draft == null
+                || draft.pages().size() != 1
+                || draft.pages().getFirst().pageNumber() != pageNumber) {
+            throw new IllegalArgumentException("accepted visual Teaching candidate lost its exact page binding");
+        }
+        return VisualRulebookCatalogPolicy.teachingStartupFact(draft.pages().getFirst());
+    }
+
+    private int candidateOutputTokens(TeachingPageCandidateAttempt attempt) {
+        if (attempt.draft() != null) return catalogOutputTokens(attempt.draft());
+        if (attempt.providerFailure() != null) return 1;
+        return attempt.violation().rejection()
+                .map(rejection -> Math.max(1, rejection.candidateJson().length() / 4))
+                .orElse(1);
+    }
+
+    private static final class TeachingPageCandidateState {
+
+        private final PageImageInput image;
+        private final Set<TeachingCatalogRejection> rejectedObservations = new LinkedHashSet<>();
+        private int candidateNumber = 1;
+        private TeachingCatalogRejection rejection;
+
+        private TeachingPageCandidateState(PageImageInput image) {
+            this.image = image;
+        }
+
+        private PageImageInput image() {
+            return image;
+        }
+
+        private int pageNumber() {
+            return image.pageNumber();
+        }
+
+        private int candidateNumber() {
+            return candidateNumber;
+        }
+
+        private TeachingCatalogRejection rejection() {
+            return rejection;
+        }
+
+        private boolean observe(TeachingCatalogRejection observation) {
+            return rejectedObservations.add(observation);
+        }
+
+        private void continueFrom(TeachingCatalogRejection observation) {
+            rejection = observation;
+            candidateNumber++;
+        }
+    }
+
+    private record TeachingPageCandidateAttempt(
+            VisualRulebookPageCatalogModel.CatalogDraft draft,
+            TeachingCatalogContractViolation violation,
+            RuntimeException providerFailure) {
+
+        private static TeachingPageCandidateAttempt accepted(
+                VisualRulebookPageCatalogModel.CatalogDraft draft) {
+            return new TeachingPageCandidateAttempt(draft, null, null);
+        }
+
+        private static TeachingPageCandidateAttempt rejected(
+                TeachingCatalogContractViolation violation) {
+            return new TeachingPageCandidateAttempt(null, violation, null);
+        }
+
+        private static TeachingPageCandidateAttempt providerFailed(RuntimeException failure) {
+            return new TeachingPageCandidateAttempt(null, null, failure);
+        }
+    }
+
+    /*
      * A short-rulebook model request may contain more images than one bounded object-store read permits. Preserve the
      * document adapter's five-page safety boundary, assemble the images in exact requested order, and let the existing
      * missing-binding recovery handle an absent stored image independently.
@@ -730,7 +827,8 @@ class VisualRulebookCataloger {
             List<Integer> chunk = requestedPages.subList(
                     start, Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, requestedPages.size()));
             Map<Integer, PageImage> available = pageImages.read(documentVersionId, new LinkedHashSet<>(chunk)).stream()
-                    .collect(Collectors.toMap(PageImage::pageNumber, image -> image, (first, ignored) -> first));
+                    .collect(Collectors.toMap(
+                            PageImage::pageNumber, image -> image, (first, ignored) -> first));
             chunk.stream()
                     .map(available::get)
                     .filter(java.util.Objects::nonNull)
@@ -738,6 +836,12 @@ class VisualRulebookCataloger {
                     .forEach(images::add);
         }
         return List.copyOf(images);
+    }
+
+    private String teachingStartupSuccessSummary(String owner) {
+        return visualCatalog.teachingStartupExecutionIdentity(owner)
+                .map(identity -> "Teaching-start page candidate received via " + identity.auditLabel())
+                .orElse("Teaching-start page candidate received");
     }
 
     /**
@@ -808,50 +912,27 @@ class VisualRulebookCataloger {
                 fact.ruleGroupFacts());
     }
 
-    /**
-     * Retry only failed pages so a temporary provider error cannot discard the rest of a visual rulebook's ledger.
-     * Failed single-page retries remain absent and are still handled by the evidence policy.
-     */
     static VisualRulebookPageCatalogModel.CatalogDraft awaitCatalog(
             Future<VisualRulebookPageCatalogModel.CatalogDraft> future, Duration timeout) {
-        return awaitCatalogBefore(future, timeout, catalogWindowDeadline(timeout));
-    }
-
-    private static long catalogWindowDeadline(Duration timeout) {
-        return System.nanoTime() + timeout.toNanos();
-    }
-
-    private static VisualRulebookPageCatalogModel.CatalogDraft awaitCatalogBefore(
-            Future<VisualRulebookPageCatalogModel.CatalogDraft> future,
-            Duration configuredTimeout,
-            long deadlineNanos) {
         try {
-            long remainingNanos = Math.max(0L, deadlineNanos - System.nanoTime());
-            return future.get(remainingNanos, TimeUnit.NANOSECONDS);
+            return future.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (TimeoutException slowProvider) {
             future.cancel(true);
             throw new IllegalStateException(
-                    "visual rulebook catalog timed out after " + configuredTimeout.toSeconds() + " seconds",
+                    "visual rulebook catalog timed out after " + timeout.toSeconds() + " seconds",
                     slowProvider);
         } catch (InterruptedException interrupted) {
             future.cancel(true);
             Thread.currentThread().interrupt();
             throw new IllegalStateException("visual rulebook catalog was interrupted", interrupted);
         } catch (ExecutionException failed) {
-            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
             if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
             throw new IllegalStateException("visual rulebook catalog failed", failed.getCause());
         }
     }
 
-    private static boolean catalogTimedOut(RuntimeException failure) {
-        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof TimeoutException
-                    || cause instanceof HttpTimeoutException
-                    || cause instanceof SocketTimeoutException
-                    || cause instanceof InterruptedIOException) return true;
-        }
-        return false;
+    private static long catalogWindowDeadline(Duration timeout) {
+        return System.nanoTime() + timeout.toNanos();
     }
 
     private static boolean catalogInterrupted(RuntimeException failure) {
@@ -860,14 +941,6 @@ class VisualRulebookCataloger {
                 Thread.currentThread().interrupt();
                 return true;
             }
-        }
-        return false;
-    }
-
-    private static boolean catalogTransient(RuntimeException failure) {
-        if (catalogInterrupted(failure) || catalogTimedOut(failure)) return false;
-        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof TransientAiException) return true;
         }
         return false;
     }

@@ -22,6 +22,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.CandidateRejection;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
@@ -109,7 +110,7 @@ class TeachingRichLessonPaidCanaryTest {
         UUID runId = UUID.randomUUID();
         PdfEvidence corpus = new PdfEvidence(pdf, versionId);
         List<PageInput> activePages = CANARY_PAGES.stream()
-                .map(page -> new PageInput(page, TeachingPageCatalogText.bounded(corpus.page(page))))
+                .map(page -> new PageInput(page, corpus.page(page).strip()))
                 .toList();
 
         List<String> rawOutlineResponses = Collections.synchronizedList(new ArrayList<>());
@@ -658,22 +659,22 @@ class TeachingRichLessonPaidCanaryTest {
         }
 
         @Override
-        public SectionDraft repairCompositionContract(SectionRequest request) {
+        public SectionDraft continueAfterRejection(
+                SectionRequest request, CandidateRejection rejection) {
             recordRequest(request);
-            return record(request, delegate.repairCompositionContract(request));
+            return record(request, delegate.continueAfterRejection(request, rejection));
         }
 
         @Override
-        public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-            recordRequest(request);
-            return record(request, delegate.revise(request, previousDraft, feedback));
+        public CandidateRejection rejectionObservation(
+                SectionRequest request, SectionDraft candidate, String validationError) {
+            return delegate.rejectionObservation(request, candidate, validationError);
         }
 
         @Override
-        public SectionDraft repairRevisionContract(
-                SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-            recordRequest(request);
-            return record(request, delegate.repairRevisionContract(request, previousDraft, feedback));
+        public CandidateRejection rejectionObservation(
+                SectionRequest request, String candidateJson, String validationError) {
+            return delegate.rejectionObservation(request, candidateJson, validationError);
         }
 
         private void recordRequest(SectionRequest request) {

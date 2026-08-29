@@ -2,6 +2,7 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceCoverage;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
@@ -21,6 +22,15 @@ final class AnswerModelRequestFactory {
             QuestionContext context,
             List<HybridEvidenceHit> evidence,
             AnswerQuestionPlan questionPlan) {
+        return create(question, context, evidence, questionPlan, EvidenceCoverage.COMPLETE);
+    }
+
+    ModelRequest create(
+            UnderstoodQuestion question,
+            QuestionContext context,
+            List<HybridEvidenceHit> evidence,
+            AnswerQuestionPlan questionPlan,
+            EvidenceCoverage evidenceCoverage) {
         return new ModelRequest(
                 question.originalQuestion(),
                 question.type(),
@@ -36,7 +46,8 @@ final class AnswerModelRequestFactory {
                                 ? List.of()
                                 : questionPlan.pageHints().stream()
                                         .map(AnswerQuestionPlan.PageHint::pageNumber)
-                                        .toList()),
+                                        .toList(),
+                        evidenceCoverage),
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
                         .map(hit -> new EvidenceInput(

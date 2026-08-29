@@ -26,7 +26,7 @@ final class AnswerRunLifecycle {
             AnswerRunProgressPolicy.ExecutionPhase lastReachedPhase) {
         for (AnswerRunProgressPolicy.ProgressUpdate update :
                 AnswerRunProgressPolicy.updatesFor(answer, lastReachedPhase)) {
-            run = runs.advance(run.id(), run.revision(), update.state(), update.summary());
+            run = runs.advanceAfterWork(run.id(), run.revision(), update.state(), update.summary());
         }
         return run;
     }

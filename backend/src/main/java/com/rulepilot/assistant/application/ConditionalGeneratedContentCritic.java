@@ -29,7 +29,6 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class ConditionalGeneratedContentCritic implements GeneratedContentCritic {
 
-    private static final int MAX_ISSUES = 12;
     private final ContentCriticModel model;
     private final AuditedAgentInvocations invocations;
     private final boolean evaluationMode;
@@ -113,7 +112,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         return draft.issues().stream()
                 .map(issue -> normalizeIssue(issue, claimPositions, allowedEvidence))
-                .limit(MAX_ISSUES)
                 .toList();
     }
 
@@ -168,7 +166,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .sorted(Comparator.comparingInt(Issue::claimPosition)
                         .thenComparing(Issue::type)
                         .thenComparing(Issue::summary))
-                .limit(MAX_ISSUES)
                 .toList();
     }
 
@@ -229,7 +226,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
     private Issue normalizeIssue(Issue issue, Set<Integer> claimPositions, Set<UUID> allowedEvidence) {
         if (issue == null || issue.type() == null || issue.claimAspect() == null
                 || issue.summary() == null || issue.summary().isBlank()
-                || issue.summary().length() > 240
                 || !claimPositions.contains(issue.claimPosition())) {
             throw new IllegalArgumentException("critic issue is invalid");
         }

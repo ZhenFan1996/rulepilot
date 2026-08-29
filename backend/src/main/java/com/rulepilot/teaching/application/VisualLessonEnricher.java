@@ -33,7 +33,6 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class VisualLessonEnricher {
 
-    private static final int MAX_TEACHING_RUN_PASSES_PER_SECTION = 1;
     private final RulebookUnderstandingCatalog understanding;
     private final VisualSectionPrioritizer prioritizer;
     private final VisualLessonSectionEnricher sectionEnricher;
@@ -143,14 +142,22 @@ public class VisualLessonEnricher {
         return enrich(documentVersionId, lesson, null);
     }
 
-    static int maximumTeachingRunModelCalls(TeachingPlan plan) {
+    static int estimatedTeachingRunModelCalls(TeachingPlan plan) {
         if (plan == null || plan.sections().isEmpty()) return 0;
-        // Every deterministically published chapter has one optional visual pass in the same work unit.
-        return Math.multiplyExact(
-                plan.sections().size(),
-                Math.multiplyExact(
-                        MAX_TEACHING_RUN_PASSES_PER_SECTION,
-                        VisualLessonStepLocator.maximumModelCallsPerSectionPass()));
+        long estimated = plan.sections().stream()
+                .filter(section -> section.visualEvidenceRecommended() && !section.sourcePageNumbers().isEmpty())
+                .mapToLong(section -> {
+                    long pages = section.sourcePageNumbers().stream().distinct().count();
+                    return Math.max(1L, (pages + DocumentPageImages.MAX_PAGES_PER_READ - 1L)
+                            / DocumentPageImages.MAX_PAGES_PER_READ);
+                })
+                .sum();
+        if (estimated > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("teaching visual workload is too large");
+        }
+        // This sizes the initial token/deadline envelope from real source-page windows. It is not a call limit:
+        // additional candidate pages and complete Agent corrections continue while durable resources remain.
+        return (int) estimated;
     }
 
     boolean supportsVisualEvidence(String modelConfigurationOwner) {
@@ -342,13 +349,13 @@ public class VisualLessonEnricher {
             case MODEL_SEMANTIC_REJECTED -> "第 " + sectionPosition + " 节的局部图示未通过当前规则步骤校验；仅省略配图，已校验正文保持不变";
             case MODEL_UNAVAILABLE -> "第 " + sectionPosition + " 节没有可用的视觉模型；仅省略配图，已校验正文保持不变";
             case MODEL_EXPLICIT_NO_REGION -> "第 " + sectionPosition + " 节的视觉 Agent 选择了 NO_VISUAL；这是有效的局部结果，正文保持不变";
-            case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节经一次完整重选仍未返回合规选择；仅省略配图，已校验正文保持不变";
-            case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节经一次完整重选仍引用了未提供的候选或依据；仅省略配图，正文保持不变";
+            case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉 Agent 已收到完整错误与 JSON 约定，但纠正后再次出现相同错误、未取得进展；仅省略配图，已校验正文保持不变";
+            case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节的视觉 Agent 已收到完整候选与引用范围，但纠正后仍重复越界选择、未取得进展；仅省略配图，正文保持不变";
             case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的候选图边界未通过校验；仅省略配图，已校验正文保持不变";
             case MODEL_TIMEOUT -> "第 " + sectionPosition + " 节的配图在有限时间内未完成；仅省略配图，已校验正文保持不变";
             case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的配图工作被安全中断；仅省略配图，已校验正文保持不变";
             case MODEL_BUSY -> "第 " + sectionPosition + " 节的配图容量已满；仅省略配图，已校验正文保持不变";
-            case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉服务在有限重试后仍失败；仅省略配图，已校验正文保持不变";
+            case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉服务调用失败；这不是 JSON 格式错误，仅省略本节配图，已校验正文保持不变";
             case CANDIDATE_PREPARATION_FAILED -> "第 " + sectionPosition + " 节的候选截图无法生成；仅省略配图，已校验正文保持不变";
             case REJECTED_TOO_SMALL -> "第 " + sectionPosition + " 节的截图太小，无法辅助理解；仅省略配图，已校验正文保持不变";
             case REJECTED_MISSING_OBSERVATION -> "第 " + sectionPosition + " 节的截图没有可核对的图中说明；仅省略配图，已校验正文保持不变";
@@ -409,7 +416,7 @@ public class VisualLessonEnricher {
 
     public record SectionOutcome(int sectionPosition, Outcome outcome, String summary) {
         public SectionOutcome {
-            if (sectionPosition < 1 || outcome == null || summary == null || summary.isBlank() || summary.length() > 240) {
+            if (sectionPosition < 1 || outcome == null || summary == null || summary.isBlank()) {
                 throw new IllegalArgumentException("visual enrichment section outcome is invalid");
             }
             summary = summary.strip();

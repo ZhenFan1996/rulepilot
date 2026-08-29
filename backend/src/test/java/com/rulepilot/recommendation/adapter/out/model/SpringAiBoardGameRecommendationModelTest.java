@@ -14,8 +14,12 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
-import java.util.ArrayList;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -27,47 +31,64 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 class SpringAiBoardGameRecommendationModelTest {
 
     @Test
-    void publishesNaturalTextOnceTheProviderHasFinishedWithoutChoosingATool() {
+    void streamsCumulativeNaturalTextBeforeTheProviderCompletes() throws Exception {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
-                textResponse("你", null),
-                textResponse("好", "stop")));
+        Sinks.Many<ChatResponse> provider = Sinks.many().unicast().onBackpressureBuffer();
+        when(chatModel.stream(any(Prompt.class))).thenReturn(provider.asFlux());
         var adapter = new SpringAiBoardGameRecommendationModel(configuration);
-        List<String> parts = new ArrayList<>();
+        List<String> parts = new CopyOnWriteArrayList<>();
+        CountDownLatch firstPart = new CountDownLatch(1);
 
-        var turn = adapter.stream(
+        CompletableFuture<Turn> completion = CompletableFuture.supplyAsync(() -> adapter.stream(
                 request(List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}"))),
                 null,
-                parts::add);
+                text -> {
+                    parts.add(text);
+                    firstPart.countDown();
+                }));
 
-        assertThat(parts).containsExactly("你好");
+        assertThat(provider.tryEmitNext(textResponse("你", null))).isEqualTo(Sinks.EmitResult.OK);
+        assertThat(firstPart.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(parts).containsExactly("你");
+        assertThat(completion).isNotDone();
+
+        assertThat(provider.tryEmitNext(textResponse("好", "stop"))).isEqualTo(Sinks.EmitResult.OK);
+        assertThat(provider.tryEmitComplete()).isEqualTo(Sinks.EmitResult.OK);
+        var turn = completion.get(2, TimeUnit.SECONDS);
+
+        assertThat(parts).containsExactly("你", "你好");
         assertThat(turn.text()).isEqualTo("你好");
         assertThat(turn.toolCalls()).isEmpty();
     }
 
     @Test
-    void neverPublishesAProvisionalPreviewWhenTheProviderChoosesATool() {
+    void revokesProvisionalTextAndNeverPublishesToolCallChunkContent() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
         when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
                 textResponse("我先看看。", null),
                 response(
                         "tool_calls",
+                        "DO_NOT_LEAK_TOOL_CONTENT",
                         new AssistantMessage.ToolCall("browse-1", "function", "browse", "{}"))));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration);
-        List<String> parts = new ArrayList<>();
+        List<String> parts = new CopyOnWriteArrayList<>();
 
         var turn = adapter.stream(
                 request(List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}"))),
                 null,
                 parts::add);
 
-        assertThat(parts).isEmpty();
+        assertThat(parts).containsExactly("我先看看。", "");
+        assertThat(parts).noneMatch(part -> part.contains("DO_NOT_LEAK_TOOL_CONTENT")
+                || part.contains("browse-1")
+                || part.contains("{}"));
         assertThat(turn.toolCalls()).singleElement().satisfies(call ->
                 assertThat(call.name()).isEqualTo("browse"));
     }
@@ -122,6 +143,7 @@ class SpringAiBoardGameRecommendationModelTest {
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
+        assertThat(options.getMaxTokens()).isEqualTo(4_096);
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
     }
@@ -283,7 +305,6 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThatThrownBy(() -> new Request(
                         List.of(Message.system("Choose an action."), Message.user("Help me choose.")),
                         List.of(),
-                        512,
                         ToolChoice.AUTO))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -308,15 +329,22 @@ class SpringAiBoardGameRecommendationModelTest {
         return new Request(
                 List.of(Message.system("Choose one typed action."), Message.user("Help me choose.")),
                 tools,
-                512,
+                4_096,
                 ToolChoice.AUTO);
     }
 
     private ChatResponse response(
             String finishReason,
             AssistantMessage.ToolCall call) {
+        return response(finishReason, "", call);
+    }
+
+    private ChatResponse response(
+            String finishReason,
+            String text,
+            AssistantMessage.ToolCall call) {
         AssistantMessage output = AssistantMessage.builder()
-                .content("")
+                .content(text)
                 .toolCalls(List.of(call))
                 .build();
         return new ChatResponse(List.of(new Generation(

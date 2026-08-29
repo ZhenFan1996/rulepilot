@@ -261,24 +261,6 @@ public class GroundedTeachingAgent {
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
             int queriesPerTopic) {
-        return baseSection(
-                plan,
-                planned,
-                priorSections,
-                reusableSections,
-                assistantRunId,
-                queriesPerTopic,
-                true);
-    }
-
-    private SectionOutcome baseSection(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<PriorSectionContext> priorSections,
-            Map<String, LessonSection> reusableSections,
-            UUID assistantRunId,
-            int queriesPerTopic,
-            boolean allowValidationRevision) {
         return generateSection(
                 plan,
                 planned,
@@ -286,8 +268,7 @@ public class GroundedTeachingAgent {
                 reusableSections,
                 assistantRunId,
                 queriesPerTopic,
-                planned.position() - 1,
-                allowValidationRevision);
+                planned.position() - 1);
     }
 
     private int baseQueryBudget() {
@@ -301,9 +282,7 @@ public class GroundedTeachingAgent {
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
             int queryBudget,
-            int sectionIndex,
-            boolean allowValidationRevision) {
-        TeachingModelCallBudget modelCallBudget = TeachingModelCallBudget.section();
+            int sectionIndex) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             return new SectionOutcome(
@@ -329,9 +308,7 @@ public class GroundedTeachingAgent {
                 priorSections,
                 assistantRunId,
                 resolution,
-                sectionIndex,
-                allowValidationRevision,
-                modelCallBudget);
+                sectionIndex);
     }
 
     private SectionOutcome composeResolvedSection(
@@ -340,9 +317,7 @@ public class GroundedTeachingAgent {
             List<PriorSectionContext> priorSections,
             UUID assistantRunId,
             TeachingSectionEvidenceRetriever.Result resolution,
-            int sectionIndex,
-            boolean allowValidationRevision,
-            TeachingModelCallBudget modelCallBudget) {
+            int sectionIndex) {
         if (!resolution.verified()) {
             return new SectionOutcome(
                     planned,
@@ -360,9 +335,7 @@ public class GroundedTeachingAgent {
                     resolution.evidence(),
                     assistantRunId,
                     sectionIndex,
-                    false,
-                    allowValidationRevision,
-                    modelCallBudget);
+                    false);
             LessonSection published = basePublication.publish(composed);
             return new SectionOutcome(
                     planned, published, ActivityOutcome.SUCCEEDED, "SUPPORTED_SECTION_PUBLISHED");

@@ -47,6 +47,24 @@ class SpringAiTeachingOutlineModelStructuredOutputTest {
             """;
 
     @Test
+    void leavesLocalTeachingUnitIdentityToTheApplication() throws Exception {
+        String grouping = """
+                {"teachingUnits":[{"role":"LEGAL_ACTION","sourceSlotIds":["page-1-rule-1"]}]}
+                """;
+
+        var draft = SpringAiTeachingOutlineModel.parseLocalOwnershipDraft(grouping);
+
+        assertThat(draft.teachingUnits()).singleElement().satisfies(unit -> {
+            assertThat(unit.role()).isEqualTo(SourceCoverageRole.LEGAL_ACTION);
+            assertThat(unit.sourceSlotIds()).containsExactly("page-1-rule-1");
+        });
+        assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseLocalOwnershipDraft(grouping.replace(
+                        "\"role\":",
+                        "\"teachingUnitId\":\"model-owned-id\",\"role\":")))
+                .isInstanceOf(JsonProcessingException.class);
+    }
+
+    @Test
     void admitsTheCompleteCompactPlanningEnvelope() throws Exception {
         var draft = SpringAiTeachingOutlineModel.parseCompactOutlineDraft(COMPACT_OUTLINE);
 

@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import java.util.UUID;
 import java.util.function.Function;
@@ -89,12 +90,21 @@ public class BudgetedAgentInvocations implements AuditedAgentInvocations {
         if (resolvedSuccessSummary == null || resolvedSuccessSummary.isBlank()) {
             resolvedSuccessSummary = fallbackSuccessSummary;
         }
-        execution.complete(
-                reservation,
-                ActivityOutcome.SUCCEEDED,
-                Math.max(0, outputTokenEstimator.applyAsInt(result)),
-                elapsedMillis(started),
-                resolvedSuccessSummary);
+        try {
+            execution.complete(
+                    reservation,
+                    ActivityOutcome.SUCCEEDED,
+                    Math.max(0, outputTokenEstimator.applyAsInt(result)),
+                    elapsedMillis(started),
+                    resolvedSuccessSummary);
+        } catch (AgentExecutionStoppedException stopped) {
+            if (stopped.reason() != AgentExecutionStoppedException.StopReason.TOKEN_BUDGET
+                    && stopped.reason() != AgentExecutionStoppedException.StopReason.TIMEOUT) {
+                throw stopped;
+            }
+            // The paid/provider work already completed and the audit row records the exhausted boundary.
+            // Preserve this result; the next reservation will stop further work, while cancellation still wins.
+        }
         return result;
     }
 

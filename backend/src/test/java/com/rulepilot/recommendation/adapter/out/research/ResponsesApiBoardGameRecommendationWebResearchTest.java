@@ -175,28 +175,92 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             assertThat(functionTool.path("type").asText()).isEqualTo("function");
             assertThat(functionTool.path("name").asText()).isEqualTo("record_game_fit_research");
             assertThat(functionTool.path("parameters").path("additionalProperties").asBoolean()).isFalse();
-            assertThat(functionTool.path("parameters").path("properties").path("games").path("maxItems").asInt())
-                    .isEqualTo(5);
+            assertThat(functionTool.path("parameters").path("properties").path("games").has("maxItems"))
+                    .isFalse();
             JsonNode observationSchema = functionTool.path("parameters")
                     .path("properties")
                     .path("games")
                     .path("items")
                     .path("properties")
                     .path("observations");
-            assertThat(observationSchema.path("maxItems").asInt()).isEqualTo(2);
+            assertThat(observationSchema.has("maxItems")).isFalse();
             assertThat(observationSchema
                             .path("items")
                             .path("properties")
                             .path("sourceIndexes")
-                            .path("maxItems")
-                            .asInt())
-                    .isEqualTo(2);
+                            .has("maxItems"))
+                    .isFalse();
             assertThat(sent.path("tool_choice").asText()).isEqualTo("auto");
             assertThat(sent.path("reasoning").path("effort").asText()).isEqualTo("minimal");
-            assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(1_600);
+            assertThat(sent.has("max_output_tokens")).isFalse();
             assertThat(sent.path("store").asBoolean()).isFalse();
             assertThat(authorization.get()).isEqualTo("Bearer secret-test-key");
             assertThat(body.get()).doesNotContain("secret-test-key");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void retainsEveryRequestedGameObservationAndCitationBeyondTheFormerContractCaps() throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        var sources = json.createArrayNode();
+        var payload = json.createObjectNode();
+        var games = payload.putArray("games");
+        for (int id = 1; id <= 6; id++) {
+            var game = games.addObject();
+            game.put("bggId", id);
+            var observations = game.putArray("observations");
+            for (int ordinal = 1; ordinal <= 3; ordinal++) {
+                int sourceIndex = (id - 1) * 3 + ordinal;
+                sources.addObject()
+                        .put("title", "Source " + sourceIndex)
+                        .put("url", "https://research.example/source/" + sourceIndex);
+                observations.addObject()
+                        .put("text", id == 1 && ordinal == 1
+                                ? "A".repeat(600)
+                                : "Observation " + ordinal + " for game " + id)
+                        .putArray("sourceIndexes")
+                        .add(sourceIndex);
+            }
+        }
+
+        AtomicReference<String> body = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, functionResponse(
+                    json.writeValueAsString(sources),
+                    "record_game_fit_research",
+                    json.writeValueAsString(payload)));
+        });
+        server.start();
+        try {
+            StringRedisTemplate redis = mock(StringRedisTemplate.class);
+            @SuppressWarnings("unchecked")
+            ValueOperations<String, String> values = mock(ValueOperations.class);
+            when(redis.opsForValue()).thenReturn(values);
+            when(values.get(anyString())).thenReturn(null);
+            when(values.increment(anyString())).thenReturn(1L);
+            var adapter = new ResponsesApiBoardGameRecommendationWebResearch(
+                    new OkHttpClient(), json, redis, true, "secret-test-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "research-model", Duration.ofDays(7), 20, 2,
+                    Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC));
+
+            List<Candidate> candidates = java.util.stream.IntStream.rangeClosed(1, 6)
+                    .mapToObj(this::candidate)
+                    .toList();
+            var result = adapter.research(new Request(candidates, "en", "Q".repeat(500)));
+
+            assertThat(result).hasValueSatisfying(research -> {
+                assertThat(research.games()).hasSize(6);
+                assertThat(research.games()).allSatisfy(game -> assertThat(game.observations()).hasSize(3));
+                assertThat(research.games().getFirst().observations().getFirst().text()).hasSize(600);
+                assertThat(research.sources()).hasSize(18);
+            });
+            JsonNode sent = json.readTree(body.get());
+            assertThat(sent.has("max_output_tokens")).isFalse();
         } finally {
             server.stop(0);
         }
@@ -423,14 +487,14 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             JsonNode sent = json.readTree(body.get());
             assertThat(sent.path("tool_choice").asText()).isEqualTo("auto");
             assertThat(sent.path("reasoning").path("effort").asText()).isEqualTo("none");
-            assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(1_200);
+            assertThat(sent.has("max_output_tokens")).isFalse();
             assertThat(sent.path("tools")).hasSize(2);
             assertThat(sent.path("tools").get(1).path("name").asText())
                     .isEqualTo("record_candidate_discovery");
             JsonNode discoverySchema = sent.path("tools").get(1).path("parameters").path("properties");
             assertThat(discoverySchema.has("relationship")).isFalse();
-            assertThat(discoverySchema.path("candidates").path("maxItems").asInt()).isEqualTo(6);
-            assertThat(discoverySchema.path("publicContext").path("maxItems").asInt()).isEqualTo(4);
+            assertThat(discoverySchema.path("candidates").has("maxItems")).isFalse();
+            assertThat(discoverySchema.path("publicContext").has("maxItems")).isFalse();
             assertThat(sent.path("input").asText())
                     .contains(
                             "Search the web once",
@@ -448,6 +512,42 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void retainsEveryPublicDiscoveryItemBeyondTheFormerCandidateAndContextCaps() throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        var payload = json.createObjectNode();
+        var candidates = payload.putArray("candidates");
+        for (int index = 1; index <= 7; index++) {
+            candidates.addObject()
+                    .put("name", "Candidate " + index)
+                    .put("fitObservation", index == 7 ? "F".repeat(500) : "Attributed fit " + index)
+                    .putArray("sourceIndexes")
+                    .add(1);
+        }
+        var publicContext = payload.putArray("publicContext");
+        for (int index = 1; index <= 5; index++) {
+            publicContext.addObject()
+                    .put("subjectKind", "ENTITY")
+                    .put("subject", "Subject " + index)
+                    .put("relation", "relates to")
+                    .put("object", "Object " + index)
+                    .put("statement", index == 5 ? "S".repeat(700) : "Statement " + index)
+                    .putArray("sourceIndexes")
+                    .add(1);
+        }
+
+        DiscoveryRun run = runDiscovery(
+                "[{\"title\":\"Complete discovery source\",\"url\":\"https://research.example/discovery\"}]",
+                json.writeValueAsString(payload));
+
+        assertThat(run.discovery()).hasValueSatisfying(discovery -> {
+            assertThat(discovery.candidates()).hasSize(7);
+            assertThat(discovery.candidates().getLast().fitObservation()).hasSize(500);
+            assertThat(discovery.publicContext()).hasSize(5);
+            assertThat(discovery.publicContext().getLast().statement()).hasSize(700);
+        });
     }
 
     @Test

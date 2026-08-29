@@ -464,11 +464,7 @@ public class UserRuleDocumentController {
         return switch (state) {
             case WAITING_FOR_DOCUMENT, LAUNCHING -> TeachingRecoveryAction.WAIT;
             case LAUNCHED -> TeachingRecoveryAction.OPEN_PROGRESS;
-            case FAILED -> "DOCUMENT_PROCESSING_FAILED".equals(errorCode)
-                    ? TeachingRecoveryAction.RETRY_DOCUMENT
-                    : "TEACHING_PREPARATION_STORAGE_FAILED".equals(errorCode)
-                            ? TeachingRecoveryAction.NONE
-                            : TeachingRecoveryAction.RETRY_TEACHING;
+            case FAILED -> failedTeachingRecoveryAction(errorCode);
             case NOT_REQUESTED -> TeachingRecoveryAction.NONE;
         };
     }
@@ -479,11 +475,21 @@ public class UserRuleDocumentController {
         return switch (state) {
             case WAITING_FOR_DOCUMENT, LAUNCHING -> TeachingRecoveryAction.WAIT;
             case LAUNCHED -> TeachingRecoveryAction.OPEN_PROGRESS;
-            case FAILED -> "DOCUMENT_PROCESSING_FAILED".equals(errorCode)
-                    ? TeachingRecoveryAction.RETRY_DOCUMENT
-                    : "TEACHING_PREPARATION_STORAGE_FAILED".equals(errorCode)
-                            ? TeachingRecoveryAction.NONE
-                            : TeachingRecoveryAction.RETRY_TEACHING;
+            case FAILED -> failedTeachingRecoveryAction(errorCode);
+        };
+    }
+
+    private static TeachingRecoveryAction failedTeachingRecoveryAction(String errorCode) {
+        if ("DOCUMENT_PROCESSING_FAILED".equals(errorCode)) {
+            return TeachingRecoveryAction.RETRY_DOCUMENT;
+        }
+        return switch (errorCode == null ? "" : errorCode) {
+            case "APPLICATION_RESTARTED",
+                    "TEACHING_HANDOFF_LAUNCH_FAILED",
+                    "TEACHING_PREPARATION_FAILED",
+                    // Existing persisted records used this code before the handoff-owned one-shot policy was removed.
+                    "TEACHING_RECOVERY_EXHAUSTED" -> TeachingRecoveryAction.RETRY_TEACHING;
+            default -> TeachingRecoveryAction.NONE;
         };
     }
 }

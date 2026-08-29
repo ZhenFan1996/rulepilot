@@ -76,9 +76,10 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 2. SSE 在任务进入后台 executor 前先发出真实的 `understanding_request` 活动；之后传 `progress/result/error`。
    provider 只有在整轮确认没有选择工具后，才把自然回答作为一个完整 `answer_part` 发布；模型先写一句前导语、
    随后又选择工具时，该前导语只留在 Agent transcript，不会在玩家界面闪现后撤回。
-3. 一个有界 ReAct Agent 自主选择 allow-list 内的 typed tools。每次工具 observation 都回到同一个模型；模型可以
+3. 一个 ReAct Agent 自主选择 allow-list 内的 typed tools。每次工具 observation 都回到同一个模型；模型可以
    继续选择真正有用的下一步，也可以直接用自然文字结束。应用不规定“必须两次”、不强制自然回复后再调用一次，
-   也不在某次读取后把能力表收缩成固定流水线；模型调用和工具调用上限只承担防无限循环的安全职责。
+   也不在某次读取后把能力表收缩成固定流水线。模型调用数只是审计事实；step/tool 安全预算由本轮 token 包络推导，
+   不是手写流程长度。防无限循环同时依赖 token、active-work deadline、取消和完全相同的 action/observation no-progress。
 4. catalog tool 提供身份已验证的游戏事实。公开资料发现把候选线索与有来源的公开事实作为一个原子结果返回；
    坏的候选、公开事实、研究 observation 或附带偏好 patch 只丢当前 item，合法 sibling 继续。公开搜索不能代替
    BGG 身份校验，重复同一 typed read 会被阻止；是否继续查目录、研究体验或结束，由 Agent 根据 observation 决定。
@@ -86,7 +87,8 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
    应用不再用 80 字 lead、12 字卡片说明或 exact selection count 充当安全边界：generic lead 可以没有 evidence ID，
    只要非空即可；候选身份、排除/硬条件、证据 allow-list 和同候选归属仍严格。坏的可选 tradeoff 只省略该字段，
    坏的单张卡只省略该卡并形成真实 shortfall，合法卡片和模型原文逐字发布。
-6. provider、协议、输出长度、空响应、重复无效动作、预算、发布边界或服务失败都不会触发应用拼写成功回复，
+6. provider、协议、输出长度、空响应、重复无效动作、token/active-work 边界、发布边界或服务失败都不会触发
+   应用拼写成功回复，
    也不会只凭“已核验候选”生成卡片。本轮返回 typed `failureReason` 和玩家安全的具体说明；请求、偏好与已核验
    会话状态保留供重试。前端从持久会话恢复真实模型输出，选中真实发布的卡片后才创建规则书接力。
 7. 会话把“最近完成回合”与“最近已发布回合”分开持久化：前者保留失败回合的精确幂等重放，后者负责刷新
@@ -100,7 +102,8 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 | 目录中没有满足硬条件的候选 | 成功返回 `no_match`，说明最小可行调整 | 否 |
 | 模型未配置、provider 连接失败、协议无法解析、输出截断或空响应 | 本轮不发布临时/模板成功结果；显示具体失败原因并保留请求 | 否 |
 | 已有合法候选，但完整终态回复仍无法取得 | 同样返回 `UNAVAILABLE`；候选留在内部 checkpoint，不能冒充已发布卡片 | 否 |
-| 六次 action 预算或整轮 deadline 用尽，仍没有终态 | 以明确的 action/time failure boundary 停止 | 否 |
+| 64,000 token 的本轮安全包络，或由它派生的 step/tool 安全预算用尽，仍没有终态 | 以明确的 resource failure boundary 停止；原样重试不会自动扩大资源，玩家需缩小问题或开启新对话 | 否 |
+| active-work deadline 用尽，仍没有终态 | 以明确的 time failure boundary 停止；服务恢复后可保留上下文重试 | 否 |
 | 一组并行动作没有逐步观察，或完全相同的无效动作再次出现 | 第一次作为 typed observation 交回模型；完全相同的重复才停止，避免无意义循环 | 否 |
 | 单张卡、可选 tradeoff 或附带偏好 patch 无效 | 只丢局部坏 item；其余合法结果继续，卡片不足时显示 shortfall | 否 |
 | 所有卡都选错身份、违反排除/硬条件，或引用未知/别的候选证据 | 当前 action 收到结构化拒绝；模型可根据 observation 另选动作或完整重交 | 否 |
@@ -108,13 +111,14 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 
 `UNAVAILABLE` 的对外原因不是一条笼统“生成失败”，而是稳定区分为 `time_limit`、`model_not_configured`、
 `provider_call_failed`、`provider_protocol_invalid`、`provider_output_truncated`、`empty_model_response`、
-`repeated_incompatible_actions`、`repeated_invalid_action`、`action_budget_exhausted`、`publication_rejected` 和
+`repeated_incompatible_actions`、`repeated_invalid_action`、`resource_budget_exhausted`、`publication_rejected` 和
 `service_failure`。前端按这个精确原因解释发生了什么，同时把未知新原因回退到较宽的安全边界；任何一种都
 不会把内部 checkpoint 或应用模板冒充成一次成功推荐。
 
-read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以换工具、缩小目标或诚实结束；只有预算内仍
-无法形成合法终态才使本轮失败。调用数只是实际决策路径的观测值，不是测试合同；验收关注是否重复相同读取、
-是否在总预算内、是否发布有用且有归属的结果。公开库为空、规则书导入失败或讲解失败从来不是推荐失败条件。
+read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以换工具、缩小目标或诚实结束；只有
+token/active-work 时间内仍无法形成合法终态，或完全相同的 action/observation 已经 no-progress，才使本轮失败。
+调用数只是实际决策路径的观测值，不是测试合同或失败边界；验收关注是否重复相同读取、是否在 token 与
+active-work deadline 内、是否发布有用且有归属的结果。公开库为空、规则书导入失败或讲解失败从来不是推荐失败条件。
 
 ### 2. 规则书取得与绑定
 
@@ -131,24 +135,39 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 1. 图片页直接用原图生成带页码身份的 V6 typed rule groups；文字页直接读取原文。系统不再先做一次 OCR、
    再把 OCR 文本喂给第二次语义模型。
 2. V6 parser 只要求当前合同的必需字段、类型、页码身份和组间关系；模型多返回无关字段时直接忽略。真正的
-   JSON、类型、必需字段、重复规则组或页码绑定错误只用同一张原图修正当前页一次。
+   JSON、类型、必需字段、重复规则组或页码绑定错误会把完整 rejected candidate JSON、准确 validation error、
+   原始 JSON schema/contract 和允许 page ID 作为 observation 交回同一 page Agent；Agent 每次返回一份完整
+   replacement，不做字段拼接，也不设猜测式“只修一次”上限。
 3. preparation 先形成 typed canonical source ledger。普通体量由一次 compact outline 调用组织；密集长规则书在
-   完整 slot 边界上分片，每片只分配 source ownership，最后一次 global ordering 只看到 unit ID、角色、页码、
-   可用性和 source identifier，不再重读整本规则事实。每个 slot 和 teaching unit 都必须恰好归属一次。
-4. preparation 的 model-call admission 按真实页数和合同结构最坏上界动态计算，不再用固定调用数卡死长书；
-   动态预算只是上界，不会主动产生调用。纯图片规则书每页最多两次页面理解；page-owned canonical shard、
-   global ordering 和一次 global ownership refinement 各自都包含 transport replay 与一次完整 replacement，
-   所以 `P` 页 preparation 的完整调用上界是 `6P + 8`（20 页为 128，500 页为 3,008）。10 个并行 shard 只缩短
-   独立页面的串行关键路径，不放宽该上界。不可读页面作为 typed unavailable catalog state 留痕并从 ownership
-   排除；只要还有一个可验证 anchor 就继续，只有零 anchor 才在规划前停止。每次调用前还会以真实消息和工具
-   schema 计算本地及全局上下文容量；若整页事实无论怎样分片都装不进 provider 合同，就在任何付费调用前拒绝。
-   Teaching run 另外按实际章节、检索和同一 work unit 内的一次可选配图取得自己的执行预算。
-5. outline 只描述章节结构；它不能凭空补规则，每个主题必须能回到当前文档版本。章节初稿若未通过确定性
-   发布校验，Agent 会收到具体诊断和同一份证据，最多返回一次完整章节替换；应用不从旧稿拣字段拼进新稿。
+   完整 slot 边界上分片，每片只决定 slot grouping 和角色，`teachingUnitId` 由应用按不可变 slot 顺序生成；最后
+   一次 global ordering 只看到应用生成的 unit ID、角色、页码、可用性和 source identifier，不再重读整本规则
+   事实。每个 slot 和 teaching unit 都必须恰好归属一次。
+4. preparation 按真实页数和合同结构估算工作量，只用这个估算扩展 token envelope 和 active-work deadline，
+   不把估计的工具、模型或状态转换次数持久化为失败边界；合法修复超出估计次数时，只要仍有 token、时间且未
+   被取消，就继续执行。工具和模型调用数只作为审计事实。纯图片规则书的普通首稿基线是每页一次页面理解、每个
+   page-owned canonical shard 一次 grouping，以及一次 global ordering；这只是调度与 deadline 估算，不是完成
+   调用上界。页面、local grouping、whole/global outline 的每个完整候选都独立审计；新的完整 validation observation
+   会继续交回同一个 Agent。no-progress 对该 owner 的 full history 做 exact observation 比较，所以 A→A 在第 2 个
+   候选停止，A→B→A 在第 3 个候选停止；新的 A→B→C 仍可在 token、active-work deadline 和取消边界内继续。提取文字可直接进入一次
+   compact outline，不再先抽四页做
+   隐藏视觉探测，也不在有效大纲后按 Java 标签规则强制第二次 ownership rewrite。并行 shard 只缩短独立页面
+   的串行关键路径。不可读页面作为 typed unavailable catalog state 留痕并从 ownership 排除；只要还有一个可验证
+   anchor 就继续，只有零 anchor 才在规划前停止。单个 page-owned grouping 遇到 full-history exact observation 的 no-progress
+   或 provider 不可用时，应用保留该页全部 canonical slots 为独立 units；成功 sibling 会在自身候选通过后立即持久化，
+   不等待失败页结束，也不会在失败页 correction 时重做；其 grouping 原样进入 global
+   ordering。输入始终保留完整页事实，持久化 run 的总 token、active-work deadline、取消状态以及 provider 自己的
+   上下文合同才是停止 owner。Teaching run 另外按实际章节、检索和同一 work unit 内的一次可选配图取得执行预算。
+5. outline 只描述章节结构；它不能凭空补规则，每个主题必须能回到当前文档版本。章节候选若未通过确定性
+   发布校验，同一个章节 Agent 会收到完整候选 JSON、准确错误、原始输出合同以及允许的 evidence、section 和
+   teaching-unit 身份，再决定并返回一份完整替换；应用不裁剪诊断、不从旧稿拣字段拼进新稿。只要候选持续变化且
+   durable run 仍有 token、active-work 时间并且未取消，就可以继续纠正；连续返回完全相同的拒绝候选和 observation
+   才以明确的 no-progress 结束当前章。合法首稿不会被强制追加第二次调用。
 6. 每章带引用正文一通过确定性边界就先写入 durable snapshot，随后才做可选图示增强；因此图示超时、预算停止、
    provider 或 crop 失败都不能擦除已经可读的正文。视觉 Agent 只能从 opaque crop candidate ID 中选择或返回
-   `NO_VISUAL`；格式错误、越权选择或 provider 失败最多触发一次完整重选。crop 的临时 503 只自动重试一次，
-   永久 502 或重试仍失败只省略该图，并在 UI 说明是容量、原页、传输还是浏览器解码边界。
+   `NO_VISUAL`；格式错误或越权选择会把完整候选、准确错误、原合同和允许身份交回同一 Agent。候选仍在变化时可在
+   token、active-work deadline 和取消边界内继续，不设固定重选次数；full-history exact repeat 以 no-progress 停止。
+   provider 或 crop 失败只省略当前图，也不会伪装成格式修正；候选页窗口会继续到 Agent 明确停止、资源边界到达或
+   所有真实候选都已检查，UI 分别说明容量、原页、传输或浏览器解码边界。
 7. 已通过 schema、证据归属、文档版本、引用和结构校验的章节立即标为 `SUPPORTED` 并可先读，后续章节继续
    后台完成。语义 critic 只在显式 evaluation/canary 中运行，不是线上第二发布 owner；其不可用、误报或额外
    延迟都不能把已经跨过确定性边界的正文重新变成草稿或失败。
@@ -158,11 +177,13 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 
 | 发生什么 | 最终状态 | 已有内容 |
 | --- | --- | --- |
-| 某次页面/章节/视觉响应未通过 typed 合同 | 带具体拒绝原因进入唯一 owner 的一次完整 replacement；这次活动不是整轮失败 | 全部保留 |
-| 明确 timeout/transient transport failure | 只在该边界声明允许时原样 replay 一次；普通 provider/config failure 不伪装成 schema repair | 全部保留 |
-| 某页 V6 修正后仍失败、页面图片无法读取、某章证据不足 | 只把该页/章标为 unavailable；其他页和章节继续 | 全部保留 |
+| 某次页面/outline/章节/视觉响应未通过 typed 合同 | provider 调用本身算已返回；另记一条带 candidate number、具体原因和 `correction-follows` 的 `VALIDATION / REJECTED` activity，并把完整候选、准确错误、原合同和允许身份交回唯一 owner，由其返回一份完整 JSON；新的 observation 可继续，不设固定 correction 次数 | 全部保留 |
+| page-owned outline grouping 重复完全相同的拒绝 observation，或其 provider 不可用 | 当前页局部降级：应用保留每个 canonical slot 为独立 unit，成功 sibling 与 global ordering 继续 | 全部保留 |
+| 某页候选重复 full-history exact observation | 记录 candidate number + `no-progress`；A→A 第 2 个候选、A→B→A 第 3 个候选局部停止，不再调用 provider | 成功 sibling 已立即持久化并全部保留 |
+| 明确 timeout/transient transport failure | 当前审计模型调用为 `FAILED`，另记 candidate number + `local-unavailable`；它不是 JSON validation/correction。尤其 correction provider failure 只让当前页局部不可用，不在模型 adapter 内隐藏 replay | 成功 sibling 与已有 durable 内容全部保留 |
+| 页面图片无法读取、某页达到兼容 workflow deadline、某章证据不足 | 记录 candidate number + `local-unavailable`，只把该页/章标为 unavailable；其他页和章节继续 | 全部保留 |
 | 视觉 Agent 返回 `NO_VISUAL` | 合法的局部完成；该章无图发布 | 已校验正文保持不变 |
-| 视觉完整重选仍失败、crop 无法生成、超时或容量满 | 只省略当前章图片 | 已校验正文保持不变 |
+| 视觉候选 full-history 无进展、所有候选检查完毕，或 crop 无法生成、超时、provider / 容量不可用 | 只省略当前章图片；格式拒绝与 provider/crop 失败分别记录 | 已校验正文保持不变 |
 | 部分页不可用或 source catalog 不完整，但至少一章可读 | `DRAFT_READY` | 可读章节立即持久化并交付 |
 | 来源整体不可用、零可验证 anchor 或最终没有任何章可发布 | `INCOMPLETE` / `INSUFFICIENT_EVIDENCE`，整轮停止 | 规则书、页面与已有章节仍保留 |
 | preparation 在普通队列 2 分钟、纯图片长书队列 30 分钟内没有 worker 接手 | `TEACHING_PREPARATION_QUEUE_TIMEOUT`；尚未开始模型调用，可直接重试 | 规则书与之前的 durable 内容保留 |
@@ -175,12 +196,13 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 | lesson/progress/run state 持久化失败 | `TEACHING_PERSISTENCE_FAILED` | 从最后 durable snapshot 发起新 run |
 | 后续章节失败 | `TEACHING_CONTINUATION_FAILED` | 已发布章节继续可读，只重启剩余工作 |
 | 输入缺失、越权、过期或结构无效 | `TEACHING_PLAN_INVALID` | 不自动重试；玩家修复输入或重新选择规则书 |
-| preparation 的精确本地/全局上下文预检不满足 provider 容量 | 在任何付费模型调用前停止并说明容量 owner | 规则书与之前的 durable 内容保留 |
-| 用户取消/会话失效，或全局 step/tool/model/token/deadline 用尽 | 当前 durable run 停止 | 已确认页面和已发布章节保留 |
+| 用户取消，或全局 token/deadline 用尽 | 当前 durable run 停止 | 已确认页面和已发布章节保留 |
+| 当前页面登录会话失效 | 只停止该页面刷新；后台 durable run 保持原状态 | 重新登录后重新绑定并读取最新进度 |
 | 最终持久化、队列或服务在有限恢复后仍失败 | 当前 durable run 停止并显示具体 owner | 上游推荐、规则书和最后一次 durable snapshot 不回滚 |
 
-所以“失败”分三层：一次 attempt 被拒只表示正在有限修正；修正用尽通常只产生局部缺页、缺章或缺图；只有
-来源/anchor/最终可发布性、取消/身份、总预算/时限，以及持久化或服务恢复这些 whole-run owner 才能把整轮
+所以“失败”分三层：一次 attempt 被拒只表示同一 Agent 收到新的校验 observation；相同无效候选不再前进通常只产生局部
+缺页、缺章或缺图；只有来源/anchor/最终可发布性、用户取消、token/active-work 时限，以及无法恢复的 provider、持久化、身份或引用边界这些
+whole-run owner 才能把整轮
 标为停止。前端按真实 `run.state + lastErrorCode` 说明是哪一层，并明确已发布章节是否仍可读。
 
 ### 4. 规则答疑
@@ -191,22 +213,26 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
    这条可选能力的个人模型配置读取失败时只跳过恢复并保留原检索结果，不会冒泡成未分类的请求失败。
 2. retrieval 返回带稳定 evidence ID 的片段；模型通过 typed tool 指明使用哪些证据和回答范围。ADVICE 或
    COMPLETE_LIST 的可选认证失败时保留已经验证的部分证据和未完成义务；CALCULATION 数值审计与精确前文页
-   复核仍是硬边界。
+   复核仍是硬边界。混合检索只有部分来源可用时，精确页读取只验证已读页面，不能把来源覆盖升级为完整：有可用
+   canonical evidence 就回答已支持分支并显示 `SOURCE_COVERAGE_PARTIAL`，不缓存该回答，也不声称列表、建议或全书
+   结论穷尽；部分来源且零可验证 evidence 才以证据不足明确停止。
 3. 最终 provider JSON 的核心回答保持严格，教学辅助只使用一个 `aid: {type, payload}` discriminated union，
    不再同时要求 12 个互斥数组。非计算 aid 的 discriminator、payload 或旧字段损坏时只丢 aid，保留 core；
    计算 aid 不完整仍硬失败并走定向完整 replacement。
-4. 发布前校验证据归属、页码、引用和硬数值；free-form prose 只用于玩家可见表达，不参与业务路由。初始完整
-   envelope 未通过 typed 解码或发布边界时，应用把具体拒绝原因与同一份 typed evidence 交回回答 Agent，最多
-   请求一次完整 replacement；初始调用和 replacement 是两个独立的审计、限流及预算事件，replacement 一旦发生
-   就用掉本轮唯一修订额度，后续发布失败不能再触发第三次模型调用。禁止按字段打补丁，也禁止应用组合新旧文本。
+4. 发布前校验证据归属、页码、引用和硬数值；free-form prose 只用于玩家可见表达，不参与业务路由。完整
+   envelope 未通过 typed 解码或发布边界时，应用把完整拒绝候选、具体错误、原输出合同、允许的 evidence 和引用身份作为
+   observation 交回同一个回答 Agent，由它返回一份新的完整 replacement。只要候选持续变化且 run 仍有 token、
+   active-work 时间并且未取消，就可以继续纠正；完全相同的拒绝候选和 observation 再次出现才是 no-progress。每个 replacement 都是独立的审计、
+   限流及 token 事件，但没有固定修订次数。
+   禁止按字段打补丁，也禁止应用组合新旧文本。
 5. 有支持的部分先回答；不支持的部分局部说明不确定，最多追问一个真正有用的问题。运行进度来自实际到达的
    execution phase，不再由终态倒推不存在的 retrieval/composition/critic；失败记录同时给出安全错误码和实际阶段。
 6. 终态区分三种模型失败：`MODEL_UNAVAILABLE` 表示配置/provider 没有接住请求，`MODEL_TIMEOUT` 表示请求超过
-   本次时限，两者都不做 schema 重放，服务恢复后可原样重试；`INVALID_MODEL_OUTPUT` 表示 provider 已返回但完整
-   结构或引用标识仍未通过一次 replacement，立即原样重试通常无益，应检查或改写问题。前端通过 typed
+   本次时限，两者都不做 schema 重放，服务恢复后可原样重试；`INVALID_MODEL_OUTPUT` 表示 provider 已返回，但同一个回答 Agent 在精确校验
+   observation 下仍没有产生可发布的新完整候选，或完全相同的拒绝已经 no-progress。立即原样重试通常无益，应检查或改写问题。前端通过 typed
    `recovery.canRetryUnchanged` 展示这一差异，不解析服务端自由文案。
 
-答疑会在证据不足时局部弃答；引用不属于当前版本、完整 replacement 仍无效、服务预算耗尽或持久化失败时
+答疑会在证据不足时局部弃答；引用不属于当前版本、完全相同的无效 replacement 已经 no-progress、token/active-work 时限耗尽或持久化失败时，
 本轮整体停止。已有讲解和推荐卡片都不会因此消失。
 
 ## 长任务、并发与恢复
@@ -227,13 +253,18 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
   终态写入的临时失败由一个有容量和尝试次数上限、独立 scheduler 的 reconciliation owner 重试；耗尽后
   释放内存槽位并告警，进程重启后再由启动 recovery 统一结束遗留 non-terminal run，避免每个任务各自递归
   创建无限 timer。
+- 规则书导入或上传接力已经绑定 preparation run 后，reconciliation 只判断该 run 的 durable 事实：可复用则确认，
+  取消则关闭，输入无效、存储故障、需要刷新或可重试失败都原子落为对应的 handoff `FAILED`，并保留原 run ID、
+  规则书和最后一次 durable snapshot。系统不会暗中创建第二个 run，也不会显示“自动恢复 1 / 1”；玩家看到具体
+  owner 后可手动重试，由重试入口显式创建新 run。输入无效、越权或存储失败不提供原样重试。
 - 普通 30 分钟/30 万 token 基线按已验证完整调用图等比例扩展，最终以 16 小时和 1,600 万 token 为 active-work
   硬上限。它们不是完成承诺，也不代替 provider 上下文限制、账户额度、并发和管理员 entitlement。
 - 后端以 `FAILED + AGENT_CANCELLED` 保存取消事实时，玩家界面按 typed error code 映射成 `CANCELLED`，不会在
   同一条提示里同时说“生成失败”和“已取消”。
 - 重试只重做最早失败的 owner，并复用已持久化的页面、证据与章节；停止任务不会顺带删除规则书。
 - 可选 OCR、图示、review、localization 或公开可用性失败，必须 fail-open，不能擦除已通过确定性边界的内容。
-  真正需要模型修正时只允许一份 complete replacement，并由原来的确定性边界重新验收。
+  真正需要模型修正时，每个新的完整 validation observation 都交回同一个 Agent，并由原来的确定性边界重新验收；
+  应用不规定固定 replacement 次数，连续相同无效候选才是明确 no-progress。
 
 ## CI、部署与线上验证
 
@@ -255,7 +286,7 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
    后成为新 release。
 3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 验证一次登录用户的新目录推荐、完整回复、
    每卡证据文案、持久化和页面逐字呈现，同时记录实际模型/工具调用图但不规定 exact 次数；门禁只要求没有
-   完全相同的重复读取、没有超过 Agent 总安全预算，并在页面 SLO 内形成正确结果。provider 修复后只要仍满足
+   完全相同的重复读取、没有超过本轮 token/active-work deadline，并在页面 SLO 内形成正确结果。provider 修复后只要仍满足
    硬边界就不应被调用次数误判为失败。随后选择其中一张卡，证明相同 BGG 身份被绑定到
    game/edition，并且只恢复
    该 edition 的既有旅程或在同 edition discovery 边界停下。首个进度、持久化终态与页面渲染分别记录延迟。
@@ -284,7 +315,8 @@ typed JSON 参数返回，并校验 schema、范围、实体身份、证据归�
 遗留的非正时长也只能生成 `UNKNOWN` claim，不能用“0 分钟”证明满足玩家的硬时长上限。
 
 普通路径让同一个 Agent 在每个真实 observation 后判断继续还是结束；测试不把 exact 模型调用数或固定阶段顺序
-写成产品合同。调用、工具、token 与 deadline 仍有安全上限，重复完全相同的读取或无效动作会被阻止。新增阶段
+写成产品合同。模型调用数只记录；step/tool 安全预算从持久化 token 包络推导，不是手写调用次数。token、
+active-work deadline 和取消是整轮执行边界，重复完全相同的读取、无效动作或拒绝 observation 以 no-progress 停止当前 owner。新增阶段
 必须拥有独立、可测量的责任；critic、视觉或本地化失败时不得销毁已验证内容。任何 correction 都返回完整对象，
 禁止字段级 patch 或应用拼接。真实语料事故只转成脱敏评测，不把游戏名、页码、同义词或某次输出写成生产
 special case。
@@ -293,10 +325,10 @@ special case。
 [OpenAI Agents](https://openai.github.io/openai-agents-python/running_agents/)、
 [LangGraph](https://docs.langchain.com/oss/python/langgraph/event-streaming) 和
 [PydanticAI](https://pydantic.dev/docs/ai/core-concepts/agent/) 的当前运行模型：它们的共同核心
-都是“模型选择动作 → typed tool observation → 在预算内继续或结束”，并把流式事件和最终输出分开。RulePilot
+都是“模型选择动作 → typed tool observation → 在资源预算内继续或结束”，并把流式事件和最终输出分开。RulePilot
 已经用 Spring AI、typed tools、durable conversation 和确定性发布边界实现这个核心，因此没有再引入一套
 Agent framework；新框架会复制状态、重试和观测 owner，却不会自动提高推荐质量。这里保留的是 Agent 的
-自主工具选择，框死的是工具参数、身份、证据、预算和最终提交，而不是自然语言或固定游戏名。
+自主工具选择，框死的是工具参数、身份、证据、派生 step/tool 预算、token/deadline/取消和最终提交，而不是自然语言或固定游戏名。
 
 ## 这次重构解决了什么
 

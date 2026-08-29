@@ -91,8 +91,8 @@ final class VisualRulebookTeachingEvidenceFreshness implements RulebookTeachingE
                 .map(AssistantRuns.RunSnapshot::state)
                 .filter(AssistantRunState.FAILED::equals)
                 .isPresent()) {
-            // A cited first section remains readable, but a transient continuation, provider, or queue failure still
-            // deserves the handoff's single bounded recovery so the player is not stranded with an unfinished guide.
+            // The durable run owns resource, deadline, and cancellation semantics. The handoff reports this terminal
+            // outcome so the player can explicitly start a fresh run without a second hidden retry policy.
             return ReuseAssessment.RETRYABLE_FAILURE;
         }
         if (lessons.findLatestByPlan(plan.orElseThrow().id())

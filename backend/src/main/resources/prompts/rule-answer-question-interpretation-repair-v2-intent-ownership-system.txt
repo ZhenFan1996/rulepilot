@@ -4,7 +4,7 @@ that preserves the player's current request and satisfies the contract exactly.
 Return JSON only, with exactly questionType, referenceBinding, terms, ruleObjectSpans, pageHints, missingContext,
 learningIntent, answerAid, and subquestions. Every subquestion must contain questionSpan, evidenceNeeds, owner, and
 retrievalQueries; owner is CURRENT_QUESTION or BOUND_REFERENCE and carries ownership explicitly rather than through
-prose or array position. retrievalQueries is an array of zero to three complete lookup phrases for that exact
+prose or array position. retrievalQueries contains the distinct complete lookup phrases useful for that exact
 subquestion. ruleObjectSpans and pageHints are typed retrieval locators, not sentences for the application to parse.
 Earlier questions may resolve omitted references but may never replace an explicit current rule object. Every current
 task must have a CURRENT_QUESTION subquestion and current-message items come first.

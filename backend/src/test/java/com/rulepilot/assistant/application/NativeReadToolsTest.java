@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContext;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidencePage;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import java.time.Instant;
 import java.util.List;
@@ -56,6 +57,27 @@ class NativeReadToolsTest {
     }
 
     @Test
+    void contextExpansionPassesEverySelectedHandleAndPositiveRadius() {
+        AssistantReadTools readTools = mock(AssistantReadTools.class);
+        List<UUID> anchorIds = java.util.stream.IntStream.rangeClosed(1, 5)
+                .mapToObj(ignored -> UUID.randomUUID())
+                .toList();
+        Set<UUID> anchors = Set.copyOf(anchorIds);
+        ToolScope scope = scope();
+        when(readTools.readRuleEvidenceContext(scope.documentVersionId(), anchors, 3))
+                .thenReturn(new RuleEvidenceContext(List.of(), List.of()));
+        var tool = new ExpandRuleEvidenceContextNativeTool(readTools, JsonMapper.builder().build());
+        String arguments = anchorIds.stream()
+                .map(id -> "\"" + id + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "{\"evidenceIds\":[", "],\"radius\":3}"));
+
+        var result = tool.execute(arguments, scope);
+
+        assertThat(result.code()).isEqualTo("NO_CONTEXT_ANCHOR");
+        verify(readTools).readRuleEvidenceContext(scope.documentVersionId(), anchors, 3);
+    }
+
+    @Test
     void contextExpansionRejectsMalformedDuplicateAndHiddenScopeArguments() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         var tool = new ExpandRuleEvidenceContextNativeTool(readTools, JsonMapper.builder().build());
@@ -74,7 +96,7 @@ class NativeReadToolsTest {
     }
 
     @Test
-    void relationshipSearchUsesOneModelSelectedTopicWithoutClassifyingItsMeaning() {
+    void relationshipSearchUsesTheCompleteModelSelectedTopicWithoutClassifyingItsMeaning() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         UUID documentVersionId = UUID.randomUUID();
         RuleEvidence ordinary = new RuleEvidence(
@@ -92,9 +114,11 @@ class NativeReadToolsTest {
         });
         var tool = new SearchRuleRelationshipsNativeTool(readTools, JsonMapper.builder().build());
 
+        String completeTopic = "movement timing and conditional replacement ".repeat(10).strip();
         var result = tool.execute(
-                "{\"topic\":\"movement timing\",\"limit\":4}",
-                new ToolScope("player", documentVersionId, UUID.randomUUID(), Instant.now().plusSeconds(30)));
+                "{\"topic\":\"" + completeTopic + "\",\"limit\":9}",
+                new ToolScope(
+                        "player", documentVersionId, UUID.randomUUID(), Instant.now().plusSeconds(30), 20_000));
 
         ArgumentCaptor<AssistantReadTools.SearchRuleEvidence> requests =
                 ArgumentCaptor.forClass(AssistantReadTools.SearchRuleEvidence.class);
@@ -102,7 +126,8 @@ class NativeReadToolsTest {
         assertThat(requests.getAllValues())
                 .allSatisfy(request -> {
                     assertThat(request.documentVersionId()).isEqualTo(documentVersionId);
-                    assertThat(request.limit()).isEqualTo(4);
+                    assertThat(request.query()).isEqualTo(completeTopic);
+                    assertThat(request.limit()).isEqualTo(9);
                     assertThat(request.includeAdjacentContext()).isTrue();
                     assertThat(request.includePageImages()).isFalse();
                 });
@@ -158,11 +183,46 @@ class NativeReadToolsTest {
     }
 
     @Test
+    void searchPassesCompleteTypedQueryFiltersAndRequestedCandidateCount() throws Exception {
+        AssistantReadTools readTools = mock(AssistantReadTools.class);
+        SearchRuleEvidenceNativeTool tool = new SearchRuleEvidenceNativeTool(
+                readTools, JsonMapper.builder().build());
+        String query = "complete turn order condition ".repeat(30).strip();
+        List<String> sectionTypes = java.util.stream.IntStream.rangeClosed(1, 8)
+                .mapToObj(index -> "SECTION_" + index)
+                .toList();
+        ToolScope scope = scope();
+        when(readTools.searchRuleEvidencePage(any(), org.mockito.ArgumentMatchers.eq(0),
+                org.mockito.ArgumentMatchers.eq(6), org.mockito.ArgumentMatchers.eq(Set.of())))
+                .thenReturn(new RuleEvidencePage(List.of(), false, 0));
+        String arguments = JsonMapper.builder().build().writeValueAsString(java.util.Map.of(
+                "query", query,
+                "limit", 12,
+                "sectionTypes", sectionTypes,
+                "includeAdjacentContext", false));
+
+        var result = tool.execute(arguments, scope);
+
+        ArgumentCaptor<AssistantReadTools.SearchRuleEvidence> request =
+                ArgumentCaptor.forClass(AssistantReadTools.SearchRuleEvidence.class);
+        verify(readTools).searchRuleEvidencePage(request.capture(),
+                org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.eq(6),
+                org.mockito.ArgumentMatchers.eq(Set.of()));
+        assertThat(request.getValue().query()).isEqualTo(query);
+        assertThat(request.getValue().limit()).isEqualTo(12);
+        assertThat(request.getValue().sectionTypes()).containsExactlyInAnyOrderElementsOf(sectionTypes);
+        assertThat(result.code()).isEqualTo("NO_EVIDENCE");
+    }
+
+    @Test
     void invalidSearchArgumentsNeverReachRetrieval() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         SearchRuleEvidenceNativeTool tool = new SearchRuleEvidenceNativeTool(readTools, JsonMapper.builder().build());
 
-        assertThatThrownBy(() -> tool.execute("{\"query\":\"x\",\"limit\":99}", scope()))
+        assertThatThrownBy(() -> tool.execute(
+                        "{\"query\":\"x\",\"limit\":0,\"sectionTypes\":[],"
+                                + "\"includeAdjacentContext\":false}",
+                        scope()))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> tool.execute(
                         "{\"query\":\"x\",\"limit\":1,\"sectionTypes\":[],"
@@ -173,15 +233,23 @@ class NativeReadToolsTest {
     }
 
     @Test
-    void pageReadRejectsUnboundedOrDuplicatePagesBeforeStorage() {
+    void pageReadRejectsDuplicatesButPassesEveryValidExactPageToAdaptiveStorage() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         ReadRulePagesNativeTool tool = new ReadRulePagesNativeTool(readTools, JsonMapper.builder().build());
 
         assertThatThrownBy(() -> tool.execute("{\"pageNumbers\":[1,1]}", scope()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> tool.execute("{\"pageNumbers\":[1,2,3,4,5,6]}", scope()))
-                .isInstanceOf(IllegalArgumentException.class);
-        verify(readTools, never()).readRuleEvidencePages(any(), any(), any(Boolean.class));
+        ToolScope scope = scope();
+        Set<Integer> pages = Set.of(1, 2, 3, 4, 5, 6, 7, 8);
+        Set<Integer> firstBatch = Set.of(1, 2, 3, 4, 5, 6);
+        when(readTools.readRuleEvidencePagesPage(scope.documentVersionId(), firstBatch, false, 0, 6))
+                .thenReturn(new RuleEvidencePage(List.of(), false, 0));
+
+        var result = tool.execute("{\"pageNumbers\":[1,2,3,4,5,6,7,8]}", scope);
+
+        assertThat(result.code()).isEqualTo("NO_PAGE_EVIDENCE");
+        assertThat(result.data()).containsEntry("hasMore", true);
+        verify(readTools).readRuleEvidencePagesPage(scope.documentVersionId(), firstBatch, false, 0, 6);
     }
 
     @Test

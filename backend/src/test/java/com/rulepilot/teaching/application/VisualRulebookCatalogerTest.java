@@ -17,6 +17,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRejection;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
@@ -180,8 +181,7 @@ class VisualRulebookCatalogerTest {
                 facts,
                 audit,
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
 
         List<PageInput> inputs = cataloger.catalogVisualPages(
                 documentVersionId,
@@ -192,8 +192,8 @@ class VisualRulebookCatalogerTest {
 
         assertThat(failedPageCalls).hasValue(1);
         assertThat(operations).containsExactly(
-                "inspectTeachingVisualPage|1|2",
-                "inspectTeachingVisualPage|2|2");
+                "inspectTeachingVisualPageCandidate|1|2|candidate-1",
+                "inspectTeachingVisualPageCandidate|2|2|candidate-1");
         assertThat(facts.find(documentVersionId, Set.of(1, 2)))
                 .extracting(PageFact::pageNumber)
                 .containsExactly(2);
@@ -230,8 +230,7 @@ class VisualRulebookCatalogerTest {
                     }
                 },
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
 
         assertThatThrownBy(() -> cataloger.catalogVisualPages(
                         documentVersionId,
@@ -289,8 +288,7 @@ class VisualRulebookCatalogerTest {
                     }
                 },
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
 
         cataloger.catalogVisualPages(
                 documentVersionId,
@@ -301,9 +299,11 @@ class VisualRulebookCatalogerTest {
 
         assertThat(operations).containsExactly(
                 "reuseVisualPageFacts",
-                "inspectTeachingVisualPage|2|3",
+                "inspectTeachingVisualPageCandidate|2|3|candidate-1",
+                "settleTeachingVisualPageCandidate|2|3|candidate-1|accepted|NONE",
                 "persistTeachingVisualPage|2|3",
-                "inspectTeachingVisualPage|3|3",
+                "inspectTeachingVisualPageCandidate|3|3|candidate-1",
+                "settleTeachingVisualPageCandidate|3|3|candidate-1|accepted|NONE",
                 "persistTeachingVisualPage|3|3");
         assertThat(facts.mergeCalls()).isEqualTo(3);
     }
@@ -347,8 +347,7 @@ class VisualRulebookCatalogerTest {
                     }
                 },
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
 
         cataloger.catalogVisualPages(
                 documentVersionId,
@@ -469,8 +468,7 @@ class VisualRulebookCatalogerTest {
                     }
                 },
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
 
         assertThatThrownBy(() -> cataloger.catalogVisualPages(
                         documentVersionId,
@@ -481,7 +479,9 @@ class VisualRulebookCatalogerTest {
                 .isInstanceOf(TeachingPreparationStorageException.class)
                 .hasRootCauseMessage("page fact store unavailable");
         assertThat(modelCalls).hasValue(1);
-        assertThat(operations).containsExactly("inspectTeachingVisualPage|1|1");
+        assertThat(operations).containsExactly(
+                "inspectTeachingVisualPageCandidate|1|1|candidate-1",
+                "settleTeachingVisualPageCandidate|1|1|candidate-1|accepted|NONE");
     }
 
     @Test
@@ -785,7 +785,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void aTimedOutProviderBatchDoesNotConsumeTheTimeoutOfLaterBatches() {
+    void compatibilityWorkflowDeadlineStopsLaterPagesWithoutInventingACallCountBudget() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         List<List<Integer>> requestedBatches = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -830,22 +830,11 @@ class VisualRulebookCatalogerTest {
                 null);
 
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
-                .extracting(PageFact::pageNumber)
-                .containsExactly(2, 3, 4, 5, 6, 7, 8, 9, 10);
+                .isEmpty();
         assertThat(inputs).hasSize(10);
-        assertThat(inputs.getFirst().text()).contains("visual interpretation did not finish");
-        assertThat(requestedBatches)
-                .containsExactly(
-                        List.of(1),
-                        List.of(2),
-                        List.of(3),
-                        List.of(4),
-                        List.of(5),
-                        List.of(6),
-                        List.of(7),
-                        List.of(8),
-                        List.of(9),
-                        List.of(10));
+        assertThat(inputs).allSatisfy(input ->
+                assertThat(input.text()).contains("visual interpretation did not finish"));
+        assertThat(requestedBatches).containsExactly(List.of(1));
     }
 
     @Test
@@ -914,7 +903,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void observesSingleCallContractRepairTransientReplayAndPersistenceWithOnlyLowCardinalityTags() {
+    void observesCandidateCorrectionProviderFailureAndPersistenceWithOnlyLowCardinalityTags() {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger pageTwoInitialCalls = new AtomicInteger();
         var recorded = new java.util.concurrent.CopyOnWriteArrayList<String>();
@@ -955,7 +944,7 @@ class VisualRulebookCatalogerTest {
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
                 int pageNumber = request.pages().getFirst().pageNumber();
                 if (pageNumber == 1) {
-                    throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+                    throw rejectedPageCandidate(pageNumber, "candidate-a");
                 }
                 if (pageTwoInitialCalls.incrementAndGet() == 1) {
                     throw new org.springframework.ai.retry.TransientAiException("provider reset");
@@ -965,9 +954,8 @@ class VisualRulebookCatalogerTest {
             }
 
             @Override
-            public CatalogDraft repairTeachingCatalog(
-                    CatalogRequest request, TeachingCatalogRepairCode repairCode) {
-                assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+            public CatalogDraft correctTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRejection rejection) {
                 return new CatalogDraft(List.of(teachingSummary(
                         1, "SETUP", "The player prepares the board.", List.of("setup"))));
             }
@@ -981,8 +969,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 directAudit(),
                 Duration.ofSeconds(2),
-                4,
-                1,
+                                1,
                 1,
                 observations);
 
@@ -990,12 +977,10 @@ class VisualRulebookCatalogerTest {
         cataloger.ensureTeachingPageFacts(documentVersionId, Set.of(2), 2, "Example game", "owner", null);
 
         assertThat(recorded).containsExactly(
-                "semantic:single_call:failed",
-                "semantic:contract_repair:completed",
-                "persist:contract_repair:completed",
-                "semantic:single_call:failed",
-                "semantic:transient_replay:completed",
-                "persist:transient_replay:completed");
+                "semantic:candidate:rejected",
+                "semantic:correction:accepted",
+                "persist:correction:completed",
+                "semantic:candidate:provider_failed");
     }
 
     @Test
@@ -1042,14 +1027,13 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 audit,
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
 
         cataloger.catalogVisualPages(
                 documentVersionId, List.of(page(1)), "Example game", "owner", UUID.randomUUID());
 
         assertThat(activitySummaries)
-                .containsExactly("Teaching-start page facts interpreted via qwen/qwen3.6-flash");
+                .containsExactly("Teaching-start page candidate received via qwen/qwen3.6-flash");
     }
 
     @Test
@@ -1099,8 +1083,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 directAudit(),
                 Duration.ofSeconds(3),
-                4,
-                10,
+                                10,
                 4);
 
         List<PageInput> result = cataloger.catalogVisualPages(
@@ -1147,8 +1130,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 directAudit(),
                 Duration.ofSeconds(2),
-                4,
-                10,
+                                10,
                 4);
 
         List<PageInput> result = cataloger.catalogVisualPages(
@@ -1174,7 +1156,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void typedRepairReusesEachOriginalPageAndKeepsSuccessfulPagesIndependent() {
+    void twoDifferentInvalidCandidatesCanBeFollowedByAValidThirdCandidateOnEveryPage() {
         UUID documentVersionId = UUID.randomUUID();
         List<String> operations = new java.util.concurrent.CopyOnWriteArrayList<>();
         Map<Integer, AtomicInteger> repairCalls = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1186,15 +1168,16 @@ class VisualRulebookCatalogerTest {
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+                throw rejectedPageCandidate(request.pages().getFirst().pageNumber(), "candidate-a");
             }
 
             @Override
-            public CatalogDraft repairTeachingCatalog(
-                    CatalogRequest request, TeachingCatalogRepairCode repairCode) {
-                assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+            public CatalogDraft correctTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRejection rejection) {
                 int pageNumber = request.pages().getFirst().pageNumber();
-                repairCalls.computeIfAbsent(pageNumber, ignored -> new AtomicInteger()).incrementAndGet();
+                int correction = repairCalls.computeIfAbsent(pageNumber, ignored -> new AtomicInteger())
+                        .incrementAndGet();
+                if (correction == 1) throw rejectedPageCandidate(pageNumber, "candidate-b");
                 return new CatalogDraft(List.of(teachingSummary(
                         pageNumber,
                         "PAGE " + pageNumber,
@@ -1226,8 +1209,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 audit,
                 Duration.ofSeconds(2),
-                4,
-                3,
+                                3,
                 3);
 
         cataloger.catalogVisualPages(
@@ -1237,18 +1219,122 @@ class VisualRulebookCatalogerTest {
                 "owner",
                 UUID.randomUUID());
 
-        assertThat(repairCalls).hasSize(3).allSatisfy((page, calls) -> assertThat(calls).hasValue(1));
+        assertThat(repairCalls).hasSize(3).allSatisfy((page, calls) -> assertThat(calls).hasValue(2));
         assertThat(operations).contains(
-                "inspectTeachingVisualPage|1|3",
-                "inspectTeachingVisualPage|2|3",
-                "inspectTeachingVisualPage|3|3",
-                "inspectTeachingVisualRepair|1|3|SCHEMA_MISMATCH",
-                "inspectTeachingVisualRepair|2|3|SCHEMA_MISMATCH",
-                "inspectTeachingVisualRepair|3|3|SCHEMA_MISMATCH");
+                "inspectTeachingVisualPageCandidate|1|3|candidate-1",
+                "inspectTeachingVisualPageCandidate|1|3|candidate-2",
+                "inspectTeachingVisualPageCandidate|1|3|candidate-3",
+                "inspectTeachingVisualPageCandidate|2|3|candidate-3",
+                "inspectTeachingVisualPageCandidate|3|3|candidate-3");
     }
 
     @Test
-    void transientReplayRereadsOnlyTheFailedOriginalImage() {
+    void exactRejectedObservationStopsOnTheSecondCandidateWithoutAnotherCorrection() {
+        AtomicInteger corrections = new AtomicInteger();
+        List<String> activities = new java.util.concurrent.CopyOnWriteArrayList<>();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw rejectedPageCandidate(1, "candidate-a");
+            }
+
+            @Override
+            public CatalogDraft correctTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRejection rejection) {
+                corrections.incrementAndGet();
+                throw rejectedPageCandidate(1, "candidate-a");
+            }
+        };
+        VisualRulebookCataloger cataloger = catalogerWithActivityCapture(model, activities);
+
+        List<PageInput> result = cataloger.catalogVisualPages(
+                UUID.randomUUID(), List.of(page(1)), "Example game", "owner", UUID.randomUUID());
+
+        assertThat(corrections).hasValue(1);
+        assertThat(activities).contains(
+                "settleTeachingVisualPageCandidate|1|1|candidate-1|correction-follows|SCHEMA_MISMATCH",
+                "settleTeachingVisualPageCandidate|1|1|candidate-2|no-progress|SCHEMA_MISMATCH");
+        assertThat(result).singleElement().satisfies(input ->
+                assertThat(input.text()).contains("visual interpretation did not finish"));
+    }
+
+    @Test
+    void fullHistoryStopsAnABACycleOnTheThirdCandidate() {
+        AtomicInteger corrections = new AtomicInteger();
+        List<String> activities = new java.util.concurrent.CopyOnWriteArrayList<>();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw rejectedPageCandidate(1, "candidate-a");
+            }
+
+            @Override
+            public CatalogDraft correctTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRejection rejection) {
+                int correction = corrections.incrementAndGet();
+                throw rejectedPageCandidate(1, correction == 1 ? "candidate-b" : "candidate-a");
+            }
+        };
+        VisualRulebookCataloger cataloger = catalogerWithActivityCapture(model, activities);
+
+        cataloger.catalogVisualPages(
+                UUID.randomUUID(), List.of(page(1)), "Example game", "owner", UUID.randomUUID());
+
+        assertThat(corrections).hasValue(2);
+        assertThat(activities).contains(
+                "settleTeachingVisualPageCandidate|1|1|candidate-1|correction-follows|SCHEMA_MISMATCH",
+                "settleTeachingVisualPageCandidate|1|1|candidate-2|correction-follows|SCHEMA_MISMATCH",
+                "settleTeachingVisualPageCandidate|1|1|candidate-3|no-progress|SCHEMA_MISMATCH");
+    }
+
+    @Test
+    void successfulSiblingPersistsBeforeAnotherPageCorrectionAndIsNotRegenerated() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        AtomicInteger pageTwoCalls = new AtomicInteger();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                int pageNumber = request.pages().getFirst().pageNumber();
+                if (pageNumber == 1) throw rejectedPageCandidate(1, "candidate-a");
+                pageTwoCalls.incrementAndGet();
+                return new CatalogDraft(List.of(teachingSummary(
+                        2, "TURN", "The active player takes one action.", List.of("turn"))));
+            }
+
+            @Override
+            public CatalogDraft correctTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRejection rejection) {
+                assertThat(facts.find(documentVersionId, Set.of(2)))
+                        .as("a successful sibling must be durable before this correction starts")
+                        .singleElement();
+                return new CatalogDraft(List.of(teachingSummary(
+                        1, "SETUP", "Prepare the shared board.", List.of("setup"))));
+            }
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(
+                                page, "image/png", new byte[] {(byte) (int) page}, 100, 120))
+                        .toList(),
+                model,
+                facts,
+                directAudit(),
+                Duration.ofSeconds(2),
+                2,
+                2);
+
+        cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1), page(2)), "Example game", "owner", UUID.randomUUID());
+
+        assertThat(pageTwoCalls).hasValue(1);
+        assertThat(facts.find(documentVersionId, Set.of(1, 2)))
+                .extracting(PageFact::pageNumber)
+                .containsExactly(1, 2);
+    }
+
+    @Test
+    void providerTransportFailureIsLocalAndDoesNotMasqueradeAsJsonCorrection() {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger imageReads = new AtomicInteger();
         AtomicInteger semanticCalls = new AtomicInteger();
@@ -1292,18 +1378,16 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 audit,
                 Duration.ofSeconds(2),
-                4,
-                10,
+                                10,
                 4);
 
         cataloger.catalogVisualPages(
                 documentVersionId, List.of(page(1)), "Example game", "owner", UUID.randomUUID());
 
-        assertThat(imageReads).hasValue(2);
-        assertThat(semanticCalls).hasValue(2);
+        assertThat(imageReads).hasValue(1);
+        assertThat(semanticCalls).hasValue(1);
         assertThat(operations).containsExactly(
-                "inspectTeachingVisualPage|1|1",
-                "inspectTeachingVisualRetry|1|1");
+                "inspectTeachingVisualPageCandidate|1|1|candidate-1");
     }
 
     @Test
@@ -1320,12 +1404,12 @@ class VisualRulebookCatalogerTest {
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
                 initialCalls.incrementAndGet();
-                throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+                throw rejectedPageCandidate(1, "candidate-a");
             }
 
             @Override
-            public CatalogDraft repairTeachingCatalog(
-                    CatalogRequest request, TeachingCatalogRepairCode repairCode) {
+            public CatalogDraft correctTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRejection rejection) {
                 repairCalls.incrementAndGet();
                 throw new org.springframework.ai.retry.TransientAiException("repair provider unavailable");
             }
@@ -1456,8 +1540,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 stoppedAudit,
                 Duration.ofSeconds(2),
-                4,
-                10,
+                                10,
                 4);
 
         assertThatThrownBy(() -> cataloger.catalogVisualPages(
@@ -1542,14 +1625,13 @@ class VisualRulebookCatalogerTest {
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
                 initialCalls.incrementAndGet();
                 awaitLatch(distinctReaders, "both section callers must join before typed repair");
-                throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+                throw rejectedPageCandidate(1, "candidate-a");
             }
 
             @Override
-            public CatalogDraft repairTeachingCatalog(
-                    CatalogRequest request, TeachingCatalogRepairCode repairCode) {
+            public CatalogDraft correctTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRejection rejection) {
                 repairCalls.incrementAndGet();
-                assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
                 return new CatalogDraft(List.of(teachingSummary(
                         1, "SETUP", "Prepare the shared board before play.", List.of("setup"))));
             }
@@ -1655,8 +1737,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 audit,
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
         ExecutorService callers = Executors.newFixedThreadPool(2);
         Future<List<PageFact>> stoppedRun = null;
         Future<List<PageFact>> independentRun = null;
@@ -1788,8 +1869,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(distinctReaders),
                 failOnceAudit,
                 Duration.ofSeconds(2),
-                4,
-                1);
+                                1);
         UUID runId = UUID.randomUUID();
         ExecutorService callers = Executors.newFixedThreadPool(2);
         try {
@@ -1978,13 +2058,49 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 directAudit(),
                 Duration.ofSeconds(2),
-                4,
-                1,
+                                1,
                 1,
                 ObservationRegistry.NOOP,
                 clock,
                 retention,
                 settledCapacity);
+    }
+
+    private static VisualRulebookCataloger catalogerWithActivityCapture(
+            VisualRulebookPageCatalogModel model, List<String> activities) {
+        AuditedAgentInvocations audit = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                activities.add(operation);
+                return invocation.get();
+            }
+
+            @Override
+            public void record(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome outcome,
+                    String summary) {
+                activities.add(operation);
+            }
+        };
+        return new VisualRulebookCataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                new InMemoryFacts(),
+                audit,
+                Duration.ofSeconds(2),
+                1,
+                1);
     }
 
     private static AuditedAgentInvocations directAudit() {
@@ -2054,6 +2170,18 @@ class VisualRulebookCatalogerTest {
                 true,
                 List.of(),
                 ruleGroupFacts);
+    }
+
+    private static TeachingCatalogContractViolation rejectedPageCandidate(int pageNumber, String candidate) {
+        var rejection = new TeachingCatalogRejection(
+                "{\"candidate\":\"" + candidate + "\",\"pageNumber\":" + pageNumber + "}",
+                "ruleGroups item must contain fact",
+                "visual-page-teaching-catalog-v6",
+                Set.of(pageNumber));
+        return new TeachingCatalogContractViolation(
+                TeachingCatalogRepairCode.SCHEMA_MISMATCH,
+                rejection,
+                new IllegalArgumentException(rejection.validationError()));
     }
 
     private static final class InMemoryFacts implements VisualRulebookPageFacts {

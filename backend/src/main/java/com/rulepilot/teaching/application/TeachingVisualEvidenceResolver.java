@@ -6,6 +6,7 @@ import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.ArrayList;
@@ -23,8 +24,6 @@ import org.slf4j.LoggerFactory;
 final class TeachingVisualEvidenceResolver {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingVisualEvidenceResolver.class);
-    private static final int MAX_PAGES_PER_TOOL_READ = 5;
-    private static final int MAX_CATALOG_OWNER_MODEL_CALLS_PER_PAGE = 2;
 
     private final AssistantReadTools tools;
     private final AuditedAgentInvocations invocations;
@@ -140,23 +139,22 @@ final class TeachingVisualEvidenceResolver {
         if (pageNumbers == null || pageNumbers.isEmpty()) return List.of();
         List<Integer> ordered = pageNumbers.stream().distinct().toList();
         List<Set<Integer>> batches = new ArrayList<>();
-        for (int start = 0; start < ordered.size(); start += MAX_PAGES_PER_TOOL_READ) {
+        for (int start = 0; start < ordered.size(); start += DocumentPageImages.MAX_PAGES_PER_READ) {
             batches.add(Set.copyOf(ordered.subList(
-                    start, Math.min(start + MAX_PAGES_PER_TOOL_READ, ordered.size()))));
+                    start, Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, ordered.size()))));
         }
         return List.copyOf(batches);
     }
 
-    static int maximumModelCalls(TeachingPlan plan) {
+    static int estimatedCatalogModelCalls(TeachingPlan plan) {
         if (plan == null || plan.sections().isEmpty()) return 0;
-        // One page has one catalog owner regardless of how many chapters cite it. Reserve the longest mutually
-        // exclusive branch: the initial image-to-typed-facts call plus either one contract repair or one transient
-        // replay. Both retries reuse the original page image.
+        // One page has one catalog owner regardless of how many chapters cite it. This sizes the ordinary useful
+        // path only; corrections continue under the durable token/deadline/cancellation owner and are not a call cap.
         long uniquePages = plan.sections().stream()
                 .flatMap(section -> section.sourcePageNumbers().stream())
                 .distinct()
                 .count();
-        return Math.toIntExact(Math.multiplyExact(uniquePages, MAX_CATALOG_OWNER_MODEL_CALLS_PER_PAGE));
+        return Math.toIntExact(uniquePages);
     }
 
     record Resolution(

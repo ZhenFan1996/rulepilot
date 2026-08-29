@@ -1,6 +1,8 @@
 package com.rulepilot.assistant.adapter.in.web;
 
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivitySnapshot;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
@@ -18,6 +20,7 @@ import com.rulepilot.gamesession.GameSessionContextLookup;
 import com.rulepilot.shared.AsyncContextPropagation;
 import java.io.IOException;
 import java.security.Principal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -48,7 +51,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class StructuredRuleAnswerController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerController.class);
-    private static final long STREAM_TIMEOUT_MILLIS = 40_000;
+    private static final Duration STREAM_COMPLETION_GRACE = Duration.ofSeconds(5);
 
     private final StructuredRuleAnswerService answers;
     private final GameSessionContextLookup sessions;
@@ -86,7 +89,7 @@ public class StructuredRuleAnswerController {
     SseEmitter answerStream(
             @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
         String username = requireOwnedReadyVersion(versionId, principal);
-        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
+        SseEmitter emitter = runBoundEmitter();
         AtomicBoolean open = new AtomicBoolean(true);
         emitter.onCompletion(() -> open.set(false));
         emitter.onTimeout(() -> open.set(false));
@@ -108,7 +111,8 @@ public class StructuredRuleAnswerController {
                                         open,
                                         runId,
                                         username,
-                                        PlayerLocale.fromRequest(request.language()));
+                                        requestLocale(request.language()),
+                                        request.question());
                                 activityPump[0].start();
                             });
                     if (activityPump[0] != null) activityPump[0].finish();
@@ -124,11 +128,14 @@ public class StructuredRuleAnswerController {
                             exception.getClass().getSimpleName(),
                             exception.getMessage(),
                             exception);
-                    sendError(emitter, open, "answer_unavailable");
+                    sendError(emitter, open, streamFailure(exception, request));
                 }
             });
         } catch (RuntimeException exception) {
-            sendError(emitter, open, "answer_unavailable");
+            LOGGER.warn(
+                    "Structured answer stream executor is unavailable: {}",
+                    exception.getClass().getSimpleName());
+            sendError(emitter, open, serviceUnavailable(request));
         }
         return emitter;
     }
@@ -146,11 +153,12 @@ public class StructuredRuleAnswerController {
             AnswerRequest request,
             String username,
             Consumer<UUID> runStarted) {
+        validateAnswerRequest(request);
         var session = validateSession(request.gameSessionId(), versionId, username);
         var priorTurn = session == null
                 ? null
                 : conversations.priorTurnReference(session.sessionId(), username, versionId).orElse(null);
-        PlayerLocale outputLanguage = PlayerLocale.fromRequest(request.language());
+        PlayerLocale outputLanguage = requestLocale(request.language());
         AnswerCreation creation = answers.answerWithRun(
                 request.question(),
                 new QuestionContext(
@@ -184,11 +192,37 @@ public class StructuredRuleAnswerController {
         }
     }
 
+    static SseEmitter runBoundEmitter() {
+        // The activity pump closes this stream from the persisted run deadline. A second servlet timeout would create
+        // an independent owner that can disconnect while the answer run is still valid.
+        return new SseEmitter(0L);
+    }
+
+    static Instant streamCompletionDeadline(Instant runDeadline) {
+        return runDeadline.plus(STREAM_COMPLETION_GRACE);
+    }
+
+    static boolean streamCompletionDeadlineReached(Instant runDeadline, Instant now) {
+        return !now.isBefore(streamCompletionDeadline(runDeadline));
+    }
+
     static PlayerActivity playerActivity(ActivitySnapshot activity, PlayerLocale locale) {
         String operation = activity.operation();
         String actor = "answer_agent";
         String stage;
-        if (operation.startsWith("nativeTool|search_rule_evidence") || operation.equals("hybridRuleSearch")) {
+        boolean correctionInProgress = activity.type() == ActivityType.VALIDATION
+                && activity.outcome() == ActivityOutcome.REJECTED
+                && isRecoverableValidation(operation);
+        boolean observationStalled = activity.type() == ActivityType.VALIDATION
+                && activity.outcome() == ActivityOutcome.REJECTED
+                && operation.startsWith("nativeObservationNoProgress");
+        if (correctionInProgress) {
+            actor = "answer_validator";
+            stage = "correcting_answer";
+        } else if (observationStalled) {
+            actor = "answer_validator";
+            stage = "evidence_search_stalled";
+        } else if (operation.startsWith("nativeTool|search_rule_evidence") || operation.equals("hybridRuleSearch")) {
             actor = "rulebook_search";
             stage = "searching_evidence";
         } else if (operation.startsWith("nativeTool|search_rule_relationships")) {
@@ -200,12 +234,12 @@ public class StructuredRuleAnswerController {
         } else if (operation.startsWith("nativeTool|read_rule_pages")) {
             actor = "rulebook_reader";
             stage = "reading_pages";
-        } else if (activity.type() == com.rulepilot.assistant.AgentExecutionControl.ActivityType.MODEL) {
+        } else if (activity.type() == ActivityType.MODEL) {
             stage = "composing_answer";
-        } else if (activity.type() == com.rulepilot.assistant.AgentExecutionControl.ActivityType.CRITIC) {
+        } else if (activity.type() == ActivityType.CRITIC) {
             actor = "answer_reviewer";
             stage = "reviewing_support";
-        } else if (activity.type() == com.rulepilot.assistant.AgentExecutionControl.ActivityType.VALIDATION) {
+        } else if (activity.type() == ActivityType.VALIDATION) {
             actor = "answer_validator";
             stage = "validating_citations";
         } else {
@@ -235,6 +269,12 @@ public class StructuredRuleAnswerController {
             case "validating_citations" -> english
                     ? "Validating citation ownership and page boundaries"
                     : "正在校验引用归属与页码边界";
+            case "correcting_answer" -> english
+                    ? "The draft did not pass validation; the answer agent is correcting it"
+                    : "回答草稿未通过校验，答疑助手正在修正";
+            case "evidence_search_stalled" -> english
+                    ? "Supplementary evidence search stopped because the same tool call returned the same evidence twice; the answer can continue with evidence already checked"
+                    : "相同工具调用连续两次返回完全相同的证据，已停止补充查找；答疑会继续使用已有的核验证据";
             default -> english ? "Checking a rule-specific detail" : "正在核对具体规则细节";
         };
         String nextAction = switch (stage) {
@@ -247,18 +287,36 @@ public class StructuredRuleAnswerController {
             case "composing_answer" -> english
                     ? "Next: validate the answer and citations"
                     : "下一步：校验回答与引用";
+            case "correcting_answer" -> english
+                    ? "Next: retry with a valid action or supported answer"
+                    : "下一步：用有效操作或有依据的回答继续";
+            case "evidence_search_stalled" -> english
+                    ? "Next: compose and validate from the evidence already checked"
+                    : "下一步：根据已有核验证据组织并校验回答";
             default -> english
                     ? "Next: publish the supported answer"
                     : "下一步：发布有依据的回答";
         };
+        String status = correctionInProgress
+                ? "running"
+                : activity.outcome().name().toLowerCase(java.util.Locale.ROOT);
         return new PlayerActivity(
                 activity.sequence(),
                 actor,
                 stage,
                 message,
-                activity.outcome().name().toLowerCase(java.util.Locale.ROOT),
+                status,
                 nextAction,
                 activity.latencyMs());
+    }
+
+    private static boolean isRecoverableValidation(String operation) {
+        return operation.equals("nativeCompletionRequirement")
+                || operation.equals("nativeEmptyCompletion")
+                || operation.equals("nativeCompletionProtocol")
+                || operation.equals("nativeActionProtocol")
+                || operation.equals("nativeToolSchema")
+                || operation.startsWith("nativeObs|");
     }
 
     private final class PlayerActivityPump {
@@ -267,6 +325,7 @@ public class StructuredRuleAnswerController {
         private final UUID runId;
         private final String username;
         private final PlayerLocale locale;
+        private final String question;
         private final Map<Long, String> deliveredStatuses = new HashMap<>();
         private final AtomicBoolean finished = new AtomicBoolean();
 
@@ -275,12 +334,14 @@ public class StructuredRuleAnswerController {
                 AtomicBoolean open,
                 UUID runId,
                 String username,
-                PlayerLocale locale) {
+                PlayerLocale locale,
+                String question) {
             this.emitter = emitter;
             this.open = open;
             this.runId = runId;
             this.username = username;
             this.locale = locale;
+            this.question = safeQuestion(question);
         }
 
         private void start() {
@@ -304,20 +365,119 @@ public class StructuredRuleAnswerController {
 
         private synchronized void flush() {
             if (!open.get()) return;
-            runs.findOwned(runId, username).ifPresent(details -> details.activities().stream()
-                    .filter(activity -> !activity.outcome().name().equals(
-                            deliveredStatuses.get(activity.sequence())))
-                    .forEach(activity -> {
-                        deliveredStatuses.put(activity.sequence(), activity.outcome().name());
-                        send(emitter, open, "activity", playerActivity(activity, locale));
-                    }));
+            runs.findOwned(runId, username).ifPresent(details -> {
+                details.activities().stream()
+                        .filter(activity -> !activity.outcome().name().equals(
+                                deliveredStatuses.get(activity.sequence())))
+                        .forEach(activity -> {
+                            deliveredStatuses.put(activity.sequence(), activity.outcome().name());
+                            send(emitter, open, "activity", playerActivity(activity, locale));
+                        });
+                Instant runDeadline = details.budget() == null ? null : details.budget().deadlineAt();
+                if (runDeadline != null && streamCompletionDeadlineReached(runDeadline, Instant.now())) {
+                    finished.set(true);
+                    sendError(emitter, open, timeout(question, locale));
+                }
+            });
         }
     }
 
-    private void sendError(SseEmitter emitter, AtomicBoolean open, String code) {
+    static StreamError streamFailure(RuntimeException exception, AnswerRequest request) {
+        PlayerLocale locale = failureLocale(request);
+        String question = safeQuestion(request == null ? null : request.question());
+        if (exception instanceof InvalidAnswerContextException) {
+            return contextInvalid(question, locale);
+        }
+        return workflowFailed(question, locale);
+    }
+
+    static StreamError serviceUnavailable(AnswerRequest request) {
+        return serviceUnavailable(
+                safeQuestion(request == null ? null : request.question()), failureLocale(request));
+    }
+
+    static StreamError timeout(String question, PlayerLocale locale) {
+        boolean english = locale == PlayerLocale.EN;
+        return new StreamError(
+                "answer_timeout",
+                new PlayerFacingRuleAnswer.Recovery(
+                        english
+                                ? "This answer did not finish within its run limit and has stopped. You can retry the same question; if it times out again, narrow its scope."
+                                : "本次答疑未能在运行时限内完成，现已停止。可以原样重试；若再次超时，请缩小问题范围。",
+                        english ? "Retry this question" : "重试这个问题",
+                        safeQuestion(question),
+                        true));
+    }
+
+    private static StreamError contextInvalid(String question, PlayerLocale locale) {
+        boolean english = locale == PlayerLocale.EN;
+        return new StreamError(
+                "answer_context_invalid",
+                new PlayerFacingRuleAnswer.Recovery(
+                        english
+                                ? "This answer context is no longer valid or belongs to a different rulebook. Reopen Q&A from the rulebook or lesson page before asking again."
+                                : "当前答疑上下文已失效，或与这本规则书不匹配。请从规则书或教学页重新进入答疑后再提问。",
+                        english ? "Reopen Q&A" : "重新进入答疑",
+                        question,
+                        false));
+    }
+
+    private static StreamError serviceUnavailable(String question, PlayerLocale locale) {
+        boolean english = locale == PlayerLocale.EN;
+        return new StreamError(
+                "answer_service_unavailable",
+                new PlayerFacingRuleAnswer.Recovery(
+                        english
+                                ? "The answer service is temporarily busy and this question has not started. You can retry it unchanged after the service recovers."
+                                : "答疑服务暂时繁忙，这个问题尚未开始处理。服务恢复后可以原样重试。",
+                        english ? "Retry later" : "稍后重试",
+                        question,
+                        true));
+    }
+
+    private static StreamError workflowFailed(String question, PlayerLocale locale) {
+        boolean english = locale == PlayerLocale.EN;
+        return new StreamError(
+                "answer_workflow_failed",
+                new PlayerFacingRuleAnswer.Recovery(
+                        english
+                                ? "This answer stopped because an internal workflow failed. The question may not have been processed completely; review or revise it before trying again."
+                                : "本次答疑因内部流程错误而停止，问题可能没有被完整处理。请检查或改写后再试。",
+                        english ? "Review question" : "检查问题",
+                        question,
+                        false));
+    }
+
+    private static PlayerLocale failureLocale(AnswerRequest request) {
+        try {
+            return PlayerLocale.fromRequest(request == null ? null : request.language());
+        } catch (IllegalArgumentException ignored) {
+            return PlayerLocale.ZH_CN;
+        }
+    }
+
+    private static String safeQuestion(String question) {
+        return question == null ? "" : question;
+    }
+
+    private static void validateAnswerRequest(AnswerRequest request) {
+        if (request == null || request.question() == null || request.question().isBlank()) {
+            throw new InvalidAnswerContextException("answer question is required");
+        }
+    }
+
+    private static PlayerLocale requestLocale(String language) {
+        try {
+            return PlayerLocale.fromRequest(language);
+        } catch (IllegalArgumentException invalidLanguage) {
+            throw new InvalidAnswerContextException("answer language is unsupported", invalidLanguage);
+        }
+    }
+
+    private void sendError(SseEmitter emitter, AtomicBoolean open, StreamError error) {
         if (!open.getAndSet(false)) return;
         try {
-            emitter.send(SseEmitter.event().name("error").data(new StreamError(code)));
+            emitter.send(SseEmitter.event().name("error").data(error));
         } catch (IOException | RuntimeException ignored) {
             // The client may already have closed the stream.
         } finally {
@@ -353,11 +513,21 @@ public class StructuredRuleAnswerController {
             return null;
         }
         var session = sessions.findOwned(sessionId, username)
-                .orElseThrow(() -> new IllegalArgumentException("game session does not exist"));
+                .orElseThrow(() -> new InvalidAnswerContextException("game session does not exist"));
         if (!session.documentVersionId().equals(documentVersionId)) {
-            throw new IllegalArgumentException("game session uses a different document version");
+            throw new InvalidAnswerContextException("game session uses a different document version");
         }
         return session;
+    }
+
+    static final class InvalidAnswerContextException extends IllegalArgumentException {
+        InvalidAnswerContextException(String message) {
+            super(message);
+        }
+
+        InvalidAnswerContextException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     record AnswerRequest(
@@ -387,7 +557,7 @@ public class StructuredRuleAnswerController {
 
     record AnswerPart(String field, String text) {}
 
-    record StreamError(String code) {}
+    record StreamError(String code, PlayerFacingRuleAnswer.Recovery recovery) {}
 
     record ConversationTurnResponse(
             UUID id,

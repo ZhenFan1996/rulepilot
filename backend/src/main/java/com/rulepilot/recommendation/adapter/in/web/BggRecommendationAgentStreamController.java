@@ -54,17 +54,6 @@ public class BggRecommendationAgentStreamController {
         this.streamTimeoutMillis = streamTimeoutMillis(properties.timeout());
     }
 
-    BggRecommendationAgentStreamController(
-            BoardGameRecommendationAgent agent,
-            BggRecommendationPresentation presentation,
-            TaskExecutor executor) {
-        this.agent = agent;
-        this.presentation = presentation;
-        this.executor = executor;
-        this.conversations = null;
-        this.streamTimeoutMillis = streamTimeoutMillis(BoardGameRecommendationProperties.MAXIMUM_TIMEOUT);
-    }
-
     static long streamTimeoutMillis(Duration recommendationTimeout) {
         return recommendationTimeout.plus(STREAM_COMPLETION_GRACE).toMillis();
     }

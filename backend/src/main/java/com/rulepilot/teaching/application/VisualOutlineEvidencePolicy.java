@@ -4,8 +4,6 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import java.text.Normalizer;
-import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -14,7 +12,6 @@ import java.util.stream.Collectors;
 /** Structural source-page and visual-budget policy for teaching outlines. */
 final class VisualOutlineEvidencePolicy {
 
-    static final int MAX_INTERPRETED_VISUAL_PAGES = 4;
     private VisualOutlineEvidencePolicy() {}
 
     static TeachingOutlineModel.OutlineDraft bindIconLegendEvidence(
@@ -88,62 +85,6 @@ final class VisualOutlineEvidencePolicy {
                         "visual teaching outline omitted external source dependency " + dependency.title());
             }
         }));
-    }
-
-    static Set<Integer> selectedVisualPageNumbers(
-            TeachingOutlineModel.OutlineDraft outline, List<DocumentProcessing.PageView> pages) {
-        Set<Integer> available = pages.stream()
-                .map(DocumentProcessing.PageView::pageNumber)
-                .collect(Collectors.toUnmodifiableSet());
-        LinkedHashSet<Integer> selected = new LinkedHashSet<>();
-        outline.topics().stream()
-                .filter(TeachingOutlineModel.TopicDraft::visualEvidenceRecommended)
-                .flatMap(topic -> topic.sourcePageNumbers().stream())
-                .filter(available::contains)
-                .forEach(page -> addBounded(selected, page));
-        if (selected.size() < MAX_INTERPRETED_VISUAL_PAGES) {
-            outline.topics().stream()
-                    .flatMap(topic -> topic.sourcePageNumbers().stream())
-                    .filter(available::contains)
-                    .forEach(page -> addBounded(selected, page));
-        }
-        return Collections.unmodifiableSet(selected);
-    }
-
-    static Set<Integer> unownedSparseVisualCoveragePageNumbers(
-            TeachingOutlineModel.OutlineDraft outline,
-            List<DocumentProcessing.PageView> pages,
-            int maximumPages) {
-        if (outline == null || pages == null || pages.isEmpty() || maximumPages < 1) return Set.of();
-        Set<Integer> owned = outline.topics().stream()
-                .flatMap(topic -> topic.sourcePageNumbers().stream())
-                .collect(Collectors.toSet());
-        List<Integer> candidates = pages.stream()
-                .filter(page -> !owned.contains(page.pageNumber()))
-                .filter(VisualOutlineEvidencePolicy::hasSparseExtractedText)
-                .map(DocumentProcessing.PageView::pageNumber)
-                .toList();
-        if (candidates.isEmpty()) return Set.of();
-        int slots = Math.min(maximumPages, candidates.size());
-        LinkedHashSet<Integer> selected = new LinkedHashSet<>();
-        if (slots == 1) {
-            selected.add(candidates.get(candidates.size() / 2));
-        } else {
-            for (int slot = 0; slot < slots; slot++) {
-                int index = (int) Math.round((double) slot * (candidates.size() - 1) / (slots - 1));
-                selected.add(candidates.get(index));
-            }
-        }
-        return Collections.unmodifiableSet(selected);
-    }
-
-    private static boolean hasSparseExtractedText(DocumentProcessing.PageView page) {
-        String text = page.text() == null ? "" : page.text();
-        return text.codePoints().filter(Character::isLetterOrDigit).limit(281).count() <= 280;
-    }
-
-    private static void addBounded(LinkedHashSet<Integer> pages, int pageNumber) {
-        if (pages.size() < MAX_INTERPRETED_VISUAL_PAGES) pages.add(pageNumber);
     }
 
     private static String identityKey(String value) {

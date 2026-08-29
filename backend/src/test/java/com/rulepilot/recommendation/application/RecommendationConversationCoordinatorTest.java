@@ -583,7 +583,7 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
-    void retainsNewlyObservedGameIdentityWhenLongTermIdentityMemoryIsFull() {
+    void retainsTheCompleteTranscriptAndEveryObservedIdentityAcrossLongConversations() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         java.util.concurrent.atomic.AtomicInteger nextId = new java.util.concurrent.atomic.AtomicInteger();
         when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
@@ -606,11 +606,15 @@ class RecommendationConversationCoordinatorTest {
                     ignored -> {});
         }
 
-        assertThat(coordinator.latest("alice").orElseThrow().state().knownGames())
-                .hasSize(RecommendationConversationCoordinator.MAX_KNOWN_GAMES)
+        ConversationState state = coordinator.latest("alice").orElseThrow().state();
+        assertThat(state.transcript()).hasSize(122);
+        assertThat(state.knownGames())
+                .hasSize(61)
                 .extracting(BoardGameRecommendationAgent.KnownGame::bggId)
-                .contains(61)
-                .doesNotContain(1);
+                .contains(1, 61);
+        assertThat(state.shownBggIds())
+                .hasSize(61)
+                .contains(1, 61);
     }
 
     @Test
