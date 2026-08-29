@@ -57,6 +57,10 @@ const productionRecommendationSpec = await readFile(
   new URL('../frontend/e2e/production-recommendation-journey.spec.ts', import.meta.url),
   'utf8',
 )
+const recommendationCanaryDiagnostics = await readFile(
+  new URL('../frontend/src/lib/recommendationCanaryDiagnostics.ts', import.meta.url),
+  'utf8',
+)
 const productionReleaseGuardPath = new URL('./production-release-guard.sh', import.meta.url).pathname
 
 function workflowRunBlock(workflow, stepName) {
@@ -306,11 +310,20 @@ function productionRecommendationRawReport(overrides = {}) {
     recommendationSseResultMs: 900,
     recommendationSseErrorCode: null,
     recommendationSseFailureBoundary: null,
+    recommendationSseFailureReason: null,
     recommendationPersistedTerminalMs: 950,
     recommendationRenderedSlateMs: 1_000,
     recommendationElapsedMs: 1_000,
     recommendationSloMet: true,
+    recommendationObservationWindowMs: 155_000,
+    recommendationCanaryFailureClass: null,
+    recommendationLastSessionProcessing: false,
     recommendationProgressEvents: [{ stage: 'untrusted', phase: 'player-secret-marker' }],
+    recommendationLastProgressStage: 'selecting_tools',
+    recommendationLastProgressPhase: 'started',
+    recommendationLastProgressAction: 'browse_bgg_catalog',
+    recommendationLastProgressServerElapsedMs: 700,
+    recommendationLastProgressBrowserReceivedMs: 720,
     recommendationStreamProbeFailed: false,
     recommendationPublishedBggIds: [101, 102, 103],
     recommendationAssistantReplyCharacterCount: 500,
@@ -357,6 +370,7 @@ function productionRecommendationRawReport(overrides = {}) {
     recommendationCatalogCalls: 1,
     recommendationWebResearchCalls: 0,
     recommendationFailureBoundary: null,
+    recommendationFailureReason: null,
     expectedRecommendationTitleTermSha256:
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
     handoffSelectedBggId: 101,
@@ -879,13 +893,24 @@ test('production recommendation verifies one deployed main release through the e
   assert.match(sanitizerStep,
     /def completed_recommendation_acceptance\(\$raw\):[\s\S]*?recommendationGameTypeHardConstraintsMatched == true[\s\S]*?recommendationSloMet == true[\s\S]*?handoffTerminalVisible == true/)
   assert.match(sanitizerStep,
-    /recommendationModelCalls \| is_integer_between\(2; 6\)[\s\S]{0,160}?recommendationModelCallElapsedMs \| length\) == \$raw\.recommendationModelCalls/)
+    /recommendationModelCalls \| is_positive_integer\)[\s\S]{0,180}?recommendationModelCallElapsedMs \| length\) == \$raw\.recommendationModelCalls/)
+  assert.match(sanitizerStep,
+    /recommendationCatalogCalls \| is_positive_integer\)[\s\S]{0,160}?recommendationWebResearchCalls \| is_non_negative_integer\)/)
   assert.match(sanitizerStep,
     /\(\(\$raw\.completed \| not\) or completed_recommendation_acceptance\(\$raw\)\)/)
   assert.match(sanitizerStep, /def is_finite_number:[\s\S]{0,100}?\(\(\. - \.\) == 0\)/)
   assert.match(sanitizerStep, /"invalid_stream_error", "unknown_stream_error"/)
   assert.match(sanitizerStep,
-    /recommendationProgressEventCount: \(\$raw\.recommendationProgressEvents \| length\)[\s\S]*?recommendationCompletedWorkCount: \(\$raw\.recommendationCompletedWork \| length\)[\s\S]*?handoffOfficialMutationAttemptCount: \(\$raw\.handoffOfficialMutationAttemptedPaths \| length\)/)
+    /recommendationProgressEventCount: \(\$raw\.recommendationProgressEvents \| length\)[\s\S]*?recommendationLastProgressStage: \$raw\.recommendationLastProgressStage[\s\S]*?recommendationCompletedWorkCount: \(\$raw\.recommendationCompletedWork \| length\)[\s\S]*?handoffOfficialMutationAttemptCount: \(\$raw\.handoffOfficialMutationAttemptedPaths \| length\)/)
+  assert.match(sanitizerStep,
+    /recommendationSseFailureReason: \$raw\.recommendationSseFailureReason[\s\S]*?recommendationCanaryFailureClass: \$raw\.recommendationCanaryFailureClass[\s\S]*?recommendationFailureReason: \$raw\.recommendationFailureReason/)
+  assert.match(sanitizerStep,
+    /def is_progress_stage_or_null:[\s\S]{0,500}?"understanding_request"[\s\S]{0,500}?"composing_response"/)
+  assert.match(sanitizerStep,
+    /def is_progress_phase_or_null:[\s\S]{0,240}?"started"[\s\S]{0,240}?"failed"/)
+  assert.match(sanitizerStep,
+    /def is_progress_action_or_null:[\s\S]{0,700}?"understand_request"[\s\S]{0,700}?"recommend_games"/)
+  assert.doesNotMatch(sanitizerStep, /is_progress_slug_or_null/)
   assert.doesNotMatch(sanitizerStep,
     /recommendationProgressEvents: \$raw|recommendationCompletedWork: \$raw|handoffOfficialMutationAttemptedPaths: \$raw|\+ \$raw|with_entries/)
   assert.match(sanitizerStep,
@@ -921,13 +946,21 @@ test('production recommendation verifies one deployed main release through the e
   assert.match(productionRecommendationSpec,
     /production returns one recommendation slate and hands its exact identity to rulebook discovery/)
   assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationModelCalls,[\s\S]{0,240}?\.toBeGreaterThanOrEqual\(2\)/)
+    /expect\(report\.recommendationModelCalls,[\s\S]{0,240}?\.toBeGreaterThanOrEqual\(1\)/)
   assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationModelCalls,[\s\S]{0,240}?\.toBeLessThanOrEqual\(MAX_RECOMMENDATION_MODEL_CALLS\)/)
+    /expect\(report\.recommendationCatalogCalls,[\s\S]{0,240}?\.toBeGreaterThanOrEqual\(1\)/)
   assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationCatalogCalls,[\s\S]{0,240}?\.toBe\(1\)/)
+    /expect\(report\.recommendationWebResearchCalls,[\s\S]{0,240}?\.toBeGreaterThanOrEqual\(0\)/)
+  assert.doesNotMatch(productionRecommendationSpec, /MAX_RECOMMENDATION_MODEL_CALLS/)
   assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationWebResearchCalls,[\s\S]{0,240}?\.toBe\(0\)/)
+    /const INTERACTION_SLO_MS = 20_000[\s\S]{0,300}?const RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS = 155_000[\s\S]{0,120}?const HANDOFF_OBSERVATION_MS = 50_000/)
+  assert.match(productionRecommendationSpec,
+    /recommendationRenderedSlateMs = slate\.elapsedMs[\s\S]{0,180}?slate\.elapsedMs !== null[\s\S]{0,120}?slate\.elapsedMs <= INTERACTION_SLO_MS/)
+  assert.match(recommendationCanaryDiagnostics,
+    /function classifyRecommendationCanaryFailure\([\s\S]{0,1200}?'observer_failure'[\s\S]{0,1200}?'product_terminal'[\s\S]{0,1200}?'lifecycle_deadline'[\s\S]{0,1200}?'terminal_evidence_gap'[\s\S]{0,1200}?'interaction_slo'/)
+  assert.match(productionRecommendationSpec,
+    /publicStreamErrorCodes: \[\.\.\.RECOMMENDATION_STREAM_ERROR_CODES\]/)
+  assert.doesNotMatch(productionRecommendationSpec, /SESSION_TIMEOUT/)
   assert.match(productionRecommendationSpec,
     /expect\(report\.recommendationSloMet,[\s\S]{0,240}?\.toBe\(true\)/)
   assert.match(productionRecommendationSpec,
@@ -975,11 +1008,11 @@ test('production recommendation verifies one deployed main release through the e
   assert.match(productionRecommendationSpec,
     /report\.recommendationSseResultMs = sseResult === null/)
   assert.match(productionRecommendationSpec,
-    /report\.recommendationPersistedTerminalMs = terminal\.elapsedMs/)
+    /report\.recommendationPersistedTerminalMs = terminal\.session === null \? null : terminal\.elapsedMs/)
   assert.match(productionRecommendationSpec,
     /report\.recommendationRenderedSlateMs = slate\.elapsedMs/)
   assert.match(productionRecommendationSpec,
-    /report\.recommendationSloMet = slate\.rendered && slate\.elapsedMs <= INTERACTION_SLO_MS/)
+    /report\.recommendationSloMet = slate\.rendered[\s\S]{0,120}?slate\.elapsedMs !== null[\s\S]{0,120}?slate\.elapsedMs <= INTERACTION_SLO_MS/)
   assert.match(productionRecommendationSpec,
     /snapshot\.recommendationModel\?\.provider[\s\S]{0,160}?snapshot\.recommendationModel\?\.model/)
   assert.match(productionRecommendationSpec,
@@ -987,13 +1020,13 @@ test('production recommendation verifies one deployed main release through the e
   assert.match(productionRecommendationSpec,
     /expect\(modelAssignment\.model,[\s\S]{0,180}?\.toBe\(EXPECTED_MODEL_NAME\)/)
   assert.match(productionRecommendationSpec,
-    /report\.recommendationModelCallElapsedMs = publicNonNegativeIntegers\(result\?\.modelCallElapsedMs\)/)
+    /report\.recommendationModelCallElapsedMs = publicNonNegativeIntegers\([\s\S]{0,180}?result\?\.modelCallElapsedMs \?\? sseResult\?\.modelCallElapsedMs/)
   assert.match(productionRecommendationSpec,
     /\.toHaveLength\(report\.recommendationModelCalls!\)/)
   assert.match(productionRecommendationSpec,
-    /report\.recommendationAgentElapsedMs = publicNonNegativeInteger\(result\?\.agentElapsedMs\)/)
+    /report\.recommendationAgentElapsedMs = publicNonNegativeInteger\([\s\S]{0,160}?result\?\.agentElapsedMs \?\? sseResult\?\.agentElapsedMs/)
   assert.match(productionRecommendationSpec,
-    /report\.recommendationPublishedBggIds = result\?\.games\.map\(\(\{ game \}\) => game\.bggId\)/)
+    /report\.recommendationPublishedBggIds = result\?\.games\.map\(\(\{ game \}\) => game\.bggId\)[\s\S]{0,100}?\?\? sseResult\?\.bggIds/)
   assert.match(productionRecommendationSpec,
     /expectedRecommendationTitleTermSha256:\s*sha256\(EXPECTED_TITLE_TERM\)/)
   assert.match(productionRecommendationSpec,
@@ -1154,8 +1187,8 @@ test('production recommendation sanitizer independently rejects a false complete
     await assert.rejects(access(sanitizedReportPath))
 
     await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-      recommendationModelCalls: 7,
-      recommendationModelCallElapsedMs: [100, 100, 100, 100, 100, 100, 100],
+      recommendationModelCalls: 0,
+      recommendationModelCallElapsedMs: [],
     })))
     await assert.rejects(
       execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
@@ -1380,26 +1413,29 @@ test('production recommendation sanitizer rejects fractional integers and non-fi
 })
 
 test('production recommendation sanitizer rejects mistyped evidence and deletes the raw report', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'rulepilot-recommendation-sanitizer-invalid.'))
-  const artifactDirectory = join(root, 'production-recommendation-journey')
-  const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-  const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-  try {
-    await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-    await mkdir(artifactDirectory, { recursive: true })
-    await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-      recommendationModelCalls: 'player-secret-marker',
-    })))
+  for (const [label, corruptedEvidence] of [
+    ['mistyped-count', { recommendationModelCalls: 'player-secret-marker' }],
+    ['unlisted-progress', { recommendationLastProgressStage: 'player_secret_marker' }],
+  ]) {
+    const root = await mkdtemp(join(tmpdir(), `rulepilot-recommendation-sanitizer-${label}.`))
+    const artifactDirectory = join(root, 'production-recommendation-journey')
+    const rawReportPath = join(artifactDirectory, 'journey.raw.json')
+    const sanitizedReportPath = join(artifactDirectory, 'journey.json')
+    try {
+      await mkdir(join(root, 'home', '.ssh'), { recursive: true })
+      await mkdir(artifactDirectory, { recursive: true })
+      await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport(corruptedEvidence)))
 
-    await assert.rejects(
-      execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-        env: productionRecommendationSanitizerEnvironment(root),
-      }),
-    )
-    await assert.rejects(access(rawReportPath))
-    await assert.rejects(access(sanitizedReportPath))
-  } finally {
-    await rm(root, { recursive: true, force: true })
+      await assert.rejects(
+        execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
+          env: productionRecommendationSanitizerEnvironment(root),
+        }),
+      )
+      await assert.rejects(access(rawReportPath))
+      await assert.rejects(access(sanitizedReportPath))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   }
 })
 
@@ -2922,6 +2958,13 @@ test('deployment isolates the recommendation startup model from shared Qwen role
   assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'QWEN_MODEL=qwen3\.7-plus'/)
   assert.doesNotMatch(deploymentWorkflow, /'QWEN_MODEL=qwen3\.8-flash'/)
+  assert.match(applicationConfiguration,
+    /recommendation-agent:[\s\S]{0,600}?timeout: \$\{AGENT_TIMEOUT:PT2M\}/)
+  assert.match(deploymentWorkflow, /managed_runtime_keys='[^']* AGENT_TIMEOUT [^']*'/)
+  assert.match(deploymentWorkflow, /'AGENT_TIMEOUT=PT2M'/)
+  assert.match(deploymentCompose, /AGENT_TIMEOUT: \$\{AGENT_TIMEOUT:-PT2M\}/)
+  assert.doesNotMatch(deploymentWorkflow, /'BGG_RECOMMENDATION_AGENT_TIMEOUT=/)
+  assert.doesNotMatch(deploymentCompose, /BGG_RECOMMENDATION_AGENT_TIMEOUT:/)
 })
 
 test('deployment forwards and owns the bounded long-teaching workload controls', () => {

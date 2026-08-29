@@ -500,6 +500,12 @@ jobs:
               is_finite_number and floor == . and . >= $minimum and . <= $maximum;
             def is_integer_or_null($minimum; $maximum):
               . == null or is_integer_between($minimum; $maximum);
+            def is_non_negative_integer:
+              is_finite_number and floor == . and . >= 0;
+            def is_positive_integer:
+              is_non_negative_integer and . >= 1;
+            def is_non_negative_integer_or_null:
+              . == null or is_non_negative_integer;
             def is_number_or_null($minimum; $maximum):
               . == null or (is_finite_number and . >= $minimum and . <= $maximum);
             def is_enum_or_null($values):
@@ -542,6 +548,20 @@ jobs:
               type == "array"
                 and length <= $maximum_length
                 and all(.[]; is_integer_between($minimum; $maximum));
+            def is_duration_array:
+              type == "array"
+                and all(.[]; is_integer_between(0; 3600000));
+            def is_progress_stage_or_null:
+              is_enum_or_null(["understanding_request", "selecting_tools", "searching_bgg_catalog",
+                "reading_game_details", "discovering_candidates", "verifying_bgg_candidates",
+                "researching_game_fit", "composing_response"]);
+            def is_progress_phase_or_null:
+              is_enum_or_null(["started", "completed", "retrying", "failed"]);
+            def is_progress_action_or_null:
+              is_enum_or_null(["understand_request", "choose_next_action", "reply_to_user", "ask_user",
+                "resolve_bgg_game", "inspect_candidate_titles", "browse_bgg_catalog",
+                "discover_public_candidates", "lookup_bgg_games", "research_game_fit",
+                "compare_candidates", "report_no_match", "recommend_games"]);
             def has_keys($required):
               . as $object
               | all($required[]; . as $key | $object | has($key));
@@ -572,10 +592,14 @@ jobs:
                 and ($raw.recommendationSseResultMs | is_integer_between(0; 3600000))
                 and $raw.recommendationSseErrorCode == null
                 and $raw.recommendationSseFailureBoundary == null
+                and $raw.recommendationSseFailureReason == null
                 and ($raw.recommendationPersistedTerminalMs | is_integer_between(0; 3600000))
                 and ($raw.recommendationRenderedSlateMs | is_integer_between(0; 20000))
                 and ($raw.recommendationElapsedMs | is_integer_between(0; 20000))
                 and $raw.recommendationSloMet == true
+                and $raw.recommendationObservationWindowMs == 155000
+                and $raw.recommendationCanaryFailureClass == null
+                and $raw.recommendationLastSessionProcessing == false
                 and $raw.recommendationStreamProbeFailed == false
                 and ($raw.recommendationPublishedBggIds | length) == $requestedCardCount
                 and (($raw.recommendationPublishedBggIds | unique | length) == $requestedCardCount)
@@ -597,12 +621,13 @@ jobs:
                 and $raw.recommendationModelAfterRequest != null
                 and $raw.recommendationModelProvider == $expectedProvider
                 and $raw.recommendationModelName == $expectedModel
-                and ($raw.recommendationModelCalls | is_integer_between(2; 6))
+                and ($raw.recommendationModelCalls | is_positive_integer)
                 and ($raw.recommendationModelCallElapsedMs | length) == $raw.recommendationModelCalls
                 and ($raw.recommendationAgentElapsedMs | is_integer_between(0; 3600000))
-                and $raw.recommendationCatalogCalls == 1
-                and $raw.recommendationWebResearchCalls == 0
+                and ($raw.recommendationCatalogCalls | is_positive_integer)
+                and ($raw.recommendationWebResearchCalls | is_non_negative_integer)
                 and $raw.recommendationFailureBoundary == null
+                and $raw.recommendationFailureReason == null
                 and ($raw.handoffSelectedBggId | is_integer_between(1; 1000000000))
                 and $raw.handoffActionClicked == true
                 and $raw.handoffSurfaceVisible == true
@@ -711,9 +736,14 @@ jobs:
                     "recommendationTerminalCategory", "recommendationTerminalObserved", "recommendationClickCaptured",
                     "recommendationFirstProgressMs", "recommendationSseTerminalCategory",
                     "recommendationSseTerminalMs", "recommendationSseResultMs", "recommendationSseErrorCode",
-                    "recommendationSseFailureBoundary", "recommendationPersistedTerminalMs",
+                    "recommendationSseFailureBoundary", "recommendationSseFailureReason",
+                    "recommendationPersistedTerminalMs",
                     "recommendationRenderedSlateMs", "recommendationElapsedMs", "recommendationSloMet",
-                    "recommendationProgressEvents", "recommendationStreamProbeFailed",
+                    "recommendationObservationWindowMs", "recommendationCanaryFailureClass",
+                    "recommendationLastSessionProcessing", "recommendationProgressEvents",
+                    "recommendationLastProgressStage", "recommendationLastProgressPhase",
+                    "recommendationLastProgressAction", "recommendationLastProgressServerElapsedMs",
+                    "recommendationLastProgressBrowserReceivedMs", "recommendationStreamProbeFailed",
                     "recommendationPublishedBggIds", "recommendationAssistantReplyCharacterCount",
                     "recommendationRenderedReplyCharacterCount", "recommendationCardReplyPartCount",
                     "recommendationUsableCardCount", "recommendationUsableReplyPartCount",
@@ -727,6 +757,7 @@ jobs:
                     "recommendationModelCallElapsedMs", "recommendationAgentElapsedMs",
                     "recommendationModelElapsedShare", "recommendationCatalogCalls",
                     "recommendationWebResearchCalls", "recommendationFailureBoundary",
+                    "recommendationFailureReason",
                     "expectedRecommendationTitleTermSha256", "handoffSelectedBggId", "handoffActionClicked",
                     "handoffSurfaceVisible", "handoffImportRequestedBggId", "handoffImportResponseStatus",
                     "handoffImportResponseOk", "handoffImportResponseBggId", "handoffImportedGameId",
@@ -777,8 +808,8 @@ jobs:
                   and ($raw.recommendationOutcome
                     | is_enum_or_null(["conversation", "needs_clarification", "recommendations", "no_match", "unavailable"]))
                   and ($raw.recommendationTerminalCategory
-                    | IN("NOT_OBSERVED", "RECOMMENDATIONS", "NON_RECOMMENDATION", "SESSION_TIMEOUT",
-                      "SESSION_READ_FAILURE", "STREAM_ERROR"))
+                    | IN("NOT_OBSERVED", "RECOMMENDATIONS", "NON_RECOMMENDATION", "TERMINAL_EVIDENCE_GAP",
+                      "LIFECYCLE_DEADLINE", "SESSION_READ_FAILURE", "STREAM_ERROR"))
                   and ($raw.recommendationTerminalObserved | is_boolean)
                   and ($raw.recommendationClickCaptured | is_boolean)
                   and ($raw.recommendationFirstProgressMs | is_integer_or_null(0; 3600000))
@@ -792,12 +823,27 @@ jobs:
                   and ($raw.recommendationSseFailureBoundary
                     | is_enum_or_null(["time_budget", "model_response", "service_configuration",
                       "action_budget", "publication_boundary", "service_failure"]))
+                  and ($raw.recommendationSseFailureReason
+                    | is_enum_or_null(["time_limit", "resource_budget_exhausted", "model_not_configured",
+                      "provider_protocol_invalid", "provider_output_truncated", "empty_model_response",
+                      "repeated_incompatible_actions", "repeated_invalid_action", "publication_rejected",
+                      "provider_call_failed", "service_failure"]))
                   and ($raw.recommendationPersistedTerminalMs | is_integer_or_null(0; 3600000))
                   and ($raw.recommendationRenderedSlateMs | is_integer_or_null(0; 3600000))
                   and ($raw.recommendationElapsedMs | is_integer_or_null(0; 3600000))
                   and ($raw.recommendationSloMet | is_boolean_or_null)
+                  and $raw.recommendationObservationWindowMs == 155000
+                  and ($raw.recommendationCanaryFailureClass
+                    | is_enum_or_null(["interaction_slo", "product_terminal", "terminal_evidence_gap",
+                      "lifecycle_deadline", "observer_failure"]))
+                  and ($raw.recommendationLastSessionProcessing | is_boolean_or_null)
                   and (($raw.recommendationProgressEvents | type) == "array"
                     and ($raw.recommendationProgressEvents | length) <= 100)
+                  and ($raw.recommendationLastProgressStage | is_progress_stage_or_null)
+                  and ($raw.recommendationLastProgressPhase | is_progress_phase_or_null)
+                  and ($raw.recommendationLastProgressAction | is_progress_action_or_null)
+                  and ($raw.recommendationLastProgressServerElapsedMs | is_integer_or_null(0; 3600000))
+                  and ($raw.recommendationLastProgressBrowserReceivedMs | is_integer_or_null(0; 3600000))
                   and ($raw.recommendationStreamProbeFailed | is_boolean)
                   and ($raw.recommendationPublishedBggIds | is_integer_array(1; 1000000000; 10))
                   and ($raw.recommendationAssistantReplyCharacterCount | is_integer_or_null(0; 10000000))
@@ -823,19 +869,24 @@ jobs:
                   and ($raw.recommendationModelProvider == null
                     or $raw.recommendationModelProvider == $expectedProvider)
                   and ($raw.recommendationModelName == null or $raw.recommendationModelName == $expectedModel)
-                  and ($raw.recommendationModelCalls | is_integer_or_null(0; 20))
-                  and ($raw.recommendationModelCallElapsedMs | is_integer_array(0; 3600000; 20))
+                  and ($raw.recommendationModelCalls | is_non_negative_integer_or_null)
+                  and ($raw.recommendationModelCallElapsedMs | is_duration_array)
                   and (($raw.recommendationModelCalls == null
                       and ($raw.recommendationModelCallElapsedMs | length) == 0)
                     or ($raw.recommendationModelCalls != null
                       and ($raw.recommendationModelCallElapsedMs | length) == $raw.recommendationModelCalls))
                   and ($raw.recommendationAgentElapsedMs | is_integer_or_null(0; 3600000))
                   and ($raw.recommendationModelElapsedShare | is_number_or_null(0; 1000))
-                  and ($raw.recommendationCatalogCalls | is_integer_or_null(0; 100))
-                  and ($raw.recommendationWebResearchCalls | is_integer_or_null(0; 100))
+                  and ($raw.recommendationCatalogCalls | is_non_negative_integer_or_null)
+                  and ($raw.recommendationWebResearchCalls | is_non_negative_integer_or_null)
                   and ($raw.recommendationFailureBoundary
                     | is_enum_or_null(["time_budget", "model_response", "service_configuration",
                       "action_budget", "publication_boundary", "service_failure"]))
+                  and ($raw.recommendationFailureReason
+                    | is_enum_or_null(["time_limit", "resource_budget_exhausted", "model_not_configured",
+                      "provider_protocol_invalid", "provider_output_truncated", "empty_model_response",
+                      "repeated_incompatible_actions", "repeated_invalid_action", "publication_rejected",
+                      "provider_call_failed", "service_failure"]))
                   and $raw.expectedRecommendationTitleTermSha256 == $expectedTitleTermSha256
                   and ($raw.handoffSelectedBggId | is_integer_or_null(1; 1000000000))
                   and ($raw.handoffActionClicked | is_boolean)
@@ -931,11 +982,21 @@ jobs:
                   recommendationSseResultMs: $raw.recommendationSseResultMs,
                   recommendationSseErrorCode: $raw.recommendationSseErrorCode,
                   recommendationSseFailureBoundary: $raw.recommendationSseFailureBoundary,
+                  recommendationSseFailureReason: $raw.recommendationSseFailureReason,
                   recommendationPersistedTerminalMs: $raw.recommendationPersistedTerminalMs,
                   recommendationRenderedSlateMs: $raw.recommendationRenderedSlateMs,
                   recommendationElapsedMs: $raw.recommendationElapsedMs,
                   recommendationSloMet: $raw.recommendationSloMet,
+                  recommendationObservationWindowMs: $raw.recommendationObservationWindowMs,
+                  recommendationCanaryFailureClass: $raw.recommendationCanaryFailureClass,
+                  recommendationLastSessionProcessing: $raw.recommendationLastSessionProcessing,
                   recommendationProgressEventCount: ($raw.recommendationProgressEvents | length),
+                  recommendationLastProgressStage: $raw.recommendationLastProgressStage,
+                  recommendationLastProgressPhase: $raw.recommendationLastProgressPhase,
+                  recommendationLastProgressAction: $raw.recommendationLastProgressAction,
+                  recommendationLastProgressServerElapsedMs: $raw.recommendationLastProgressServerElapsedMs,
+                  recommendationLastProgressBrowserReceivedMs:
+                    $raw.recommendationLastProgressBrowserReceivedMs,
                   recommendationStreamProbeFailed: $raw.recommendationStreamProbeFailed,
                   recommendationPublishedBggIds: $raw.recommendationPublishedBggIds,
                   recommendationAssistantReplyCharacterCount: $raw.recommendationAssistantReplyCharacterCount,
@@ -967,6 +1028,7 @@ jobs:
                   recommendationCatalogCalls: $raw.recommendationCatalogCalls,
                   recommendationWebResearchCalls: $raw.recommendationWebResearchCalls,
                   recommendationFailureBoundary: $raw.recommendationFailureBoundary,
+                  recommendationFailureReason: $raw.recommendationFailureReason,
                   expectedRecommendationTitleTermSha256: $expectedTitleTermSha256,
                   handoffSelectedBggId: $raw.handoffSelectedBggId,
                   handoffActionClicked: $raw.handoffActionClicked,

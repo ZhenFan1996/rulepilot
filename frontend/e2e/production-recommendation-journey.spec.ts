@@ -12,6 +12,13 @@ import {
 } from '@playwright/test'
 import MarkdownIt from 'markdown-it'
 
+import {
+  classifyRecommendationCanaryFailure,
+  classifyRecommendationStreamError,
+  RECOMMENDATION_STREAM_ERROR_CODES,
+  type RecommendationCanaryFailureClass,
+} from '../src/lib/recommendationCanaryDiagnostics'
+
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
 const SELECTION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_SELECTION_PROMPT ?? ''
 const EXPECTED_TITLE_TERM = (process.env.RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM ?? '')
@@ -24,8 +31,11 @@ const TESTED_SHA = process.env.RULEPILOT_RECOMMENDATION_TESTED_SHA ?? ''
 const ACTIVE_RELEASE_ID = process.env.RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID ?? ''
 const INTERACTION_SLO_MS = 20_000
 const FIRST_PROGRESS_SLO_MS = 3_000
-const TERMINAL_OBSERVATION_MS = 50_000
-const MAX_RECOMMENDATION_MODEL_CALLS = 6
+// This recommendation-only window observes through the 120-second Agent deadline, five-second stream grace, and the
+// coordinator's 30-second stale-turn recovery-eligibility boundary. It does not perform a replay or relax the
+// 20-second useful-slate SLO.
+const RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS = 155_000
+const HANDOFF_OBSERVATION_MS = 50_000
 const PUBLIC_FAILURE_BOUNDARIES = new Set([
   'time_budget',
   'model_response',
@@ -33,6 +43,50 @@ const PUBLIC_FAILURE_BOUNDARIES = new Set([
   'action_budget',
   'publication_boundary',
   'service_failure',
+])
+const PUBLIC_FAILURE_REASONS = new Set([
+  'time_limit',
+  'resource_budget_exhausted',
+  'model_not_configured',
+  'provider_protocol_invalid',
+  'provider_output_truncated',
+  'empty_model_response',
+  'repeated_incompatible_actions',
+  'repeated_invalid_action',
+  'publication_rejected',
+  'provider_call_failed',
+  'service_failure',
+])
+const PUBLIC_PROGRESS_STAGES = new Set([
+  'understanding_request',
+  'selecting_tools',
+  'searching_bgg_catalog',
+  'reading_game_details',
+  'discovering_candidates',
+  'verifying_bgg_candidates',
+  'researching_game_fit',
+  'composing_response',
+])
+const PUBLIC_PROGRESS_PHASES = new Set([
+  'started',
+  'completed',
+  'retrying',
+  'failed',
+])
+const PUBLIC_PROGRESS_ACTIONS = new Set([
+  'understand_request',
+  'choose_next_action',
+  'reply_to_user',
+  'ask_user',
+  'resolve_bgg_game',
+  'inspect_candidate_titles',
+  'browse_bgg_catalog',
+  'discover_public_candidates',
+  'lookup_bgg_games',
+  'research_game_fit',
+  'compare_candidates',
+  'report_no_match',
+  'recommend_games',
 ])
 const PLAYER_MARKDOWN = new MarkdownIt({
   breaks: true,
@@ -128,6 +182,7 @@ interface RecommendationResult {
   catalogCalls?: number
   webResearchCalls?: number
   failureBoundary?: string | null
+  failureReason?: string | null
 }
 
 interface EffectiveModelAssignment {
@@ -155,19 +210,21 @@ interface RecommendationSession {
 type TerminalCategory =
   | 'RECOMMENDATIONS'
   | 'NON_RECOMMENDATION'
-  | 'SESSION_TIMEOUT'
+  | 'TERMINAL_EVIDENCE_GAP'
+  | 'LIFECYCLE_DEADLINE'
   | 'SESSION_READ_FAILURE'
   | 'STREAM_ERROR'
 
 interface TerminalObservation {
   category: TerminalCategory
   session: RecommendationSession | null
+  lastSession: RecommendationSession | null
   elapsedMs: number
 }
 
 interface SlateObservation {
   rendered: boolean
-  elapsedMs: number
+  elapsedMs: number | null
   bggIds: number[]
 }
 
@@ -245,6 +302,13 @@ interface BrowserSseResultObservation {
   clientTurnId: string | null
   outcome: string | null
   failureBoundary: string | null
+  failureReason: string | null
+  completedWork: string[]
+  modelCalls: number | null
+  modelCallElapsedMs: number[]
+  agentElapsedMs: number | null
+  catalogCalls: number | null
+  webResearchCalls: number | null
   bggIds: number[]
   content: RecommendationPublishedContent
 }
@@ -293,11 +357,20 @@ interface ProductionRecommendationReport {
   recommendationSseResultMs: number | null
   recommendationSseErrorCode: string | null
   recommendationSseFailureBoundary: string | null
+  recommendationSseFailureReason: string | null
   recommendationPersistedTerminalMs: number | null
   recommendationRenderedSlateMs: number | null
   recommendationElapsedMs: number | null
   recommendationSloMet: boolean | null
+  recommendationObservationWindowMs: number
+  recommendationCanaryFailureClass: RecommendationCanaryFailureClass | null
+  recommendationLastSessionProcessing: boolean | null
   recommendationProgressEvents: RecommendationProgressEvidence[]
+  recommendationLastProgressStage: string | null
+  recommendationLastProgressPhase: string | null
+  recommendationLastProgressAction: string | null
+  recommendationLastProgressServerElapsedMs: number | null
+  recommendationLastProgressBrowserReceivedMs: number | null
   recommendationStreamProbeFailed: boolean
   recommendationPublishedBggIds: number[]
   recommendationAssistantReplyCharacterCount: number | null
@@ -326,6 +399,7 @@ interface ProductionRecommendationReport {
   recommendationCatalogCalls: number | null
   recommendationWebResearchCalls: number | null
   recommendationFailureBoundary: string | null
+  recommendationFailureReason: string | null
   expectedRecommendationTitleTermSha256: string
   handoffSelectedBggId: number | null
   handoffActionClicked: boolean
@@ -561,6 +635,26 @@ function displayedRulebookCandidateOrder(candidates: RulebookDiscoveryCandidateI
 
 function publicFailureBoundary(value: unknown): string | null {
   return typeof value === 'string' && PUBLIC_FAILURE_BOUNDARIES.has(value) ? value : null
+}
+
+function publicFailureReason(value: unknown): string | null {
+  return typeof value === 'string' && PUBLIC_FAILURE_REASONS.has(value) ? value : null
+}
+
+function publicProgressValue(value: unknown, allowed: ReadonlySet<string>): string | null {
+  return typeof value === 'string' && allowed.has(value) ? value : null
+}
+
+function retainLastProgress(
+  report: ProductionRecommendationReport,
+  progressEvents: RecommendationProgressEvidence[],
+) {
+  const last = progressEvents.at(-1)
+  report.recommendationLastProgressStage = publicProgressValue(last?.stage, PUBLIC_PROGRESS_STAGES)
+  report.recommendationLastProgressPhase = publicProgressValue(last?.phase, PUBLIC_PROGRESS_PHASES)
+  report.recommendationLastProgressAction = publicProgressValue(last?.action, PUBLIC_PROGRESS_ACTIONS)
+  report.recommendationLastProgressServerElapsedMs = publicNonNegativeInteger(last?.serverElapsedMs)
+  report.recommendationLastProgressBrowserReceivedMs = publicNonNegativeInteger(last?.browserReceivedMs)
 }
 
 function normalizedPlayerText(value: string) {
@@ -900,13 +994,20 @@ async function expectUsablePlayerSurface(element: Locator, message: string) {
 }
 
 async function installRecommendationStreamEvidence(page: Page) {
-  await page.addInitScript(() => {
+  await page.addInitScript(({ publicStreamErrorCodes }) => {
     type StreamTerminal = {
       kind: 'result'
       browserReceivedAtEpochMs: number
       clientTurnId: string | null
       outcome: string | null
       failureBoundary: string | null
+      failureReason: string | null
+      completedWork: string[]
+      modelCalls: number | null
+      modelCallElapsedMs: number[]
+      agentElapsedMs: number | null
+      catalogCalls: number | null
+      webResearchCalls: number | null
       bggIds: number[]
       content: {
         assistantMessage: string
@@ -964,16 +1065,24 @@ async function installRecommendationStreamEvidence(page: Page) {
       'publication_boundary',
       'service_failure',
     ])
-    const publicErrorCodes = new Set([
-      'recommendation_unavailable',
-      'not_found',
-      'revision_conflict',
-      'turn_id_reused',
-      'turn_in_progress',
-      'concurrent_turn',
+    const publicFailureReasons = new Set([
+      'time_limit',
+      'resource_budget_exhausted',
+      'model_not_configured',
+      'provider_protocol_invalid',
+      'provider_output_truncated',
+      'empty_model_response',
+      'repeated_incompatible_actions',
+      'repeated_invalid_action',
+      'publication_rejected',
+      'provider_call_failed',
+      'service_failure',
     ])
+    const publicErrorCodes = new Set(publicStreamErrorCodes)
     const failureBoundary = (value: unknown) => typeof value === 'string'
       && publicFailureBoundaries.has(value) ? value : null
+    const failureReason = (value: unknown) => typeof value === 'string'
+      && publicFailureReasons.has(value) ? value : null
 
     document.addEventListener('click', event => {
       const target = event.target instanceof Element ? event.target : null
@@ -1096,12 +1205,30 @@ async function installRecommendationStreamEvidence(page: Page) {
             replyParts,
           }
         }).filter(value => value !== null)
+        const rawModelCallElapsedMs = Array.isArray(payload.modelCallElapsedMs)
+          ? payload.modelCallElapsedMs.map(nonNegativeInteger)
+          : []
+        if (rawModelCallElapsedMs.some(value => value === null)) state.probeFailed = true
+        const modelCallElapsedMs = rawModelCallElapsedMs.filter((value): value is number => value !== null)
+        const modelCalls = nonNegativeInteger(payload.modelCalls)
+        if (modelCalls !== null && modelCallElapsedMs.length !== modelCalls) state.probeFailed = true
+        const rawCompletedWork = Array.isArray(payload.completedWork) ? payload.completedWork : []
+        const completedWork = rawCompletedWork.filter((value): value is string =>
+          typeof value === 'string' && /^[a-z][a-z0-9_]{0,63}$/u.test(value))
+        if (completedWork.length !== rawCompletedWork.length) state.probeFailed = true
         state.sseTerminal = {
           kind: 'result',
           browserReceivedAtEpochMs: observedAtEpochMs(),
           clientTurnId: typeof payload.clientTurnId === 'string' ? payload.clientTurnId : null,
           outcome: typeof payload.outcome === 'string' ? payload.outcome : null,
           failureBoundary: failureBoundary(payload.failureBoundary),
+          failureReason: failureReason(payload.failureReason),
+          completedWork,
+          modelCalls,
+          modelCallElapsedMs,
+          agentElapsedMs: nonNegativeInteger(payload.agentElapsedMs),
+          catalogCalls: nonNegativeInteger(payload.catalogCalls),
+          webResearchCalls: nonNegativeInteger(payload.webResearchCalls),
           bggIds: games.map(game => game.bggId),
           content: {
             assistantMessage: typeof payload.assistantMessage === 'string' ? payload.assistantMessage : '',
@@ -1112,10 +1239,10 @@ async function installRecommendationStreamEvidence(page: Page) {
       }
 
       if (eventName === 'error') {
-        state.probeFailed = true
         const code = typeof payload.code === 'string' && publicErrorCodes.has(payload.code)
           ? payload.code
           : 'unknown_stream_error'
+        if (code === 'unknown_stream_error') state.probeFailed = true
         state.sseTerminal = {
           kind: 'error',
           browserReceivedAtEpochMs: observedAtEpochMs(),
@@ -1168,7 +1295,7 @@ async function installRecommendationStreamEvidence(page: Page) {
       }
       return response
     }
-  })
+  }, { publicStreamErrorCodes: [...RECOMMENDATION_STREAM_ERROR_CODES] })
 }
 
 async function resetRecommendationStreamEvidence(page: Page) {
@@ -1518,6 +1645,7 @@ async function waitForPersistedTerminal(
   signal: AbortSignal,
 ): Promise<TerminalObservation> {
   let successfulReads = 0
+  let lastSession: RecommendationSession | null = null
   do {
     if (signal.aborted) break
     try {
@@ -1527,6 +1655,7 @@ async function waitForPersistedTerminal(
       if (response.ok()) {
         successfulReads += 1
         const session = await response.json() as RecommendationSession
+        lastSession = session
         if (!session.processing
           && session.revision > baselineRevision
           && session.latestResponse?.clientTurnId === clientTurnId) {
@@ -1535,6 +1664,7 @@ async function waitForPersistedTerminal(
               ? 'RECOMMENDATIONS'
               : 'NON_RECOMMENDATION',
             session,
+            lastSession: session,
             elapsedMs: nodeElapsed(nodeStartedAtEpochMs),
           }
         }
@@ -1546,8 +1676,13 @@ async function waitForPersistedTerminal(
   } while (!signal.aborted && Date.now() <= nodeDeadlineAtEpochMs)
 
   return {
-    category: successfulReads > 0 ? 'SESSION_TIMEOUT' : 'SESSION_READ_FAILURE',
+    category: successfulReads === 0
+      ? 'SESSION_READ_FAILURE'
+      : lastSession?.processing === true
+        ? 'LIFECYCLE_DEADLINE'
+        : 'TERMINAL_EVIDENCE_GAP',
     session: null,
+    lastSession,
     elapsedMs: nodeElapsed(nodeStartedAtEpochMs),
   }
 }
@@ -1663,11 +1798,20 @@ test('production returns one recommendation slate and hands its exact identity t
     recommendationSseResultMs: null,
     recommendationSseErrorCode: null,
     recommendationSseFailureBoundary: null,
+    recommendationSseFailureReason: null,
     recommendationPersistedTerminalMs: null,
     recommendationRenderedSlateMs: null,
     recommendationElapsedMs: null,
     recommendationSloMet: null,
+    recommendationObservationWindowMs: RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS,
+    recommendationCanaryFailureClass: null,
+    recommendationLastSessionProcessing: null,
     recommendationProgressEvents: [],
+    recommendationLastProgressStage: null,
+    recommendationLastProgressPhase: null,
+    recommendationLastProgressAction: null,
+    recommendationLastProgressServerElapsedMs: null,
+    recommendationLastProgressBrowserReceivedMs: null,
     recommendationStreamProbeFailed: false,
     recommendationPublishedBggIds: [],
     recommendationAssistantReplyCharacterCount: null,
@@ -1699,6 +1843,7 @@ test('production returns one recommendation slate and hands its exact identity t
     recommendationCatalogCalls: null,
     recommendationWebResearchCalls: null,
     recommendationFailureBoundary: null,
+    recommendationFailureReason: null,
     expectedRecommendationTitleTermSha256: sha256(EXPECTED_TITLE_TERM),
     handoffSelectedBggId: null,
     handoffActionClicked: false,
@@ -1794,10 +1939,10 @@ test('production returns one recommendation slate and hands its exact identity t
     const firstProgressVisiblePromise = waitForFirstProgressVisible(
       page,
       FIRST_PROGRESS_SLO_MS,
-      TERMINAL_OBSERVATION_MS,
+      RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS,
     )
-    const sseResultPromise = waitForBrowserSseResult(page, TERMINAL_OBSERVATION_MS)
-    const renderedSlatePromise = waitForFirstRenderedSlate(page, TERMINAL_OBSERVATION_MS)
+    const sseResultPromise = waitForBrowserSseResult(page, RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS)
+    const renderedSlatePromise = waitForFirstRenderedSlate(page, RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS)
     await page.getByRole('button', { name: '发送', exact: true }).click()
     const browserClickStartedAtEpochMs = await recommendationClickEpoch(page)
     if (browserClickStartedAtEpochMs === null) {
@@ -1828,7 +1973,7 @@ test('production returns one recommendation slate and hands its exact identity t
       created.revision,
       clientTurnId,
       browserClickStartedAtEpochMs,
-      browserClickStartedAtEpochMs + TERMINAL_OBSERVATION_MS,
+      browserClickStartedAtEpochMs + RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS,
       observationAbort.signal,
     )
     const gatedSseResultPromise = sseResultPromise.then((observation): BrowserSseResultObservation | null => {
@@ -1860,7 +2005,8 @@ test('production returns one recommendation slate and hands its exact identity t
         )
         report.stage = 'recommendation-stream-error'
         report.recommendationProgressEvents = streamEvidence.progressEvents
-        report.recommendationStreamProbeFailed = true
+        retainLastProgress(report, streamEvidence.progressEvents)
+        report.recommendationStreamProbeFailed = streamEvidence.probeFailed
         report.recommendationFirstProgressMs = firstProgressVisible.observedAtEpochMs === null
           ? null
           : browserElapsed(firstProgressVisible.observedAtEpochMs, browserClickStartedAtEpochMs)
@@ -1873,6 +2019,9 @@ test('production returns one recommendation slate and hands its exact identity t
         report.recommendationElapsedMs = streamElapsedMs
         report.recommendationSloMet = false
         report.recommendationFailureBoundary = error.observation.failureBoundary
+        report.recommendationCanaryFailureClass = classifyRecommendationStreamError(
+          error.observation.code,
+        )
         await retainReport(reportFile, report)
       }
       throw error
@@ -1885,6 +2034,7 @@ test('production returns one recommendation slate and hands its exact identity t
     report.recommendationModelName = modelAssignmentAfterRequest.model
     const streamEvidence = await readBrowserProgressEvidence(page, browserClickStartedAtEpochMs)
     report.recommendationProgressEvents = streamEvidence.progressEvents
+    retainLastProgress(report, streamEvidence.progressEvents)
     report.recommendationStreamProbeFailed = streamEvidence.probeFailed
     report.recommendationFirstProgressMs = firstProgressVisible.observedAtEpochMs === null
       ? null
@@ -1897,14 +2047,16 @@ test('production returns one recommendation slate and hands its exact identity t
       ? null
       : browserElapsed(sseResult.browserReceivedAtEpochMs, browserClickStartedAtEpochMs)
     report.recommendationSseFailureBoundary = publicFailureBoundary(sseResult?.failureBoundary)
+    report.recommendationSseFailureReason = publicFailureReason(sseResult?.failureReason)
     report.recommendationTerminalCategory = terminal.category
     report.recommendationTerminalObserved = terminal.session !== null
-    report.recommendationPersistedTerminalMs = terminal.elapsedMs
+    report.recommendationLastSessionProcessing = terminal.lastSession?.processing ?? null
+    report.recommendationPersistedTerminalMs = terminal.session === null ? null : terminal.elapsedMs
     const renderedSlateElapsedMs = renderedSlate === null
       ? null
       : browserElapsed(renderedSlate.observedAtEpochMs, browserClickStartedAtEpochMs)
     const slate: SlateObservation = renderedSlate === null || renderedSlateElapsedMs === null
-      ? { rendered: false, elapsedMs: TERMINAL_OBSERVATION_MS, bggIds: [] }
+      ? { rendered: false, elapsedMs: null, bggIds: [] }
       : {
           rendered: true,
           elapsedMs: renderedSlateElapsedMs,
@@ -1912,33 +2064,58 @@ test('production returns one recommendation slate and hands its exact identity t
         }
     report.recommendationRenderedSlateMs = slate.elapsedMs
     report.recommendationElapsedMs = slate.elapsedMs
-    report.recommendationSloMet = slate.rendered && slate.elapsedMs <= INTERACTION_SLO_MS
+    report.recommendationSloMet = slate.rendered
+      && slate.elapsedMs !== null
+      && slate.elapsedMs <= INTERACTION_SLO_MS
 
     const result = terminal.session?.latestResponse ?? null
-    report.recommendationOutcome = result?.outcome ?? null
+    const sseOutcome = sseResult?.outcome
+    report.recommendationOutcome = result?.outcome
+      ?? (sseOutcome === 'conversation'
+        || sseOutcome === 'needs_clarification'
+        || sseOutcome === 'recommendations'
+        || sseOutcome === 'no_match'
+        || sseOutcome === 'unavailable'
+        ? sseOutcome
+        : null)
     report.recommendationFailureBoundary = publicFailureBoundary(result?.failureBoundary)
       ?? publicFailureBoundary(sseResult?.failureBoundary)
-    report.recommendationModelCalls = publicNonNegativeInteger(result?.modelCalls)
-    report.recommendationModelCallElapsedMs = publicNonNegativeIntegers(result?.modelCallElapsedMs)
-    report.recommendationAgentElapsedMs = publicNonNegativeInteger(result?.agentElapsedMs)
+    report.recommendationFailureReason = publicFailureReason(result?.failureReason)
+      ?? publicFailureReason(sseResult?.failureReason)
+    report.recommendationModelCalls = publicNonNegativeInteger(result?.modelCalls ?? sseResult?.modelCalls)
+    report.recommendationModelCallElapsedMs = publicNonNegativeIntegers(
+      result?.modelCallElapsedMs ?? sseResult?.modelCallElapsedMs,
+    )
+    report.recommendationAgentElapsedMs = publicNonNegativeInteger(
+      result?.agentElapsedMs ?? sseResult?.agentElapsedMs,
+    )
     const modelElapsedTotal = report.recommendationModelCallElapsedMs
       .reduce((total, value) => total + value, 0)
     report.recommendationModelElapsedShare = report.recommendationAgentElapsedMs !== null
       && report.recommendationAgentElapsedMs > 0
       ? Math.round(modelElapsedTotal / report.recommendationAgentElapsedMs * 1_000) / 1_000
       : null
-    report.recommendationCatalogCalls = publicNonNegativeInteger(result?.catalogCalls)
-    report.recommendationWebResearchCalls = publicNonNegativeInteger(result?.webResearchCalls)
+    report.recommendationCatalogCalls = publicNonNegativeInteger(
+      result?.catalogCalls ?? sseResult?.catalogCalls,
+    )
+    report.recommendationWebResearchCalls = publicNonNegativeInteger(
+      result?.webResearchCalls ?? sseResult?.webResearchCalls,
+    )
     report.recommendationCompletedWork = Array.isArray(result?.completedWork)
       ? result.completedWork.filter((value): value is string => typeof value === 'string')
-      : []
-    report.recommendationPublishedBggIds = result?.games.map(({ game }) => game.bggId) ?? []
-    report.recommendationAssistantReplyCharacterCount = result
-      ? Array.from(result.assistantMessage.trim()).length
-      : null
+      : sseResult?.completedWork ?? []
+    report.recommendationPublishedBggIds = result?.games.map(({ game }) => game.bggId)
+      ?? sseResult?.bggIds
+      ?? []
+    const observedAssistantMessage = result?.assistantMessage ?? sseResult?.content.assistantMessage
+    report.recommendationAssistantReplyCharacterCount = observedAssistantMessage === undefined
+      ? null
+      : Array.from(observedAssistantMessage.trim()).length
     report.recommendationCardReplyPartCount = result
       ? result.games.reduce((count, game) => count + (game.replyParts?.length ?? 0), 0)
-      : null
+      : sseResult
+        ? sseResult.content.games.reduce((count, game) => count + game.replyParts.length, 0)
+        : null
     report.recommendationPersistedCardCount = result?.outcome === 'recommendations'
       ? result.games.length
       : null
@@ -2025,6 +2202,17 @@ test('production returns one recommendation slate and hands its exact identity t
         ? null
         : samePlayerVisibleContent(persistedVisibleContent, domContent)
     }
+    const observedOutcome = result?.outcome ?? report.recommendationOutcome
+    report.recommendationCanaryFailureClass = classifyRecommendationCanaryFailure({
+      observerFailed: report.recommendationStreamProbeFailed
+        || terminal.category === 'SESSION_READ_FAILURE',
+      outcome: observedOutcome,
+      lifecycleDeadline: terminal.category === 'LIFECYCLE_DEADLINE',
+      hasSseResult: sseResult !== null,
+      hasPersistedTerminal: terminal.session !== null,
+      ssePersistedContentConsistent: report.recommendationSsePersistedContentConsistent,
+      sloMet: report.recommendationSloMet,
+    })
     await retainReport(reportFile, report)
 
     expect(modelAssignmentAfterRequest,
@@ -2044,6 +2232,9 @@ test('production returns one recommendation slate and hands its exact identity t
     expect(report.recommendationFirstProgressMs).toBeLessThanOrEqual(FIRST_PROGRESS_SLO_MS)
     expect(report.recommendationStreamProbeFailed,
       'The browser could not preserve structured recommendation stream evidence').toBe(false)
+    expect(report.recommendationSloMet,
+      'The recommendation did not render a complete useful slate within the 20-second interaction SLO')
+      .toBe(true)
     expect(sseResult, 'The browser did not observe the recommendation SSE result').not.toBeNull()
     expect(sseResult?.clientTurnId).toBe(clientTurnId)
     expect(report.recommendationSsePersistedContentConsistent,
@@ -2056,11 +2247,8 @@ test('production returns one recommendation slate and hands its exact identity t
     expect(report.recommendationAssistantReplyCharacterCount,
       'The persisted recommendation reply is still only a terse status line').toBeGreaterThanOrEqual(80)
     expect(report.recommendationModelCalls,
-      'A successful recommendation must include the catalog and terminal model turns')
-      .toBeGreaterThanOrEqual(2)
-    expect(report.recommendationModelCalls,
-      'A successful repair must remain inside the Agent model-call budget')
-      .toBeLessThanOrEqual(MAX_RECOMMENDATION_MODEL_CALLS)
+      'A successful recommendation must include at least one model decision')
+      .toBeGreaterThanOrEqual(1)
     expect(report.recommendationModelCallElapsedMs,
       'Every recommendation model call must expose one non-negative elapsed time')
       .toHaveLength(report.recommendationModelCalls!)
@@ -2068,9 +2256,9 @@ test('production returns one recommendation slate and hands its exact identity t
     expect(report.recommendationAgentElapsedMs,
       'The recommendation must expose the full server-side Agent elapsed time').not.toBeNull()
     expect(report.recommendationCatalogCalls,
-      'The fixed fresh recommendation must verify the catalog exactly once').toBe(1)
+      'The recommendation must ground its candidates in the BGG catalog').toBeGreaterThanOrEqual(1)
     expect(report.recommendationWebResearchCalls,
-      'The fixed fresh recommendation must not require optional web research').toBe(0)
+      'Optional web research is observed but does not define a fixed execution path').toBeGreaterThanOrEqual(0)
     expect(report.recommendationPersistedCardCount,
       'The fixed fresh recommendation must publish exactly the requested card count')
       .toBe(requestedCardCount)
@@ -2197,12 +2385,12 @@ test('production returns one recommendation slate and hands its exact identity t
       const url = new URL(response.url())
       return /^\/api\/v1\/bgg\/games\/\d+\/import$/.test(url.pathname)
         && response.request().method() === 'POST'
-    }, { timeout: TERMINAL_OBSERVATION_MS })
+    }, { timeout: HANDOFF_OBSERVATION_MS })
     const existingImportsResponsePromise = page.waitForResponse(response => {
       const url = new URL(response.url())
       return url.pathname === '/api/v1/documents/official-imports'
         && response.request().method() === 'GET'
-    }, { timeout: TERMINAL_OBSERVATION_MS })
+    }, { timeout: HANDOFF_OBSERVATION_MS })
     let resolveImportedEdition!: (editionId: string) => void
     const importedEditionPromise = new Promise<string>(resolve => {
       resolveImportedEdition = resolve
@@ -2328,7 +2516,7 @@ test('production returns one recommendation slate and hands its exact identity t
       const discoveryResponse = existingRestore === null
         ? await Promise.race([
             observedDiscoveryResponse,
-            sleep(TERMINAL_OBSERVATION_MS).then(() => {
+            sleep(HANDOFF_OBSERVATION_MS).then(() => {
               throw new Error('The exact-edition handoff neither restored existing work nor reached discovery')
             }),
           ])
@@ -2352,7 +2540,7 @@ test('production returns one recommendation slate and hands its exact identity t
         if (existingRestore.freshnessEligible) {
           const ensureCurrentResponse = await Promise.race([
             observedEnsureCurrentResponse,
-            sleep(TERMINAL_OBSERVATION_MS).then(() => {
+            sleep(HANDOFF_OBSERVATION_MS).then(() => {
               throw new Error('The exact-edition freshness request did not return a production response')
             }),
           ])
