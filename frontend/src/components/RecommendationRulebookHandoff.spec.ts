@@ -75,7 +75,8 @@ function planFixture(id: string, documentVersionId: string, visualEvidenceRecomm
 
 function lessonFixture(id: string, teachingPlanId = 'plan-1') {
   return {
-    id, teachingPlanId, status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }],
+    id, teachingPlanId, status: 'COMPLETE',
+    sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' }],
   }
 }
 

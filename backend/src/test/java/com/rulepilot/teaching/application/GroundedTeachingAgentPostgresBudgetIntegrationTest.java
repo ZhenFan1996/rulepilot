@@ -14,12 +14,10 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AgentWorkAlreadyClaimedException;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
-import com.rulepilot.assistant.ContentCriticModel.CritiqueDraft;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.adapter.out.persistence.JpaAgentExecutionControl;
 import com.rulepilot.assistant.application.BudgetedAgentInvocations;
-import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
@@ -115,8 +113,6 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
-                new ConditionalGeneratedContentCritic(
-                        request -> new CritiqueDraft(List.of()), invocations, false),
                 invocations,
                 visualFacts,
                 3,
@@ -141,7 +137,7 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         List<ActivitySnapshot> activities = execution.activities(runId);
         // The durable admission covers the initial image interpretation plus one page-local repair or replay.
         // This fixture's visual catalog is unavailable, so its lower actual usage remains asserted independently.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 441));
+        assertThat(demand).isEqualTo(new WorkloadDemand(95, 247));
         assertThat(lesson.sections()).hasSize(19).allSatisfy(section ->
                 assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED));
         assertThat(model.maximumConcurrentCalls()).isOne();
@@ -157,15 +153,10 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         assertThat(budget.maxToolCalls()).isEqualTo(demand.requiredToolCalls());
         assertThat(budget.maxModelCalls()).isEqualTo(demand.requiredModelCalls());
         assertThat(budget.usedToolCalls()).isEqualTo(77).isLessThanOrEqualTo(budget.maxToolCalls());
-        assertThat(budget.usedModelCalls()).isEqualTo(21).isLessThanOrEqualTo(budget.maxModelCalls());
+        assertThat(budget.usedModelCalls()).isEqualTo(20).isLessThanOrEqualTo(budget.maxModelCalls());
         assertThat(activities).filteredOn(activity -> activity.type() == ActivityType.TOOL).hasSize(77);
         assertThat(activities).filteredOn(activity -> activity.type() == ActivityType.MODEL).hasSize(20);
-        assertThat(activities).filteredOn(activity -> activity.type() == ActivityType.CRITIC)
-                .singleElement()
-                .satisfies(activity -> {
-                    assertThat(activity.operation()).isEqualTo("reviewPublishedTeachingLesson");
-                    assertThat(activity.outcome()).isEqualTo(ActivityOutcome.SUCCEEDED);
-                });
+        assertThat(activities).noneMatch(activity -> activity.type() == ActivityType.CRITIC);
     }
 
     @Test

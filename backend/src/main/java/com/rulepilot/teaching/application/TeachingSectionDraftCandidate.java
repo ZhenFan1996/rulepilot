@@ -7,7 +7,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
 
-/** Source-cited, normalized section draft retained for bounded post-publication review. */
+/** Source-cited, normalized section draft that crossed the deterministic publication boundary. */
 record TeachingSectionDraftCandidate(
         int sectionIndex,
         TeachingPlan.PlannedSection planned,

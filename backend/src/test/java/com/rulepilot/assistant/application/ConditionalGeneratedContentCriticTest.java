@@ -61,7 +61,7 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
-    void performsTheBoundedTeachingPublicationReviewOutsideEvaluationMode() {
+    void skipsTeachingPublicationReviewOutsideEvaluationMode() {
         AtomicInteger calls = new AtomicInteger();
         var critic = critic(false, request -> {
             calls.incrementAndGet();
@@ -70,9 +70,9 @@ class ConditionalGeneratedContentCriticTest {
 
         var review = critic.review(opaqueLessonRequest(), ReviewRisk.HIGH_IMPACT);
 
-        assertThat(review.performed()).isTrue();
+        assertThat(review.performed()).isFalse();
         assertThat(review.accepted()).isTrue();
-        assertThat(calls).hasValue(1);
+        assertThat(calls).hasValue(0);
     }
 
     @Test

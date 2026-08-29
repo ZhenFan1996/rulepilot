@@ -14,12 +14,9 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.PlayerLocale;
-import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
-import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -171,8 +168,6 @@ class TeachingRichLessonPaidCanaryTest {
         RecordingTeachingModel sections = new RecordingTeachingModel(new SpringAiTeachingLessonModel(
                 sectionConfiguration, prompts, teachingTemperature));
         CanaryInvocations audit = new CanaryInvocations();
-        GeneratedContentCritic publicationCritic = new ConditionalGeneratedContentCritic(
-                new SpringAiContentCriticModel(sectionConfiguration, prompts), audit, false);
         NativeToolScopes scopes = mock(NativeToolScopes.class);
         when(scopes.create(eq(OWNER), eq(versionId), eq(runId))).thenReturn(java.util.Optional.of(
                 new ToolScope(OWNER, versionId, runId, Instant.now().plusSeconds(300))));
@@ -183,7 +178,6 @@ class TeachingRichLessonPaidCanaryTest {
                 corpus,
                 sections,
                 new PolicyEvidenceVerifier(),
-                publicationCritic,
                 audit,
                 visualFacts,
                 3,
@@ -241,7 +235,7 @@ class TeachingRichLessonPaidCanaryTest {
                 .containsEntry("sectionRequestsRetainOwnUnitsAndEvidence", true)
                 .containsEntry("wholeGameCompletedBeforeSectionFanOut", true)
                 .containsEntry("withinLatencyBudget", true);
-        assertThat(audit.criticCalls.get()).isPositive();
+        assertThat(audit.criticCalls.get()).isZero();
         assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
         assertThat(rawOutlineResponses).isNotEmpty().hasSizeLessThanOrEqualTo(2);
         assertThat(rawSectionResponses).isNotEmpty();

@@ -7,14 +7,12 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
-import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
-import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -35,7 +33,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v59-post-model-visual-ownership";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v60-deterministic-publication";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;
@@ -47,7 +45,6 @@ public class GroundedTeachingAgent {
     private final TeachingBaseSectionPublicationPolicy basePublication =
             new TeachingBaseSectionPublicationPolicy();
     private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
-    private final TeachingPublishedLessonReviewer publishedLessonReviewer;
     private final TeachingRunWorkloadPolicy workloadPolicy;
     private final VisualLessonEnricher visualEnricher;
 
@@ -56,7 +53,6 @@ public class GroundedTeachingAgent {
             AssistantReadTools tools,
             TeachingLessonModel model,
             EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
             @Value("${rulepilot.teaching.base-max-retrieval-queries-per-section:3}")
@@ -74,8 +70,6 @@ public class GroundedTeachingAgent {
         this.evidenceRefiner = evidenceRefiner;
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
                 model, evidenceVerifier, invocations, visualFacts);
-        this.publishedLessonReviewer = new TeachingPublishedLessonReviewer(
-                critic, invocations, sectionDraftComposer);
         this.workloadPolicy = new TeachingRunWorkloadPolicy(Math.max(1, baseMaxRetrievalQueriesPerSection));
         this.visualEnricher = visualEnricher;
     }
@@ -84,7 +78,6 @@ public class GroundedTeachingAgent {
             AssistantReadTools tools,
             TeachingLessonModel model,
             EvidenceVerifier evidenceVerifier,
-            GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
             int baseMaxRetrievalQueriesPerSection,
@@ -94,36 +87,12 @@ public class GroundedTeachingAgent {
                 tools,
                 model,
                 evidenceVerifier,
-                critic,
                 invocations,
                 visualFacts,
                 baseMaxRetrievalQueriesPerSection,
                 evidenceRefiner,
                 visualCataloger,
                 null);
-    }
-
-    /**
-     * Completes the compatibility review workflow in one call. The production launcher uses
-     * {@link #createBase(TeachingPlan, UUID, IllustratedLesson, Consumer)} so a player receives cited chapters
-     * incrementally while quantitative and legality-changing chapters remain visibly provisional until one bounded
-     * whole-lesson review completes.
-     */
-    public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
-        return create(plan, assistantRunId, null);
-    }
-
-    public IllustratedLesson create(
-            TeachingPlan plan, UUID assistantRunId, IllustratedLesson previousLesson) {
-        return create(plan, assistantRunId, previousLesson, ignored -> {});
-    }
-
-    public IllustratedLesson create(
-            TeachingPlan plan,
-            UUID assistantRunId,
-            IllustratedLesson previousLesson,
-            Consumer<IllustratedLesson> progressPublisher) {
-        return createComplete(plan, assistantRunId, previousLesson, progressPublisher);
     }
 
     /**
@@ -172,7 +141,6 @@ public class GroundedTeachingAgent {
         Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
         int queriesPerTopic = baseQueryBudget();
         List<LessonSection> sections = new ArrayList<>();
-        List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
             SectionOutcome outcome = baseSection(
                     plan,
@@ -189,10 +157,6 @@ public class GroundedTeachingAgent {
                     lessonId,
                     createdAt,
                     progressPublisher);
-            if (outcome.reviewCandidate() != null
-                    && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
-                reviewCandidates.add(outcome.reviewCandidate());
-            }
             if (outcome.section().evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE) break;
         }
 
@@ -203,8 +167,7 @@ public class GroundedTeachingAgent {
                 createdAt,
                 reusable,
                 queriesPerTopic,
-                sections,
-                reviewCandidates);
+                sections);
     }
 
     IllustratedLesson continueBase(
@@ -247,28 +210,11 @@ public class GroundedTeachingAgent {
                     lessonId,
                     createdAt,
                     progressPublisher);
-            continuation.track(outcome);
             if (continuation.hasRemainingWork()) {
                 return new BaseWorkUnitResult(lesson(lessonId, plan, sections, createdAt), false);
             }
         }
-        IllustratedLesson firstPass = lesson(lessonId, plan, sections, createdAt);
-        if (firstPass.status() == LessonStatus.DRAFT_READY && !continuation.reviewCandidates.isEmpty()) {
-            TeachingPublishedLessonReviewer.ReviewResult reviewResult = publishedLessonReviewer.review(
-                    plan,
-                    List.copyOf(continuation.reviewCandidates),
-                    sections,
-                    assistantRunId,
-                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
-            reEnrichAcceptedReplacements(
-                    plan,
-                    reviewResult,
-                    sections,
-                    assistantRunId,
-                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
-            return new BaseWorkUnitResult(lesson(lessonId, plan, sections, createdAt), true);
-        }
-        return new BaseWorkUnitResult(firstPass, true);
+        return new BaseWorkUnitResult(lesson(lessonId, plan, sections, createdAt), true);
     }
 
     static final class BaseLessonContinuation {
@@ -279,7 +225,6 @@ public class GroundedTeachingAgent {
         private final Map<String, LessonSection> reusableSections;
         private final int queriesPerTopic;
         private final List<LessonSection> sections;
-        private final List<TeachingSectionDraftCandidate> reviewCandidates;
 
         private BaseLessonContinuation(
                 TeachingPlan plan,
@@ -288,8 +233,7 @@ public class GroundedTeachingAgent {
                 Instant createdAt,
                 Map<String, LessonSection> reusableSections,
                 int queriesPerTopic,
-                List<LessonSection> sections,
-                List<TeachingSectionDraftCandidate> reviewCandidates) {
+                List<LessonSection> sections) {
             this.plan = plan;
             this.assistantRunId = assistantRunId;
             this.lessonId = lessonId;
@@ -297,20 +241,11 @@ public class GroundedTeachingAgent {
             this.reusableSections = reusableSections;
             this.queriesPerTopic = queriesPerTopic;
             this.sections = sections;
-            this.reviewCandidates = reviewCandidates;
         }
 
         boolean hasRemainingWork() {
             return sections.size() < plan.sections().size();
         }
-
-        private void track(SectionOutcome outcome) {
-            if (outcome.reviewCandidate() != null
-                    && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
-                reviewCandidates.add(outcome.reviewCandidate());
-            }
-        }
-
     }
 
     record BaseWorkUnitResult(IllustratedLesson lesson, boolean complete) {
@@ -352,7 +287,6 @@ public class GroundedTeachingAgent {
                 assistantRunId,
                 queriesPerTopic,
                 planned.position() - 1,
-                GenerationMode.BASE,
                 allowValidationRevision);
     }
 
@@ -368,18 +302,15 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             int queryBudget,
             int sectionIndex,
-            GenerationMode mode,
             boolean allowValidationRevision) {
         TeachingModelCallBudget modelCallBudget = TeachingModelCallBudget.section();
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             return new SectionOutcome(
-                    planned.position(), planned, reusable, null,
-                    ActivityOutcome.SUCCEEDED,
-                    "REUSED_VERIFIED_SECTION");
+                    planned, reusable, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
         }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
-                plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
+                plan, planned, assistantRunId, queryBudget, true);
         if (evidenceRefiner != null) {
             try {
                 resolution = evidenceRefiner.refine(plan, planned, assistantRunId, resolution);
@@ -399,7 +330,6 @@ public class GroundedTeachingAgent {
                 assistantRunId,
                 resolution,
                 sectionIndex,
-                mode,
                 allowValidationRevision,
                 modelCallBudget);
     }
@@ -411,19 +341,16 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             TeachingSectionEvidenceRetriever.Result resolution,
             int sectionIndex,
-            GenerationMode mode,
             boolean allowValidationRevision,
             TeachingModelCallBudget modelCallBudget) {
         if (!resolution.verified()) {
             return new SectionOutcome(
-                    planned.position(),
                     planned,
                     lessonAssembly.insufficient(planned),
-                    null,
                     ActivityOutcome.REJECTED,
                     resolution.state() == TeachingSectionEvidenceRetriever.State.EMPTY
-                            ? mode.noEvidenceCategory()
-                            : mode.invalidEvidenceCategory());
+                            ? "NO_VALID_BASE_EVIDENCE"
+                            : "BASE_EVIDENCE_IDENTITY_INVALID");
         }
         try {
             TeachingSectionDraftCandidate composed = sectionDraftComposer.compose(
@@ -433,80 +360,22 @@ public class GroundedTeachingAgent {
                     resolution.evidence(),
                     assistantRunId,
                     sectionIndex,
-                    mode.includeVisualEvidence() && planned.visualEvidenceRecommended(),
+                    false,
                     allowValidationRevision,
                     modelCallBudget);
-            LessonSection published = mode.publishAfterDeterministicValidation()
-                    ? basePublication.publish(composed)
-                    : composed.section();
+            LessonSection published = basePublication.publish(composed);
             return new SectionOutcome(
-                    planned.position(), planned, published, composed,
-                    ActivityOutcome.SUCCEEDED,
-                    mode.publishedCategory());
+                    planned, published, ActivityOutcome.SUCCEEDED, "SUPPORTED_SECTION_PUBLISHED");
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException invalidDraft) {
             log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
             return new SectionOutcome(
-                    planned.position(), planned, lessonAssembly.insufficient(planned), null,
-                    ActivityOutcome.REJECTED,
-                    mode.withheldCategory());
-        }
-    }
-
-    private IllustratedLesson createComplete(
-            TeachingPlan plan,
-            UUID assistantRunId,
-            IllustratedLesson previousLesson,
-            Consumer<IllustratedLesson> progressPublisher) {
-        if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
-        UUID lessonId = UUID.randomUUID();
-        Instant createdAt = Instant.now();
-        List<LessonSection> sections = new ArrayList<>();
-        List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
-        Map<String, LessonSection> reusableSections = reusableSections(plan, previousLesson);
-        int queriesPerTopic = baseQueryBudget();
-        for (TeachingPlan.PlannedSection planned : plan.sections()) {
-            SectionOutcome outcome = generateSection(
-                    plan,
                     planned,
-                    lessonAssembly.continuityContext(sections),
-                    reusableSections,
-                    assistantRunId,
-                    queriesPerTopic,
-                    sections.size(),
-                    GenerationMode.COMPATIBILITY_COMPLETE,
-                    true);
-            outcome = publishValidatedSectionThenEnrich(
-                    plan,
-                    outcome,
-                    sections,
-                    assistantRunId,
-                    lessonId,
-                    createdAt,
-                    progressPublisher);
-            if (outcome.reviewCandidate() != null
-                    && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
-                reviewCandidates.add(outcome.reviewCandidate());
-            }
+                    lessonAssembly.insufficient(planned),
+                    ActivityOutcome.REJECTED,
+                    "BASE_DRAFT_WITHHELD");
         }
-
-        IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
-        if (draftReady.status() == LessonStatus.DRAFT_READY && !reviewCandidates.isEmpty()) {
-            TeachingPublishedLessonReviewer.ReviewResult reviewResult = publishedLessonReviewer.review(
-                    plan,
-                    reviewCandidates,
-                    sections,
-                    assistantRunId,
-                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
-            reEnrichAcceptedReplacements(
-                    plan,
-                    reviewResult,
-                    sections,
-                    assistantRunId,
-                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
-        }
-        return lesson(lessonId, plan, sections, createdAt);
     }
 
     private IllustratedLesson lesson(
@@ -605,32 +474,12 @@ public class GroundedTeachingAgent {
         }
     }
 
-    private void reEnrichAcceptedReplacements(
-            TeachingPlan plan,
-            TeachingPublishedLessonReviewer.ReviewResult reviewResult,
-            List<LessonSection> sections,
-            UUID assistantRunId,
-            Runnable progressPublisher) {
-        for (int sectionIndex : reviewResult.acceptedReplacementIndexes()) {
-            LessonSection replacement = sections.get(sectionIndex);
-            LessonSection enriched = enrichValidatedSection(
-                    plan,
-                    plan.sections().get(sectionIndex),
-                    replacement,
-                    sections.subList(0, sectionIndex),
-                    assistantRunId);
-            sections.set(sectionIndex, enriched);
-            progressPublisher.run();
-        }
-    }
-
     private Map<String, LessonSection> reusableSections(
             TeachingPlan plan, IllustratedLesson previousLesson) {
         return lessonAssembly.reusableSections(
                 plan,
                 previousLesson,
-                REUSABLE_GENERATOR_VERSIONS,
-                model.supportsVisualEvidence(plan.createdBy()));
+                REUSABLE_GENERATOR_VERSIONS);
     }
 
     private void recordPublication(
@@ -646,45 +495,15 @@ public class GroundedTeachingAgent {
                 "Teaching section " + (outcome == ActivityOutcome.SUCCEEDED ? "published: " : "withheld: ") + category);
     }
 
-    private record GenerationMode(
-            boolean bindVisualPageEvidence,
-            boolean includeVisualEvidence,
-            boolean publishAfterDeterministicValidation,
-            String noEvidenceCategory,
-            String invalidEvidenceCategory,
-            String publishedCategory,
-            String withheldCategory) {
-        private static final GenerationMode BASE = new GenerationMode(
-                true,
-                false,
-                true,
-                "NO_VALID_BASE_EVIDENCE",
-                "BASE_EVIDENCE_IDENTITY_INVALID",
-                "CITED_BASE_SECTION_PUBLISHED",
-                "BASE_DRAFT_WITHHELD");
-        private static final GenerationMode COMPATIBILITY_COMPLETE = new GenerationMode(
-                false,
-                true,
-                false,
-                "NO_RETRIEVED_EVIDENCE",
-                "RETRIEVED_EVIDENCE_INVALID",
-                "CITED_DRAFT_PUBLISHED",
-                "DRAFT_WITHHELD_AFTER_REPAIR_BUDGET");
-    }
-
     private record SectionOutcome(
-            int position,
             TeachingPlan.PlannedSection planned,
             LessonSection section,
-            TeachingSectionDraftCandidate reviewCandidate,
             ActivityOutcome publicationOutcome,
             String publicationCategory) {
         private SectionOutcome withSection(LessonSection replacement) {
             return new SectionOutcome(
-                    position,
                     planned,
                     replacement,
-                    reviewCandidate,
                     publicationOutcome,
                     publicationCategory);
         }
@@ -692,13 +511,5 @@ public class GroundedTeachingAgent {
 
     WorkloadDemand workload(TeachingPlan plan) {
         return workloadPolicy.demand(plan);
-    }
-
-    private int estimateTokens(String value) {
-        return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
-    }
-
-    private String operationName(String operation, int sectionPosition) {
-        return operation + "|" + sectionPosition;
     }
 }

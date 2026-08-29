@@ -101,7 +101,11 @@ export interface PlayerJourneyPlan {
 export interface PlayerJourneyLesson {
   id: string
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
-  sections: Array<{ position: number; title: string }>
+  sections: Array<{
+    position: number
+    title: string
+    evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE'
+  }>
   createdAt?: string
 }
 
@@ -253,7 +257,9 @@ interface FailurePolicy {
 }
 
 export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyProjection {
-  const availableSections = input.lesson?.sections.length ?? 0
+  const availableSections = input.lesson?.sections.filter(section => (
+    section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT'
+  )).length ?? 0
   const totalSections = input.plan?.sections.length ?? null
   const canReadLesson = Boolean(input.plan && availableSections > 0)
   const canReadRulebook = Boolean(input.importJob?.documentVersionId && (

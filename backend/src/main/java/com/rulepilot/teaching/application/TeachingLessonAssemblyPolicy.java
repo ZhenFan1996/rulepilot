@@ -57,8 +57,7 @@ final class TeachingLessonAssemblyPolicy {
     Map<String, LessonSection> reusableSections(
             TeachingPlan plan,
             IllustratedLesson previousLesson,
-            Set<String> reusableGeneratorVersions,
-            boolean supportsVisualEvidence) {
+            Set<String> reusableGeneratorVersions) {
         if (previousLesson == null
                 || !plan.id().equals(previousLesson.teachingPlanId())
                 || !reusableGeneratorVersions.contains(previousLesson.generatorVersion())) {
@@ -67,17 +66,9 @@ final class TeachingLessonAssemblyPolicy {
         Set<String> currentTopics = plan.sections().stream()
                 .map(TeachingPlan.PlannedSection::topicKey)
                 .collect(Collectors.toUnmodifiableSet());
-        Map<String, Boolean> visualRequirements = plan.sections().stream()
-                .collect(Collectors.toUnmodifiableMap(
-                        TeachingPlan.PlannedSection::topicKey,
-                        TeachingPlan.PlannedSection::visualEvidenceRecommended));
         return previousLesson.sections().stream()
                 .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
                 .filter(section -> currentTopics.contains(section.topicKey()))
-                .filter(section -> !supportsVisualEvidence
-                        || !visualRequirements.getOrDefault(section.topicKey(), false)
-                        || section.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL
-                                && step.visualFocus() != null))
                 .collect(Collectors.toUnmodifiableMap(LessonSection::topicKey, Function.identity()));
     }
 

@@ -31,7 +31,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.stream.IntStream;
-import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -269,14 +268,12 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
     }
 
     @Test
-    void targetedMissingSlotRepairUsesTheSameTypedPartialEvidenceBoundary() {
+    void replacesTheWholeOutlineWhenTheFirstDraftOmitsATypedPartialSlot() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
         when(chatModel.call(any(Prompt.class))).thenReturn(
                 response(COMPACT_OUTLINE),
-                response("""
-                        {"assignments":[{"sourceSlotId":"page-2-rule-1","teachingUnitId":"choose-action"}]}
-                        """));
+                response(COMPACT_OUTLINE_WITH_PARTIAL_SLOT));
         SpringAiTeachingOutlineModel model = model(configuration);
 
         try {
@@ -287,51 +284,20 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                     .containsExactly("R-1", "R-2");
             ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
             verify(chatModel, times(2)).call(prompts.capture());
-            List<String> repairInstructions = prompts.getAllValues().get(1).getInstructions().stream()
+            List<String> replacementInstructions = prompts.getAllValues().get(1).getInstructions().stream()
                     .map(message -> message.getText())
                     .toList();
-            assertThat(repairInstructions).anySatisfy(text -> assertThat(text).contains(
+            assertThat(replacementInstructions).anySatisfy(text -> assertThat(text).contains(
                     "PAGE_LEDGER_STATE: VISUAL_PARTIAL",
-                    "RULE_GROUP_FACT: Complete page-owned fact for R-2."));
+                    "RULE_GROUP_FACT: Complete page-owned fact for R-2.",
+                    "Rebuild the complete outline"));
+            assertThat(replacementInstructions).allSatisfy(text -> assertThat(text).doesNotContain(
+                    "Frozen teaching units",
+                    "assignments",
+                    "replacements"));
             assertThat(prompts.getAllValues()).allSatisfy(prompt -> assertThat(prompt.getInstructions())
                     .allSatisfy(message -> assertThat(message.getText())
                             .doesNotContain("UNSAFE_PARTIAL_DISPLAY_TEXT")));
-        } finally {
-            model.close();
-        }
-    }
-
-    @Test
-    void keepsTargetedRepairAvailableAtTheGlobalTypedEvidenceBoundary() {
-        RuntimeModelConfiguration configuration = configuration();
-        ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                response(COMPACT_OUTLINE),
-                response("""
-                        {"assignments":[{"sourceSlotId":"page-1-rule-2","teachingUnitId":"choose-action"}]}
-                        """));
-        SpringAiTeachingOutlineModel model = model(configuration);
-        PageInput seed = twoFactPartialPage("x");
-        int seedEvidenceCharacters = SpringAiTeachingOutlineModel.canonicalPlanningEvidence(
-                        seed, SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS)
-                .length();
-        int fillerCharacters = SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS
-                - seedEvidenceCharacters
-                - 7;
-        PageInput nearBoundary = twoFactPartialPage("x".repeat(fillerCharacters));
-        int admittedEvidenceCharacters = SpringAiTeachingOutlineModel.canonicalPlanningEvidence(
-                        nearBoundary, SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS)
-                .length();
-
-        try {
-            var outline = model.organize(new OutlineRequest(List.of(nearBoundary), List.of(), "player"));
-
-            assertThat(admittedEvidenceCharacters)
-                    .isEqualTo(SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS - 8);
-            assertThat(outline.sourceCoverageSlots())
-                    .extracting(slot -> slot.sourceIdentifier())
-                    .containsExactly("R-1", "R-2");
-            verify(chatModel, times(2)).call(any(Prompt.class));
         } finally {
             model.close();
         }

@@ -33,7 +33,7 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class VisualLessonEnricher {
 
-    private static final int MAX_TEACHING_RUN_PASSES_PER_SECTION = 2;
+    private static final int MAX_TEACHING_RUN_PASSES_PER_SECTION = 1;
     private final RulebookUnderstandingCatalog understanding;
     private final VisualSectionPrioritizer prioritizer;
     private final VisualLessonSectionEnricher sectionEnricher;
@@ -145,8 +145,7 @@ public class VisualLessonEnricher {
 
     static int maximumTeachingRunModelCalls(TeachingPlan plan) {
         if (plan == null || plan.sections().isEmpty()) return 0;
-        // Every cited chapter can be inspected once after its deterministic draft and once more only when the
-        // whole-lesson reviewer accepts a complete replacement. This is a structural ceiling, not eager visual work.
+        // Every deterministically published chapter has one optional visual pass in the same work unit.
         return Math.multiplyExact(
                 plan.sections().size(),
                 Math.multiplyExact(

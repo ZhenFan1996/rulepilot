@@ -61,14 +61,7 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
-        // Answers and ordinary evaluation probes keep the zero-latency runtime path. Teaching calls this mode only
-        // after a chapter with a quantitative or legality-changing relationship has remained CITED_DRAFT; measured
-        // rulebook canaries have shown that identity-valid citations alone do not catch swapped counts or a dropped
-        // multiplier, so that one bounded whole-lesson review is a publication boundary rather than optional polish.
-        boolean requiredTeachingPublicationReview = request != null
-                && request.contentType() == ContentType.LESSON
-                && request.reviewMode() == ReviewMode.POST_PUBLICATION;
-        if (!evaluationMode && !requiredTeachingPublicationReview) {
+        if (!evaluationMode) {
             return new Review(false, List.of());
         }
         validateRequest(request);

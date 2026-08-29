@@ -7,8 +7,8 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
  * Publishes the exact section that already crossed the deterministic Teaching boundary.
  *
  * <p>The candidate can only be produced after schema, citation scope, document version, and optional visual geometry
- * checks pass. A section containing a quantitative or legality-changing relationship remains a cited draft until the
- * bounded whole-lesson semantic review runs. Publication never rewrites model prose, citations, or structure.</p>
+ * checks pass. Publication never rewrites model prose, citations, or structure. Optional semantic evaluation must
+ * not become a second production publication owner.</p>
  */
 final class TeachingBaseSectionPublicationPolicy {
 
@@ -20,17 +20,13 @@ final class TeachingBaseSectionPublicationPolicy {
         if (section.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE) {
             throw new IllegalArgumentException("an evidence-insufficient section cannot be published");
         }
-        EvidenceStatus publicationStatus = TeachingQuantitativeReviewPolicy.requiresCompleteReviewEvidence(
-                        candidate.planned(), candidate.draft())
-                ? EvidenceStatus.CITED_DRAFT
-                : EvidenceStatus.SUPPORTED;
         return new LessonSection(
                 section.position(),
                 section.topicKey(),
                 section.coverageTags(),
                 section.title(),
                 section.required(),
-                publicationStatus,
+                EvidenceStatus.SUPPORTED,
                 section.visualKind(),
                 section.visualCaption(),
                 section.visualSourcePages(),

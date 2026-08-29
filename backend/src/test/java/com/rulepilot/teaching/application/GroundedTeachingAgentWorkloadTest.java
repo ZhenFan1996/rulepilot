@@ -8,10 +8,7 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.ContentCriticModel.CritiqueDraft;
-import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.NativeToolScopes;
-import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
@@ -51,8 +48,6 @@ class GroundedTeachingAgentWorkloadTest {
         WorkflowTools tools = new WorkflowTools(versionId, searchEvidenceIds, canonicalEvidenceIds);
         EnforcingInvocations invocations = new EnforcingInvocations();
         WorkflowModel model = new WorkflowModel();
-        GeneratedContentCritic critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of()), invocations, false);
         NativeToolScopes scopes = (owner, documentVersionId, assistantRunId) -> Optional.of(
                 new com.rulepilot.assistant.NativeAgentTool.ToolScope(
                         owner, documentVersionId, assistantRunId, Instant.now().plusSeconds(30)));
@@ -63,7 +58,6 @@ class GroundedTeachingAgentWorkloadTest {
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
-                critic,
                 invocations,
                 visualFacts,
                 3,
@@ -88,10 +82,10 @@ class GroundedTeachingAgentWorkloadTest {
         assertThat(tools.visualPageReads()).isEqualTo(19);
         assertThat(tools.canonicalFallbackReads()).isOne();
         assertThat(invocations.usedToolCalls()).isEqualTo(77).isLessThanOrEqualTo(demand.requiredToolCalls());
-        assertThat(invocations.usedModelCalls()).isEqualTo(21).isLessThanOrEqualTo(demand.requiredModelCalls());
+        assertThat(invocations.usedModelCalls()).isEqualTo(20).isLessThanOrEqualTo(demand.requiredModelCalls());
         // Admission reserves the initial image interpretation plus one contract repair or transient replay per page.
         // Runtime availability and cached facts reduce work.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 441));
+        assertThat(demand).isEqualTo(new WorkloadDemand(95, 247));
     }
 
     static TeachingPlan plan(UUID versionId) {

@@ -273,7 +273,14 @@ public class IllustratedLessonService {
                 run = advanceAfterWork(run, AssistantRunState.INSUFFICIENT_EVIDENCE, "Required lesson evidence is incomplete");
             } else {
                 run = advanceAfterWork(run, AssistantRunState.LESSON_COMPOSITION, "Cited illustrated lesson is composed");
-                run = advanceAfterWork(run, AssistantRunState.COMPLETED, "Illustrated lesson generation completed");
+                if (status == LessonStatus.DRAFT_READY) {
+                    run = advanceAfterWork(
+                            run,
+                            AssistantRunState.DEGRADED,
+                            "Readable cited lesson retained with incomplete optional or source coverage");
+                } else {
+                    run = advanceAfterWork(run, AssistantRunState.COMPLETED, "Illustrated lesson generation completed");
+                }
             }
         } catch (AgentExecutionStoppedException stopped) {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped before completion", stopped);

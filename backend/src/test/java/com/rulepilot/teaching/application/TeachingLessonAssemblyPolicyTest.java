@@ -54,7 +54,7 @@ class TeachingLessonAssemblyPolicyTest {
     }
 
     @Test
-    void reusesOnlySupportedCurrentTopicsAndRequiresVisualProofWhenAvailable() {
+    void reusesSupportedTextAndLetsOptionalVisualEnrichmentRunIndependently() {
         TeachingPlan plan = plan();
         LessonSection visualMissing = section(1, "setup", EvidenceStatus.SUPPORTED, false);
         LessonSection scoring = section(2, "scoring", EvidenceStatus.SUPPORTED, false);
@@ -66,14 +66,11 @@ class TeachingLessonAssemblyPolicyTest {
                 "reusable",
                 Instant.EPOCH);
 
-        Map<String, LessonSection> visualCapable = policy.reusableSections(
-                plan, previous, Set.of("reusable"), true);
-        Map<String, LessonSection> textOnly = policy.reusableSections(
-                plan, previous, Set.of("reusable"), false);
+        Map<String, LessonSection> reusable = policy.reusableSections(
+                plan, previous, Set.of("reusable"));
 
-        assertThat(visualCapable).containsOnlyKeys("scoring");
-        assertThat(textOnly).containsOnlyKeys("setup", "scoring");
-        assertThat(policy.reusableSections(plan, previous, Set.of("other-version"), false)).isEmpty();
+        assertThat(reusable).containsOnlyKeys("setup", "scoring");
+        assertThat(policy.reusableSections(plan, previous, Set.of("other-version"))).isEmpty();
     }
 
     @Test
@@ -90,12 +87,11 @@ class TeachingLessonAssemblyPolicyTest {
 
         assertThat(legacyVisual.steps().getFirst().visualFocus()).isNotNull();
         assertThat(GroundedTeachingAgent.GENERATOR_VERSION)
-                .isEqualTo("adaptive-teaching-v59-post-model-visual-ownership");
+                .isEqualTo("adaptive-teaching-v60-deterministic-publication");
         assertThat(policy.reusableSections(
                         plan,
                         previous,
-                        Set.of(GroundedTeachingAgent.GENERATOR_VERSION),
-                        false))
+                        Set.of(GroundedTeachingAgent.GENERATOR_VERSION)))
                 .isEmpty();
     }
 

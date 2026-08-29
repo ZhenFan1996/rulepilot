@@ -12,8 +12,6 @@ public class VersionedAgentPrompts {
 
     private final String focusedTeachingSystem;
     private final String teachingUser;
-    private final String teachingOutlineSystem;
-    private final String teachingOutlineUser;
     private final String focusedAnswerCoreSystem;
     private final Map<String, String> focusedAnswerModules;
     private final String answerUser;
@@ -32,18 +30,6 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v45-focused-source-contract-system.txt") Resource focusedTeachingSystem,
             @Value("classpath:prompts/teaching-agent-v44-quantitative-aggregation-system.txt") Resource teachingQuantitativeAggregation,
             @Value("classpath:prompts/teaching-agent-v12-user.txt") Resource teachingUser,
-            @Value("classpath:prompts/teaching-outline-v14-intrinsic-scope-system.txt") Resource teachingOutlineSystem,
-            @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
-            @Value("classpath:prompts/teaching-outline-v8-visual-density-system.txt") Resource teachingOutlineVisualDensity,
-            @Value("classpath:prompts/teaching-outline-v9-core-evidence-system.txt") Resource teachingOutlineCoreEvidence,
-            @Value("classpath:prompts/teaching-outline-v10-chapter-ownership-system.txt") Resource teachingOutlineChapterOwnership,
-            @Value("classpath:prompts/teaching-outline-v11-visual-coverage-system.txt") Resource teachingOutlineVisualCoverage,
-            @Value("classpath:prompts/teaching-outline-v15-retired-audience-system.txt") Resource teachingOutlineRulebookScope,
-            @Value("classpath:prompts/teaching-outline-v13-player-goal-system.txt") Resource teachingOutlinePlayerGoal,
-            @Value("classpath:prompts/teaching-outline-v16-quantitative-aggregation-system.txt") Resource teachingOutlineQuantitativeAggregation,
-            @Value("classpath:prompts/teaching-outline-v17-source-dependency-system.txt") Resource teachingOutlineSourceDependency,
-            @Value("classpath:prompts/teaching-outline-v18-source-coverage-contract-system.txt") Resource teachingOutlineSourceCoverageContract,
-            @Value("classpath:prompts/teaching-outline-v6-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v19-complete-list-system.txt") Resource answerCompleteList,
             @Value("classpath:prompts/rule-answer-agent-v21-resolved-visual-language-system.txt") Resource answerResolvedVisualLanguage,
             @Value("classpath:prompts/rule-answer-agent-v22-mechanical-list-consistency-system.txt") Resource answerMechanicalListConsistency,
@@ -92,19 +78,6 @@ public class VersionedAgentPrompts {
             throws IOException {
         this.focusedTeachingSystem = combined(focusedTeachingSystem, teachingQuantitativeAggregation);
         this.teachingUser = read(teachingUser);
-        this.teachingOutlineSystem = combined(
-                teachingOutlineSystem,
-                teachingOutlineFidelity,
-                teachingOutlineVisualDensity,
-                teachingOutlineCoreEvidence,
-                teachingOutlineChapterOwnership,
-                teachingOutlineVisualCoverage,
-                teachingOutlineRulebookScope,
-                teachingOutlinePlayerGoal,
-                teachingOutlineQuantitativeAggregation,
-                teachingOutlineSourceDependency,
-                teachingOutlineSourceCoverageContract);
-        this.teachingOutlineUser = read(teachingOutlineUser);
         this.focusedAnswerCoreSystem = read(answerLeanRuntimeCore);
         this.focusedAnswerModules = Map.ofEntries(
                 Map.entry("NONE", ""),
@@ -171,14 +144,6 @@ public class VersionedAgentPrompts {
 
     public String teachingUser() {
         return teachingUser;
-    }
-
-    public String teachingOutlineSystem() {
-        return teachingOutlineSystem;
-    }
-
-    public String teachingOutlineUser() {
-        return teachingOutlineUser;
     }
 
     /**

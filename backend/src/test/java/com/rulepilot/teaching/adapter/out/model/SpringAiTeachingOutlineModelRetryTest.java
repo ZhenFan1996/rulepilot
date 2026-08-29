@@ -89,7 +89,7 @@ class SpringAiTeachingOutlineModelRetryTest {
     }
 
     @Test
-    void stopsAfterTheSingleBoundedTransportRetry() {
+    void retriesOnlyTimeoutsAndDoesNotReplayProviderFailuresAsSchemaRepair() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
         when(chatModel.call(any(Prompt.class)))
@@ -109,6 +109,21 @@ class SpringAiTeachingOutlineModelRetryTest {
             verify(configuration, never()).usesDeepSeekNonThinkingGeneration(Role.TEACHING, "player");
         } finally {
             model.close();
+        }
+
+        RuntimeModelConfiguration unavailableConfiguration = configuration();
+        ChatModel unavailableChatModel = chatModel(unavailableConfiguration);
+        when(unavailableChatModel.call(any(Prompt.class)))
+                .thenThrow(new IllegalStateException("provider unavailable"));
+        SpringAiTeachingOutlineModel unavailableModel = model(unavailableConfiguration);
+
+        try {
+            assertThatThrownBy(() -> unavailableModel.organize(request()))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasMessageContaining("no valid outline");
+            verify(unavailableChatModel, times(1)).call(any(Prompt.class));
+        } finally {
+            unavailableModel.close();
         }
     }
 

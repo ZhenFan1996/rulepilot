@@ -52,19 +52,19 @@ class IllustratedLessonServiceTest {
     }
 
     @Test
-    void finalizesAPersistedLessonWithoutReopeningItsExecutionBudget() {
+    void marksAReadablePartialLessonDegradedWithoutReopeningItsExecutionBudget() {
         AssistantRuns runs = mock(AssistantRuns.class);
         RunSnapshot verified = run(AssistantRunState.VERIFYING_EVIDENCE, 5);
         RunSnapshot composed = run(verified.id(), AssistantRunState.LESSON_COMPOSITION, 6);
-        RunSnapshot completed = run(verified.id(), AssistantRunState.COMPLETED, 7);
+        RunSnapshot degraded = run(verified.id(), AssistantRunState.DEGRADED, 7);
         when(runs.advanceAfterWork(
                         verified.id(), 5, AssistantRunState.LESSON_COMPOSITION,
                         "Cited illustrated lesson is composed"))
                 .thenReturn(composed);
         when(runs.advanceAfterWork(
-                        verified.id(), 6, AssistantRunState.COMPLETED,
-                        "Illustrated lesson generation completed"))
-                .thenReturn(completed);
+                        verified.id(), 6, AssistantRunState.DEGRADED,
+                        "Readable cited lesson retained with incomplete optional or source coverage"))
+                .thenReturn(degraded);
         IllustratedLessonService service = service(runs);
 
         service.finish(new GenerationOutcome(verified, LessonStatus.DRAFT_READY));
@@ -72,7 +72,10 @@ class IllustratedLessonServiceTest {
         verify(runs).advanceAfterWork(
                 verified.id(), 5, AssistantRunState.LESSON_COMPOSITION, "Cited illustrated lesson is composed");
         verify(runs).advanceAfterWork(
-                verified.id(), 6, AssistantRunState.COMPLETED, "Illustrated lesson generation completed");
+                verified.id(),
+                6,
+                AssistantRunState.DEGRADED,
+                "Readable cited lesson retained with incomplete optional or source coverage");
         verify(runs, never()).advance(any(), any(Long.class), any(), any());
     }
 
