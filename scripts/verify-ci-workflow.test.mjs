@@ -778,6 +778,8 @@ test('production recommendation verifies one deployed main release through the e
   assert.match(journeyJob,
     /mcr\.microsoft\.com\/playwright:v1\.61\.1-noble@sha256:[0-9a-f]{64}/)
   assert.match(journeyJob, /actions\/download-artifact@v8/)
+  assert.match(journeyJob,
+    /ssh_options=\([\s\S]{0,500}?UserKnownHostsFile=\$HOME\/\.ssh\/known_hosts/)
   assert.doesNotMatch(journeyJob,
     /actions\/checkout|actions\/setup-node|npm (?:ci|install|exec)|npx playwright/)
   const recommendationCredentialRead = productionRecommendationWorkflow.indexOf(

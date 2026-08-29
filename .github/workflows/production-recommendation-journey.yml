@@ -242,6 +242,7 @@ jobs:
             -o ServerAliveInterval=15
             -o ServerAliveCountMax=3
             -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts"
             -p "$DEPLOY_SSH_PORT"
           )
           active_release_coordinates=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
