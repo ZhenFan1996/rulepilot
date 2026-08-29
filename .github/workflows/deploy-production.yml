@@ -752,7 +752,7 @@ jobs:
 
           safe_container_state() {
             docker inspect --format \
-              'container={{.Id}} status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' \
+              'container={{.Id}} status={{.State.Status}} running={{.State.Running}} restartCount={{.RestartCount}} oomKilled={{.State.OOMKilled}} exit={{.State.ExitCode}} error={{json .State.Error}} startedAt={{.State.StartedAt}} finishedAt={{.State.FinishedAt}} health={{with index .State "Health"}}{{.Status}}{{else}}not-configured{{end}}' \
               "$1" || true
           }
 

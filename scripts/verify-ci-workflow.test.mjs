@@ -282,7 +282,7 @@ async function createReleaseGuardFixture() {
   await mkdir(fakeBin)
   await writeFile(
     environmentFile,
-    'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=18081\n',
+    'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=127.0.0.1:18081\n',
     { mode: 0o600 },
   )
   await symlink(environmentFile, join(previousRelease, '.env'))
@@ -293,6 +293,14 @@ async function createReleaseGuardFixture() {
     '#!/usr/bin/env bash',
     'set -Eeuo pipefail',
     'if [[ "$1" == compose ]]; then',
+    '  if [[ " $* " == *" port api 8080 "* ]]; then',
+    '    printf "%s\\n" "${RULEPILOT_TEST_API_ENDPOINT:-127.0.0.1:18080}"',
+    '    exit 0',
+    '  fi',
+    '  if [[ " $* " == *" port frontend 80 "* ]]; then',
+    '    printf "%s\\n" "${RULEPILOT_TEST_FRONTEND_ENDPOINT:-127.0.0.1:18081}"',
+    '    exit 0',
+    '  fi',
     '  if [[ " $* " == *" ps -q "* ]]; then',
     '    service="${!#}"',
     '    printf "%s-container\\n" "$service"',
@@ -432,7 +440,7 @@ async function seedArmedReleaseGuard(fixture, failureCount) {
   await writeFile(join(fixture.guardState, 'previous-release'), `${fixture.previous}\n`, { mode: 0o600 })
   await writeFile(
     snapshot,
-    'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=18081\n',
+    'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=127.0.0.1:18081\n',
     { mode: 0o600 },
   )
   await writeFile(join(fixture.guardState, 'armed'), `${fixture.release}\n`, { mode: 0o600 })
@@ -441,7 +449,7 @@ async function seedArmedReleaseGuard(fixture, failureCount) {
   await utimes(lease, stale, stale)
   await writeFile(
     fixture.environmentFile,
-    'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=28081\n',
+    'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=127.0.0.1:28081\n',
     { mode: 0o600 },
   )
   await rm(fixture.current)
@@ -1365,7 +1373,7 @@ test('release guard stays live from checkpoint through the public commit', () =>
   assert.match(checkpointGuard,
     /snapshot_environment "\$application_root" "\$state_dir"[\s\S]*?bash "\$0" start/)
   assert.match(checkpointGuard,
-    /flock -x 9[\s\S]*?current_release=\$\(readlink -f[\s\S]*?claim_active_transaction_held/)
+    /flock -x 9[\s\S]*?claim_active_transaction_held[\s\S]*?current_release=\$\(readlink -f/)
   assert.match(checkpointGuard, /bash "\$0" start[^\n]*9>&-/)
   assert.match(synchronizationStep,
     /flock -x 9[\s\S]*?"\$guard_script" arm[\s\S]*?done < "\$env_file" > "\$temporary_env"[\s\S]*?mv "\$temporary_env" "\$env_file"/)
@@ -1528,6 +1536,155 @@ test('release ownership rejects overlap without orphaning the next transaction o
   } finally {
     await stopWatchdog(fixture.release)
     await stopWatchdog(following)
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('a new checkpoint uses the current guard to recover one armed stale predecessor', async (context) => {
+  const checkpointGuard = productionReleaseGuard.slice(
+    productionReleaseGuard.indexOf('claim_active_transaction_held()'),
+    productionReleaseGuard.indexOf('release_active_transaction_held()'),
+  )
+  assert.match(checkpointGuard,
+    /nonterminal_count <= 1[\s\S]*?recover_stale_transaction_held "\$application_root" "\$nonterminal_id"/)
+  assert.match(checkpointGuard,
+    /"\$state_dir\/armed"[\s\S]*?"\$state_dir\/lease"[\s\S]*?now - lease_epoch < LEASE_STALE_SECONDS[\s\S]*?rollback_held "\$application_root" "\$release_id" "\$previous_release_id"/)
+  assert.match(checkpointGuard,
+    /transaction_terminal "\$state_dir"[\s\S]*?active_transaction_file "\$application_root"/)
+
+  if (process.platform !== 'linux') {
+    context.skip('stale transaction takeover is exercised on the Linux CI runner')
+    return
+  }
+  const fixture = await createReleaseGuardFixture()
+  const following = `${'d'.repeat(40)}-103-1`
+  const guardsRoot = join(fixture.root, 'deployment-guards')
+  const followingState = join(guardsRoot, following)
+  const invoke = (command, release) => execFileAsync('bash', [
+    productionReleaseGuardPath,
+    command,
+    fixture.root,
+    release,
+    ...(command === 'checkpoint' ? [] : [fixture.previous]),
+  ], {
+    env: {
+      ...fixture.processEnvironment,
+      RULEPILOT_TEST_CURRENT_MAIN_SHA: release.slice(0, 40),
+    },
+  })
+  try {
+    const { snapshot } = await seedArmedReleaseGuard(fixture, 0)
+    await writeFile(join(fixture.guardState, 'watchdog-failed'), 'deadline-recovery:exit-75\n', {
+      mode: 0o600,
+    })
+
+    const accepted = await invoke('checkpoint', following)
+
+    assert.equal(accepted.stdout.trim(), fixture.previous)
+    assert.match(accepted.stderr, /Recovering previous production transaction[\s\S]*stale lease after watchdog failure/)
+    assert.equal(await realpath(fixture.current), fixture.previousRelease)
+    assert.equal(
+      await readFile(join(fixture.guardState, 'rolled-back'), 'utf8'),
+      `${fixture.previous}\n`,
+    )
+    await assert.rejects(access(snapshot))
+    await assert.rejects(access(join(fixture.guardState, 'watchdog-failed')))
+    assert.equal(
+      await readFile(join(guardsRoot, 'active-transaction'), 'utf8'),
+      `${following}\n`,
+    )
+    assert.equal(
+      await readFile(join(followingState, 'previous-release'), 'utf8'),
+      `${fixture.previous}\n`,
+    )
+    await invoke('finalize-unchanged', following)
+  } finally {
+    try {
+      const pid = Number.parseInt(await readFile(join(followingState, 'watchdog.pid'), 'utf8'), 10)
+      if (Number.isSafeInteger(pid) && pid > 0) process.kill(pid, 'SIGTERM')
+    } catch {
+      // The following watchdog may already have observed its terminal marker.
+    }
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('a fresh predecessor lease rejects checkpoint takeover even after watchdog failure', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('fresh transaction takeover rejection is exercised on the Linux CI runner')
+    return
+  }
+  const fixture = await createReleaseGuardFixture()
+  const following = `${'e'.repeat(40)}-104-1`
+  const ownership = join(fixture.root, 'deployment-guards', 'active-transaction')
+  const snapshot = join(fixture.guardState, 'environment.snapshot')
+  try {
+    await seedArmedReleaseGuard(fixture, 0)
+    const fresh = new Date()
+    await utimes(join(fixture.guardState, 'lease'), fresh, fresh)
+    await writeFile(join(fixture.guardState, 'watchdog-failed'), 'deadline-recovery:exit-75\n', {
+      mode: 0o600,
+    })
+
+    await assert.rejects(
+      execFileAsync('bash', [productionReleaseGuardPath, 'checkpoint', fixture.root, following], {
+        env: {
+          ...fixture.processEnvironment,
+          RULEPILOT_TEST_CURRENT_MAIN_SHA: following.slice(0, 40),
+        },
+      }),
+      (error) => {
+        assert.match(error.stderr, /still has a fresh lease/)
+        return true
+      },
+    )
+
+    assert.equal(await readFile(ownership, 'utf8'), `${fixture.release}\n`)
+    assert.equal(await realpath(fixture.current), fixture.candidateRelease)
+    await access(snapshot)
+    await access(join(fixture.guardState, 'watchdog-failed'))
+    await assert.rejects(access(join(fixture.root, 'deployment-guards', following, 'previous-release')))
+    await assert.rejects(access(join(fixture.guardState, 'rolled-back')))
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('an unarmed stale predecessor is never taken over by a new checkpoint', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('unarmed stale transaction rejection is exercised on the Linux CI runner')
+    return
+  }
+  const fixture = await createReleaseGuardFixture()
+  const following = `${'f'.repeat(40)}-105-1`
+  const ownership = join(fixture.root, 'deployment-guards', 'active-transaction')
+  const snapshot = join(fixture.guardState, 'environment.snapshot')
+  try {
+    await seedArmedReleaseGuard(fixture, 0)
+    await rm(join(fixture.guardState, 'armed'))
+    await writeFile(join(fixture.guardState, 'watchdog-failed'), 'deadline-recovery:exit-75\n', {
+      mode: 0o600,
+    })
+
+    await assert.rejects(
+      execFileAsync('bash', [productionReleaseGuardPath, 'checkpoint', fixture.root, following], {
+        env: {
+          ...fixture.processEnvironment,
+          RULEPILOT_TEST_CURRENT_MAIN_SHA: following.slice(0, 40),
+        },
+      }),
+      (error) => {
+        assert.match(error.stderr, /unarmed checkpoint requires the watchdog/)
+        return true
+      },
+    )
+
+    assert.equal(await readFile(ownership, 'utf8'), `${fixture.release}\n`)
+    assert.equal(await realpath(fixture.current), fixture.candidateRelease)
+    await access(snapshot)
+    await access(join(fixture.guardState, 'watchdog-failed'))
+    await assert.rejects(access(join(fixture.guardState, 'rolled-back')))
+  } finally {
     await rm(fixture.root, { recursive: true, force: true })
   }
 })
@@ -1784,6 +1941,29 @@ test('activation refreshes its lease after every slow cleanup while still holdin
     && finalHeartbeat < lockScopeEnd)
 })
 
+test('activation diagnostics safely describe containers without a Docker healthcheck', () => {
+  const activation = workflowRunBlock(
+    deploymentWorkflow,
+    'Activate release and verify production health',
+  )
+  const functionStart = activation.indexOf('safe_container_state()')
+  const functionEnd = activation.indexOf('\n}', functionStart) + 2
+  assert.ok(functionStart >= 0 && functionEnd > functionStart)
+  const diagnostic = activation.slice(functionStart, functionEnd)
+  assert.match(diagnostic, /status=\{\{\.State\.Status\}\}/)
+  assert.match(diagnostic, /running=\{\{\.State\.Running\}\}/)
+  assert.match(diagnostic, /restartCount=\{\{\.RestartCount\}\}/)
+  assert.match(diagnostic, /oomKilled=\{\{\.State\.OOMKilled\}\}/)
+  assert.match(diagnostic, /exit=\{\{\.State\.ExitCode\}\}/)
+  assert.match(diagnostic, /error=\{\{json \.State\.Error\}\}/)
+  assert.match(diagnostic, /startedAt=\{\{\.State\.StartedAt\}\}/)
+  assert.match(diagnostic, /finishedAt=\{\{\.State\.FinishedAt\}\}/)
+  assert.match(diagnostic,
+    /health=\{\{with index \.State "Health"\}\}\{\{\.Status\}\}\{\{else\}\}not-configured\{\{end\}\}/)
+  assert.doesNotMatch(diagnostic,
+    /\.State\.Health|docker logs|\.Config\.Env|printenv|inspect .*\.Config|inspect .*Log/)
+})
+
 test('unarmed watchdog deadline records an unchanged terminal and deletes its secret snapshot', async (context) => {
   if (process.platform !== 'linux') {
     context.skip('production watchdog finalization is exercised on the Linux CI runner')
@@ -1920,7 +2100,107 @@ test('rollback is bounded to immutable releases and publishes only a revalidated
   assert.ok(workerIdentity < frontendIdentity && frontendIdentity < publishCurrent)
   assert.ok(publishCurrent < terminal)
   assert.doesNotMatch(rollbackGuard, /make production-up/)
+
+  const endpointGuard = productionReleaseGuard.slice(
+    productionReleaseGuard.indexOf('compose_loopback_endpoint()'),
+    productionReleaseGuard.indexOf('wait_for_http()'),
+  )
+  assert.match(endpointGuard,
+    /docker compose[\s\S]*?port "\$service" "\$container_port"/)
+  assert.match(endpointGuard,
+    /\^127\\\.0\\\.0\\\.1:[\s\S]*?\^\\\[::1\\\]:[\s\S]*?exactly one loopback endpoint/)
+  assert.doesNotMatch(endpointGuard, /sed|BACKEND_PORT|RULEPILOT_HTTP_PORT|\.env.*=|0\.0\.0\.0/)
+  assert.match(rollbackGuard,
+    /compose_loopback_endpoint "\$previous_release" api 8080[\s\S]*?compose_loopback_endpoint "\$previous_release" frontend 80/)
 })
+
+test('rollback accepts a single IPv6 loopback Compose endpoint', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('rollback IPv6 endpoint validation is exercised on the Linux CI runner')
+    return
+  }
+  const fixture = await createReleaseGuardFixture()
+  try {
+    await invokeReleaseGuard(fixture, 'checkpoint')
+    await invokeReleaseGuard(fixture, 'arm')
+
+    await execFileAsync(
+      'bash',
+      [
+        productionReleaseGuardPath,
+        'rollback',
+        fixture.root,
+        fixture.release,
+        fixture.previous,
+      ],
+      {
+        env: {
+          ...fixture.processEnvironment,
+          RULEPILOT_TEST_API_ENDPOINT: '[::1]:18080',
+          RULEPILOT_TEST_FRONTEND_ENDPOINT: '[::1]:18081',
+        },
+      },
+    )
+
+    await access(join(fixture.guardState, 'rolled-back'))
+    await assert.rejects(access(join(fixture.root, 'deployment-guards', 'active-transaction')))
+  } finally {
+    await stopReleaseGuardWatchdog(fixture)
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+for (const [endpointCase, endpoint] of [
+  ['an external IPv4 endpoint', '192.0.2.10:18080'],
+  ['an external IPv6 endpoint', '[2001:db8::10]:18080'],
+  ['multiple endpoint lines', '127.0.0.1:18080\n127.0.0.1:28080'],
+]) {
+  test(`rollback refuses ${endpointCase} without publishing a terminal`, async (context) => {
+    if (process.platform !== 'linux') {
+      context.skip('rollback endpoint rejection is exercised on the Linux CI runner')
+      return
+    }
+    const fixture = await createReleaseGuardFixture()
+    const snapshot = join(fixture.guardState, 'environment.snapshot')
+    try {
+      await invokeReleaseGuard(fixture, 'checkpoint')
+      await invokeReleaseGuard(fixture, 'arm')
+
+      await assert.rejects(
+        execFileAsync(
+          'bash',
+          [
+            productionReleaseGuardPath,
+            'rollback',
+            fixture.root,
+            fixture.release,
+            fixture.previous,
+          ],
+          {
+            env: {
+              ...fixture.processEnvironment,
+              RULEPILOT_TEST_API_ENDPOINT: endpoint,
+            },
+          },
+        ),
+        (error) => {
+          assert.match(error.stderr, /must publish exactly one loopback endpoint/)
+          return true
+        },
+      )
+
+      await access(snapshot)
+      await assert.rejects(access(join(fixture.guardState, 'rolled-back')))
+      assert.equal(
+        await readFile(join(fixture.root, 'deployment-guards', 'active-transaction'), 'utf8'),
+        `${fixture.release}\n`,
+      )
+    } finally {
+      await stopReleaseGuardWatchdog(fixture)
+      await rm(fixture.root, { recursive: true, force: true })
+    }
+  })
+}
 
 test('release transaction restores the 0600 environment before restart and discards it only when terminal', () => {
   const checkpointGuard = productionReleaseGuard.slice(
@@ -1972,21 +2252,21 @@ test('release guard restores the exact environment checkpoint and removes the se
     assert.equal(checkpoint.stdout.trim(), fixture.previous)
     assert.equal(
       await readFile(snapshot, 'utf8'),
-      'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=18081\n',
+      'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=127.0.0.1:18081\n',
     )
     assert.equal((await lstat(snapshot)).mode & 0o777, 0o600)
 
     await invokeReleaseGuard(fixture, 'arm')
     await writeFile(
       fixture.environmentFile,
-      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=28081\n',
+      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=127.0.0.1:28081\n',
     )
     await chmod(fixture.environmentFile, 0o644)
     await invokeReleaseGuard(fixture, 'rollback')
 
     assert.equal(
       await readFile(fixture.environmentFile, 'utf8'),
-      'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=18081\n',
+      'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=127.0.0.1:18081\n',
     )
     assert.equal((await lstat(fixture.environmentFile)).mode & 0o777, 0o600)
     await access(join(fixture.guardState, 'rolled-back'))
@@ -2011,7 +2291,7 @@ test('release guard commit keeps the candidate environment and removes the secre
     await symlink(fixture.candidateRelease, fixture.current)
     await writeFile(
       fixture.environmentFile,
-      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=28081\n',
+      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=127.0.0.1:28081\n',
     )
     await chmod(fixture.environmentFile, 0o600)
     await invokeReleaseGuard(fixture, 'heartbeat')
@@ -2019,7 +2299,7 @@ test('release guard commit keeps the candidate environment and removes the secre
 
     assert.equal(
       await readFile(fixture.environmentFile, 'utf8'),
-      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=28081\n',
+      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=127.0.0.1:28081\n',
     )
     await access(join(fixture.guardState, 'committed'))
     await assert.rejects(access(snapshot))
