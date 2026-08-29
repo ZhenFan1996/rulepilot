@@ -302,7 +302,8 @@ whole-run owner 才能把整轮
 4. canary 的 sanitizer 总会先删除原始输出和凭据并生成有界诊断 artifact；独立 final success gate 再要求
    `completed`/`SUCCEEDED` 的完整验收合同。测试被 skip、报告不完整或 sanitizer 只成功保存失败诊断时，workflow
    仍然必须红，不能把“有诊断可下载”误当成产品链路成功。生产 SSH 只出现在固定 bootstrap 边界；repo-owned
-   canary 代码运行前必须删掉 key 并通过 `env -i` 只接收其最小玩家或管理员权限。
+   canary 代码运行前必须删掉 key 并通过 `env -i` 只接收其最小玩家或管理员权限。容器化 canary 还必须显式
+   把 bootstrap 写入的固定 `known_hosts` 传给 OpenSSH，不能假定容器进程的 `$HOME` 与系统用户目录相同。
 
 如果 GitHub 没有送达 `main` 的 push CI 事件，恢复动作是手工触发同一份 `CI` workflow；只有该 main SHA
 的 CI 成功，`workflow_run` 才能进入部署。部署 workflow 本身没有直接手工入口，因而恢复不会绕过测试。
