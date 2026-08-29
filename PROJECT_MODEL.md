@@ -203,12 +203,18 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 
 交付也按失败 owner 分层，避免把所有红灯都叫成“部署失败”：
 
-1. PR CI 只运行可重复、无付费模型的确定性检查。后端任务同时验证 Java 契约和最终 Docker runtime 中的
-   OpenCV native 依赖；前端、基础设施集成和 Playwright 用户旅程各自拥有独立 job。
+1. PR CI 只运行可重复、无付费模型的确定性检查。后端任务同时验证 Java 契约、最终 Docker runtime 中的
+   OpenCV native 依赖，以及 `api` profile 下必须 eager 创建的真实生产组件；不能让 `test` profile 的组件排除
+   或 `worker` profile 的 lazy initialization 掩盖 API 专属依赖图错误。前端、基础设施集成和 Playwright 用户
+   旅程各自拥有独立 job。
 2. 合并后部署先在无生产权限的 job 封存精确 SHA 源码，再在隔离 job 构建不可变镜像，最后才把校验过的
    release 和临时凭据交给部署 job。部署事务在切换前保存环境和旧 release，活跃 watchdog 覆盖整个激活窗口；
-   Compose、migration、容器健康、公开 availability 和 `Cache-Control: no-store` release identity 任一不满足都
-   回滚到经过重新校验的旧 topology。公开 `current` 只在 commit checkpoint 后成为新 release。
+   新 checkpoint 持有同一部署锁时，至多恢复一个已经 armed 且 lease 过期的前序事务，fresh lease 即使带有
+   watchdog failure 也拒绝接管，unarmed 状态则保持 fail closed。回滚健康探测读取 Compose 已求值的唯一
+   loopback published endpoint，而不是再次解释 `.env` 端口表达式；失败诊断只输出容器状态、重启/OOM、退出码、
+   错误与时间戳，不读取日志或环境变量。Compose、migration、容器健康、公开 availability 和
+   `Cache-Control: no-store` release identity 任一不满足都回滚到经过重新校验的旧 topology。公开 `current`
+   只在 commit checkpoint 后成为新 release。
 3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 验证一次登录用户的新目录推荐、完整回复、
    每卡证据文案、持久化和页面逐字呈现。固定 fresh 路径通常是 2 次模型、1 次目录、0 次网页研究；若 provider
    漏掉 required typed action，只允许一次有界协议修复，最终结果仍需在 6 次 Agent 总预算和 20 秒页面 SLO

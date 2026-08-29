@@ -128,20 +128,37 @@ compose_container() {
 	)
 }
 
-managed_port() {
-	local env_file=$1
-	local key=$2
-	local fallback=$3
-	local value
-	value=$(sed -n "s/^${key}=//p" "$env_file" | head -n 1)
-	value=${value:-$fallback}
-	case "$value" in
-		\"*\") value=${value#\"}; value=${value%\"} ;;
-		\'*\') value=${value#\'}; value=${value%\'} ;;
-	esac
-	[[ "$value" =~ ^[1-9][0-9]{0,4}$ && "$value" -le 65535 ]] \
-		|| fail "Invalid managed production port"
-	printf '%s\n' "$value"
+compose_loopback_endpoint() {
+	local release_dir=$1
+	local service=$2
+	local container_port=$3
+	local endpoint published_port
+	[[ "$container_port" =~ ^[1-9][0-9]{0,4}$ && "$container_port" -le 65535 ]] \
+		|| fail "Invalid rollback container port"
+	if ! endpoint=$(
+		cd "$release_dir"
+		docker compose --env-file .env \
+			-f infra/compose.yml \
+			-f infra/compose.deployment.yml \
+			-f infra/compose.production.yml port "$service" "$container_port"
+	); then
+		fail "Rollback service published endpoint is unavailable"
+	fi
+	# Compose is authoritative after it has evaluated every layered file and environment expression. Accept exactly
+	# one numeric port on a literal loopback address so rollback probes can never follow an external or ambiguous
+	# endpoint supplied by mutable environment text.
+	[[ -n "$endpoint" && "$endpoint" != *$'\n'* ]] \
+		|| fail "Rollback service must publish exactly one loopback endpoint"
+	if [[ "$endpoint" =~ ^127\.0\.0\.1:([1-9][0-9]{0,4})$ ]]; then
+		published_port=${BASH_REMATCH[1]}
+	elif [[ "$endpoint" =~ ^\[::1\]:([1-9][0-9]{0,4})$ ]]; then
+		published_port=${BASH_REMATCH[1]}
+	else
+		fail "Rollback service must publish exactly one loopback endpoint"
+	fi
+	[[ "$published_port" -le 65535 ]] \
+		|| fail "Rollback service published port is invalid"
+	printf '%s\n' "$endpoint"
 }
 
 wait_for_http() {
@@ -222,6 +239,7 @@ claim_active_transaction_held() {
 	local application_root=$1
 	local release_id=$2
 	local guards_root ownership_file owner owner_state candidate_state candidate_id
+	local nonterminal_id='' nonterminal_count=0
 	require_candidate_release_id "$release_id"
 	guards_root="$application_root/deployment-guards"
 	ownership_file=$(active_transaction_file "$application_root")
@@ -232,22 +250,87 @@ claim_active_transaction_held() {
 		owner=$(<"$ownership_file")
 		require_candidate_release_id "$owner"
 		owner_state=$(guard_directory "$application_root" "$owner")
-		if [[ -d "$owner_state" ]] && ! transaction_terminal "$owner_state"; then
-			fail "Another production release transaction is still active"
-		fi
+		[[ -d "$owner_state" && ! -L "$owner_state" \
+			&& -f "$owner_state/previous-release" && ! -L "$owner_state/previous-release" ]] \
+			|| fail "Production release transaction ownership is invalid"
 	fi
 	# The ownership file was introduced after the first immutable guard. Scan legacy guard state as a one-way
-	# compatibility boundary so an already-running watchdog cannot overlap the first deployment using ownership.
+	# compatibility boundary. Prove there is at most one unfinished owner before changing either the runtime or the
+	# ownership coordinate; inconsistent multiple transactions must remain a fail-closed operator incident.
 	for candidate_state in "$guards_root"/*; do
 		[[ -d "$candidate_state" && -f "$candidate_state/previous-release" ]] || continue
 		candidate_id=${candidate_state##*/}
-		[[ "$candidate_id" == "$release_id" ]] && continue
 		require_candidate_release_id "$candidate_id"
 		if ! transaction_terminal "$candidate_state"; then
-			fail "Another production release transaction is still active"
+			nonterminal_id=$candidate_id
+			nonterminal_count=$((nonterminal_count + 1))
 		fi
 	done
+	(( nonterminal_count <= 1 )) \
+		|| fail "Multiple non-terminal production release transactions require operator recovery"
+	if [[ -n "${owner:-}" ]]; then
+		if transaction_terminal "$owner_state"; then
+			discard_transaction_secrets "$owner_state" "$owner"
+			release_active_transaction_held "$application_root" "$owner"
+		elif [[ "$nonterminal_id" != "$owner" ]]; then
+			fail "Production release transaction ownership does not match guard state"
+		fi
+	fi
+	if [[ -n "$nonterminal_id" ]]; then
+		# A legacy guard might predate the explicit ownership file. Publish that exact owner while still holding the
+		# production mutation lock, then let this current, reviewed guard perform the recovery.
+		if [[ ! -e "$ownership_file" ]]; then
+			atomic_write "$ownership_file" "$nonterminal_id"
+		fi
+		recover_stale_transaction_held "$application_root" "$nonterminal_id"
+	fi
+	[[ ! -e "$ownership_file" ]] \
+		|| fail "Previous production release transaction did not release ownership"
 	atomic_write "$ownership_file" "$release_id"
+}
+
+recover_stale_transaction_held() {
+	local application_root=$1
+	local release_id=$2
+	local state_dir previous_release_id armed_release now lease_epoch recovery_reason
+	require_candidate_release_id "$release_id"
+	state_dir=$(guard_directory "$application_root" "$release_id")
+	[[ -d "$state_dir" && ! -L "$state_dir" \
+		&& -f "$state_dir/previous-release" && ! -L "$state_dir/previous-release" ]] \
+		|| fail "Previous production release transaction checkpoint is invalid"
+	transaction_terminal "$state_dir" \
+		&& fail "Terminal production release transaction cannot be recovered as active"
+	[[ -f "$state_dir/armed" && ! -L "$state_dir/armed" ]] \
+		|| fail "Another production release transaction is still active; its unarmed checkpoint requires the watchdog"
+	armed_release=$(<"$state_dir/armed")
+	[[ "$armed_release" == "$release_id" ]] \
+		|| fail "Previous production release transaction arm marker is invalid"
+	[[ -f "$state_dir/lease" && ! -L "$state_dir/lease" ]] \
+		|| fail "Another production release transaction has no recoverable lease"
+	now=$(date +%s)
+	lease_epoch=$(stat -c %Y "$state_dir/lease")
+	[[ "$lease_epoch" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ && "$now" -ge "$lease_epoch" ]] \
+		|| fail "Previous production release transaction lease is invalid"
+	# A persisted watchdog failure explains why takeover is needed, but never overrides a fresh lease. The lease is
+	# the authoritative concurrency boundary for a runner that may still be making progress under another SSH call.
+	if (( now - lease_epoch < LEASE_STALE_SECONDS )); then
+		fail "Another production release transaction still has a fresh lease"
+	fi
+	previous_release_id=$(<"$state_dir/previous-release")
+	require_release_id "$previous_release_id"
+	recovery_reason='stale lease'
+	if [[ -f "$state_dir/watchdog-failed" && ! -L "$state_dir/watchdog-failed" ]]; then
+		recovery_reason='stale lease after watchdog failure'
+	fi
+	printf 'Recovering previous production transaction %s (%s).\n' \
+		"$release_id" "$recovery_reason" >&2
+	# checkpoint stdout is a machine-readable previous-release id consumed by the workflow. Keep the recovered
+	# transaction's human diagnostic on stderr so takeover cannot corrupt that control-plane coordinate.
+	rollback_held "$application_root" "$release_id" "$previous_release_id" >&2
+	transaction_terminal "$state_dir" \
+		|| fail "Previous production release transaction did not reach a terminal state"
+	[[ ! -e "$(active_transaction_file "$application_root")" ]] \
+		|| fail "Previous production release transaction did not release ownership"
 }
 
 release_active_transaction_held() {
@@ -274,7 +357,8 @@ checkpoint() (
 	cleanup_unpublished_checkpoint() {
 		local status=$?
 		trap - EXIT
-		if [[ "$checkpoint_published" != true && "$watchdog_start_attempted" != true ]]; then
+		if [[ "$checkpoint_claimed" == true \
+			&& "$checkpoint_published" != true && "$watchdog_start_attempted" != true ]]; then
 			if [[ -n "${state_dir:-}" && -d "$state_dir" ]]; then
 				discard_transaction_secrets "$state_dir" "$release_id" || true
 				# This candidate was never published to a watchdog. Remove every bounded transaction marker so a
@@ -306,6 +390,11 @@ checkpoint() (
 	# workflow_run events and their reruns can arrive out of order. Recheck the public repository while holding the
 	# production mutation lock so a previously qualified but now stale commit can never move the runtime backward.
 	require_current_qualified_main "$release_id"
+	state_dir=$(guard_directory "$application_root" "$release_id")
+	# Recover at most one abandoned armed transaction before reading the active release. A successful takeover can
+	# move current back to that transaction's checkpoint, which is the only correct baseline for this new checkpoint.
+	claim_active_transaction_held "$application_root" "$release_id"
+	checkpoint_claimed=true
 	releases_root=$(readlink -f "$application_root/releases")
 	[[ -L "$application_root/current" ]] || fail "Current production release is not an immutable symlink"
 	current_release=$(readlink -f "$application_root/current")
@@ -328,9 +417,6 @@ checkpoint() (
 		|| fail "The active API and worker do not share one immutable backend image"
 	docker image inspect "$api_image" >/dev/null
 	docker image inspect "$frontend_image" >/dev/null
-	state_dir=$(guard_directory "$application_root" "$release_id")
-	claim_active_transaction_held "$application_root" "$release_id"
-	checkpoint_claimed=true
 	docker tag "$api_image" "rulepilot-backend:${previous_release_id}"
 	docker tag "$frontend_image" "rulepilot-frontend:${previous_release_id}"
 
@@ -471,7 +557,7 @@ finalize_unchanged() {
 rollback_held() {
 	local application_root release_id previous_release_id state_dir releases_root
 	local failed_release previous_release active_release backend_image frontend_image backend_image_id frontend_image_id
-	local backend_port frontend_port
+	local backend_endpoint frontend_endpoint
 	application_root=$(resolve_application_root "$1")
 	release_id=$2
 	previous_release_id=$3
@@ -521,10 +607,10 @@ rollback_held() {
 			-f infra/compose.production.yml \
 			up -d --no-build --no-deps api worker frontend gateway
 	)
-	backend_port=$(managed_port "$previous_release/.env" BACKEND_PORT 8080)
-	frontend_port=$(managed_port "$previous_release/.env" RULEPILOT_HTTP_PORT 80)
-	wait_for_http "http://127.0.0.1:${backend_port}/actuator/health" 60
-	wait_for_http "http://127.0.0.1:${frontend_port}/" 45
+	backend_endpoint=$(compose_loopback_endpoint "$previous_release" api 8080)
+	frontend_endpoint=$(compose_loopback_endpoint "$previous_release" frontend 80)
+	wait_for_http "http://${backend_endpoint}/actuator/health" 60
+	wait_for_http "http://${frontend_endpoint}/" 45
 	wait_for_worker "$previous_release" "$backend_image_id" 60
 	# A service that became ready earlier in the recovery window can still restart while a sibling catches up. Verify
 	# the complete immutable topology once more immediately before making the rollback terminal and visible.
