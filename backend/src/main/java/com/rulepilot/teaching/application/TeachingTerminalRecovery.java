@@ -20,7 +20,8 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 /**
- * One bounded live-process owner reconciles Teaching terminal writes after transient persistence failures.
+ * One bounded live-process owner reconciles explicitly retryable Teaching terminal writes after transient
+ * persistence failures. Settled or permanently rejected intents never occupy recovery capacity.
  * A restart deliberately drops these closures: the earlier {@code InterruptedAssistantRunRecovery} then owns every
  * durable non-terminal run before any new handoff can be launched.
  */
@@ -72,7 +73,7 @@ final class TeachingTerminalRecovery {
                 .register(metrics);
     }
 
-    synchronized void register(UUID runId, Supplier<Boolean> recorder) {
+    synchronized void register(UUID runId, Supplier<TeachingTerminalRecordResult> recorder) {
         if (runId == null || recorder == null) {
             throw new IllegalArgumentException("teaching terminal recovery intent is invalid");
         }
@@ -101,41 +102,56 @@ final class TeachingTerminalRecovery {
         }
 
         for (Attempt attempt : attempts) {
-            boolean recorded;
+            TeachingTerminalRecordResult result;
             try {
-                recorded = Boolean.TRUE.equals(attempt.intent().recorder().get());
+                result = attempt.intent().recorder().get();
+                if (result == null) {
+                    result = TeachingTerminalRecordResult.SETTLED;
+                    metrics.counter("rulepilot.teaching.terminal.recovery.invalid-result").increment();
+                    LOGGER.error(
+                            "Teaching terminal recorder returned no result for run {}; stopping permanent retry",
+                            attempt.runId());
+                }
             } catch (RuntimeException persistenceFailure) {
-                recorded = false;
+                result = TeachingTerminalRecordResult.RETRYABLE;
             }
             metrics.counter("rulepilot.teaching.terminal.recovery.attempts").increment();
             synchronized (this) {
                 if (pending.get(attempt.runId()) != attempt.intent()) continue;
-                if (recorded) {
+                if (result == TeachingTerminalRecordResult.SETTLED) {
                     pending.remove(attempt.runId());
-                    LOGGER.info(
-                            "Teaching terminal state recovered after {} reconciliation attempts for run {}",
-                            attempt.intent().attempt(),
-                            attempt.runId());
-                } else if (attempt.intent().attempt() >= MAX_RECOVERY_ATTEMPTS) {
-                    pending.remove(attempt.runId());
-                    metrics.counter("rulepilot.teaching.terminal.recovery.exhausted").increment();
-                    LOGGER.error(
-                            "Teaching terminal recovery exhausted {} bounded attempts for run {}; "
-                                    + "process-start recovery must reconcile it",
-                            MAX_RECOVERY_ATTEMPTS,
-                            attempt.runId());
-                } else {
-                    int nextAttempt = attempt.intent().attempt() + 1;
-                    pending.put(
-                            attempt.runId(),
-                            new PendingIntent(
-                                    attempt.intent().recorder(),
-                                    nextAttempt,
-                                    nextAttemptNanos(attempt.runId(), nextAttempt)));
-                    if (attempt.intent().attempt() == 7) {
-                        LOGGER.error(
-                                "Teaching terminal recovery entered low-frequency reconciliation for run {}",
+                    metrics.counter("rulepilot.teaching.terminal.recovery.settled").increment();
+                    if (attempt.intent().attempt() == 1) {
+                        LOGGER.debug("Teaching terminal intent settled on first reconciliation for run {}", attempt.runId());
+                    } else {
+                        LOGGER.info(
+                                "Teaching terminal intent settled after {} reconciliation attempts for run {}",
+                                attempt.intent().attempt(),
                                 attempt.runId());
+                    }
+                } else {
+                    metrics.counter("rulepilot.teaching.terminal.recovery.retryable").increment();
+                    if (attempt.intent().attempt() >= MAX_RECOVERY_ATTEMPTS) {
+                        pending.remove(attempt.runId());
+                        metrics.counter("rulepilot.teaching.terminal.recovery.exhausted").increment();
+                        LOGGER.error(
+                                "Teaching terminal recovery exhausted {} bounded attempts for run {}; "
+                                        + "process-start recovery must reconcile it",
+                                MAX_RECOVERY_ATTEMPTS,
+                                attempt.runId());
+                    } else {
+                        int nextAttempt = attempt.intent().attempt() + 1;
+                        pending.put(
+                                attempt.runId(),
+                                new PendingIntent(
+                                        attempt.intent().recorder(),
+                                        nextAttempt,
+                                        nextAttemptNanos(attempt.runId(), nextAttempt)));
+                        if (attempt.intent().attempt() == 7) {
+                            LOGGER.error(
+                                    "Teaching terminal recovery entered low-frequency reconciliation for run {}",
+                                    attempt.runId());
+                        }
                     }
                 }
             }
@@ -189,7 +205,10 @@ final class TeachingTerminalRecovery {
         return pending.size();
     }
 
-    private record PendingIntent(Supplier<Boolean> recorder, int attempt, long nextAttemptNanos) {}
+    private record PendingIntent(
+            Supplier<TeachingTerminalRecordResult> recorder,
+            int attempt,
+            long nextAttemptNanos) {}
 
     private record Attempt(UUID runId, PendingIntent intent) {}
 }

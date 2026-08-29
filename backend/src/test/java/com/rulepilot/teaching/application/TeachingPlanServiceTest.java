@@ -67,6 +67,31 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void routesAnyTextPageThatWouldBeSampledThroughTheDurablePagePlanner() {
+        List<PageView> pages = List.of(
+                new PageView(1, "setup", 5),
+                new PageView(2, "x".repeat(TeachingPageCatalogText.MAX_CHARACTERS + 1),
+                        TeachingPageCatalogText.MAX_CHARACTERS + 1));
+
+        assertThat(TeachingPlanService.requiresCanonicalPagePlanning(pages)).isTrue();
+        assertThat(TeachingPlanService.preparationWorkload(true, pages.size()))
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 20));
+    }
+
+    @Test
+    void routesDenseMultiPageTextThroughTheHierarchicalPlannerWithoutANameBasedSpecialCase() {
+        List<PageView> pages = IntStream.rangeClosed(1, 6)
+                .mapToObj(page -> new PageView(page, "r".repeat(5_500), 5_500))
+                .toList();
+
+        assertThat(TeachingPlanService.requiresCanonicalPagePlanning(pages)).isTrue();
+        assertThat(TeachingPlanService.requiresCanonicalPagePlanning(List.of(
+                        new PageView(1, "A short complete rules leaflet.", 31),
+                        new PageView(2, "One final scoring rule.", 23))))
+                .isFalse();
+    }
+
+    @Test
     void isolatesOnlyWorkloadsBeyondTheOrdinaryPreparationCallGraph() {
         assertThat(TeachingPlanService.requiresExtendedPreparationLane(
                         new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(0, 16)))

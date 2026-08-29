@@ -2,6 +2,7 @@ package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
+import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.teaching.application.PublicLessonCatalog;
 import com.rulepilot.teaching.application.PublicLessonReader;
 import com.rulepilot.teaching.application.PublicLessonQuestionService;
@@ -154,19 +155,25 @@ public class PublicLessonController {
         } catch (ResponseStatusException classified) {
             throw classified;
         } catch (RejectedExecutionException saturated) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .cacheControl(CacheControl.noStore())
-                    .header("Retry-After", "1")
-                    .header(VISUAL_FAILURE_HEADER, "DECODE_CAPACITY_EXCEEDED")
-                    .body(new byte[0]);
+            return retryablePageImageFailure("DECODE_CAPACITY_EXCEEDED");
+        } catch (RetryableDocumentProcessingException transientFailure) {
+            return retryablePageImageFailure("PAGE_IMAGE_TEMPORARILY_UNAVAILABLE");
         } catch (IllegalArgumentException invalidRequest) {
             throw invalidRequest;
-        } catch (RuntimeException unavailable) {
+        } catch (RuntimeException unreadable) {
             return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
                     .cacheControl(CacheControl.noStore())
                     .header(VISUAL_FAILURE_HEADER, "PAGE_IMAGE_UNAVAILABLE")
                     .body(new byte[0]);
         }
+    }
+
+    private ResponseEntity<byte[]> retryablePageImageFailure(String reason) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .cacheControl(CacheControl.noStore())
+                .header("Retry-After", "1")
+                .header(VISUAL_FAILURE_HEADER, reason)
+                .body(new byte[0]);
     }
 
     private DocumentPageImages.PageImage image(UUID planId, int pageNumber) {

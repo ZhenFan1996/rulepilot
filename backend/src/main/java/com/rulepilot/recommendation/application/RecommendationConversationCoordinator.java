@@ -86,6 +86,20 @@ public class RecommendationConversationCoordinator {
             String requestedLocale,
             String ownerUsername,
             Consumer<ProgressUpdate> progressListener) {
+        return converse(
+                turn,
+                requestedLocale,
+                ownerUsername,
+                progressListener,
+                null);
+    }
+
+    public TurnResult converse(
+            SessionTurn turn,
+            String requestedLocale,
+            String ownerUsername,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
         Objects.requireNonNull(turn, "recommendation session turn is required");
         Objects.requireNonNull(turn.clientTurnId(), "clientTurnId is required for a persisted turn");
         ConversationRequest validatedRequest = agent.validatedConversationRequest(turn.request());
@@ -119,28 +133,37 @@ public class RecommendationConversationCoordinator {
         ConversationResponse response;
         try {
             AtomicReference<ConversationState> settledState = new AtomicReference<>(initialState);
-            response = agent.conversePersisted(
-                    effectiveRequest,
-                    locale,
-                    owner,
-                    progressListener,
-                    checkpoint -> {
-                        ConversationState value = checkpointState(initialState, checkpoint);
-                        if (!conversations.checkpointTurn(
-                                claimed.id(),
-                                owner,
-                                claimed.revision(),
-                                validatedTurn.clientTurnId(),
-                                fingerprint,
-                                claimAttemptId,
-                                value,
-                                clock.instant())) {
-                            throw conflict(
-                                    Code.CONCURRENT_TURN,
-                                    "recommendation conversation changed while a settled read was saved");
-                        }
-                        settledState.set(value);
-                    });
+            Consumer<TurnCheckpoint> checkpointListener = checkpoint -> {
+                ConversationState value = checkpointState(initialState, checkpoint);
+                if (!conversations.checkpointTurn(
+                        claimed.id(),
+                        owner,
+                        claimed.revision(),
+                        validatedTurn.clientTurnId(),
+                        fingerprint,
+                        claimAttemptId,
+                        value,
+                        clock.instant())) {
+                    throw conflict(
+                            Code.CONCURRENT_TURN,
+                            "recommendation conversation changed while a settled read was saved");
+                }
+                settledState.set(value);
+            };
+            response = answerPartListener == null
+                    ? agent.conversePersisted(
+                            effectiveRequest,
+                            locale,
+                            owner,
+                            progressListener,
+                            checkpointListener)
+                    : agent.conversePersisted(
+                            effectiveRequest,
+                            locale,
+                            owner,
+                            progressListener,
+                            answerPartListener,
+                            checkpointListener);
             ConversationState nextState = nextState(
                     settledState.get(),
                     effectiveRequest,

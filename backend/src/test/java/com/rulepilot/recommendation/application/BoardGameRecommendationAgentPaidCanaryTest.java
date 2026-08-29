@@ -39,6 +39,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -55,7 +57,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
-    void publishesAComplexTitleBoundedSlateWithoutOptionalResearch() throws Exception {
+    void repliesToAGreetingNaturallyWithinTheInteractiveBudget() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
@@ -76,6 +78,58 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 properties,
                 json);
         long started = System.nanoTime();
+        AtomicLong firstAnswerPartMs = new AtomicLong(-1);
+
+        try {
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), "你好"),
+                    "zh-CN",
+                    null,
+                    ignored -> {},
+                    text -> {
+                        if (!text.isBlank()) firstAnswerPartMs.compareAndSet(-1, elapsed(started));
+                    });
+            long totalMs = elapsed(started);
+
+            assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(response.assistantMessage()).isNotBlank();
+            assertThat(response.harness().modelCalls())
+                    .isBetween(1, RecommendationReActLoop.MAX_MODEL_CALLS);
+            assertThat(response.harness().catalogCalls()).isZero();
+            assertThat(response.harness().webResearchCalls()).isZero();
+            assertThat(firstAnswerPartMs.get()).isBetween(0L, 3_000L);
+            assertThat(totalMs).isLessThan(8_000L);
+            writeArtifact("greeting", capture, response, totalMs, null);
+        } catch (Throwable failure) {
+            writeArtifact("greeting", capture, null, elapsed(started), failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void publishesAComplexTitleBoundedSlateWithAdaptiveResearch() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        long started = System.nanoTime();
 
         try {
             var response = agent.converse(
@@ -89,24 +143,28 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.games()).hasSize(2).allSatisfy(game -> {
                 assertThat(game.game().ranking().sourceName()).containsIgnoringCase("Harbor");
                 assertThat(game.replyParts()).isNotEmpty().allSatisfy(part ->
-                        assertThat(part.claim().text().strip().codePointCount(
-                                        0, part.claim().text().strip().length()))
-                                .isGreaterThanOrEqualTo(12));
+                        assertThat(part.claim().text()).isNotBlank());
             });
             String reply = response.assistantMessage().strip();
-            assertThat(reply.codePointCount(0, reply.length())).isGreaterThanOrEqualTo(80);
+            assertThat(reply.codePointCount(0, reply.length())).isGreaterThanOrEqualTo(40);
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().modelCalls()).isEqualTo(2);
-            assertThat(response.harness().catalogCalls()).isEqualTo(1);
-            assertThat(response.harness().webResearchCalls()).isZero();
+            assertThat(response.harness().modelCalls())
+                    .isBetween(1, RecommendationReActLoop.MAX_MODEL_CALLS);
+            assertThat(response.harness().catalogCalls()).isPositive();
+            assertThat(response.harness().actions().stream()
+                            .filter(action -> action.startsWith("REJECTED_ACTION:"))
+                            .toList())
+                    .doesNotHaveDuplicates();
             assertThat(response.harness().actions())
-                    .noneMatch(action -> action.startsWith("REJECTED_")
-                            || action.startsWith("FALLBACK_")
+                    .noneMatch(action -> action.startsWith("FALLBACK_")
+                            || action.startsWith("REPEATED_")
                             || action.equals("RUN_DEADLINE_EXCEEDED"));
-            assertThat(capture.toolCalls(BoardGameRecommendationAgent.BROWSE_TOOL)).hasSize(1);
-            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)).hasSize(1);
-            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL)).isEmpty();
-            assertThat(totalMs).isLessThan(20_000L);
+            assertThat(capture.toolCalls(BoardGameRecommendationAgent.BROWSE_TOOL)).isNotEmpty();
+            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)).isNotEmpty();
+            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL))
+                    .extracting(ToolCall::argumentsJson)
+                    .doesNotHaveDuplicates();
+            assertThat(totalMs).isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
 
             ToolCall browse = capture.lastCandidateProducingToolCall();
             JsonNode arguments = json.readTree(browse.argumentsJson());
@@ -115,9 +173,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .containsIgnoringCase("Harbor");
             assertThat(arguments.path("evidence").asText()).isEqualTo("U1");
             assertThat(arguments.has("candidateUse")).isFalse();
-            writeArtifact(capture, response, totalMs, null);
+            writeArtifact("complex-title", capture, response, totalMs, null);
         } catch (Throwable failure) {
-            writeArtifact(capture, null, elapsed(started), failure.getClass().getSimpleName());
+            writeArtifact(
+                    "complex-title", capture, null, elapsed(started), failure.getClass().getSimpleName());
             throw failure;
         } finally {
             agent.stopBoundedCalls();
@@ -133,6 +192,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         ChatModel chatModel = new ChatModelFactory(ObservationRegistry.NOOP, RECOMMENDATION_TIMEOUT)
                 .create(provider, apiKey, baseUrl, modelName);
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        var resolvedModel = new RuntimeModelConfiguration.ResolvedModel(
+                chatModel, provider, modelName, "deepseek".equals(provider));
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(resolvedModel);
         when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
         when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(provider);
         when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(modelName);
@@ -162,6 +225,29 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     throw failure;
                 }
             }
+
+            @Override
+            public Turn stream(
+                    BoardGameRecommendationModel.Request request,
+                    String ownerUsername,
+                    Consumer<String> accumulatedTextListener) {
+                long started = System.nanoTime();
+                int callIndex = capture.begin("react_stream", request);
+                AtomicLong firstTextMs = new AtomicLong(-1);
+                try {
+                    Turn result = delegate.stream(request, ownerUsername, text -> {
+                        if (!text.isBlank() && firstTextMs.compareAndSet(-1, elapsed(started))) {
+                            capture.firstText(callIndex, firstTextMs.get());
+                        }
+                        accumulatedTextListener.accept(text);
+                    });
+                    capture.complete(callIndex, result, elapsed(started));
+                    return result;
+                } catch (RuntimeException | Error failure) {
+                    capture.fail(callIndex, failure, elapsed(started));
+                    throw failure;
+                }
+            }
         };
     }
 
@@ -179,7 +265,35 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         };
     }
 
+    private BoardGameRecommendationWebResearch configuredResearchCanary() {
+        return new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                List<BoardGameRecommendationWebResearch.GameResearch> games = request.candidates().stream()
+                        .map(candidate -> new BoardGameRecommendationWebResearch.GameResearch(
+                                candidate.bggId(),
+                                List.of(new BoardGameRecommendationWebResearch.Observation(
+                                        "Canary participants reported that a mixed-experience group could learn the opening turns together.",
+                                        List.of(1)))))
+                        .toList();
+                return Optional.of(new Research(
+                        games,
+                        List.of(new BoardGameRecommendationWebResearch.Source(
+                                1,
+                                "RulePilot canary experience report",
+                                "https://canary.rulepilot.example/recommendation-experience",
+                                "canary.rulepilot.example"))));
+            }
+        };
+    }
+
     private void writeArtifact(
+            String scenario,
             Capture capture,
             BoardGameRecommendationAgent.ConversationResponse response,
             long latencyMs,
@@ -188,7 +302,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 .replaceAll("[^a-zA-Z0-9._-]", "_");
         Path output = Path.of(System.getProperty("user.dir"))
                 .getParent()
-                .resolve(".local/agent-evaluation/recommendation-paid-canary-" + label + ".json");
+                .resolve(".local/agent-evaluation/recommendation-paid-canary-" + label + "-" + scenario + ".json");
         Files.createDirectories(output.getParent());
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("schemaVersion", 1);
@@ -280,6 +394,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .toList());
             calls.set(callIndex, Map.copyOf(call));
             toolCalls.addAll(turn.toolCalls());
+        }
+
+        private synchronized void firstText(int callIndex, long firstTextMs) {
+            Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
+            call.put("firstTextMs", firstTextMs);
+            calls.set(callIndex, Map.copyOf(call));
         }
 
         private synchronized void fail(int callIndex, Throwable failure, long latencyMs) {

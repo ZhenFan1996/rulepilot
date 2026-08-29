@@ -54,6 +54,48 @@ import org.junit.jupiter.api.Test;
 class VisualRulebookCatalogerTest {
 
     @Test
+    void keepsReadablePageLedgersWhenOneStoredPageImageCannotBeRead() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        List<Integer> interpretedPages = new java.util.concurrent.CopyOnWriteArrayList<>();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> {
+                    int pageNumber = pages.iterator().next();
+                    if (pageNumber == 2) {
+                        throw new IllegalStateException("stored page image cannot be decoded");
+                    }
+                    return List.of(new DocumentPageImages.PageImage(
+                            pageNumber, "image/png", new byte[] {1}, 100, 120));
+                },
+                request -> {
+                    int pageNumber = request.pages().getFirst().pageNumber();
+                    interpretedPages.add(pageNumber);
+                    return new CatalogDraft(List.of(teachingSummary(
+                            pageNumber,
+                            "PAGE " + pageNumber,
+                            "A visible rule on page " + pageNumber,
+                            List.of("page " + pageNumber))));
+                },
+                facts);
+
+        List<PageInput> inputs = cataloger.catalogVisualPages(
+                documentVersionId,
+                List.of(page(1), page(2), page(3)),
+                "Example game",
+                "owner",
+                null);
+
+        assertThat(interpretedPages).containsExactlyInAnyOrder(1, 3);
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
+                .extracting(PageFact::pageNumber)
+                .containsExactly(1, 3);
+        assertThat(inputs).extracting(PageInput::pageNumber).containsExactly(1, 2, 3);
+        assertThat(inputs.get(1).pageLedgerState())
+                .isEqualTo(com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE);
+        assertThat(inputs.get(1).text()).contains("visual interpretation did not finish");
+    }
+
+    @Test
     void retainsCompletedPageFactsWhenALaterVisualBatchFails() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();

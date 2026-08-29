@@ -127,14 +127,16 @@ public class BggRecommendationAgentStreamController {
                                     request.toSessionTurn(command),
                                     locale,
                                     modelConfigurationOwner,
-                                    update -> sendAgentProgress(emitter, open, update)),
+                                    update -> sendAgentProgress(emitter, open, update),
+                                    text -> sendAnswerPart(emitter, open, text)),
                             presentation)
                     : BggRecommendationAgentController.present(
                             agent.converse(
                                     command,
                                     locale,
                                     modelConfigurationOwner,
-                                    update -> sendAgentProgress(emitter, open, update)),
+                                    update -> sendAgentProgress(emitter, open, update),
+                                    text -> sendAnswerPart(emitter, open, text)),
                             locale,
                             presentation);
             if (!open.get()) return;
@@ -187,6 +189,18 @@ public class BggRecommendationAgentStreamController {
         }
     }
 
+    private void sendAnswerPart(SseEmitter emitter, AtomicBoolean open, String text) {
+        if (!open.get()) return;
+        try {
+            emitter.send(SseEmitter.event()
+                    .name("answer_part")
+                    .data(new AnswerPart(text == null ? "" : text)));
+        } catch (IOException | RuntimeException exception) {
+            open.set(false);
+            LOGGER.debug("Recommendation answer stream disconnected before completion");
+        }
+    }
+
     private void sendError(SseEmitter emitter, AtomicBoolean open, String code) {
         if (!open.getAndSet(false)) return;
         try {
@@ -220,4 +234,6 @@ public class BggRecommendationAgentStreamController {
     }
 
     record StreamError(String code) {}
+
+    record AnswerPart(String text) {}
 }

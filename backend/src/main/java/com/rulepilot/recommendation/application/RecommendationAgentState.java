@@ -2,7 +2,7 @@ package com.rulepilot.recommendation.application;
 
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
-import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.PublicContextEvidence;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
@@ -23,9 +23,9 @@ final class RecommendationAgentState {
 
     static final int MAX_VERIFIED_GAMES = 8;
     static final int MAX_OBSERVED_CANDIDATES = 16;
-    static final int MIN_RECOMMENDATION_REPLY_CODE_POINTS = 80;
+    static final int MIN_RECOMMENDATION_REPLY_CODE_POINTS = 1;
     static final int MAX_RECOMMENDATION_REPLY_CODE_POINTS = 1_200;
-    static final int MIN_CARD_REPLY_CODE_POINTS = 12;
+    static final int MIN_CARD_REPLY_CODE_POINTS = 1;
     static final int MAX_CARD_REPLY_CODE_POINTS = 400;
 
     final long startedAtNanos;
@@ -58,8 +58,7 @@ final class RecommendationAgentState {
     boolean catalogBrowseAttempted;
     boolean discoveryAttempted;
     DiscoveryPurpose discoveryPurpose;
-    RelationshipKind discoveredRelationshipKind;
-    List<String> discoveredRelationshipNames = List.of();
+    List<CandidateLead> discoveredCandidateLeads = List.of();
     final Map<String, PublicContextEvidence> publicContextEvidence = new LinkedHashMap<>();
     List<Source> publicContextSources = List.of();
     boolean researchAttempted;
@@ -183,26 +182,8 @@ final class RecommendationAgentState {
         modelCallElapsedMs.add(Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000));
     }
 
-    boolean hasVerifiedIdentity() {
-        return discoveredRelationshipKind != null && !discoveredRelationshipNames.isEmpty();
-    }
-
     boolean hasVerifiedPublicContext() {
         return !publicContextEvidence.isEmpty();
-    }
-
-    List<Integer> verifiedIdentityContextIds() {
-        return java.util.stream.Stream.concat(
-                        comparisonSubjectIds.stream(),
-                        comparisonReferenceIds.stream())
-                .distinct()
-                .filter(id -> {
-                    Game game = verified.get(id);
-                    return game != null
-                            && game.details() != null
-                            && !game.details().designers().isEmpty();
-                })
-                .toList();
     }
 
     record ContextualPreference(
@@ -277,8 +258,7 @@ final class RecommendationAgentState {
                 throw new IllegalArgumentException("recommendation reply draft text is invalid");
             }
             evidenceIds = evidenceIds == null ? List.of() : List.copyOf(evidenceIds);
-            if (evidenceIds.isEmpty()
-                    || evidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
+            if (evidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
                     || evidenceIds.stream().distinct().count() != evidenceIds.size()) {
                 throw new IllegalArgumentException("recommendation reply draft evidence is invalid");
             }
@@ -308,8 +288,7 @@ final class RecommendationAgentState {
                     ? List.of()
                     : List.copyOf(playerReplyEvidenceIds);
             candidates = candidates == null ? List.of() : List.copyOf(candidates);
-            if (playerReplyEvidenceIds.isEmpty()
-                    || playerReplyEvidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
+            if (playerReplyEvidenceIds.stream().anyMatch(id -> id == null || id.isBlank())
                     || playerReplyEvidenceIds.stream().distinct().count() != playerReplyEvidenceIds.size()
                     || candidates.isEmpty()
                     || candidates.stream().map(CandidateReplyDraft::bggId).distinct().count()

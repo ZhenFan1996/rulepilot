@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
+import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.teaching.PublicCoverThumbnailCache.Thumbnail;
 import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.application.PublicCoverThumbnailService;
@@ -172,7 +173,30 @@ class PublicLessonControllerTest {
                         .param("width", "300")
                         .param("height", "400"))
                 .andExpect(status().isBadGateway())
+                .andExpect(header().doesNotExist("Retry-After"))
                 .andExpect(header().string("X-RulePilot-Visual-Failure", "PAGE_IMAGE_UNAVAILABLE"))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
+    }
+
+    @Test
+    void classifies_a_transient_public_crop_storage_failure_as_temporarily_unavailable() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        var lesson = lesson(planId, documentVersionId);
+        when(lessons.requireCitedPage(planId, 4)).thenReturn(lesson);
+        when(pageImages.read(documentVersionId, Set.of(4)))
+                .thenThrow(new RetryableDocumentProcessingException(
+                        "page image storage is temporarily unavailable", new IllegalStateException("storage")));
+
+        mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image/crop", planId, 4)
+                        .param("x", "100")
+                        .param("y", "200")
+                        .param("width", "300")
+                        .param("height", "400"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "1"))
+                .andExpect(header().string(
+                        "X-RulePilot-Visual-Failure", "PAGE_IMAGE_TEMPORARILY_UNAVAILABLE"))
                 .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
     }
 

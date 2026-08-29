@@ -114,6 +114,19 @@ export type RecommendationFailureBoundary =
   | 'publication_boundary'
   | 'service_failure'
 
+export type RecommendationFailureReason =
+  | 'time_limit'
+  | 'model_not_configured'
+  | 'provider_call_failed'
+  | 'provider_protocol_invalid'
+  | 'provider_output_truncated'
+  | 'empty_model_response'
+  | 'repeated_incompatible_actions'
+  | 'repeated_invalid_action'
+  | 'action_budget_exhausted'
+  | 'publication_rejected'
+  | 'service_failure'
+
 export type RecommendationAgentResponse = {
   conversationId?: string | null
   revision?: number | null
@@ -131,6 +144,7 @@ export type RecommendationAgentResponse = {
   catalogCalls?: number
   webResearchCalls?: number
   failureBoundary?: RecommendationFailureBoundary | null
+  failureReason?: RecommendationFailureReason | null
   userModel?: {
     summary: string
     hypotheses: {

@@ -654,7 +654,7 @@ jobs:
             'BGG_RECOMMENDATION_TEMPERATURE=0.0' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S' \
-            'WEB_SEARCH_MODEL=qwen3.7-plus' \
+            'WEB_SEARCH_MODEL=qwen3.8-flash' \
             'QWEN_MODEL=qwen3.7-plus' \
             'QWEN_VISION_CAPABLE=true' \
             'RULEBOOK_DISCOVERY_MODEL=qwen3.7-max' \

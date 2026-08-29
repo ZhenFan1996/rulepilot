@@ -1367,7 +1367,7 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
     }
     if (request.method === 'GET' && request.url === `/api/v1/documents/official-imports/${importJobId}`) {
       importReads += 1
-      if (importReads === 1) {
+      if (importReads <= 2) {
         return json(response, 200, {
           id: importJobId, editionId, rulebookTitle: canaryTitle, officialSourceUrl: effectiveSource,
           stage: 'QUEUED', duplicate: false, documentVersionId: null,
@@ -1425,7 +1425,7 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
         '--rights-confirmed',
         '--navigation-mode', 'api',
         '--question', '游戏什么时候结束？',
-        '--timeout-seconds', '1'],
+        '--timeout-seconds', '3'],
       {
         ...process.env,
         RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
@@ -1435,7 +1435,7 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
     )
 
     assert.equal(result.code, 1, result.stderr)
-    assert.match(result.stderr, /Official image-gallery import exhausted the 1s total forward-work budget/)
+    assert.match(result.stderr, /Official image-gallery import exhausted the 3s total forward-work budget/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-import-resolved/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
     assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {

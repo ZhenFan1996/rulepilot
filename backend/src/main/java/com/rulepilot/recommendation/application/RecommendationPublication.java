@@ -75,29 +75,6 @@ final class RecommendationPublication {
                 List.of());
     }
 
-    ConversationResponse publishFallback(
-            RecommendationAgentState state,
-            Permit permit,
-            String locale,
-            String failureCode) {
-        List<RecommendedGame> games = selector.present(
-                permit.selectedGames(),
-                state.profile,
-                runtime.chinese(locale));
-        String message = runtime.chinese(locale)
-                ? "候选卡片已经通过资料核验，但这轮的自然语言说明没有完成。为避免编造，我保留已核验的卡片事实；你可以直接重试生成完整说明。"
-                : "The candidate cards passed evidence checks, but the natural-language explanation did not finish. To avoid inventing details, I kept the verified card facts; you can retry the complete explanation.";
-        return response(
-                state,
-                permit,
-                games,
-                message,
-                List.of(),
-                locale,
-                true,
-                List.of("RECOMMENDATION_REPLY_FALLBACK:" + failureCode));
-    }
-
     private ConversationResponse response(
             RecommendationAgentState state,
             Permit permit,
@@ -173,7 +150,7 @@ final class RecommendationPublication {
         List<Integer> selectedIds = draft.candidates().stream()
                 .map(CandidateReplyDraft::bggId)
                 .toList();
-        if (selectedIds.size() != expectedCount) {
+        if (selectedIds.isEmpty() || selectedIds.size() > expectedCount) {
             throw invalid(Code.PUBLICATION_SELECTION_COUNT_INVALID);
         }
         if (!availableIds.containsAll(selectedIds)) {

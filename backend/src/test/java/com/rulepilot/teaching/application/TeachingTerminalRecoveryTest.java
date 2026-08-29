@@ -37,7 +37,9 @@ class TeachingTerminalRecoveryTest {
         AtomicInteger attempts = new AtomicInteger();
         UUID runId = UUID.randomUUID();
 
-        recovery.register(runId, () -> attempts.incrementAndGet() == 2);
+        recovery.register(runId, () -> attempts.incrementAndGet() == 2
+                ? TeachingTerminalRecordResult.SETTLED
+                : TeachingTerminalRecordResult.RETRYABLE);
         callbacks.get(0).run();
         callbacks.get(1).run();
 
@@ -66,11 +68,11 @@ class TeachingTerminalRecoveryTest {
 
         recovery.register(runId, () -> {
             first.incrementAndGet();
-            return true;
+            return TeachingTerminalRecordResult.SETTLED;
         });
         recovery.register(runId, () -> {
             later.incrementAndGet();
-            return true;
+            return TeachingTerminalRecordResult.SETTLED;
         });
         callbacks.getFirst().run();
 
@@ -91,7 +93,7 @@ class TeachingTerminalRecoveryTest {
                 Duration.ofMinutes(5));
 
         for (int index = 0; index < TeachingTerminalRecovery.MAX_PENDING_INTENTS + 1; index++) {
-            recovery.register(UUID.randomUUID(), () -> false);
+            recovery.register(UUID.randomUUID(), () -> TeachingTerminalRecordResult.RETRYABLE);
         }
 
         assertThat(recovery.pendingCount()).isEqualTo(TeachingTerminalRecovery.MAX_PENDING_INTENTS);
@@ -117,7 +119,7 @@ class TeachingTerminalRecoveryTest {
 
         recovery.register(UUID.randomUUID(), () -> {
             attempts.incrementAndGet();
-            return false;
+            return TeachingTerminalRecordResult.RETRYABLE;
         });
         for (int index = 0; index < TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS; index++) {
             callbacks.get(index).run();
@@ -126,8 +128,49 @@ class TeachingTerminalRecoveryTest {
         assertThat(attempts).hasValue(TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS);
         assertThat(recovery.pendingCount()).isZero();
         assertThat(metrics.counter("rulepilot.teaching.terminal.recovery.exhausted").count()).isEqualTo(1);
+        assertThat(metrics.counter("rulepilot.teaching.terminal.recovery.retryable").count())
+                .isEqualTo(TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS);
         verify(scheduler, times(TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS))
                 .schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    void settledPermanentIntentsReleaseEveryCapacitySlot() {
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        ScheduledFuture<?> future = mock(ScheduledFuture.class);
+        List<Runnable> callbacks = new ArrayList<>();
+        when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenAnswer(invocation -> {
+            callbacks.add(invocation.getArgument(0));
+            return future;
+        });
+        var metrics = new SimpleMeterRegistry();
+        var recovery = new TeachingTerminalRecovery(
+                scheduler,
+                metrics,
+                Duration.ofNanos(1),
+                Duration.ofNanos(1));
+        AtomicInteger attempts = new AtomicInteger();
+
+        for (int index = 0; index < TeachingTerminalRecovery.MAX_PENDING_INTENTS; index++) {
+            recovery.register(UUID.randomUUID(), () -> {
+                attempts.incrementAndGet();
+                return TeachingTerminalRecordResult.SETTLED;
+            });
+        }
+        int callbackIndex = 0;
+        while (recovery.pendingCount() > 0) {
+            callbacks.get(callbackIndex++).run();
+        }
+        recovery.register(UUID.randomUUID(), () -> {
+            attempts.incrementAndGet();
+            return TeachingTerminalRecordResult.SETTLED;
+        });
+        callbacks.get(callbackIndex).run();
+
+        assertThat(attempts).hasValue(TeachingTerminalRecovery.MAX_PENDING_INTENTS + 1);
+        assertThat(recovery.pendingCount()).isZero();
+        assertThat(metrics.counter("rulepilot.teaching.terminal.recovery.settled").count())
+                .isEqualTo(TeachingTerminalRecovery.MAX_PENDING_INTENTS + 1);
     }
 
     @Test

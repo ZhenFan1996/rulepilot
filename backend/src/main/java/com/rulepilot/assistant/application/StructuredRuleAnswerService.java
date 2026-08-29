@@ -60,8 +60,8 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v115-context-only-interpretation";
+    // Retrieval-first context recovery changes the semantic identity, so earlier answer-cache entries are stale.
+    private static final String ANSWER_POLICY_VERSION = "answer-v116-retrieval-first-recovery";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerQuestionInterpretationPolicy questionInterpretation;
@@ -362,18 +362,29 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String question, QuestionContext context, String username, UUID evaluationSessionId) {
         RunSnapshot run = runLifecycle.start(
                 AssistantRunMode.QUESTION_ANSWER, context.documentVersionId(), username);
+        AnswerRunProgressPolicy.Tracker progress = new AnswerRunProgressPolicy.Tracker();
         try {
             StructuredRuleAnswer answer = answerInternal(
-                    question, context, username, evaluationSessionId, run.id(), false);
-            runLifecycle.finish(run, answer);
+                    question, context, username, evaluationSessionId, run.id(), false, progress);
+            runLifecycle.finish(run, answer, progress.phase());
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
-            runLifecycle.fail(run, "AGENT_" + stopped.reason().name(), "Evaluation stopped by execution budget", stopped);
+            runLifecycle.fail(
+                    run,
+                    progress.phase(),
+                    "AGENT_" + stopped.reason().name(),
+                    "Evaluation stopped by execution budget",
+                    stopped);
             return new AnswerCreation(
                     run.id(), safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
                             "评测执行受到预算限制，未产生可验证答案。"));
         } catch (RuntimeException exception) {
-            runLifecycle.fail(run, "ANSWER_EVALUATION_FAILED", "Answer evaluation failed safely", exception);
+            runLifecycle.fail(
+                    run,
+                    progress.phase(),
+                    "ANSWER_EVALUATION_FAILED",
+                    "Answer evaluation failed safely",
+                    exception);
             return new AnswerCreation(
                     run.id(), safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
                             "评测执行失败，未产生可验证答案。"));
@@ -391,6 +402,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 AssistantRunMode.QUESTION_ANSWER,
                 gameSessionId == null ? context.documentVersionId() : gameSessionId,
                 username);
+        AnswerRunProgressPolicy.Tracker progress = new AnswerRunProgressPolicy.Tracker();
         try {
             runStarted.accept(run.id());
         } catch (RuntimeException exception) {
@@ -398,18 +410,28 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         try {
             StructuredRuleAnswer answer = answerInternal(
-                    question, context, username, gameSessionId, run.id(), useCache);
-            run = runLifecycle.finish(run, answer);
+                    question, context, username, gameSessionId, run.id(), useCache, progress);
+            run = runLifecycle.finish(run, answer, progress.phase());
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
-            runLifecycle.fail(run, "AGENT_" + stopped.reason().name(), "Question workflow stopped by execution budget", stopped);
+            runLifecycle.fail(
+                    run,
+                    progress.phase(),
+                    "AGENT_" + stopped.reason().name(),
+                    "Question workflow stopped by execution budget",
+                    stopped);
             AnswerStatus status = stopped.reason() == AgentExecutionStoppedException.StopReason.TIMEOUT
                     ? AnswerStatus.MODEL_TIMEOUT
                     : AnswerStatus.INVALID_MODEL_OUTPUT;
             return new AnswerCreation(
                     run.id(), safe(context.documentVersionId(), status, "答疑执行已在应用预算边界安全停止。"));
         } catch (RuntimeException exception) {
-            runLifecycle.fail(run, "QUESTION_WORKFLOW_FAILED", "Question workflow failed safely", exception);
+            runLifecycle.fail(
+                    run,
+                    progress.phase(),
+                    "QUESTION_WORKFLOW_FAILED",
+                    "Question workflow failed safely",
+                    exception);
             throw exception;
         }
     }
@@ -421,7 +443,14 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private StructuredRuleAnswer answerInternal(
             String question, QuestionContext context, String username, UUID gameSessionId, UUID assistantRunId) {
-        return answerInternal(question, context, username, gameSessionId, assistantRunId, true);
+        return answerInternal(
+                question,
+                context,
+                username,
+                gameSessionId,
+                assistantRunId,
+                true,
+                new AnswerRunProgressPolicy.Tracker());
     }
 
     private StructuredRuleAnswer answerInternal(
@@ -430,68 +459,28 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String username,
             UUID gameSessionId,
             UUID assistantRunId,
-            boolean useCache) {
+            boolean useCache,
+            AnswerRunProgressPolicy.Tracker progress) {
         UnderstoodQuestion deterministic = understanding.understand(question, context);
-        UnderstoodQuestion understood = deterministic;
-        AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);
+        progress.reached(AnswerRunProgressPolicy.ExecutionPhase.QUESTION_UNDERSTANDING);
         QuestionContext suppliedContext = context;
-        LearningIntent plannedLearningIntent = context.learningIntent();
-        if (modelGateway.supportsQuestionInterpretation(username)
-                && questionInterpretation.requiresModelInterpretation(suppliedContext)) {
-            try {
-                Optional<AnswerQuestionInterpretationPolicy.Interpretation> interpreted = modelGateway
-                        .interpretQuestion(
-                                assistantRunId,
-                                username,
-                                gameSessionId,
-                                interpretationRequest(deterministic, suppliedContext))
-                        .flatMap(draft -> questionInterpretation.applyWithPlan(deterministic, suppliedContext, draft));
-                if (interpreted.isPresent()) {
-                    AnswerQuestionInterpretationPolicy.Interpretation accepted = interpreted.orElseThrow();
-                    understood = accepted.question();
-                    if (accepted.plan() != null) questionPlan = accepted.plan();
-                    plannedLearningIntent = accepted.learningIntent();
-                    acceptedQuestionInterpretations.increment();
-                } else {
-                    rejectedQuestionInterpretations.increment();
-                    return safe(
-                            context.documentVersionId(),
-                            AnswerStatus.INVALID_MODEL_OUTPUT,
-                            questionInterpretationFailure(context.outputLanguage(), false));
-                }
-            } catch (RuleAnswerModelTimeoutException timeout) {
-                rejectedQuestionInterpretations.increment();
-                LOGGER.warn("Answer question interpretation timed out; refusing to infer missing structured fields");
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.MODEL_TIMEOUT,
-                        questionInterpretationFailure(context.outputLanguage(), true));
-            } catch (RuntimeException failure) {
-                rejectedQuestionInterpretations.increment();
-                LOGGER.warn("Answer question interpretation failed validation; refusing to infer missing structured fields");
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        questionInterpretationFailure(context.outputLanguage(), false));
-            }
+        UnderstoodQuestion interpretedQuestion = deterministic;
+        AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic, suppliedContext.learningIntent());
+        QuestionContext resolvedContext = suppliedContext;
+        if (deterministic.needsClarification()) {
+            return AnswerOutcomePolicy.clarification(deterministic, suppliedContext.outputLanguage());
         }
-        QuestionContext resolvedContext = suppliedContext.withLearningIntent(plannedLearningIntent);
-        context = resolvedContext;
-        UnderstoodQuestion interpretedQuestion = understood;
-        if (interpretedQuestion.needsClarification()) {
-            return AnswerOutcomePolicy.clarification(interpretedQuestion, context.outputLanguage());
-        }
-        var confirmed = resolvedContext.allowedEvidencePages() == null
+        var confirmed = suppliedContext.allowedEvidencePages() == null
                 ? invocations.invoke(
                         assistantRunId,
                         ActivityType.TOOL,
                         "searchConfirmedRulings",
-                        estimateTokens(interpretedQuestion.originalQuestion()),
+                        estimateTokens(deterministic.originalQuestion()),
                         "Confirmed ruling lookup completed",
                         () -> confirmedRulings.find(
-                                resolvedContext.documentVersionId(),
+                                suppliedContext.documentVersionId(),
                                 Set.of(),
-                                interpretedQuestion.originalQuestion(),
+                                deterministic.originalQuestion(),
                                 username),
                         result -> result.isPresent() ? 32 : 0)
                 : Optional.<com.rulepilot.ruling.ConfirmedRulingLookup.ConfirmedAnswer>empty();
@@ -500,7 +489,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             return AnswerOutcomePolicy.confirmedRuling(confirmed.get());
         }
         rateLimiter.checkUser(username);
-        Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(interpretedQuestion, context) : Optional.empty();
+        Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(deterministic, suppliedContext) : Optional.empty();
         if (cacheKey.isPresent()) {
             var cached = findCached(cacheKey.get());
             if (cached.isPresent()) {
@@ -509,12 +498,72 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
             cacheMisses.increment();
         }
+        progress.reached(AnswerRunProgressPolicy.ExecutionPhase.RETRIEVAL_PLANNING);
+        progress.reached(AnswerRunProgressPolicy.ExecutionPhase.RETRIEVING);
         AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(
                 assistantRunId,
-                AnswerRetrievalInputMapper.question(interpretedQuestion),
-                AnswerRetrievalInputMapper.context(context),
+                AnswerRetrievalInputMapper.question(deterministic),
+                AnswerRetrievalInputMapper.context(suppliedContext),
                 username,
                 AnswerRetrievalInputMapper.plan(questionPlan));
+        progress.reached(AnswerRunProgressPolicy.ExecutionPhase.VERIFYING_EVIDENCE);
+
+        if (retrievalResult.state() == AnswerEvidenceRetriever.State.READY
+                && retrievalResult.evidence().isEmpty()
+                && modelGateway.supportsQuestionInterpretation(username)
+                && questionInterpretation.canRecoverEmptyEvidence(suppliedContext)) {
+            try {
+                Optional<AnswerQuestionInterpretationPolicy.Interpretation> recovery = modelGateway
+                        .interpretQuestion(
+                                assistantRunId,
+                                username,
+                                gameSessionId,
+                                interpretationRequest(deterministic, suppliedContext))
+                        .flatMap(draft -> questionInterpretation.applyWithPlan(deterministic, suppliedContext, draft));
+                if (recovery.isPresent()) {
+                    AnswerQuestionInterpretationPolicy.Interpretation accepted = recovery.orElseThrow();
+                    UnderstoodQuestion recoveredQuestion = accepted.question();
+                    AnswerQuestionPlan recoveredPlan = accepted.plan() == null ? questionPlan : accepted.plan();
+                    QuestionContext recoveredContext =
+                            suppliedContext.withLearningIntent(accepted.learningIntent());
+                    acceptedQuestionInterpretations.increment();
+                    if (recoveredQuestion.needsClarification()) {
+                        return AnswerOutcomePolicy.clarification(
+                                recoveredQuestion, recoveredContext.outputLanguage());
+                    }
+                    progress.reached(AnswerRunProgressPolicy.ExecutionPhase.RETRIEVAL_PLANNING);
+                    progress.reached(AnswerRunProgressPolicy.ExecutionPhase.RETRIEVING);
+                    AnswerEvidenceRetriever.Result recoveredResult = evidenceRetriever.retrieve(
+                            assistantRunId,
+                            AnswerRetrievalInputMapper.question(recoveredQuestion),
+                            AnswerRetrievalInputMapper.context(recoveredContext),
+                            username,
+                            AnswerRetrievalInputMapper.plan(recoveredPlan));
+                    progress.reached(AnswerRunProgressPolicy.ExecutionPhase.VERIFYING_EVIDENCE);
+                    interpretedQuestion = recoveredQuestion;
+                    questionPlan = recoveredPlan;
+                    resolvedContext = recoveredContext;
+                    retrievalResult = recoveredResult;
+                    cacheKey = useCache ? cacheKey(recoveredQuestion, recoveredContext) : Optional.empty();
+                } else {
+                    rejectedQuestionInterpretations.increment();
+                    LOGGER.info(
+                            "Empty-evidence question recovery was not accepted; preserving the current-question result");
+                }
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuleAnswerModelTimeoutException timeout) {
+                rejectedQuestionInterpretations.increment();
+                LOGGER.warn(
+                        "Empty-evidence question recovery timed out; preserving the current-question result");
+            } catch (RuntimeException failure) {
+                rejectedQuestionInterpretations.increment();
+                LOGGER.warn(
+                        "Empty-evidence question recovery failed validation; preserving the current-question result");
+            }
+        }
+        progress.reached(AnswerRunProgressPolicy.ExecutionPhase.VERIFYING_EVIDENCE);
+        context = resolvedContext;
         if (evidenceRefiner != null && context.allowedEvidencePages() == null) {
             retrievalResult = evidenceRefiner.refine(
                     assistantRunId,
@@ -539,6 +588,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
+        progress.reached(AnswerRunProgressPolicy.ExecutionPhase.ANSWER_COMPOSITION);
         AnswerDraftComposer.Result draftResult = draftComposer.compose(
                 assistantRunId, username, gameSessionId, modelRequest);
         if (!draftResult.ready()) {
@@ -613,6 +663,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         answer = AnswerOutcomePolicy.withWarnings(answer, publicationWarnings);
         try {
+            progress.reached(AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING);
             answer = postPublicationReviewer.review(
                     assistantRunId,
                     interpretedQuestion,
@@ -760,17 +811,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 deterministic.missingContext(),
                 context.learningIntent(),
                 context.outputLanguage());
-    }
-
-    private String questionInterpretationFailure(PlayerLocale language, boolean timedOut) {
-        if (language == PlayerLocale.EN) {
-            return timedOut
-                    ? "I could not finish structuring this question in time. Your question is unchanged; please retry."
-                    : "The question interpretation did not match the required structure. Your question is unchanged; please retry.";
-        }
-        return timedOut
-                ? "本次未能在时限内完成问题结构化。你的问题没有被改写，可以直接重试。"
-                : "本次问题解释未通过结构校验。你的问题没有被改写，可以直接重试。";
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {

@@ -14,6 +14,7 @@ import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.BudgetLimits;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
+import com.rulepilot.assistant.AssistantRuns.StepSnapshot;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.domain.AssistantRun;
 import java.time.Duration;
@@ -700,6 +701,32 @@ class AssistantRunServiceTest {
         verify(repository).find(run.id());
         verify(execution).budget(run.id());
         verify(execution).activities(run.id());
+    }
+
+    @Test
+    void exposesTheSafeFailureCodeAndActualAnswerPhaseThroughOwnedRunDetails() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(5);
+        AssistantRun failed = AssistantRun.start(
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", startedAt)
+                .fail("QUESTION_WORKFLOW_FAILED", startedAt.plusSeconds(1));
+        StepSnapshot failureStep = new StepSnapshot(
+                1,
+                AssistantRunState.RECEIVED,
+                AssistantRunState.FAILED,
+                "Question workflow failed safely during RETRIEVING",
+                startedAt.plusSeconds(1));
+        when(repository.find(failed.id())).thenReturn(java.util.Optional.of(failed));
+        when(repository.steps(failed.id())).thenReturn(List.of(failureStep));
+        when(execution.activities(failed.id())).thenReturn(List.of());
+
+        var details = service.findOwned(failed.id(), "player").orElseThrow();
+
+        assertThat(details.run().lastErrorCode()).isEqualTo("QUESTION_WORKFLOW_FAILED");
+        assertThat(details.steps()).last().extracting(StepSnapshot::summary)
+                .isEqualTo("Question workflow failed safely during RETRIEVING");
     }
 
     @Test

@@ -229,12 +229,6 @@ public class BoardGameRecommendationTools {
         }
     }
 
-    void rememberVerifiedIdentity(
-            DiscoveryRequest request,
-            BoardGameRecommendationWebResearch.CandidateDiscovery discovery) {
-        webResearch.rememberVerifiedIdentity(request, discovery);
-    }
-
     ResearchObservation researchGameFit(List<Candidate> candidates, String locale, String question) {
         if (!webResearch.configured()) return ResearchObservation.unavailable();
         try {

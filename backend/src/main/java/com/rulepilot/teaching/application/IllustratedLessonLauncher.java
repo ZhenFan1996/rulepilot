@@ -243,7 +243,7 @@ public class IllustratedLessonLauncher {
         }
     }
 
-    private boolean recordQueueTerminal(
+    private TeachingTerminalRecordResult recordQueueTerminal(
             RunSnapshot queued,
             String ownerUsername,
             UUID activationId,
@@ -265,10 +265,19 @@ public class IllustratedLessonLauncher {
             } else {
                 runs.failQueuedIfUnactivated(queued.id(), ownerUsername, errorCode, summary);
             }
-            return true;
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (AgentExecutionStoppedException | AgentWorkAlreadyClaimedException settledRace) {
+            LOGGER.info("Teaching run {} queue terminal intent already has a durable winner", queued.id());
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (IllegalArgumentException permanentFailure) {
+            LOGGER.error(
+                    "Teaching run {} queue terminal intent was permanently rejected",
+                    queued.id(),
+                    permanentFailure);
+            return TeachingTerminalRecordResult.SETTLED;
         } catch (RuntimeException persistenceFailure) {
             LOGGER.warn("Teaching run {} queue terminal state could not yet be recorded", queued.id());
-            return false;
+            return TeachingTerminalRecordResult.RETRYABLE;
         }
     }
 
@@ -367,7 +376,7 @@ public class IllustratedLessonLauncher {
         }
     }
 
-    private boolean recordContinuationTerminal(
+    private TeachingTerminalRecordResult recordContinuationTerminal(
             IllustratedLessonService.GenerationContinuation continuation,
             String ownerUsername,
             TeachingQueueAdmission.Expiry expiry) {
@@ -382,12 +391,24 @@ public class IllustratedLessonLauncher {
             case WORKER_ADMISSION_FAILED -> "The first cited section is readable but remaining teaching work could not acquire its worker lease";
         };
         try {
-            return runs.failActiveIfOwned(continuation.run().id(), ownerUsername, errorCode, summary);
+            runs.failActiveIfOwned(continuation.run().id(), ownerUsername, errorCode, summary);
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (AgentExecutionStoppedException | AgentWorkAlreadyClaimedException settledRace) {
+            LOGGER.info(
+                    "Teaching continuation run {} queue terminal intent already has a durable winner",
+                    continuation.run().id());
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (IllegalArgumentException permanentFailure) {
+            LOGGER.error(
+                    "Teaching continuation run {} queue terminal intent was permanently rejected",
+                    continuation.run().id(),
+                    permanentFailure);
+            return TeachingTerminalRecordResult.SETTLED;
         } catch (RuntimeException persistenceFailure) {
             LOGGER.warn(
                     "Teaching continuation run {} queue terminal state could not yet be recorded",
                     continuation.run().id());
-            return false;
+            return TeachingTerminalRecordResult.RETRYABLE;
         }
     }
 

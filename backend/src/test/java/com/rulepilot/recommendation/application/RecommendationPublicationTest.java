@@ -82,7 +82,7 @@ class RecommendationPublicationTest {
     }
 
     @Test
-    void rejectsCandidateOrEvidenceOutsideThePendingVerifiedBoundary() {
+    void acceptsConciseModelProseButRejectsCandidateOrEvidenceOutsideTheVerifiedBoundary() {
         Fixture fixture = fixture(List.of(101, 102));
         fixture.state.pendingPublicationSeed = new PublicationSeed(List.of(101), List.of(), 1);
 
@@ -90,9 +90,9 @@ class RecommendationPublicationTest {
                 "已推荐。",
                 List.of(evidenceId(fixture, 101)),
                 List.of(candidateDraft(fixture, 101, "人数和时长都有当前候选的目录事实支持。", null)));
-        assertFailure(
-                () -> fixture.publication.permit(fixture.state, shortStatus),
-                RecommendationPublication.Code.RECOMMENDATION_REPLY_INVALID);
+        assertThat(fixture.publication.permit(fixture.state, shortStatus).selectedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(101);
 
         PublicationDraft shortCardNote = new PublicationDraft(
                 "这是一段达到完整答复长度的模型回复，它只引用当前候选自己的已核验目录事实，也没有越过候选身份边界；不过卡片理由仍然过短，无法向玩家解释为什么值得考虑，所以整个正常发布动作必须被拒绝并由模型修复。",
@@ -101,9 +101,9 @@ class RecommendationPublicationTest {
                         101,
                         new RecommendationReplyDraft("合适。", List.of(evidenceId(fixture, 101))),
                         null)));
-        assertFailure(
-                () -> fixture.publication.permit(fixture.state, shortCardNote),
-                RecommendationPublication.Code.RECOMMENDATION_REPLY_INVALID);
+        assertThat(fixture.publication.permit(fixture.state, shortCardNote).selectedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(101);
 
         PublicationDraft outsideCandidate = new PublicationDraft(
                 "这是一段长度完整的候选回复，但它故意选择了当前待发布集合以外的游戏。验证层必须先拒绝候选身份，不能因为自然语言听起来合理就放行，也不能由应用把它偷偷换成另一款已核验候选；模型只能按当前枚举重新提交。",

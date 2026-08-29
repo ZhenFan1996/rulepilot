@@ -1,13 +1,17 @@
 package com.rulepilot.document.adapter.in.web;
 
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
+import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import java.security.Principal;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Supplier;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -25,15 +29,17 @@ import org.springframework.web.server.ResponseStatusException;
 @Profile("!test")
 public class DocumentPageController {
 
+    private static final String VISUAL_FAILURE_HEADER = "X-RulePilot-Visual-Failure";
+
     private final DocumentProcessing documents;
     private final DocumentPageImages pageImages;
-    private final RulePageImageCropper imageCropper;
+    private final DocumentPageImageCropper imageCropper;
     private final DocumentVersionScopeLookup versions;
 
     public DocumentPageController(
             DocumentProcessing documents,
             DocumentPageImages pageImages,
-            RulePageImageCropper imageCropper,
+            DocumentPageImageCropper imageCropper,
             DocumentVersionScopeLookup versions) {
         this.documents = documents;
         this.pageImages = pageImages;
@@ -79,13 +85,12 @@ public class DocumentPageController {
             @RequestParam int height,
             Principal principal) {
         requireOwned(versionId, principal);
-        var image = pageImages.read(versionId, Set.of(pageNumber)).stream()
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("document page image does not exist"));
-        return ResponseEntity.ok()
-                .contentType(MediaType.IMAGE_JPEG)
-                .cacheControl(CacheControl.noStore())
-                .body(imageCropper.crop(image, x, y, width, height));
+        return cropResponse(() -> {
+            var image = pageImages.read(versionId, Set.of(pageNumber)).stream()
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("document page image does not exist"));
+            return imageCropper.crop(image, x, y, width, height);
+        });
     }
 
     @GetMapping("/{pageNumber}/image/preview")
@@ -107,6 +112,34 @@ public class DocumentPageController {
                 .filter(version -> version.createdBy().equals(owner))
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "document version does not exist"));
+    }
+
+    private ResponseEntity<byte[]> cropResponse(Supplier<byte[]> content) {
+        try {
+            return ResponseEntity.ok()
+                    .contentType(MediaType.IMAGE_JPEG)
+                    .cacheControl(CacheControl.noStore())
+                    .body(content.get());
+        } catch (RejectedExecutionException saturated) {
+            return retryableCropFailure("DECODE_CAPACITY_EXCEEDED");
+        } catch (RetryableDocumentProcessingException transientFailure) {
+            return retryableCropFailure("PAGE_IMAGE_TEMPORARILY_UNAVAILABLE");
+        } catch (IllegalArgumentException invalidRequest) {
+            throw invalidRequest;
+        } catch (RuntimeException unreadable) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                    .cacheControl(CacheControl.noStore())
+                    .header(VISUAL_FAILURE_HEADER, "PAGE_IMAGE_UNAVAILABLE")
+                    .body(new byte[0]);
+        }
+    }
+
+    private ResponseEntity<byte[]> retryableCropFailure(String reason) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .cacheControl(CacheControl.noStore())
+                .header("Retry-After", "1")
+                .header(VISUAL_FAILURE_HEADER, reason)
+                .body(new byte[0]);
     }
 
     record PageResponse(int pageNumber, String text, int characterCount) {

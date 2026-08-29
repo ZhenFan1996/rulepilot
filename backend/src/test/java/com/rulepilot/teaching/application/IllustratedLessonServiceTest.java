@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -18,6 +19,9 @@ import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
+import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
+import com.rulepilot.teaching.application.GroundedTeachingAgent.BaseLessonContinuation;
+import com.rulepilot.teaching.application.IllustratedLessonService.GenerationContinuation;
 import com.rulepilot.teaching.application.IllustratedLessonService.GenerationOutcome;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
@@ -29,7 +33,9 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import io.micrometer.observation.ObservationRegistry;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 class IllustratedLessonServiceTest {
@@ -189,6 +195,193 @@ class IllustratedLessonServiceTest {
     }
 
     @Test
+    void classifiesMissingOrInvalidPlanInputAsPermanentWithoutPersistingPrivateDetails() {
+        UUID planId = UUID.randomUUID();
+        AssistantRuns runs = mock(AssistantRuns.class);
+        RunSnapshot received = run(planId, "alice", AssistantRunState.RECEIVED, 1);
+        TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
+        when(plans.findById(planId)).thenReturn(Optional.empty());
+        IllustratedLessonService service = service(
+                plans,
+                mock(GroundedTeachingAgent.class),
+                mock(IllustratedLessonRepository.class),
+                runs,
+                mock(DocumentVersionScopeLookup.class),
+                mock(IllustratedLessonProgressPublisher.class));
+
+        assertThatThrownBy(() -> service.startGeneration(planId, "alice", received))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("teaching plan does not exist");
+
+        verify(runs).fail(
+                received.id(),
+                1,
+                "TEACHING_PLAN_INVALID",
+                "Teaching input is no longer valid");
+    }
+
+    @Test
+    void classifiesPlanRepositoryOutageAsRetryablePlanRetrieval() {
+        UUID planId = UUID.randomUUID();
+        AssistantRuns runs = mock(AssistantRuns.class);
+        RunSnapshot received = run(planId, "alice", AssistantRunState.RECEIVED, 1);
+        TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
+        when(plans.findById(planId)).thenThrow(new IllegalStateException("private database endpoint"));
+        IllustratedLessonService service = service(
+                plans,
+                mock(GroundedTeachingAgent.class),
+                mock(IllustratedLessonRepository.class),
+                runs,
+                mock(DocumentVersionScopeLookup.class),
+                mock(IllustratedLessonProgressPublisher.class));
+
+        assertThatThrownBy(() -> service.startGeneration(planId, "alice", received))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("private database endpoint");
+
+        verify(runs).fail(
+                received.id(),
+                1,
+                "TEACHING_PLAN_RETRIEVAL_FAILED",
+                "Teaching plan and source scope could not be loaded");
+    }
+
+    @Test
+    void classifiesFirstSectionDependencyFailureAsEvidenceRetrieval() {
+        TeachingPlan plan = ownedPlan("alice");
+        AssistantRuns runs = mock(AssistantRuns.class);
+        GenerationRuns generation = generationRuns(runs, plan.id(), "alice");
+        GroundedTeachingAgent agent = mock(GroundedTeachingAgent.class);
+        when(agent.startBase(any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("private evidence adapter detail"));
+        IllustratedLessonService service = service(
+                mock(TeachingPlanRepository.class),
+                agent,
+                mock(IllustratedLessonRepository.class),
+                runs,
+                mock(DocumentVersionScopeLookup.class),
+                mock(IllustratedLessonProgressPublisher.class));
+
+        assertThatThrownBy(() -> service.startGeneration(plan, "alice", generation.received()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("private evidence adapter detail");
+
+        verify(runs).fail(
+                generation.received().id(),
+                generation.retrieving().revision(),
+                "TEACHING_EVIDENCE_RETRIEVAL_FAILED",
+                "Teaching evidence could not be loaded; any published chapters remain available");
+    }
+
+    @Test
+    void classifiesLegacyFullGenerationProviderFailureWithoutExposingProviderDetails() {
+        TeachingPlan plan = ownedPlan("alice");
+        AssistantRuns runs = mock(AssistantRuns.class);
+        GenerationRuns generation = generationRuns(runs, plan.id(), "alice");
+        TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
+        when(plans.findById(plan.id())).thenReturn(Optional.of(plan));
+        DocumentVersionScopeLookup documents = mock(DocumentVersionScopeLookup.class);
+        UUID documentVersionId = plan.documentVersionId();
+        when(documents.findVersion(documentVersionId))
+                .thenReturn(Optional.of(new VersionScope(
+                        documentVersionId, UUID.randomUUID(), "READY", "alice")));
+        GroundedTeachingAgent agent = mock(GroundedTeachingAgent.class);
+        when(agent.createBase(any(), any(), any(), any()))
+                .thenThrow(new ProviderFailureException(
+                        new IllegalStateException("private provider response")));
+        IllustratedLessonService service = service(
+                plans,
+                agent,
+                mock(IllustratedLessonRepository.class),
+                runs,
+                documents,
+                mock(IllustratedLessonProgressPublisher.class));
+
+        assertThatThrownBy(() -> service.generateCandidate(plan.id(), "alice", generation.received()))
+                .isInstanceOf(ProviderFailureException.class)
+                .hasMessage("teaching model provider failed")
+                .hasRootCauseMessage("private provider response");
+
+        verify(runs).fail(
+                generation.received().id(),
+                generation.retrieving().revision(),
+                "TEACHING_MODEL_PROVIDER_FAILED",
+                "Teaching model work could not complete; any published chapters remain available");
+    }
+
+    @Test
+    void keepsThePreviousDurableChapterWhenPublishingNewProgressFails() {
+        TeachingPlan plan = ownedPlan("alice");
+        AssistantRuns runs = mock(AssistantRuns.class);
+        GenerationRuns generation = generationRuns(runs, plan.id(), "alice");
+        IllustratedLesson previous = lesson(
+                plan.id(), EvidenceStatus.CITED_DRAFT, List.of(4), List.of(UUID.randomUUID()));
+        IllustratedLesson next = lesson(
+                plan.id(), EvidenceStatus.CITED_DRAFT, List.of(4, 7), List.of(UUID.randomUUID()));
+        IllustratedLessonRepository repository = mock(IllustratedLessonRepository.class);
+        when(repository.findLatestByPlan(plan.id())).thenReturn(Optional.of(previous));
+        IllustratedLessonProgressPublisher publisher = mock(IllustratedLessonProgressPublisher.class);
+        when(publisher.publish(next)).thenThrow(new IllegalStateException("private storage coordinates"));
+        GroundedTeachingAgent agent = mock(GroundedTeachingAgent.class);
+        when(agent.startBase(any(), any(), any(), any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<IllustratedLesson> publish = invocation.getArgument(3, Consumer.class);
+            publish.accept(next);
+            return mock(BaseLessonContinuation.class);
+        });
+        IllustratedLessonService service = service(
+                mock(TeachingPlanRepository.class),
+                agent,
+                repository,
+                runs,
+                mock(DocumentVersionScopeLookup.class),
+                publisher);
+
+        assertThatThrownBy(() -> service.startGeneration(plan, "alice", generation.received()))
+                .isInstanceOf(RuntimeException.class)
+                .hasRootCauseMessage("private storage coordinates");
+
+        verify(agent).startBase(eq(plan), eq(generation.received().id()), eq(previous), any());
+        verify(runs).fail(
+                generation.received().id(),
+                generation.retrieving().revision(),
+                "TEACHING_PERSISTENCE_FAILED",
+                "Teaching progress could not be persisted; any previously published chapters remain available");
+        verify(publisher).publish(next);
+        assertThat(service.latest(plan.id())).contains(previous);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void classifiesRemainingChapterFailureAsContinuationAndLeavesDurableProgressUntouched() {
+        AssistantRuns runs = mock(AssistantRuns.class);
+        RunSnapshot retrieving = run(AssistantRunState.RETRIEVING, 5);
+        BaseLessonContinuation base = mock(BaseLessonContinuation.class);
+        GroundedTeachingAgent agent = mock(GroundedTeachingAgent.class);
+        when(agent.continueBaseWorkUnit(eq(base), any()))
+                .thenThrow(new IllegalStateException("private continuation state"));
+        IllustratedLessonRepository repository = mock(IllustratedLessonRepository.class);
+        IllustratedLessonService service = service(
+                mock(TeachingPlanRepository.class),
+                agent,
+                repository,
+                runs,
+                mock(DocumentVersionScopeLookup.class),
+                mock(IllustratedLessonProgressPublisher.class));
+
+        assertThatThrownBy(() -> service.continueGeneration(new GenerationContinuation(retrieving, base)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("private continuation state");
+
+        verify(runs).fail(
+                retrieving.id(),
+                retrieving.revision(),
+                "TEACHING_CONTINUATION_FAILED",
+                "Remaining teaching chapters could not continue; published chapters remain available");
+        verifyNoInteractions(repository);
+    }
+
+    @Test
     void recognizesOnlyPersistedSectionsThatAlreadyHaveVerifiableCitations() {
         UUID planId = UUID.randomUUID();
         IllustratedLessonRepository repository = mock(IllustratedLessonRepository.class);
@@ -228,15 +421,70 @@ class IllustratedLessonServiceTest {
     }
 
     private IllustratedLessonService service(AssistantRuns runs, IllustratedLessonRepository repository) {
-        return new IllustratedLessonService(
+        return service(
                 mock(TeachingPlanRepository.class),
                 mock(GroundedTeachingAgent.class),
                 repository,
                 runs,
                 mock(DocumentVersionScopeLookup.class),
-                mock(ObservationRegistry.class),
                 mock(IllustratedLessonProgressPublisher.class));
     }
+
+    private IllustratedLessonService service(
+            TeachingPlanRepository plans,
+            GroundedTeachingAgent agent,
+            IllustratedLessonRepository repository,
+            AssistantRuns runs,
+            DocumentVersionScopeLookup documents,
+            IllustratedLessonProgressPublisher progressPublisher) {
+        return new IllustratedLessonService(
+                plans,
+                agent,
+                repository,
+                runs,
+                documents,
+                ObservationRegistry.NOOP,
+                progressPublisher);
+    }
+
+    private TeachingPlan ownedPlan(String owner) {
+        TeachingPlan plan = mock(TeachingPlan.class);
+        when(plan.id()).thenReturn(UUID.randomUUID());
+        when(plan.documentVersionId()).thenReturn(UUID.randomUUID());
+        when(plan.createdBy()).thenReturn(owner);
+        return plan;
+    }
+
+    private GenerationRuns generationRuns(AssistantRuns runs, UUID planId, String owner) {
+        RunSnapshot received = run(planId, owner, AssistantRunState.RECEIVED, 1);
+        RunSnapshot documentReady = run(
+                received.id(), planId, owner, AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot planned = run(
+                received.id(), planId, owner, AssistantRunState.LESSON_PLANNING, 3);
+        RunSnapshot retrievalPlanned = run(
+                received.id(), planId, owner, AssistantRunState.RETRIEVAL_PLANNING, 4);
+        RunSnapshot retrieving = run(
+                received.id(), planId, owner, AssistantRunState.RETRIEVING, 5);
+        when(runs.advance(
+                        received.id(), received.revision(), AssistantRunState.DOCUMENT_READINESS,
+                        "Rule document readiness is checked"))
+                .thenReturn(documentReady);
+        when(runs.advance(
+                        received.id(), documentReady.revision(), AssistantRunState.LESSON_PLANNING,
+                        "Teaching plan is loaded"))
+                .thenReturn(planned);
+        when(runs.advance(
+                        received.id(), planned.revision(), AssistantRunState.RETRIEVAL_PLANNING,
+                        "Required lesson evidence is planned"))
+                .thenReturn(retrievalPlanned);
+        when(runs.advance(
+                        received.id(), retrievalPlanned.revision(), AssistantRunState.RETRIEVING,
+                        "Allow-listed rule search is running"))
+                .thenReturn(retrieving);
+        return new GenerationRuns(received, retrieving);
+    }
+
+    private record GenerationRuns(RunSnapshot received, RunSnapshot retrieving) {}
 
     private IllustratedLesson lesson(
             UUID planId,

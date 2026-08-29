@@ -61,7 +61,11 @@ public record AssistantRun(
             Map.entry(AssistantRunState.RECEIVED, Set.of(AssistantRunState.QUESTION_UNDERSTANDING)),
             Map.entry(
                     AssistantRunState.QUESTION_UNDERSTANDING,
-                    Set.of(AssistantRunState.NEED_CLARIFICATION, AssistantRunState.RETRIEVAL_PLANNING)),
+                    Set.of(
+                            AssistantRunState.NEED_CLARIFICATION,
+                            AssistantRunState.RETRIEVAL_PLANNING,
+                            AssistantRunState.COMPLETED,
+                            AssistantRunState.DEGRADED)),
             Map.entry(AssistantRunState.NEED_CLARIFICATION, Set.of(AssistantRunState.QUESTION_UNDERSTANDING)),
             Map.entry(AssistantRunState.RETRIEVAL_PLANNING, Set.of(AssistantRunState.RETRIEVING)),
             Map.entry(AssistantRunState.RETRIEVING, Set.of(AssistantRunState.VERIFYING_EVIDENCE)),
@@ -69,14 +73,23 @@ public record AssistantRun(
                     AssistantRunState.VERIFYING_EVIDENCE,
                     Set.of(
                             AssistantRunState.RETRIEVAL_PLANNING,
+                            AssistantRunState.NEED_CLARIFICATION,
                             AssistantRunState.INSUFFICIENT_EVIDENCE,
-                            AssistantRunState.ANSWER_COMPOSITION)),
+                            AssistantRunState.ANSWER_COMPOSITION,
+                            AssistantRunState.DEGRADED)),
             Map.entry(
                     AssistantRunState.ANSWER_COMPOSITION,
-                    Set.of(AssistantRunState.CRITIQUING, AssistantRunState.COMPLETED, AssistantRunState.DEGRADED)),
+                    Set.of(
+                            AssistantRunState.CRITIQUING,
+                            AssistantRunState.INSUFFICIENT_EVIDENCE,
+                            AssistantRunState.COMPLETED,
+                            AssistantRunState.DEGRADED)),
             Map.entry(
                     AssistantRunState.CRITIQUING,
-                    Set.of(AssistantRunState.COMPLETED, AssistantRunState.DEGRADED)));
+                    Set.of(
+                            AssistantRunState.INSUFFICIENT_EVIDENCE,
+                            AssistantRunState.COMPLETED,
+                            AssistantRunState.DEGRADED)));
 
     public AssistantRun {
         if (id == null || mode == null || subjectId == null || state == null || createdAt == null || updatedAt == null) {

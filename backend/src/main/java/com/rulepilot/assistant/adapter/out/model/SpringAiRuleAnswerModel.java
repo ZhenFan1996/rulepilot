@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
@@ -15,9 +17,10 @@ import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -50,23 +53,23 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiRuleAnswerModel.class);
     private static final String QUESTION_INTERPRETATION_SCHEMA =
             new BeanOutputConverter<>(QuestionInterpretationDraft.class).getJsonSchema();
-    private static final String MODEL_DRAFT_SCHEMA =
+    private static final String LEGACY_MODEL_DRAFT_SCHEMA =
             new BeanOutputConverter<>(ModelDraft.class).getJsonSchema();
-    private static final Set<String> ANSWER_ARRAY_FIELDS = Set.of(
-            "citationIds",
-            "exceptions",
-            "calculations",
-            "walkthroughSteps",
-            "decisionBranches",
-            "exceptionClauses",
-            "termDefinitions",
-            "workedExamples",
-            "priorityResolutions",
-            "timingResolutions",
-            "tieResolutions",
-            "scopeResolutions",
-            "conceptComparisons",
-            "ruleOptions");
+    private static final Map<AnswerAid, String> AID_ARRAY_FIELDS = Map.ofEntries(
+            Map.entry(AnswerAid.CALCULATION, "calculations"),
+            Map.entry(AnswerAid.WALKTHROUGH, "walkthroughSteps"),
+            Map.entry(AnswerAid.DECISION_TABLE, "decisionBranches"),
+            Map.entry(AnswerAid.EXCEPTIONS, "exceptionClauses"),
+            Map.entry(AnswerAid.DEFINITIONS, "termDefinitions"),
+            Map.entry(AnswerAid.EXAMPLE, "workedExamples"),
+            Map.entry(AnswerAid.RULE_PRIORITY, "priorityResolutions"),
+            Map.entry(AnswerAid.TIMING, "timingResolutions"),
+            Map.entry(AnswerAid.TIE, "tieResolutions"),
+            Map.entry(AnswerAid.SCOPE, "scopeResolutions"),
+            Map.entry(AnswerAid.CONCEPT_COMPARISON, "conceptComparisons"),
+            Map.entry(AnswerAid.OPTIONS, "ruleOptions"));
+    private static final Map<AnswerAid, String> MODEL_DRAFT_SCHEMAS = modelDraftSchemas();
+    private static final Set<String> ANSWER_ARRAY_FIELDS = Set.of("citationIds", "exceptions");
     private static final Set<String> QUESTION_INTERPRETATION_ARRAY_FIELDS = Set.of(
             "terms", "ruleObjectSpans", "pageHints", "missingContext", "subquestions");
     private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
@@ -264,14 +267,14 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
             }
-            options.responseFormat(responseFormat(MODEL_DRAFT_SCHEMA, ownerUsername));
+            options.responseFormat(responseFormat(modelDraftSchema(request.answerAid()), ownerUsername));
             prompt = prompt.options(options);
         } else {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(answerTemperature));
         }
         String content = prompt
-                .system(prompts.answerSystem(request.answerAid().name()))
+                .system(answerOutputSystem(prompts.answerSystem(request.answerAid().name()), request.answerAid()))
                 .user(user -> user.text(prompts.answerUser())
                         .param("question", request.question())
                         .param("questionType", request.questionType().name())
@@ -288,7 +291,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("repair", repairInstruction))
                 .call()
                 .content();
-        return parseModelDraft(content);
+        return parseModelDraft(content, request.answerAid());
     }
 
     private ModelDraft repairOnce(
@@ -306,14 +309,14 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
             }
-            options.responseFormat(responseFormat(MODEL_DRAFT_SCHEMA, ownerUsername));
+            options.responseFormat(responseFormat(modelDraftSchema(request.answerAid()), ownerUsername));
             prompt = prompt.options(options);
         } else {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(interpretationTemperature));
         }
         String content = prompt
-                .system(ANSWER_REPAIR_SYSTEM)
+                .system(answerOutputSystem(ANSWER_REPAIR_SYSTEM, request.answerAid()))
                 .user(user -> user.text(ANSWER_REPAIR_USER)
                         .param("question", request.question())
                         .param("questionType", request.questionType().name())
@@ -324,21 +327,42 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("pageHints", request.context().pageHints())
                         .param("outputLanguage", request.context().outputLanguageForPrompt())
                         .param("evidence", request.evidence())
-                        .param("previousDraft", previousDraft)
+                        .param("previousDraft", providerDraftJson(previousDraft, request.answerAid()))
                         .param("feedback", feedback))
                 .call()
                 .content();
-        return parseModelDraft(content);
+        return parseModelDraft(content, request.answerAid());
     }
 
     /** Exact admission for the combined natural-answer and machine-decision JSON envelope. */
     static ModelDraft parseModelDraft(String content) {
+        return parseModelDraft(content, declaredAid(content));
+    }
+
+    static ModelDraft parseModelDraft(String content, AnswerAid expectedAid) {
         if (content == null || content.isBlank()) {
             throw new IllegalStateException("answer model returned no structured output");
         }
+        if (expectedAid == null) throw new IllegalArgumentException("expected answer aid is required");
         try {
-            validateStructuredArrays(content, ANSWER_ARRAY_FIELDS, "answer model output");
-            return JSON.readValue(content, ModelDraft.class);
+            JsonNode parsed = JSON.readTree(content);
+            if (!(parsed instanceof ObjectNode provider)) {
+                throw JsonMappingException.from((JsonParser) null, "answer model output must be an object");
+            }
+            if (expectedAid == AnswerAid.CALCULATION) {
+                validateStructuredArrays(provider, ANSWER_ARRAY_FIELDS, "answer model output");
+                return toModelDraft(provider, expectedAid);
+            }
+            ModelDraft core = toCoreModelDraft(provider);
+            try {
+                validateStructuredArrays(provider, ANSWER_ARRAY_FIELDS, "answer model output");
+                return toModelDraft(provider, expectedAid);
+            } catch (IOException invalidAid) {
+                LOGGER.info(
+                        "Dropping invalid optional {} answer aid while preserving its strictly decoded core",
+                        expectedAid);
+                return core;
+            }
         } catch (IOException invalidOutput) {
             throw new IllegalStateException("answer model returned an invalid structured output contract", invalidOutput);
         }
@@ -363,7 +387,140 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     }
 
     static String modelDraftSchema() {
-        return MODEL_DRAFT_SCHEMA;
+        return modelDraftSchema(AnswerAid.NONE);
+    }
+
+    static String modelDraftSchema(AnswerAid aid) {
+        String schema = MODEL_DRAFT_SCHEMAS.get(aid);
+        if (schema == null) throw new IllegalArgumentException("answer aid schema is unavailable");
+        return schema;
+    }
+
+    private static Map<AnswerAid, String> modelDraftSchemas() {
+        EnumMap<AnswerAid, String> schemas = new EnumMap<>(AnswerAid.class);
+        for (AnswerAid aid : AnswerAid.values()) schemas.put(aid, providerSchema(aid));
+        return Map.copyOf(schemas);
+    }
+
+    private static String providerSchema(AnswerAid aid) {
+        try {
+            ObjectNode schema = (ObjectNode) JSON.readTree(LEGACY_MODEL_DRAFT_SCHEMA);
+            ObjectNode properties = (ObjectNode) schema.required("properties");
+            ArrayNode required = (ArrayNode) schema.required("required");
+            String payloadField = AID_ARRAY_FIELDS.get(aid);
+            JsonNode payloadSchema = payloadField == null ? null : properties.get(payloadField).deepCopy();
+            for (String field : AID_ARRAY_FIELDS.values()) {
+                properties.remove(field);
+                for (int index = required.size() - 1; index >= 0; index--) {
+                    if (field.equals(required.get(index).asText())) required.remove(index);
+                }
+            }
+
+            ObjectNode aidSchema = JSON.createObjectNode();
+            aidSchema.put("type", "object");
+            aidSchema.put("additionalProperties", false);
+            ObjectNode aidProperties = aidSchema.putObject("properties");
+            aidProperties.putObject("type").put("type", "string").putArray("enum").add(aid.name());
+            ArrayNode aidRequired = aidSchema.putArray("required").add("type");
+            if (payloadSchema != null) {
+                aidProperties.set("payload", payloadSchema);
+                aidRequired.add("payload");
+            }
+            properties.set("aid", aidSchema);
+            required.add("aid");
+            return JSON.writeValueAsString(schema);
+        } catch (IOException invalidSchema) {
+            throw new IllegalStateException("answer model schema is unavailable", invalidSchema);
+        }
+    }
+
+    private static String answerOutputSystem(String configuredPrompt, AnswerAid aid) {
+        String prompt = configuredPrompt == null ? "" : configuredPrompt;
+        return prompt + "\n\nThe final provider response contract below replaces every older final-envelope example. "
+                + "Return exactly one aid object and no legacy top-level aid arrays. The aid discriminator must be "
+                + aid.name() + ". Do not change the player-facing shortVerdict or explanation merely to satisfy this "
+                + "wire shape.\n" + modelDraftSchema(aid);
+    }
+
+    private static AnswerAid declaredAid(String content) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalStateException("answer model returned no structured output");
+        }
+        try {
+            JsonNode root = JSON.readTree(content);
+            if (!(root instanceof ObjectNode provider)) {
+                throw JsonMappingException.from((JsonParser) null, "answer model output must be an object");
+            }
+            return readAidType(provider);
+        } catch (IOException invalidOutput) {
+            throw new IllegalStateException("answer model returned an invalid structured output contract", invalidOutput);
+        }
+    }
+
+    private static ModelDraft toModelDraft(ObjectNode provider, AnswerAid expectedAid) throws IOException {
+        for (String legacyField : AID_ARRAY_FIELDS.values()) {
+            if (provider.has(legacyField)) {
+                throw JsonMappingException.from(
+                        (JsonParser) null, "answer model output contains a legacy top-level aid array");
+            }
+        }
+        JsonNode aidNode = provider.get("aid");
+        if (!(aidNode instanceof ObjectNode aid)) {
+            throw JsonMappingException.from((JsonParser) null, "answer model output aid is invalid");
+        }
+        AnswerAid actualAid = readAidType(provider);
+        if (actualAid != expectedAid) {
+            throw JsonMappingException.from(
+                    (JsonParser) null, "answer model output aid does not match the accepted answer plan");
+        }
+        String payloadField = AID_ARRAY_FIELDS.get(expectedAid);
+        JsonNode payload = aid.get("payload");
+        int expectedAidFields = payloadField == null ? 1 : 2;
+        if (aid.size() != expectedAidFields
+                || payloadField != null && (payload == null || !payload.isArray())) {
+            throw JsonMappingException.from((JsonParser) null, "answer model output aid payload is invalid");
+        }
+
+        ObjectNode legacy = provider.deepCopy();
+        legacy.remove("aid");
+        for (String field : AID_ARRAY_FIELDS.values()) legacy.putArray(field);
+        if (payloadField != null) legacy.set(payloadField, payload.deepCopy());
+        return JSON.treeToValue(legacy, ModelDraft.class);
+    }
+
+    private static ModelDraft toCoreModelDraft(ObjectNode provider) throws IOException {
+        ObjectNode core = provider.deepCopy();
+        core.remove("aid");
+        for (String field : AID_ARRAY_FIELDS.values()) {
+            core.remove(field);
+            core.putArray(field);
+        }
+        validateStructuredArrays(core, ANSWER_ARRAY_FIELDS, "answer model output core");
+        return JSON.treeToValue(core, ModelDraft.class);
+    }
+
+    private static AnswerAid readAidType(ObjectNode provider) throws IOException {
+        JsonNode aid = provider.get("aid");
+        JsonNode type = aid == null ? null : aid.get("type");
+        if (aid == null || !aid.isObject() || type == null || !type.isTextual()) {
+            throw JsonMappingException.from((JsonParser) null, "answer model output aid is invalid");
+        }
+        return JSON.treeToValue(type, AnswerAid.class);
+    }
+
+    static String providerDraftJson(ModelDraft draft, AnswerAid aid) {
+        try {
+            ObjectNode provider = JSON.valueToTree(draft);
+            String payloadField = AID_ARRAY_FIELDS.get(aid);
+            JsonNode payload = payloadField == null ? null : provider.get(payloadField);
+            for (String field : AID_ARRAY_FIELDS.values()) provider.remove(field);
+            ObjectNode selected = provider.putObject("aid");
+            selected.put("type", aid.name());
+            if (payload != null) selected.set("payload", payload);
+            return JSON.writeValueAsString(provider);
+        } catch (IOException serializationFailure) {
+            throw new IllegalStateException("previous answer draft could not be serialized", serializationFailure);
+        }
     }
 
     private ChatModel modelFor(String ownerUsername) {
@@ -437,7 +594,11 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     private static void validateStructuredArrays(
             String content, Set<String> requiredTopLevelArrays, String contract) throws IOException {
-        JsonNode root = JSON.readTree(content);
+        validateStructuredArrays(JSON.readTree(content), requiredTopLevelArrays, contract);
+    }
+
+    private static void validateStructuredArrays(
+            JsonNode root, Set<String> requiredTopLevelArrays, String contract) throws JsonMappingException {
         if (root == null || !root.isObject()) {
             throw JsonMappingException.from((JsonParser) null, contract + " must be a JSON object");
         }

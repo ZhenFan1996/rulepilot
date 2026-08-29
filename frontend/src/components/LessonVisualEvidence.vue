@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { VisualFocus } from '@/composables/lessonSupportingContent'
 import { useLocale } from '@/lib/locale'
@@ -12,12 +12,67 @@ const props = defineProps<{
 }>()
 
 const { t } = useLocale()
+const DETAIL_RETRY_DEFAULT_MS = 250
+const DETAIL_RETRY_MAX_MS = 1_000
+const VISUAL_FAILURE_HEADER = 'X-RulePilot-Visual-Failure'
+type RetryableDetailFailure = 'DECODE_CAPACITY_EXCEEDED' | 'PAGE_IMAGE_TEMPORARILY_UNAVAILABLE' | 'UNKNOWN'
+type DetailFailure =
+  | 'RETRY_EXHAUSTED_CAPACITY'
+  | 'RETRY_EXHAUSTED_PAGE_IMAGE'
+  | 'RETRY_EXHAUSTED_UNKNOWN'
+  | 'PAGE_IMAGE_UNAVAILABLE'
+  | 'NETWORK'
+  | 'BROWSER_DECODE'
+
+class DetailImageLoadError extends Error {
+  constructor(readonly failure: DetailFailure) {
+    super(failure)
+  }
+}
+
 const contextFailed = ref(false)
-const detailFailed = ref(false)
+const detailFailure = ref<DetailFailure | null>(null)
+const detailRetryReason = ref<RetryableDetailFailure | null>(null)
+const detailLoading = ref(false)
+const loadedDetailImageUrl = ref('')
+const detailViewport = ref<HTMLElement | null>(null)
 const originalPageUrl = computed(() => props.pageImageUrl(props.focus.pageNumber))
 const contextImageUrl = computed(() => props.pagePreviewImageUrl(props.focus.pageNumber))
 const detailIsReliable = computed(() => isReliableDetailViewport(props.focus))
 const detailImageUrl = computed(() => detailIsReliable.value ? props.focusedPageImageUrl(props.focus) : '')
+const detailRetryMessage = computed(() => {
+  if (detailRetryReason.value === 'DECODE_CAPACITY_EXCEEDED') {
+    return t('lesson.visualStoryboard.detail.retry.decodeCapacity')
+  }
+  if (detailRetryReason.value === 'PAGE_IMAGE_TEMPORARILY_UNAVAILABLE') {
+    return t('lesson.visualStoryboard.detail.retry.pageImage')
+  }
+  return t('lesson.visualStoryboard.detail.retry.temporary')
+})
+const detailFailureMessage = computed(() => {
+  if (detailFailure.value === null) return t('lesson.visualStoryboard.detail.unavailable')
+  if (detailFailure.value === 'RETRY_EXHAUSTED_CAPACITY') {
+    return t('lesson.visualStoryboard.detail.failure.retryExhaustedCapacity')
+  }
+  if (detailFailure.value === 'RETRY_EXHAUSTED_PAGE_IMAGE') {
+    return t('lesson.visualStoryboard.detail.failure.retryExhaustedPageImage')
+  }
+  if (detailFailure.value === 'RETRY_EXHAUSTED_UNKNOWN') {
+    return t('lesson.visualStoryboard.detail.failure.retryExhaustedTemporary')
+  }
+  if (detailFailure.value === 'PAGE_IMAGE_UNAVAILABLE') {
+    return t('lesson.visualStoryboard.detail.failure.permanent')
+  }
+  if (detailFailure.value === 'BROWSER_DECODE') {
+    return t('lesson.visualStoryboard.detail.failure.browserDecode')
+  }
+  return t('lesson.visualStoryboard.detail.failure.network')
+})
+let detailRequest = 0
+let detailRequestController: AbortController | null = null
+let detailObserver: IntersectionObserver | null = null
+let detailVisible = false
+let pendingDetailImageUrl = ''
 const focusStyle = computed(() => {
   const left = boundedPercent(props.focus.x)
   const top = boundedPercent(props.focus.y)
@@ -29,10 +84,160 @@ const focusStyle = computed(() => {
   }
 })
 
-watch([contextImageUrl, detailImageUrl], () => {
+watch(contextImageUrl, () => {
   contextFailed.value = false
-  detailFailed.value = false
 })
+
+watch(detailImageUrl, queueDetailImage, { immediate: true })
+
+watch(detailViewport, (current, previous) => {
+  if (previous) detailObserver?.unobserve(previous)
+  if (current) detailObserver?.observe(current)
+})
+
+onMounted(() => {
+  if (typeof IntersectionObserver === 'undefined') {
+    detailVisible = true
+    loadPendingDetailImage()
+    return
+  }
+  detailObserver = new IntersectionObserver((entries) => {
+    if (!entries.some(entry => entry.isIntersecting)) return
+    detailVisible = true
+    detailObserver?.disconnect()
+    detailObserver = null
+    loadPendingDetailImage()
+  }, { rootMargin: '320px 0px' })
+  if (detailViewport.value) detailObserver.observe(detailViewport.value)
+})
+
+onBeforeUnmount(() => {
+  detailObserver?.disconnect()
+  detailRequestController?.abort()
+})
+
+function queueDetailImage(url: string) {
+  detailRequestController?.abort()
+  detailRequest += 1
+  loadedDetailImageUrl.value = ''
+  detailFailure.value = null
+  detailRetryReason.value = null
+  detailLoading.value = Boolean(url)
+  pendingDetailImageUrl = url
+  if (url && detailVisible) loadPendingDetailImage()
+}
+
+function loadPendingDetailImage() {
+  const url = pendingDetailImageUrl
+  if (!url) return
+  pendingDetailImageUrl = ''
+  const request = detailRequest
+
+  const controller = new AbortController()
+  detailRequestController = controller
+  void fetchDetailImage(url, controller.signal, (reason) => {
+    if (!controller.signal.aborted && request === detailRequest) detailRetryReason.value = reason
+  })
+    .then((imageUrl) => {
+      if (!imageUrl || controller.signal.aborted || request !== detailRequest) return
+      loadedDetailImageUrl.value = imageUrl
+      detailRetryReason.value = null
+    })
+    .catch((error: unknown) => {
+      if (controller.signal.aborted || request !== detailRequest) return
+      detailRetryReason.value = null
+      detailFailure.value = error instanceof DetailImageLoadError ? error.failure : 'NETWORK'
+    })
+    .finally(() => {
+      if (request === detailRequest) detailLoading.value = false
+    })
+}
+
+async function fetchDetailImage(
+  url: string,
+  signal: AbortSignal,
+  onRetry: (reason: RetryableDetailFailure) => void,
+) {
+  let response = await requestDetailImage(url, signal)
+  if (response.status === 503) {
+    onRetry(retryableFailureReason(response))
+    await waitForRetry(retryDelay(response), signal)
+    if (signal.aborted) return null
+    response = await requestDetailImage(url, signal)
+  }
+  if (response.status === 503) {
+    throw new DetailImageLoadError(exhaustedRetryFailure(retryableFailureReason(response)))
+  }
+  if (response.status === 502 && response.headers.get(VISUAL_FAILURE_HEADER) === 'PAGE_IMAGE_UNAVAILABLE') {
+    throw new DetailImageLoadError('PAGE_IMAGE_UNAVAILABLE')
+  }
+  if (!response.ok) throw new DetailImageLoadError('NETWORK')
+  try {
+    return await imageDataUrl(await response.blob())
+  } catch {
+    throw new DetailImageLoadError('BROWSER_DECODE')
+  }
+}
+
+async function requestDetailImage(url: string, signal: AbortSignal) {
+  try {
+    return await fetch(url, { credentials: 'include', signal })
+  } catch (error) {
+    if (signal.aborted) throw error
+    throw new DetailImageLoadError('NETWORK')
+  }
+}
+
+function retryableFailureReason(response: Response): RetryableDetailFailure {
+  const reason = response.headers.get(VISUAL_FAILURE_HEADER)
+  if (reason === 'DECODE_CAPACITY_EXCEEDED' || reason === 'PAGE_IMAGE_TEMPORARILY_UNAVAILABLE') return reason
+  return 'UNKNOWN'
+}
+
+function exhaustedRetryFailure(reason: RetryableDetailFailure): DetailFailure {
+  if (reason === 'DECODE_CAPACITY_EXCEEDED') return 'RETRY_EXHAUSTED_CAPACITY'
+  if (reason === 'PAGE_IMAGE_TEMPORARILY_UNAVAILABLE') return 'RETRY_EXHAUSTED_PAGE_IMAGE'
+  return 'RETRY_EXHAUSTED_UNKNOWN'
+}
+
+function imageDataUrl(image: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('lesson visual could not be decoded'))
+    }
+    reader.onerror = () => reject(new Error('lesson visual could not be read'))
+    reader.readAsDataURL(image)
+  })
+}
+
+function retryDelay(response: Response) {
+  const retryAfter = response.headers.get('Retry-After')
+  if (retryAfter === null) return DETAIL_RETRY_DEFAULT_MS
+  const seconds = Number(retryAfter)
+  if (!Number.isFinite(seconds) || seconds < 0) return DETAIL_RETRY_DEFAULT_MS
+  return Math.min(seconds * 1_000, DETAIL_RETRY_MAX_MS)
+}
+
+function waitForRetry(delay: number, signal: AbortSignal) {
+  if (signal.aborted || delay <= 0) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    let timeout = 0
+    const finish = () => {
+      window.clearTimeout(timeout)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    timeout = window.setTimeout(finish, delay)
+    signal.addEventListener('abort', finish, { once: true })
+  })
+}
+
+function handleDetailDecodeFailure() {
+  loadedDetailImageUrl.value = ''
+  detailFailure.value = 'BROWSER_DECODE'
+}
 
 function boundedPercent(value: number) {
   return Math.max(0, Math.min(100, value / 10))
@@ -104,14 +309,14 @@ function isReliableDetailViewport(focus: VisualFocus) {
         </div>
       </li>
 
-      <li v-if="detailIsReliable" class="min-w-0 rounded-xl border border-indigo/12 bg-paper p-2.5">
+      <li v-if="detailIsReliable" ref="detailViewport" class="min-w-0 rounded-xl border border-indigo/12 bg-paper p-2.5">
         <div class="px-1 pb-2">
           <p class="text-[11px] font-bold uppercase tracking-[0.1em] text-indigo">{{ t('lesson.visualStoryboard.detail.step') }}</p>
           <p class="mt-0.5 text-sm font-semibold text-ink">{{ t('lesson.visualStoryboard.detail.title') }}</p>
         </div>
 
         <a
-          v-if="detailImageUrl && !detailFailed"
+          v-if="loadedDetailImageUrl && !detailFailure"
           data-testid="lesson-visual-detail"
           :href="originalPageUrl"
           target="_blank"
@@ -119,16 +324,35 @@ function isReliableDetailViewport(focus: VisualFocus) {
           class="block overflow-hidden rounded-lg border border-indigo/10 bg-canvas focus:outline-none focus:ring-4 focus:ring-indigo/15"
         >
           <img
-            :src="detailImageUrl"
+            :src="loadedDetailImageUrl"
             :alt="t('lesson.visualStoryboard.detail.alt', { page: focus.pageNumber, label: focus.label })"
             class="block max-h-[28rem] w-full object-contain"
             loading="lazy"
             decoding="async"
-            @error="detailFailed = true"
+            @error="handleDetailDecodeFailure"
           >
         </a>
-        <div v-else class="rounded-lg border border-dashed border-indigo/15 bg-canvas px-3 py-6 text-center">
-          <p class="text-xs leading-5 text-ink/55">{{ t('lesson.visualStoryboard.detail.unavailable') }}</p>
+        <div
+          v-else-if="detailLoading && detailRetryReason"
+          data-testid="lesson-visual-detail-retrying"
+          role="status"
+          class="min-h-28 rounded-lg border border-copper/20 bg-copper/[0.045] px-3 py-6 text-center"
+        >
+          <p class="text-xs leading-5 text-ink/65">{{ detailRetryMessage }}</p>
+        </div>
+        <div
+          v-else-if="detailLoading"
+          data-testid="lesson-visual-detail-loading"
+          role="status"
+          :aria-label="t('lesson.visualStoryboard.detail.title')"
+          class="min-h-28 rounded-lg border border-indigo/10 bg-canvas"
+        />
+        <div
+          v-else
+          data-testid="lesson-visual-detail-failure"
+          class="rounded-lg border border-dashed border-indigo/15 bg-canvas px-3 py-6 text-center"
+        >
+          <p class="text-xs leading-5 text-ink/60">{{ detailFailureMessage }}</p>
         </div>
       </li>
 

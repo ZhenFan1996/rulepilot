@@ -1,7 +1,5 @@
 package com.rulepilot.recommendation.adapter.out.model;
 
-import com.openai.models.chat.completions.ChatCompletionNamedToolChoice;
-import com.openai.models.chat.completions.ChatCompletionToolChoiceOption;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
@@ -11,6 +9,9 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -19,6 +20,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.MessageAggregator;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
@@ -74,6 +76,48 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         return invoke(request, temperature, "react", ownerUsername);
     }
 
+    @Override
+    public Turn stream(
+            Request request,
+            String ownerUsername,
+            Consumer<String> accumulatedTextListener) {
+        RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
+        ChatModel model = selected.model();
+        Prompt prompt = new Prompt(
+                request.messages().stream().map(this::message).toList(),
+                requestOptions(selected, request)
+                        .temperature(temperature)
+                        .build());
+        long startedAt = System.nanoTime();
+        AtomicLong firstTextAt = new AtomicLong();
+        AtomicReference<ChatResponse> aggregated = new AtomicReference<>();
+
+        var chunks = model.stream(prompt).doOnNext(response -> {
+            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) return;
+            AssistantMessage output = response.getResult().getOutput();
+            String chunk = output.getText();
+            if (chunk != null && !chunk.isEmpty()) firstTextAt.compareAndSet(0, System.nanoTime());
+        });
+        new MessageAggregator().aggregate(chunks, aggregated::set).blockLast();
+        ChatResponse response = aggregated.get();
+        if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+            throw new IllegalStateException("recommendation model returned no streamed result");
+        }
+        AssistantMessage output = response.getResult().getOutput();
+        if (output.getToolCalls().isEmpty() && !output.getText().isBlank()) {
+            accumulatedTextListener.accept(output.getText());
+        }
+        logUsage(
+                request,
+                response,
+                (System.nanoTime() - startedAt) / 1_000_000,
+                temperature,
+                "react_stream",
+                selected,
+                firstTextAt.get() == 0 ? -1 : (firstTextAt.get() - startedAt) / 1_000_000);
+        return turn(response);
+    }
+
     private Turn invoke(
             Request request, double requestTemperature, String operation, String ownerUsername) {
         RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
@@ -93,7 +137,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 (System.nanoTime() - startedAt) / 1_000_000,
                 requestTemperature,
                 operation,
-                selected);
+                selected,
+                -1);
         return turn(response);
     }
 
@@ -119,7 +164,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {
             GoogleGenAiChatOptions.Builder builder = defaults.mutate();
             builder.toolChoice(new GoogleGenAiChatOptions.ToolChoice(
-                    GoogleGenAiChatOptions.ToolChoice.Mode.ANY,
+                    GoogleGenAiChatOptions.ToolChoice.Mode.AUTO,
                     request.tools().stream().map(ToolSpec::name).toList()));
             options = builder;
         } else if (model.getOptions() instanceof ToolCallingChatOptions defaults) {
@@ -133,19 +178,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     }
 
     private Object openAiToolChoice(Request request, String provider) {
-        if ("qwen".equals(provider) && request.tools().size() == 1) {
-            ToolSpec onlyAction = request.tools().getFirst();
-            ChatCompletionNamedToolChoice named = ChatCompletionNamedToolChoice.builder()
-                    .function(ChatCompletionNamedToolChoice.Function.builder()
-                            .name(onlyAction.name())
-                            .build())
-                    .build();
-            return ChatCompletionToolChoiceOption.ofNamedToolChoice(named);
-        }
-        // Qwen's OpenAI-compatible endpoint accepts multiple typed tools reliably in auto mode. Its required wire
-        // mode is unsupported by some current Qwen models and sends others down a severe latency path. The application
-        // ReAct boundary still rejects zero, incompatible, unknown, or schema-invalid action calls.
-        return "qwen".equals(provider) ? "auto" : "required";
+        return "auto";
     }
 
     private Turn turn(ChatResponse response) {
@@ -177,7 +210,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             long elapsedMs,
             double requestTemperature,
             String operation,
-            RuntimeModelConfiguration.ResolvedModel selected) {
+            RuntimeModelConfiguration.ResolvedModel selected,
+            long firstTextMs) {
         int inputCharacters = request.messages().stream()
                         .mapToInt(message -> message.content().length())
                         .sum()
@@ -190,12 +224,13 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 ? null
                 : response.getMetadata().getUsage();
         LOGGER.info(
-                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
+                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, firstTextMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
                 operation,
                 selected.provider(),
                 selected.modelName(),
                 requestTemperature,
                 elapsedMs,
+                firstTextMs,
                 inputCharacters,
                 request.maxOutputTokens(),
                 usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),

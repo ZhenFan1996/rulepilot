@@ -8,6 +8,7 @@ import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.FailureReason;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -320,6 +321,7 @@ public class BggRecommendationAgentController {
             int catalogCalls,
             int webResearchCalls,
             String failureBoundary,
+            String failureReason,
             UserModelResponse userModel,
             List<ResearchSourceResponse> researchSources,
             List<String> completedWork,
@@ -353,6 +355,7 @@ public class BggRecommendationAgentController {
                     response.harness().catalogCalls(),
                     response.harness().webResearchCalls(),
                     publicFailureBoundary(response),
+                    publicFailureReason(response),
                     UserModelResponse.from(response.userModel()),
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
                     publicCompletedWork(response.harness().actions()),
@@ -366,27 +369,26 @@ public class BggRecommendationAgentController {
 
         private static String publicFailureBoundary(ConversationResponse response) {
             if (response.outcome() != BoardGameRecommendationAgent.Outcome.UNAVAILABLE) return null;
-            String unavailablePrefix = "UNAVAILABLE:";
-            String code = response.harness().actions().stream()
-                    .filter(action -> action.startsWith(unavailablePrefix))
-                    .map(action -> action.substring(unavailablePrefix.length()))
-                    .reduce((ignored, latest) -> latest)
-                    .orElse("");
-            if ("RUN_DEADLINE_EXCEEDED".equals(code)) return "time_budget";
-            if ("MODEL_NOT_CONFIGURED".equals(code)) return "service_configuration";
-            if ("BUDGET_EXHAUSTED".equals(code)) return "action_budget";
-            if (code.startsWith("MODEL_PROTOCOL_FAILED:")
-                    || "MODEL_OUTPUT_TRUNCATED".equals(code)
-                    || "EMPTY_MODEL_TURN".equals(code)
-                    || "UNSTRUCTURED_EVIDENCE_REPLY".equals(code)
-                    || "INVALID_ACTION_COUNT".equals(code)) {
-                return "model_response";
+            FailureReason reason = response.harness().failureReason();
+            if (reason == null) return "service_failure";
+            return switch (reason) {
+                case TIME_LIMIT -> "time_budget";
+                case MODEL_NOT_CONFIGURED -> "service_configuration";
+                case PROVIDER_PROTOCOL_INVALID, PROVIDER_OUTPUT_TRUNCATED, EMPTY_MODEL_RESPONSE ->
+                    "model_response";
+                case REPEATED_INCOMPATIBLE_ACTIONS, REPEATED_INVALID_ACTION, ACTION_BUDGET_EXHAUSTED ->
+                    "action_budget";
+                case PUBLICATION_REJECTED -> "publication_boundary";
+                case PROVIDER_CALL_FAILED, SERVICE_FAILURE -> "service_failure";
+            };
+        }
+
+        private static String publicFailureReason(ConversationResponse response) {
+            if (response.outcome() != BoardGameRecommendationAgent.Outcome.UNAVAILABLE
+                    || response.harness().failureReason() == null) {
+                return null;
             }
-            if (response.harness().actions().stream()
-                    .anyMatch(action -> action.startsWith("PUBLICATION_FAILED:"))) {
-                return "publication_boundary";
-            }
-            return "service_failure";
+            return response.harness().failureReason().name().toLowerCase(Locale.ROOT);
         }
 
         private static List<String> publicCompletedWork(List<String> actions) {

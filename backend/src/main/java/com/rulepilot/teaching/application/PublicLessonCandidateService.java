@@ -13,6 +13,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -25,6 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Profile("!test")
 public class PublicLessonCandidateService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PublicLessonCandidateService.class);
 
     private final TeachingPlanRepository plans;
     private final IllustratedLessonRepository repository;
@@ -120,7 +124,7 @@ public class PublicLessonCandidateService {
         return Optional.of(new CandidateLaunch(run.id(), run.state(), false));
     }
 
-    private boolean recordQueueTerminal(
+    private TeachingTerminalRecordResult recordQueueTerminal(
             RunSnapshot queued,
             String ownerUsername,
             UUID activationId,
@@ -142,9 +146,19 @@ public class PublicLessonCandidateService {
             } else {
                 runs.failQueuedIfUnactivated(queued.id(), ownerUsername, errorCode, summary);
             }
-            return true;
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (AgentExecutionStoppedException | AgentWorkAlreadyClaimedException settledRace) {
+            LOGGER.info("Public lesson candidate run {} terminal intent already has a durable winner", queued.id());
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (IllegalArgumentException permanentFailure) {
+            LOGGER.error(
+                    "Public lesson candidate run {} terminal intent was permanently rejected",
+                    queued.id(),
+                    permanentFailure);
+            return TeachingTerminalRecordResult.SETTLED;
         } catch (RuntimeException persistenceFailure) {
-            return false;
+            LOGGER.warn("Public lesson candidate run {} terminal state could not yet be recorded", queued.id());
+            return TeachingTerminalRecordResult.RETRYABLE;
         }
     }
 

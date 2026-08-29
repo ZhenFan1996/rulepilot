@@ -41,6 +41,7 @@ import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.application.RuleAnswerRateLimiter.Permit;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerWarning;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.RuleCitation;
@@ -170,14 +171,14 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void standaloneQuestionsDoNotSpendASeparateInterpretationCall() {
+    void standaloneQuestionsDoNotForceASeparateInterpretationStage() {
         RuleEvidenceHit source = source("After taking tiles, move every remaining tile to the center.");
         AtomicInteger interpretations = new AtomicInteger();
-        AtomicInteger compositions = new AtomicInteger();
+        AtomicBoolean composed = new AtomicBoolean();
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
             public ModelDraft compose(ModelRequest request) {
-                compositions.incrementAndGet();
+                composed.set(true);
                 return draft(source, "Move them to the center.", "The remaining tiles go to the center.");
             }
 
@@ -189,7 +190,8 @@ class StructuredRuleAnswerServiceTest {
             @Override
             public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
                 interpretations.incrementAndGet();
-                throw new AssertionError("a standalone current-turn question must not be interpreted twice");
+                throw new AssertionError(
+                        "a successful current-question retrieval must not force context recovery");
             }
         };
 
@@ -200,7 +202,70 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(RuleCitation::chunkId).containsExactly(source.chunkId());
         assertThat(interpretations).hasValue(0);
-        assertThat(compositions).hasValue(1);
+        assertThat(composed).isTrue();
+    }
+
+    @Test
+    void anOrdinarySecondQuestionUsesItsOwnRetrievedEvidenceWithoutInterpretation() {
+        RuleEvidenceHit source = source("The remaining tiles move to the center.");
+        AtomicBoolean interpreted = new AtomicBoolean();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return draft(source, "Move them to the center.", "The current question retrieved this rule directly.");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                interpreted.set(true);
+                return Optional.empty();
+            }
+        };
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "Where do the remaining tiles go?",
+                new QuestionContext(versionId, "Which color did I take?", null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(interpreted).isFalse();
+    }
+
+    @Test
+    void explicitLearningIntentSelectsItsAidWithoutInterpretation() {
+        RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
+        AtomicBoolean interpreted = new AtomicBoolean();
+        AtomicReference<AnswerAid> composedAid = new AtomicReference<>();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                composedAid.set(request.answerAid());
+                return draft(source, "Pay first.", "The cited sequence can be explained step by step.");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                interpreted.set(true);
+                return Optional.empty();
+            }
+        };
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "Why must I pay before resolving?",
+                new QuestionContext(versionId, null, LearningIntent.WHY, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(composedAid).hasValue(AnswerAid.WALKTHROUGH);
+        assertThat(interpreted).isFalse();
     }
 
     @Test
@@ -222,6 +287,66 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.explanation()).isEqualTo(explanation);
         assertThat(answer.citations()).extracting(RuleCitation::chunkId)
                 .containsExactly(source.chunkId());
+    }
+
+    @Test
+    void publishesSupportedCompoundEvidenceWhenCompleteListCoverageRemainsUnmet() {
+        RuleEvidenceHit source = source("Reaching twenty points is one way to win.");
+        AtomicReference<ModelRequest> composed = new AtomicReference<>();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                composed.set(request);
+                return draft(
+                        source,
+                        "Reaching twenty points is a confirmed victory condition.",
+                        "The cited rule supports that condition, but the available evidence does not establish a complete list of every victory condition.");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                return Optional.of(new QuestionInterpretationDraft(
+                        QuestionType.RULE_QUERY,
+                        ReferenceBinding.CURRENT_QUESTION,
+                        List.of("victory condition"),
+                        Set.of(),
+                        null,
+                        AnswerAid.NONE,
+                        List.of(
+                                new PlannedSubquestion(
+                                        "How does a player win?", Set.of(EvidenceNeed.DIRECT_RULE)),
+                                new PlannedSubquestion(
+                                        "What are all victory conditions?", Set.of(EvidenceNeed.COMPLETE_LIST)))));
+            }
+        };
+        AtomicBoolean firstSearch = new AtomicBoolean(true);
+        AnswerEvidenceRefiner preservePartial =
+                (runId, question, context, username, sessionId, deterministic) -> deterministic;
+
+        StructuredRuleAnswer answer = service(
+                        (version, query, options) -> firstSearch.getAndSet(false)
+                                ? List.of()
+                                : List.of(hit(source)),
+                        model,
+                        new InMemoryAnswerCache(),
+                        new RecordingRateLimiter(),
+                        noConfirmedRulings(),
+                        acceptedCritic(),
+                        preservePartial)
+                .answer(
+                        "How do I win, and what are all victory conditions?",
+                        new QuestionContext(versionId, "What counts as victory?", null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.explanation()).contains("does not establish a complete list");
+        assertThat(answer.citations()).extracting(RuleCitation::chunkId).containsExactly(source.chunkId());
+        assertThat(composed.get().evidenceNeeds())
+                .containsExactlyInAnyOrder(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST);
     }
 
     @Test
@@ -314,7 +439,10 @@ class StructuredRuleAnswerServiceTest {
                                                     source.chunkId())))));
                 });
 
-        StructuredRuleAnswer answer = service(search(source), model).answer(
+        AtomicInteger searches = new AtomicInteger();
+        StructuredRuleAnswer answer = service((version, query, options) ->
+                        searches.getAndIncrement() == 0 ? List.of() : List.of(hit(source)), model)
+                .answer(
                 "I have 8 resources. How many points do I score?",
                 new QuestionContext(versionId, "How are complete resource sets scored?", null, PlayerLocale.EN));
 
@@ -324,6 +452,7 @@ class StructuredRuleAnswerServiceTest {
             assertThat(calculation.expression()).isEqualTo("floor(8 / 3) * 5");
             assertThat(calculation.result()).isEqualTo("10");
         });
+        assertThat(model.interpreted()).isTrue();
     }
 
     @Test
@@ -351,7 +480,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
                 "How do I pay the cost before resolving the effect?",
-                new QuestionContext(versionId, "What happens after I choose this effect?", null, PlayerLocale.EN));
+                new QuestionContext(versionId, null, LearningIntent.WHY, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.walkthroughSteps()).extracting(step -> step.instruction())
@@ -375,7 +504,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
                 "How do I pay the cost before resolving the effect?",
-                new QuestionContext(versionId, "What happens after I choose this effect?", null, PlayerLocale.EN));
+                new QuestionContext(versionId, null, LearningIntent.WHY, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo("Pay first.");
@@ -412,7 +541,8 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
-                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+                "How do I pay the cost before resolving the effect?",
+                new QuestionContext(versionId, null, LearningIntent.WHY, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(answer.shortVerdict()).contains("结构");
@@ -454,7 +584,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
                 "How do I pay the cost before resolving the effect?",
-                new QuestionContext(versionId, "What happens after I choose this effect?", null, PlayerLocale.EN));
+                new QuestionContext(versionId, null, LearningIntent.WHY, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo(verdict);
@@ -527,7 +657,8 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
-                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+                "How do I pay the cost before resolving the effect?",
+                new QuestionContext(versionId, null, LearningIntent.WHY, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo("Pay first.");
@@ -537,7 +668,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void semanticClarificationStopsBeforeRetrievalAndComposition() {
+    void emptyCurrentQuestionEvidenceMayRecoverIntoAClarificationBeforeComposition() {
         AtomicBoolean retrievalCalled = new AtomicBoolean();
         AtomicInteger composeCalls = new AtomicInteger();
         RuleAnswerModel model = new RuleAnswerModel() {
@@ -575,12 +706,12 @@ class StructuredRuleAnswerServiceTest {
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
         assertThat(answer.clarification()).contains("What exactly");
-        assertThat(retrievalCalled).isFalse();
+        assertThat(retrievalCalled).isTrue();
         assertThat(composeCalls).hasValue(0);
     }
 
     @Test
-    void rejectsAnInvalidStructuredQuestionInterpretationInsteadOfGuessingRetrievalFields() {
+    void invalidRecoveryInterpretationPreservesTheCurrentQuestionInsufficiency() {
         AtomicBoolean retrievalCalled = new AtomicBoolean();
         AtomicInteger composeCalls = new AtomicInteger();
         RuleAnswerModel model = new RuleAnswerModel() {
@@ -607,14 +738,13 @@ class StructuredRuleAnswerServiceTest {
                 "When does this resolve?",
                 new QuestionContext(versionId, "What happens after movement?", null, PlayerLocale.EN));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(answer.shortVerdict()).contains("required structure");
-        assertThat(retrievalCalled).isFalse();
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(retrievalCalled).isTrue();
         assertThat(composeCalls).hasValue(0);
     }
 
     @Test
-    void reportsQuestionInterpretationTimeoutWithoutContinuingWithGuessedFields() {
+    void recoveryInterpretationTimeoutPreservesTheCurrentQuestionInsufficiency() {
         AtomicBoolean retrievalCalled = new AtomicBoolean();
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
@@ -639,9 +769,77 @@ class StructuredRuleAnswerServiceTest {
                 "When does this resolve?",
                 new QuestionContext(versionId, "What happens after movement?", null, PlayerLocale.EN));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
-        assertThat(answer.shortVerdict()).contains("in time");
-        assertThat(retrievalCalled).isFalse();
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(retrievalCalled).isTrue();
+    }
+
+    @Test
+    void recoveryInterpretationCannotSwallowAWorkflowBudgetStop() {
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                throw new AssertionError("a stopped workflow must not continue to composition");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
+            }
+        };
+
+        assertThatThrownBy(() -> service((version, query, options) -> List.of(), model)
+                        .answer(
+                                "When does this resolve?",
+                                new QuestionContext(
+                                        versionId,
+                                        "What happens after movement?",
+                                        null,
+                                        PlayerLocale.EN)))
+                .isInstanceOfSatisfying(AgentExecutionStoppedException.class,
+                        stopped -> assertThat(stopped.reason()).isEqualTo(StopReason.MODEL_BUDGET));
+    }
+
+    @Test
+    void failedRecoveryInterpretationDoesNotBlockLaterVerifiedEvidence() {
+        RuleEvidenceHit source = source("The effect resolves after movement.");
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return draft(source, "Resolve it after movement.", "The verified rule supplies the timing.");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                return Optional.empty();
+            }
+        };
+        AnswerEvidenceRefiner refiner = (runId, question, context, username, sessionId, deterministic) ->
+                new AnswerEvidenceRetriever.Result(List.of(hit(source)), AnswerEvidenceRetriever.State.READY);
+
+        StructuredRuleAnswer answer = service(
+                        (version, query, options) -> List.of(),
+                        model,
+                        new InMemoryAnswerCache(),
+                        new RecordingRateLimiter(),
+                        noConfirmedRulings(),
+                        acceptedCritic(),
+                        refiner)
+                .answer(
+                        "When does this resolve?",
+                        new QuestionContext(versionId, "What happens after movement?", null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(RuleCitation::chunkId).containsExactly(source.chunkId());
     }
 
     @Test
@@ -984,6 +1182,7 @@ class StructuredRuleAnswerServiceTest {
         private final Set<EvidenceNeed> needs;
         private final Function<ModelRequest, ModelDraft> composer;
         private final Revision revision;
+        private boolean interpreted;
 
         private PlanningModel(
                 AnswerAid aid,
@@ -1013,6 +1212,7 @@ class StructuredRuleAnswerServiceTest {
 
         @Override
         public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+            interpreted = true;
             return Optional.of(new QuestionInterpretationDraft(
                     request.deterministicType(),
                     ReferenceBinding.CURRENT_QUESTION,
@@ -1021,6 +1221,10 @@ class StructuredRuleAnswerServiceTest {
                     null,
                     aid,
                     List.of(new PlannedSubquestion(request.question(), needs))));
+        }
+
+        private boolean interpreted() {
+            return interpreted;
         }
     }
 

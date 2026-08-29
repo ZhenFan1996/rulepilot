@@ -15,16 +15,11 @@ import java.util.Optional;
 /** Applies an untrusted semantic decision only through application-owned context and grounding invariants. */
 final class AnswerQuestionInterpretationPolicy {
 
-    /**
-     * A standalone current-turn question already has an application-owned semantic identity and can be searched as
-     * written. Model interpretation is reserved for the responsibilities that actually need it: resolving earlier
-     * conversation context or planning an explicit pedagogical transformation.
-     */
-    boolean requiresModelInterpretation(QuestionContext context) {
+    /** Earlier context may recover an empty current-question search; explicit learning intent is application-owned. */
+    boolean canRecoverEmptyEvidence(QuestionContext context) {
         return context != null
                 && (context.previousQuestion() != null
-                        || context.priorTurnReference() != null
-                        || context.learningIntent() != null);
+                        || context.priorTurnReference() != null);
     }
 
     Optional<UnderstoodQuestion> apply(

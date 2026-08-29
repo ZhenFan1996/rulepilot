@@ -329,6 +329,36 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
+    void withholdsDeterministicEvidenceWhenACalculationExactPageAuditDoesNotComplete() {
+        HybridEvidenceHit initial =
+                hit(UUID.randomUUID(), "Scoring", "Each matching space scores one point.");
+        AnswerQuestionPlan calculation = new AnswerQuestionPlan(
+                List.of(new AnswerQuestionPlan.Subquestion(
+                        "I have two cards and nine spaces; what is the total?",
+                        Set.of(EvidenceNeed.DIRECT_RULE))),
+                true,
+                AnswerAid.CALCULATION,
+                ReferenceBinding.CURRENT_QUESTION);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                capturingFallbackAgent(new AtomicReference<>()),
+                emptyLookup(),
+                scopes(),
+                limiter(mock(Permit.class)));
+
+        var result = agent.refine(
+                runId,
+                question("I have two cards and nine spaces; what is the total?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                calculation,
+                ready(initial));
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+        assertThat(result.evidence()).isEmpty();
+    }
+
+    @Test
     void completesOneMissingDirectRuleObligationAsSoonAsItsExactPageIsRead() {
         AtomicReference<RunRequest> captured = new AtomicReference<>();
         Permit permit = mock(Permit.class);
@@ -356,35 +386,9 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
-    void keepsOneReadyCompleteListOnTheZeroAdditionalModelCallPath() {
-        AtomicInteger calls = new AtomicInteger();
-        NativeToolAgent nativeAgent = request -> {
-            calls.incrementAndGet();
-            throw new AssertionError("ready direct evidence must not invoke a second model review");
-        };
-        DocumentNativeToolScopeFactory scopes = mock(DocumentNativeToolScopeFactory.class);
-        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
-        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(nativeAgent, emptyLookup(), scopes, limiter);
-        AnswerEvidenceRetriever.Result deterministic = ready(
-                hit(UUID.randomUUID(), "Victory", "There are two ways to win: reach the threshold or complete a card."));
-
-        var result = agent.refine(
-                runId,
-                question("What are the two ways to win?"),
-                new QuestionContext(versionId),
-                "player",
-                null,
-                plan(Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST)),
-                deterministic);
-
-        assertThat(result).isSameAs(deterministic);
-        assertThat(calls).hasValue(0);
-        verify(scopes, never()).create(any(), any(), any());
-        verify(limiter, never()).acquireModel(any(), any(), any());
-    }
-
-    @Test
-    void withholdsExactPagesWhenTheEvidenceStageCannotCertifyACompleteList() {
+    void preservesVerifiedPartialEvidenceWhenTheEvidenceStageCannotCertifyACompleteList() {
+        HybridEvidenceHit initial = hit(
+                UUID.randomUUID(), "Victory", "Reaching the final space is one listed way to win.");
         RuleEvidenceHit observed = source(UUID.randomUUID(), "Alternative", "One special card changes victory.");
         RunResult incomplete = new RunResult(
                 RunStatus.COMPLETED,
@@ -399,6 +403,13 @@ class AnswerEvidenceAgentTest {
                 (documentVersionId, ids) -> List.of(observed),
                 scopes(),
                 limiter(mock(Permit.class)));
+        AnswerQuestionPlan compound = new AnswerQuestionPlan(
+                List.of(
+                        new AnswerQuestionPlan.Subquestion(
+                                "How can the player win?", Set.of(EvidenceNeed.DIRECT_RULE)),
+                        new AnswerQuestionPlan.Subquestion(
+                                "What are all alternative victory conditions?", Set.of(EvidenceNeed.COMPLETE_LIST))),
+                true);
 
         var result = agent.refine(
                 runId,
@@ -406,11 +417,11 @@ class AnswerEvidenceAgentTest {
                 new QuestionContext(versionId),
                 "player",
                 null,
-                plan(Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST)),
-                new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY));
+                compound,
+                ready(initial));
 
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
-        assertThat(result.evidence()).isEmpty();
+        assertThat(result.evidence()).containsExactly(initial);
     }
 
     @Test
@@ -482,7 +493,7 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
-    void withholdsAnExactPageWhenTheEvidenceStageDoesNotCertifySourceAuthoredAdvice() {
+    void preservesVerifiedRuleEvidenceWhenTheEvidenceStageDoesNotCertifySourceAuthoredAdvice() {
         HybridEvidenceHit initial = hit(UUID.randomUUID(), "Objective", "Reach the end of the score track.");
         RuleEvidenceHit observed = source(UUID.randomUUID(), "Scoring", "Gain one point for each completed row.");
         RunResult noAdvice = new RunResult(
@@ -509,7 +520,7 @@ class AnswerEvidenceAgentTest {
                 ready(initial));
 
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
-        assertThat(result.evidence()).isEmpty();
+        assertThat(result.evidence()).containsExactly(initial);
     }
 
     @Test

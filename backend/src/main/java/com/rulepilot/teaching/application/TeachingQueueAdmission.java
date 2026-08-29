@@ -25,7 +25,7 @@ final class TeachingQueueAdmission {
     private final Duration timeout;
     private final long deadlineNanos;
     private final UUID runId;
-    private final Function<Expiry, Boolean> terminalRecorder;
+    private final Function<Expiry, TeachingTerminalRecordResult> terminalRecorder;
     private final TeachingTerminalRecovery terminalRecovery;
     private final AtomicReference<State> state = new AtomicReference<>(State.QUEUED);
     private final AtomicReference<ScheduledFuture<?>> scheduled = new AtomicReference<>();
@@ -34,7 +34,7 @@ final class TeachingQueueAdmission {
             TaskScheduler scheduler,
             Duration timeout,
             UUID runId,
-            Function<Expiry, Boolean> terminalRecorder) {
+            Function<Expiry, TeachingTerminalRecordResult> terminalRecorder) {
         this(scheduler, null, timeout, runId, terminalRecorder);
     }
 
@@ -43,7 +43,7 @@ final class TeachingQueueAdmission {
             TeachingTerminalRecovery terminalRecovery,
             Duration timeout,
             UUID runId,
-            Function<Expiry, Boolean> terminalRecorder) {
+            Function<Expiry, TeachingTerminalRecordResult> terminalRecorder) {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("teaching queue admission timeout must be positive");
         }
@@ -109,7 +109,7 @@ final class TeachingQueueAdmission {
 
     private void recordOrReconcile(Expiry expiry) {
         scheduled.set(null);
-        if (record(expiry)) return;
+        if (record(expiry) == TeachingTerminalRecordResult.SETTLED) return;
         LOGGER.warn("Teaching queue terminal state could not yet be recorded for run {}", runId);
         if (terminalRecovery != null) {
             terminalRecovery.register(runId, () -> record(expiry));
@@ -120,11 +120,14 @@ final class TeachingQueueAdmission {
         }
     }
 
-    private boolean record(Expiry expiry) {
+    private TeachingTerminalRecordResult record(Expiry expiry) {
         try {
-            return Boolean.TRUE.equals(terminalRecorder.apply(expiry));
+            TeachingTerminalRecordResult result = terminalRecorder.apply(expiry);
+            if (result != null) return result;
+            LOGGER.error("Teaching queue terminal recorder returned no result for run {}; stopping retry", runId);
+            return TeachingTerminalRecordResult.SETTLED;
         } catch (RuntimeException persistenceFailure) {
-            return false;
+            return TeachingTerminalRecordResult.RETRYABLE;
         }
     }
 

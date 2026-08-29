@@ -24,6 +24,7 @@ export async function streamGameRecommendation(
   url: string,
   init: RequestInit,
   onProgress: (update: RecommendationProgressUpdate) => void,
+  onAnswerPart: (text: string) => void = () => undefined,
 ) {
   const response = await fetch(url, init)
   if (!response.ok) throw new RecommendationRequestError(response.status)
@@ -42,6 +43,9 @@ export async function streamGameRecommendation(
         latestProgressElapsed = update.elapsedMs
         onProgress(update)
       }
+    } else if (event.event === 'answer_part') {
+      const text = parseAnswerPart(JSON.parse(event.data) as unknown)
+      if (text !== null) onAnswerPart(text)
     } else if (event.event === 'result') {
       result = JSON.parse(event.data) as RecommendationAgentResponse
     } else if (event.event === 'error') {
@@ -73,6 +77,12 @@ export async function streamGameRecommendation(
   }
   if (!result) throw new Error('recommendation stream ended without a result')
   return result
+}
+
+function parseAnswerPart(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const text = (value as Record<string, unknown>).text
+  return typeof text === 'string' ? text : null
 }
 
 function parseProgress(value: unknown): RecommendationProgressUpdate | null {

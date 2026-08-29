@@ -3,10 +3,12 @@ package com.rulepilot.assistant.adapter.out.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.CalculationOperandSource;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
+import java.math.BigDecimal;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -52,18 +54,7 @@ class RuleAnswerStructuredOutputContractTest {
                           "exceptions":[],
                           "confidence":"HIGH",
                           "answerBasis":"GROUNDED_APPLICATION",
-                          "calculations":[{"expression":"1 + 1"}],
-                          "walkthroughSteps":[],
-                          "decisionBranches":[],
-                          "exceptionClauses":[],
-                          "termDefinitions":[],
-                          "workedExamples":[],
-                          "priorityResolutions":[],
-                          "timingResolutions":[],
-                          "tieResolutions":[],
-                          "scopeResolutions":[],
-                          "conceptComparisons":[],
-                          "ruleOptions":[]
+                          "aid":{"type":"CALCULATION","payload":[{"expression":"1 + 1"}]}
                         }
                         """.formatted(citationId)))
                 .isInstanceOf(RuntimeException.class);
@@ -73,8 +64,8 @@ class RuleAnswerStructuredOutputContractTest {
     void rejectsMissingOrUnexpectedDisplayFieldsInsteadOfDefaultingOrIgnoringThem() {
         assertThatThrownBy(() -> SpringAiRuleAnswerModel.parseModelDraft(
                         validCalculationJson().replace(
-                                "  \"conceptComparisons\":[],\n  \"ruleOptions\":[]",
-                                "  \"conceptComparisons\":[]")))
+                                "  \"explanation\":\"两个完整组合各得五分。\",\n",
+                                "")))
                 .isInstanceOf(RuntimeException.class);
         assertThatThrownBy(() -> SpringAiRuleAnswerModel.parseModelDraft(
                         validCalculationJson().replace(
@@ -83,14 +74,80 @@ class RuleAnswerStructuredOutputContractTest {
                 .isInstanceOf(RuntimeException.class);
         assertThatThrownBy(() -> SpringAiRuleAnswerModel.parseModelDraft(
                         validCalculationJson().replaceFirst(
-                                "(?s)\"calculations\":\\[\\{.*?\\}\\],\\s*\"walkthroughSteps\"",
-                                "\"calculations\":null,\n  \"walkthroughSteps\"")))
+                                "(?s)\"payload\":\\[.*\\]\\s*\\}\\s*\\}",
+                                "\"payload\":null\n  }\n}")))
                 .isInstanceOf(RuntimeException.class);
         assertThatThrownBy(() -> SpringAiRuleAnswerModel.parseModelDraft(
                         validCalculationJson().replace(
                                 "\"citationIds\":[\"%s\"]".formatted(citationId),
                                 "\"citationIds\":[\"%s\",\"%s\"]".formatted(citationId, citationId))))
                 .isInstanceOf(RuntimeException.class);
+    }
+
+    @Test
+    void exposesOnlyTheSelectedTypedAidPayloadInTheProviderSchema() {
+        String calculation = SpringAiRuleAnswerModel.modelDraftSchema(AnswerAid.CALCULATION);
+        String none = SpringAiRuleAnswerModel.modelDraftSchema(AnswerAid.NONE);
+
+        assertThat(calculation)
+                .contains("\"aid\"", "\"payload\"", "\"expression\"", "\"CALCULATION\"")
+                .doesNotContain("\"calculations\"", "\"walkthroughSteps\"", "\"decisionBranches\"");
+        assertThat(none)
+                .contains("\"aid\"", "\"NONE\"")
+                .doesNotContain("\"payload\"", "\"calculations\"", "\"walkthroughSteps\"");
+    }
+
+    @Test
+    void salvagesAValidCoreWhenAnOptionalAidIsInvalidOrUsesLegacyArrays() {
+        ModelDraft mismatched = SpringAiRuleAnswerModel.parseModelDraft(
+                validCalculationJson(), AnswerAid.WALKTHROUGH);
+        ModelDraft legacy = SpringAiRuleAnswerModel.parseModelDraft(
+                validCalculationJson().replace("\"aid\":{", "\"walkthroughSteps\":[{\"old\":true}],\"aid\":{"),
+                AnswerAid.NONE);
+        ModelDraft malformedPayload = SpringAiRuleAnswerModel.parseModelDraft(
+                validCalculationJson().replaceFirst(
+                        "(?s)\"aid\":\\{.*\\}\\s*\\}",
+                        "\"aid\":{\"type\":\"WALKTHROUGH\",\"payload\":[{\"instruction\":\"Pay first\"}]}\n}"),
+                AnswerAid.WALKTHROUGH);
+
+        assertThat(mismatched.shortVerdict()).isEqualTo("你得到 10 分。\n现在可以继续结算。 ");
+        assertThat(mismatched.calculations()).isEmpty();
+        assertThat(mismatched.walkthroughSteps()).isEmpty();
+        assertThat(legacy.shortVerdict()).isEqualTo(mismatched.shortVerdict());
+        assertThat(legacy.walkthroughSteps()).isEmpty();
+        assertThat(malformedPayload.shortVerdict()).isEqualTo(mismatched.shortVerdict());
+        assertThat(malformedPayload.walkthroughSteps()).isEmpty();
+    }
+
+    @Test
+    void keepsCalculationAidAndTheCoreContractStrict() {
+        assertThatThrownBy(() -> SpringAiRuleAnswerModel.parseModelDraft(
+                        validCalculationJson().replace("\"type\":\"CALCULATION\"", "\"type\":\"WALKTHROUGH\""),
+                        AnswerAid.CALCULATION))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("structured output contract");
+        assertThatThrownBy(() -> SpringAiRuleAnswerModel.parseModelDraft(
+                        validCalculationJson().replace(
+                                "  \"explanation\":\"两个完整组合各得五分。\",\n",
+                                ""),
+                        AnswerAid.NONE))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("structured output contract");
+    }
+
+    @Test
+    void roundTripsARepairDraftWithoutReintroducingLegacyAidArrays() {
+        ModelDraft original = SpringAiRuleAnswerModel.parseModelDraft(validCalculationJson(), AnswerAid.CALCULATION);
+
+        String providerDraft = SpringAiRuleAnswerModel.providerDraftJson(original, AnswerAid.CALCULATION);
+
+        assertThat(providerDraft)
+                .contains("\"aid\":{\"type\":\"CALCULATION\",\"payload\":[")
+                .doesNotContain("\"calculations\":", "\"walkthroughSteps\":");
+        assertThat(SpringAiRuleAnswerModel.parseModelDraft(providerDraft, AnswerAid.CALCULATION))
+                .usingRecursiveComparison()
+                .withComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+                .isEqualTo(original);
     }
 
     @Test
@@ -154,27 +211,19 @@ class RuleAnswerStructuredOutputContractTest {
                   "exceptions":[],
                   "confidence":"HIGH",
                   "answerBasis":"GROUNDED_APPLICATION",
-                  "calculations":[{
-                    "expression":"floor(8 / 3) * 5",
-                    "expectedResult":10,
-                    "resultUnit":"分",
-                    "operands":[
-                      {"name":"现有资源","value":8,"source":"QUESTION","sourceSpan":"八个资源","citationId":null},
-                      {"name":"每组资源","value":3,"source":"EVIDENCE","sourceSpan":"每三个资源","citationId":"%s"},
-                      {"name":"每组分数","value":5,"source":"EVIDENCE","sourceSpan":"获得五分","citationId":"%s"}
-                    ]
-                  }],
-                  "walkthroughSteps":[],
-                  "decisionBranches":[],
-                  "exceptionClauses":[],
-                  "termDefinitions":[],
-                  "workedExamples":[],
-                  "priorityResolutions":[],
-                  "timingResolutions":[],
-                  "tieResolutions":[],
-                  "scopeResolutions":[],
-                  "conceptComparisons":[],
-                  "ruleOptions":[]
+                  "aid":{
+                    "type":"CALCULATION",
+                    "payload":[{
+                      "expression":"floor(8 / 3) * 5",
+                      "expectedResult":10,
+                      "resultUnit":"分",
+                      "operands":[
+                        {"name":"现有资源","value":8,"source":"QUESTION","sourceSpan":"八个资源","citationId":null},
+                        {"name":"每组资源","value":3,"source":"EVIDENCE","sourceSpan":"每三个资源","citationId":"%s"},
+                        {"name":"每组分数","value":5,"source":"EVIDENCE","sourceSpan":"获得五分","citationId":"%s"}
+                      ]
+                    }]
+                  }
                 }
                 """.formatted(citationId, citationId, citationId);
     }

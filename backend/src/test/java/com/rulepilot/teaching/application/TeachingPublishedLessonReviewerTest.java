@@ -96,8 +96,8 @@ class TeachingPublishedLessonReviewerTest {
     }
 
     @ParameterizedTest
-    @EnumSource(StopReason.class)
-    void propagatesAWholeRunStopFromTheFinalReviewerWhileRetainingTheCitedDraft(StopReason stopReason) {
+    @EnumSource(value = StopReason.class, names = "CANCELLED", mode = EnumSource.Mode.EXCLUDE)
+    void retainsTheCitedDraftWhenOptionalFinalReviewExhaustsItsBoundary(StopReason stopReason) {
         Fixture fixture = fixture();
         LessonSection cited = new TeachingBaseSectionPublicationPolicy().publish(fixture.candidate());
         List<LessonSection> published = new ArrayList<>(List.of(cited));
@@ -105,8 +105,29 @@ class TeachingPublishedLessonReviewerTest {
             throw new AgentExecutionStoppedException(stopReason);
         };
 
+        new TeachingPublishedLessonReviewer(stoppedReviewer, fixture.invocations(), fixture.composer())
+                .review(
+                        fixture.plan(),
+                        List.of(fixture.candidate()),
+                        published,
+                        fixture.runId(),
+                        () -> {});
+
+        assertThat(published).containsExactly(cited);
+        assertThat(published.getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+    }
+
+    @Test
+    void stillPropagatesPlayerCancellationFromTheFinalReviewer() {
+        Fixture fixture = fixture();
+        LessonSection cited = new TeachingBaseSectionPublicationPolicy().publish(fixture.candidate());
+        List<LessonSection> published = new ArrayList<>(List.of(cited));
+        GeneratedContentCritic cancelledReviewer = (request, risk) -> {
+            throw new AgentExecutionStoppedException(StopReason.CANCELLED);
+        };
+
         assertThatThrownBy(() -> new TeachingPublishedLessonReviewer(
-                                stoppedReviewer, fixture.invocations(), fixture.composer())
+                                cancelledReviewer, fixture.invocations(), fixture.composer())
                         .review(
                                 fixture.plan(),
                                 List.of(fixture.candidate()),
@@ -114,10 +135,9 @@ class TeachingPublishedLessonReviewerTest {
                                 fixture.runId(),
                                 () -> {}))
                 .isInstanceOf(AgentExecutionStoppedException.class)
-                .hasFieldOrPropertyWithValue("reason", stopReason);
+                .hasFieldOrPropertyWithValue("reason", StopReason.CANCELLED);
 
         assertThat(published).containsExactly(cited);
-        assertThat(published.getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
     }
 
     @Test
@@ -231,9 +251,17 @@ class TeachingPublishedLessonReviewerTest {
         });
     }
 
-    @ParameterizedTest
-    @EnumSource(value = StopReason.class, names = {"MODEL_BUDGET", "CANCELLED"})
-    void persistsConfirmedDefectsAsUnreadableBeforeAReplacementStop(StopReason stopReason) {
+    @Test
+    void completesTheLessonWithAConfirmedDefectWithheldWhenReplacementBudgetIsExhausted() {
+        assertReplacementStopBoundary(StopReason.MODEL_BUDGET, false);
+    }
+
+    @Test
+    void persistsConfirmedDefectsAsUnreadableBeforeReplacementCancellation() {
+        assertReplacementStopBoundary(StopReason.CANCELLED, true);
+    }
+
+    private void assertReplacementStopBoundary(StopReason stopReason, boolean expectCancellation) {
         UUID versionId = UUID.randomUUID();
         UUID firstEvidenceId = UUID.randomUUID();
         UUID secondEvidenceId = UUID.randomUUID();
@@ -290,20 +318,25 @@ class TeachingPublishedLessonReviewerTest {
                 request.claims().getFirst().citationIds(),
                 "The first published quantity is contradicted by its evidence.")));
 
-        assertThatThrownBy(() -> new TeachingPublishedLessonReviewer(critic, invocations, composer)
-                        .review(
-                                plan,
-                                List.of(first, second),
-                                published,
-                                runId,
-                                () -> {
-                                    persisted.set(List.copyOf(published));
-                                    persistedSnapshots.incrementAndGet();
-                                }))
-                .isInstanceOf(AgentExecutionStoppedException.class)
-                .hasFieldOrPropertyWithValue("reason", stopReason);
+        Runnable review = () -> new TeachingPublishedLessonReviewer(critic, invocations, composer)
+                .review(
+                        plan,
+                        List.of(first, second),
+                        published,
+                        runId,
+                        () -> {
+                            persisted.set(List.copyOf(published));
+                            persistedSnapshots.incrementAndGet();
+                        });
+        if (expectCancellation) {
+            assertThatThrownBy(review::run)
+                    .isInstanceOf(AgentExecutionStoppedException.class)
+                    .hasFieldOrPropertyWithValue("reason", StopReason.CANCELLED);
+        } else {
+            review.run();
+        }
 
-        assertThat(persistedSnapshots).hasValue(1);
+        assertThat(persistedSnapshots).hasValue(expectCancellation ? 1 : 2);
         assertThat(persisted.get()).containsExactlyElementsOf(published);
         assertThat(published.get(0).evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
         assertThat(published.get(0).steps().getFirst().text()).contains("尚未找到");

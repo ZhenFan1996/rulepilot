@@ -4,14 +4,13 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.BROWSE_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.COMPARE_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DISCOVER_TOOL;
-import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.LOOKUP_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.NO_MATCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PROMPT_VERSION;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RECOMMEND_TOOL;
-import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.REPLY_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
+import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL;
 import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_VERIFIED_GAMES;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -39,6 +38,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Con
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.FailureReason;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.HarnessTrace;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
@@ -88,7 +88,6 @@ final class RecommendationReActLoop {
     private static final int MAX_ACTION_CALLS = 6;
     private static final int ACTION_SELECTION_OUTPUT_TOKENS = 512;
     private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 2_048;
-    static final int MAX_REFERENCE_RESOLUTION_ATTEMPTS = 2;
     private static final Set<String> READ_ACTIONS = Set.of(
             RESOLVE_TOOL,
             BROWSE_TOOL,
@@ -96,8 +95,7 @@ final class RecommendationReActLoop {
             LOOKUP_TOOL,
             RESEARCH_TOOL);
     private static final Set<String> OBSERVED_ACTIONS = Set.of(
-            REPLY_TOOL,
-            IDENTITY_REPLY_TOOL,
+            UPDATE_PREFERENCES_TOOL,
             ASK_TOOL,
             RESOLVE_TOOL,
             BROWSE_TOOL,
@@ -169,7 +167,24 @@ final class RecommendationReActLoop {
                 validate(input),
                 requestedLocale,
                 modelConfigurationOwner,
-                progressListener);
+                progressListener,
+                null,
+                ignored -> {});
+    }
+
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
+        return converseValidated(
+                validate(input),
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {});
     }
 
     ConversationResponse converseValidated(
@@ -182,6 +197,7 @@ final class RecommendationReActLoop {
                 requestedLocale,
                 modelConfigurationOwner,
                 progressListener,
+                null,
                 ignored -> {});
     }
 
@@ -190,6 +206,22 @@ final class RecommendationReActLoop {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
+        return converseValidated(
+                request,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                null,
+                checkpointListener);
+    }
+
+    ConversationResponse converseValidated(
+            ConversationRequest request,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         Observation workflow = Observation.createNotStarted("rulepilot.recommendation.workflow", observations)
                 .contextualName("recommendation-react");
@@ -200,6 +232,7 @@ final class RecommendationReActLoop {
                         requestedLocale,
                         modelConfigurationOwner,
                         progressListener,
+                        answerPartListener,
                         checkpointListener);
                 workflow.lowCardinalityKeyValue(
                         "outcome", response.outcome().name().toLowerCase(Locale.ROOT));
@@ -216,6 +249,7 @@ final class RecommendationReActLoop {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         long startedAt = System.nanoTime();
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
@@ -232,6 +266,7 @@ final class RecommendationReActLoop {
                     locale,
                     state,
                     progress,
+                    answerPartListener,
                     checkpointListener);
         } catch (RuntimeException | Error failure) {
             progress.abort(failure);
@@ -244,6 +279,7 @@ final class RecommendationReActLoop {
             String locale,
             RecommendationAgentState state,
             ProgressTracker progress,
+            Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         progress.start(ProgressStage.UNDERSTANDING_REQUEST, ProgressAction.UNDERSTAND_REQUEST);
         progress.complete();
@@ -267,9 +303,8 @@ final class RecommendationReActLoop {
                 Message.user(input));
         List<Message> messages = new ArrayList<>(actionFoundation);
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
+        Set<String> rejectedIncompatibleActionSets = new LinkedHashSet<>();
         int stateEpoch = 0;
-        boolean missingActionRepairUsed = false;
-
         while (state.modelCalls < MAX_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             state.modelCalls++;
             progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
@@ -288,10 +323,13 @@ final class RecommendationReActLoop {
                         turnMessages,
                         currentActions,
                         outputTokenBudget(state),
-                        ToolChoice.REQUIRED);
-                turn = withinDeadline(
-                        state,
-                        () -> model.next(modelRequest, state.modelConfigurationOwner));
+                        ToolChoice.AUTO);
+                turn = withinDeadline(state, () -> answerPartListener == null
+                        ? model.next(modelRequest, state.modelConfigurationOwner)
+                        : model.stream(
+                                modelRequest,
+                                state.modelConfigurationOwner,
+                                answerPartListener));
             } catch (RunInterrupted exception) {
                 state.recordModelCallElapsed(modelCallStartedAt);
                 decisionObservation.stop("interrupted", false, exception);
@@ -326,47 +364,47 @@ final class RecommendationReActLoop {
                 return unavailable(state, locale, "MODEL_OUTPUT_TRUNCATED");
             }
             if (turn.toolCalls().isEmpty()) {
-                if (!missingActionRepairUsed && state.modelCalls < MAX_MODEL_CALLS) {
-                    missingActionRepairUsed = true;
-                    decisionObservation.stop("missing_action_retry", false, null);
-                    LOGGER.warn("Recommendation Agent turn returned no typed action; requesting one bounded repair");
-                    progress.retry();
-                    state.actions.add("REJECTED_MISSING_ACTION");
-                    messages.set(0, Message.system(
-                            systemPromptV2()
-                                    + "\n\nProtocol repair: the previous response did not contain a typed action. "
-                                    + "Return exactly one action from the currently supplied tools; do not return prose."));
-                    continue;
-                }
-                decisionObservation.stop("missing_action", false, null);
-                LOGGER.warn("Recommendation Agent turn returned no typed action after the bounded repair");
-                progress.fail();
-                state.actions.add("UNSTRUCTURED_EVIDENCE_REPLY");
-                return unavailable(state, locale, "UNSTRUCTURED_EVIDENCE_REPLY");
-            }
-            ToolCall call;
-            if (turn.toolCalls().size() == 1) {
-                call = turn.toolCalls().getFirst();
-            } else {
-                String actionName = turn.toolCalls().getFirst().name();
-                boolean sameReadAction = READ_ACTIONS.contains(actionName)
-                        && turn.toolCalls().stream().allMatch(candidate -> actionName.equals(candidate.name()));
-                if (!sameReadAction) {
-                    decisionObservation.stop("invalid_action_count", false, null);
-                    LOGGER.warn(
-                            "Recommendation ReAct turn returned {} incompatible actions (textCharacters={})",
-                            turn.toolCalls().size(),
-                            turn.text().length());
+                if (turn.text().isBlank()) {
+                    decisionObservation.stop("empty_response", false, null);
+                    LOGGER.warn("Recommendation Agent turn returned neither a typed action nor natural text");
                     progress.fail();
-                    state.actions.add("INVALID_ACTION_COUNT");
-                    return unavailable(state, locale, "INVALID_ACTION_COUNT");
+                    state.actions.add("EMPTY_MODEL_RESPONSE");
+                    return unavailable(state, locale, "EMPTY_MODEL_RESPONSE");
                 }
-                // Some compatible providers emit parallel alternatives even when parallel calls are
-                // disabled. These capabilities are side-effect-free reads, so one bounded read is enough;
-                // executing every variant would add cost without giving the model an observation between them.
-                call = turn.toolCalls().getFirst();
-                state.actions.add("COALESCED_PARALLEL_READ_ACTIONS:" + turn.toolCalls().size());
+                decisionObservation.stop("completed", false, null);
+                progress.complete();
+                state.actions.add("FINAL_ANSWER");
+                return publishNaturalResponse(state, locale, turn.text(), progress);
             }
+            if (turn.toolCalls().size() > 1) {
+                String fingerprint = turn.toolCalls().stream()
+                        .map(this::actionFingerprint)
+                        .sorted()
+                        .collect(java.util.stream.Collectors.joining("\n---\n"));
+                decisionObservation.stop("rejected", false, null);
+                LOGGER.warn(
+                        "Recommendation ReAct turn returned {} parallel actions (textCharacters={})",
+                        turn.toolCalls().size(),
+                        turn.text().length());
+                state.actionCalls++;
+                if (!rejectedIncompatibleActionSets.add(fingerprint)) {
+                    progress.fail();
+                    state.actions.add("REPEATED_INCOMPATIBLE_ACTIONS");
+                    return unavailable(state, locale, "REPEATED_INCOMPATIBLE_ACTIONS");
+                }
+                state.actions.add("REJECTED_INCOMPATIBLE_ACTIONS");
+                progress.retry();
+                String observation = budgetedObservation(
+                        error(
+                                "INCOMPATIBLE_ACTIONS",
+                                "Choose one action, observe its result, then decide whether another action is useful."),
+                        state);
+                compactPriorToolState(messages);
+                messages.add(Message.assistant(turn.text(), turn.toolCalls()));
+                turn.toolCalls().forEach(candidate -> messages.add(Message.tool(candidate, observation)));
+                continue;
+            }
+            ToolCall call = turn.toolCalls().getFirst();
             decisionObservation.stop("completed", false, null);
             progress.complete();
             state.actionCalls++;
@@ -461,7 +499,7 @@ final class RecommendationReActLoop {
             }
             String observation = budgetedObservation(outcome.observation(), state);
             compactPriorToolState(messages);
-            messages.add(Message.assistant("", call));
+            messages.add(Message.assistant(turn.text(), call));
             messages.add(Message.tool(call, observation));
         }
         progress.fail();
@@ -507,6 +545,54 @@ final class RecommendationReActLoop {
         progress.complete();
         logRun(decision);
         return decision;
+    }
+
+    private ConversationResponse publishNaturalResponse(
+            RecommendationAgentState state,
+            String locale,
+            String naturalText,
+            ProgressTracker progress) {
+        progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.REPLY_TO_USER);
+        ConversationResponse response = new ConversationResponse(
+                Outcome.CONVERSATION,
+                DecisionMode.MODEL_ASSISTED,
+                naturalText,
+                state.profile,
+                null,
+                state.sourceCount,
+                state.verified.size(),
+                evidenceReview.userModelView(state, locale),
+                naturalResponseSources(state),
+                new HarnessTrace(
+                        state.modelCalls,
+                        state.catalogCalls,
+                        state.webResearchCalls,
+                        false,
+                        state.actions,
+                        state.elapsedMs(),
+                        state.modelCallElapsedMs),
+                List.of(),
+                null,
+                null);
+        progress.complete();
+        logRun(response);
+        return response;
+    }
+
+    private List<ResearchSource> naturalResponseSources(RecommendationAgentState state) {
+        Map<String, ResearchSource> sources = new LinkedHashMap<>();
+        int nextIndex = 1;
+        for (Source source : state.research.sources()) {
+            if (sources.containsKey(source.url())) continue;
+            sources.put(source.url(), new ResearchSource(
+                    nextIndex++, source.title(), source.url(), source.domain()));
+        }
+        for (Source source : state.publicContextSources) {
+            if (sources.containsKey(source.url())) continue;
+            sources.put(source.url(), new ResearchSource(
+                    nextIndex++, source.title(), source.url(), source.domain()));
+        }
+        return List.copyOf(sources.values());
     }
 
     private ConversationResponse publishRecommendationWithinBoundary(
@@ -563,7 +649,7 @@ final class RecommendationReActLoop {
 
     private ProgressAction progressAction(String action) {
         return switch (action) {
-            case REPLY_TOOL, IDENTITY_REPLY_TOOL -> ProgressAction.REPLY_TO_USER;
+            case UPDATE_PREFERENCES_TOOL -> ProgressAction.CHOOSE_NEXT_ACTION;
             case ASK_TOOL -> ProgressAction.ASK_USER;
             case RESOLVE_TOOL -> ProgressAction.RESOLVE_BGG_GAME;
             case BROWSE_TOOL -> ProgressAction.BROWSE_BGG_CATALOG;
@@ -579,28 +665,11 @@ final class RecommendationReActLoop {
 
     ConversationResponse unavailable(RecommendationAgentState state, String locale, String code) {
         state.actions.add("UNAVAILABLE:" + code);
-        if (state.pendingPublicationSeed != null) {
-            try {
-                Permit permit = publication.permit(state, state.pendingPublicationSeed);
-                ConversationResponse partial = publication.publishFallback(
-                        state,
-                        permit,
-                        locale,
-                        code);
-                logRun(partial);
-                return partial;
-            } catch (RuntimeException exception) {
-                String fallbackCode = publicationFailureCode(exception);
-                state.actions.add("PARTIAL_PUBLICATION_FAILED:" + fallbackCode);
-                LOGGER.warn("Verified recommendation fallback could not be published ({})", fallbackCode);
-            }
-        }
+        FailureReason reason = failureReason(state, code);
         ConversationResponse response = new ConversationResponse(
                 Outcome.UNAVAILABLE,
                 DecisionMode.MODEL_ASSISTED,
-                chinese(locale)
-                        ? "这轮推荐没有完成；继续查找已经停止。你刚才的内容和已记录条件都还在，可以直接重试。"
-                        : "This recommendation turn did not finish, and further searching has stopped. Your message and saved constraints are still here, so you can retry.",
+                playerFacingFailureMessage(reason, locale),
                 state.profile,
                 null,
                 state.sourceCount,
@@ -617,11 +686,71 @@ final class RecommendationReActLoop {
                         false,
                         state.actions,
                         state.elapsedMs(),
-                        state.modelCallElapsedMs),
+                        state.modelCallElapsedMs,
+                        reason),
                 List.of(),
                 null);
         logRun(response);
         return response;
+    }
+
+    private FailureReason failureReason(RecommendationAgentState state, String code) {
+        if ("RUN_DEADLINE_EXCEEDED".equals(code)) return FailureReason.TIME_LIMIT;
+        if ("MODEL_NOT_CONFIGURED".equals(code)) return FailureReason.MODEL_NOT_CONFIGURED;
+        if ("MODEL_CALL_FAILED".equals(code)) return FailureReason.PROVIDER_CALL_FAILED;
+        if (code.startsWith("MODEL_PROTOCOL_FAILED:")) return FailureReason.PROVIDER_PROTOCOL_INVALID;
+        if ("MODEL_OUTPUT_TRUNCATED".equals(code)) return FailureReason.PROVIDER_OUTPUT_TRUNCATED;
+        if ("EMPTY_MODEL_RESPONSE".equals(code)) return FailureReason.EMPTY_MODEL_RESPONSE;
+        if ("REPEATED_INCOMPATIBLE_ACTIONS".equals(code)) {
+            return FailureReason.REPEATED_INCOMPATIBLE_ACTIONS;
+        }
+        if (code.startsWith("REPEATED_DETERMINISTIC_ACTION:")) {
+            return FailureReason.REPEATED_INVALID_ACTION;
+        }
+        if ("BUDGET_EXHAUSTED".equals(code)) return FailureReason.ACTION_BUDGET_EXHAUSTED;
+        if (state.actions.stream().anyMatch(action -> action.startsWith("PUBLICATION_FAILED:"))) {
+            return FailureReason.PUBLICATION_REJECTED;
+        }
+        return FailureReason.SERVICE_FAILURE;
+    }
+
+    private String playerFacingFailureMessage(FailureReason reason, String locale) {
+        boolean zh = chinese(locale);
+        return switch (reason) {
+            case TIME_LIMIT -> zh
+                    ? "本轮总时限已用完，模型或检索尚未返回可发布的完整结果。已核对的会话信息仍然保留，可以直接重试。"
+                    : "This turn reached its total time limit before the model or retrieval returned a complete publishable result. Verified conversation context is still saved, so you can retry.";
+            case MODEL_NOT_CONFIGURED -> zh
+                    ? "当前账号没有可用的推荐模型配置。本轮没有调用检索，也没有发布临时结果。"
+                    : "This account has no available recommendation model configuration. No retrieval ran and no provisional result was published.";
+            case PROVIDER_CALL_FAILED -> zh
+                    ? "推荐模型服务连接失败或提前中断；这不是“没有匹配候选”。已核对的会话信息仍然保留，可以直接重试。"
+                    : "The recommendation model request failed or disconnected; this does not mean that no candidate matched. Verified conversation context is still saved, so you can retry.";
+            case PROVIDER_PROTOCOL_INVALID -> zh
+                    ? "模型返回的工具协议无法安全解析，因此没有执行不确定的动作，也没有发布草稿。"
+                    : "The model returned a tool protocol that could not be parsed safely, so no uncertain action ran and no draft was published.";
+            case PROVIDER_OUTPUT_TRUNCATED -> zh
+                    ? "模型输出达到长度上限，回答或工具参数不完整，因此本轮没有发布。"
+                    : "The model reached its output limit, leaving the answer or action arguments incomplete, so this turn was not published.";
+            case EMPTY_MODEL_RESPONSE -> zh
+                    ? "模型这次既没有返回自然回答，也没有选择工具。本轮没有自动补写或强制追加一次调用。"
+                    : "The model returned neither a natural answer nor an action. The application did not fabricate text or force another call.";
+            case REPEATED_INCOMPATIBLE_ACTIONS -> zh
+                    ? "模型在收到逐步执行提示后，仍重复提交同一组并行动作。为避免跳过工具结果，本轮已停止。"
+                    : "After being told to act step by step, the model repeated the same parallel action set. The turn stopped rather than skipping tool observations.";
+            case REPEATED_INVALID_ACTION -> zh
+                    ? "模型看到明确的参数校验错误后，仍重复完全相同的无效动作。本轮已停止，避免无意义循环。"
+                    : "After receiving a precise parameter error, the model repeated the identical invalid action. The turn stopped to avoid a pointless loop.";
+            case ACTION_BUDGET_EXHAUSTED -> zh
+                    ? "Agent 已用完本轮安全预算，但仍没有选择自然结束或提交可发布结果。已核对内容保留，可以重试。"
+                    : "The Agent used this turn's safety budget without choosing a natural finish or a publishable result. Verified work is preserved for retry.";
+            case PUBLICATION_REJECTED -> zh
+                    ? "最终候选、证据归属或完整回复没有通过发布校验。为避免把未经支持的内容显示成推荐，本轮未发布；已核对事实仍保留。"
+                    : "The final candidates, evidence ownership, or complete reply failed publication validation. Nothing unsupported was shown as a recommendation, and verified facts remain saved.";
+            case SERVICE_FAILURE -> zh
+                    ? "推荐服务在本轮遇到无法归类的运行故障，未写入未完成结果。请求和已核对会话信息仍然保留。"
+                    : "The recommendation service hit an unclassified runtime failure and did not commit an incomplete result. The request and verified conversation context remain saved.";
+        };
     }
 
     void logRun(ConversationResponse response) {
@@ -738,13 +867,13 @@ final class RecommendationReActLoop {
         return """
                 You are RulePilot, a knowledgeable, natural board-game companion. Treat recentConversation as the complete request, honor its latest correction, and answer in the player's language.
 
-                Choose exactly one supplied typed action per model turn. Typed arguments and cited user evidence own routing and memory; prose never does. Retrieve game facts instead of guessing. Write complete useful prose inside the typed action only when it is terminal. Ask at most one question, and only when one missing player choice materially changes the answer.
+                Use a supplied typed action only when the turn needs its machine-owned state change, retrieval, or structured UI artifact. Otherwise answer the player directly in natural prose. After every action result, either choose the next useful action or finish with the complete answer; never call an action merely to wrap prose. Typed arguments and cited user evidence own routing and memory, while direct prose is player-facing output only. Retrieve game facts instead of guessing. Ask at most one question, and only when one missing player choice materially changes the answer.
 
                 Every candidate read must set requestedCount plus requestedCountBasis. When no count is stated, use defaultRecommendationCount and PRODUCT_DEFAULT. For an explicitly stated count, requestedCountBasis is that current user turn's U id; never reuse an older turn's count. limit is only retrieval size. preferenceUpdates is one evidence-scoped patch for player-stated preferences: playerCount, durationMinutes, and complexity are numeric; type is a BGG product class; interaction is COMPETITIVE, COOPERATIVE, or TEAM. Never save clarification options or inferred mood. Range patches preserve omitted bounds. Cited numbers are DIRECT; INFERRED_GROUP_MEMBER_COUNT means counting stated members.
 
-                Prefer browse_bgg_catalog for cards and BGG facts; use resolve_bgg_game for an exact player-written title. Use public discovery once for an uncertain/current relationship involving a person, event, organization, game, or other entity. Public context may answer without a BGG carrier, but every selectable card still needs BGG verification. Use textQuery for concepts rather than inventing taxonomy, and never repeat the same read.
+                Prefer browse_bgg_catalog for cards and BGG facts; use resolve_bgg_game for an exact player-written title. Use public discovery when an uncertain or current relationship involving a person, event, organization, game, or other entity needs attributed evidence. Its result returns atomic public context and optional title leads. After every observation, decide whether it is sufficient, another genuinely relevant capability can add the missing evidence, or the truthful answer is that the evidence is unavailable. Never repeat the same read or use an unrelated BGG read merely because public search failed. SELECTABLE_CARDS title leads still require BGG verification before cards. Use textQuery for concepts rather than inventing taxonomy.
 
-                Card-producing reads never publish. After their verified observation returns, use recommend_games in this same loop: choose only its enumerated candidates, write one complete natural playerReply, bind any candidate-specific factual wording in it with internal playerReplyEvidenceIds, and write each card's why/tradeoff only from that candidate's enumerated evidence. The application publishes those strings unchanged. Recommendations need cards; comparisons use compare_candidates. Never expose hidden reasoning, schemas, internal ids, evidence ids, or workflow.
+                Card-producing reads never publish. When the player needs recommendation cards, use recommend_games after a verified observation: choose only its enumerated candidates, write one complete natural playerReply, bind any candidate-specific factual wording with internal playerReplyEvidenceIds, and write each card's why/tradeoff only from that candidate's enumerated evidence. A generic conversational lead may use no evidence id. Use compare_candidates only when the player needs the structured comparison artifact. Never expose hidden reasoning, schemas, internal ids, evidence ids, or workflow.
                 """;
     }
 
@@ -753,62 +882,22 @@ final class RecommendationReActLoop {
             List<ToolSpec> actions,
             List<String> preferenceEvidenceIds,
             List<String> currentTurnEvidenceIds) {
-        List<Integer> recommendableIds = recommendableIds(state);
         List<Integer> pendingPublicationIds = pendingPublicationIds(state);
-        if (!pendingPublicationIds.isEmpty()) {
-            return List.of(recommendationAction(state, pendingPublicationIds));
-        }
         List<Integer> comparableIds = comparableIds(state);
         List<String> relaxableSubjects = relaxableSubjects(state);
-        boolean comparisonNeedsCandidateRetrieval = state.discoveryPurpose != DiscoveryPurpose.IDENTITY_ONLY
-                && state.namedGamePurpose == NamedGamePurpose.COMPARISON_REFERENCE
-                && !state.catalogBrowseAttempted
-                && !state.discoveryAttempted;
-        boolean verifiedSlateAvailable = !recommendableIds.isEmpty();
-        boolean identityTurnCanFinish = state.discoveryPurpose == DiscoveryPurpose.IDENTITY_ONLY
-                && (state.discoveryAttempted || state.catalogBrowseAttempted);
         boolean unresolvedIdentityCanStillBeClarified = state.unresolvedPlayerTitle;
         boolean clarificationWouldMaskFailure = !unresolvedIdentityCanStillBeClarified
-                && (state.clarificationBlockedByExecutionFailure
-                        || state.catalogBrowseAttempted && state.verified.isEmpty()
-                        || state.discoveryAttempted && state.verified.isEmpty());
-        return actions.stream()
-                .filter(action -> !state.unresolvedPlayerTitle
-                        || RESOLVE_TOOL.equals(action.name())
-                        || isDiscoveryAction(action.name())
-                        || ASK_TOOL.equals(action.name())
-                        || REPLY_TOOL.equals(action.name()))
+                && state.clarificationBlockedByExecutionFailure;
+        List<ToolSpec> available = actions.stream()
                 .filter(action -> !RECOMMEND_TOOL.equals(action.name()))
-                .filter(action -> !comparisonNeedsCandidateRetrieval
-                        || !REPLY_TOOL.equals(action.name()) && !ASK_TOOL.equals(action.name()))
                 .filter(action -> !clarificationWouldMaskFailure || !ASK_TOOL.equals(action.name()))
                 .filter(action -> state.webResearchAvailable
                         || !isDiscoveryAction(action.name()) && !RESEARCH_TOOL.equals(action.name()))
                 .filter(action -> !state.verified.isEmpty() || !RESEARCH_TOOL.equals(action.name()))
                 .filter(action -> state.legalIds.stream().anyMatch(id -> !state.verified.containsKey(id))
                         || !LOOKUP_TOOL.equals(action.name()))
-                .filter(action -> state.referenceResolutionAttempts < MAX_REFERENCE_RESOLUTION_ATTEMPTS
-                        || !RESOLVE_TOOL.equals(action.name()))
-                .filter(action -> !state.discoveryAttempted || !isDiscoveryAction(action.name()))
-                .filter(action -> !state.researchAttempted || !RESEARCH_TOOL.equals(action.name()))
                 .filter(action -> comparableIds.size() >= 2 || !COMPARE_TOOL.equals(action.name()))
-                .filter(action -> !state.researchAttempted
-                        || comparableIds.size() < 2
-                        || !REPLY_TOOL.equals(action.name()))
                 .filter(action -> !relaxableSubjects.isEmpty() || !NO_MATCH_TOOL.equals(action.name()))
-                .filter(action -> !verifiedSlateAvailable
-                        || REPLY_TOOL.equals(action.name())
-                        || RECOMMEND_TOOL.equals(action.name())
-                        || RESOLVE_TOOL.equals(action.name())
-                        || COMPARE_TOOL.equals(action.name())
-                        || RESEARCH_TOOL.equals(action.name())
-                                && state.webResearchAvailable
-                                && !state.researchAttempted
-                        || isDiscoveryAction(action.name())
-                                && state.webResearchAvailable
-                                && !state.discoveryAttempted
-                        || BROWSE_TOOL.equals(action.name())
-                        || isDiscoveryAction(action.name()))
                 .map(action -> BROWSE_TOOL.equals(action.name())
                                 ? catalogAction(
                                         preferenceEvidenceIds,
@@ -822,45 +911,12 @@ final class RecommendationReActLoop {
                                         preferenceEvidenceIds)
                         : NO_MATCH_TOOL.equals(action.name())
                                 ? noMatchAction(relaxableSubjects)
-                        : RECOMMEND_TOOL.equals(action.name())
-                                ? recommendationAction(state, pendingPublicationIds)
-                        : identityTurnCanFinish && REPLY_TOOL.equals(action.name())
-                                ? identityReplyAction(state)
-                        : !recommendableIds.isEmpty() && REPLY_TOOL.equals(action.name())
-                                ? slateReplyAction()
                         : action)
-                .map(action -> preferencesCapturedThisRun(state)
-                        ? withoutPreferenceUpdates(action)
-                        : action)
-                .toList();
-    }
-
-    private boolean preferencesCapturedThisRun(RecommendationAgentState state) {
-        return state.actions.stream().anyMatch(action -> Set.of(
-                                "UPDATE_PREFERENCES",
-                                "RECORD_CONTEXTUAL_PREFERENCE",
-                                "IGNORED_REDUNDANT_PREFERENCE_UPDATE")
-                        .contains(action)
-                || action.startsWith("IGNORED_INVALID_PREFERENCE_UPDATE:"));
-    }
-
-    private ToolSpec withoutPreferenceUpdates(ToolSpec action) {
-    try {
-            JsonNode schema = json.readTree(action.inputSchema());
-            if (schema.path("properties") instanceof ObjectNode properties) {
-                properties.remove("preferenceUpdates");
-                properties.remove("contextualGroup");
-            }
-            if (schema.path("required") instanceof ArrayNode required) {
-                for (int index = required.size() - 1; index >= 0; index--) {
-                    if (Set.of("preferenceUpdates", "contextualGroup")
-                            .contains(required.path(index).asText())) required.remove(index);
-                }
-            }
-            return new ToolSpec(action.name(), action.description(), json.writeValueAsString(schema));
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("recommendation action schema could not be narrowed", exception);
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        if (!pendingPublicationIds.isEmpty()) {
+            available.add(recommendationAction(state, pendingPublicationIds));
         }
+        return List.copyOf(available);
     }
 
     int maximumRecommendationResults() {
@@ -951,11 +1007,11 @@ final class RecommendationReActLoop {
         String preferences = preferenceSchema(preferenceEvidenceIds);
         return List.of(
                 new ToolSpec(
-                        REPLY_TOOL,
-                        "Finish without retrieval/new cards. playerReply is the complete answer, not status. referencedBggIds cite only verified discussion games and never create cards; resolve_bgg_game opens named games.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched player answer; no internal markers or unsupported game facts.\",\"minLength\":1,\"maxLength\":1200},\"referencedBggIds\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"preferenceUpdates\":"
+                        UPDATE_PREFERENCES_TOOL,
+                        "Persist explicit player-stated preferences without retrieval. This action changes machine-owned memory only and returns an observation; after it returns, answer the player directly unless another useful action is needed.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"preferenceUpdates\":"
                                 + preferences
-                                + "},\"required\":[\"playerReply\"]}"),
+                                + "},\"required\":[\"preferenceUpdates\"]}"),
                 new ToolSpec(
                         ASK_TOOL,
                         "Ask one natural high-value question only when a missing player choice changes the slate. preferenceUpdates keep stated numeric facts, never proposed options. Do not ask after read failure or when discovery/immediate cards can answer.",
@@ -977,12 +1033,10 @@ final class RecommendationReActLoop {
                                 defaultRecommendationCount)),
                 new ToolSpec(
                         DISCOVER_TOOL,
-                        "Verify one uncertain/current relationship involving a person, event, organization, alias, award, or list. subject is the exact cited identity phrase, not a guessed answer. afterIdentity says whether sourced context answers the turn or selectable cards remain. Supply requestedCount/basis. Verified selectable cards return as an observation; recommend_games owns their final prose.",
+                        "Search public sources once for an uncertain/current relationship, alias, event, organization, award, list, or source-backed title lead. subject is the exact cited identity phrase, not a guessed answer. goal selects the shape of this search result only; it never triggers a hidden BGG lookup or recommendation. After the observation, answer naturally or choose a separate catalog action.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
-                                + "},\"subject\":{\"type\":\"string\",\"description\":\"Exact identity-bearing nickname, initials, award, or relationship phrase; not the full question and not a guessed answer.\",\"minLength\":1,\"maxLength\":80},\"afterIdentity\":{\"type\":\"string\",\"enum\":[\"REPLY_WITH_IDENTITY\",\"RECOMMEND_WITH_CARDS\"]},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
-                                + requestedCountBasisSchema(currentTurnEvidenceIds)
-                                + ",\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"afterIdentity\",\"requestedCount\",\"requestedCountBasis\"]}"),
+                                + "},\"subject\":{\"type\":\"string\",\"description\":\"Exact identity-bearing nickname, initials, award, event, organization, or relationship phrase; not the full question and not a guessed answer.\",\"minLength\":1,\"maxLength\":80},\"goal\":{\"type\":\"string\",\"description\":\"IDENTITY_ONLY for a public fact or relationship; SELECTABLE_CARDS when public title leads may be useful, while BGG verification remains a separate action.\",\"enum\":[\"IDENTITY_ONLY\",\"SELECTABLE_CARDS\"]},\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"goal\"]}"),
                 new ToolSpec(
                         LOOKUP_TOOL,
                         "Load BGG facts only for observed conversation-context IDs that do not yet have verified details.",
@@ -998,7 +1052,7 @@ final class RecommendationReActLoop {
                                 + RecommendationAgentState.MIN_RECOMMENDATION_REPLY_CODE_POINTS
                                 + ",\"maxLength\":"
                                 + RecommendationAgentState.MAX_RECOMMENDATION_REPLY_CODE_POINTS
-                                + "},\"playerReplyEvidenceIds\":{\"type\":\"array\",\"minItems\":1},\"selections\":{\"type\":\"array\",\"minItems\":1}},\"required\":[\"playerReply\",\"playerReplyEvidenceIds\",\"selections\"]}"),
+                                + "},\"playerReplyEvidenceIds\":{\"type\":\"array\",\"minItems\":0},\"selections\":{\"type\":\"array\",\"minItems\":1}},\"required\":[\"playerReply\",\"playerReplyEvidenceIds\",\"selections\"]}"),
                 comparisonAction(List.of(), List.of(), List.of(), preferenceEvidenceIds),
                 noMatchAction(List.of()));
     }
@@ -1057,11 +1111,11 @@ final class RecommendationReActLoop {
         String countGuidance = candidateIds.size() < pending.requestedCount()
                 ? " The player requested " + pending.requestedCount() + " cards, but only "
                         + candidateIds.size()
-                        + " verified candidates remain; select all of them and explain that bounded shortfall naturally without claiming the catalog is exhausted."
-                : " Select exactly " + selectionCount + " candidates in the order you want them shown.";
+                        + " verified candidates remain. Prefer all useful candidates, but never invent or pad a weak card; explain any bounded shortfall naturally without claiming the catalog is exhausted."
+                : " Select up to " + selectionCount + " useful candidates in the order you want them shown; never invent or pad a weak card.";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Finish the current verified recommendation. playerReply is the complete natural answer shown above the cards; bind its candidate-specific factual wording with playerReplyEvidenceIds. Each selection requires one evidence-bound why; add a tradeoff only when the same candidate's observations support a useful boundary. The application validates candidate/evidence ownership and publishes every text string unchanged."
+                "Finish the current verified recommendation. playerReply is the complete natural answer shown above the cards; bind candidate-specific factual wording with playerReplyEvidenceIds, or use an empty list for a generic conversational lead. Each selection requires one evidence-bound why; add a tradeoff only when the same candidate's observations support a useful boundary. The application validates candidate/evidence ownership and publishes every accepted text string unchanged; a malformed optional tradeoff or candidate may be omitted without discarding valid siblings."
                         + countGuidance,
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
                         + "\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched recommendation lead. Do not expose internal ids, evidence ids, tools, or workflow.\",\"minLength\":"
@@ -1069,14 +1123,12 @@ final class RecommendationReActLoop {
                         + ",\"maxLength\":"
                         + RecommendationAgentState.MAX_RECOMMENDATION_REPLY_CODE_POINTS
                         + "},"
-                        + "\"playerReplyEvidenceIds\":{\"type\":\"array\",\"description\":\"Internal observation ids supporting candidate-specific factual wording in playerReply; never show these ids to the player.\",\"minItems\":1,\"maxItems\":"
+                        + "\"playerReplyEvidenceIds\":{\"type\":\"array\",\"description\":\"Internal observation ids supporting candidate-specific factual wording in playerReply; use [] for a generic lead and never show these ids to the player.\",\"minItems\":0,\"maxItems\":"
                         + Math.min(16, playerReplyEvidenceIds.size())
                         + ",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(playerReplyEvidenceIds)
                         + "}},"
-                        + "\"selections\":{\"type\":\"array\",\"minItems\":"
-                        + selectionCount
-                        + ",\"maxItems\":"
+                        + "\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
                         + selectionCount
                         + ",\"uniqueItems\":true,\"items\":{\"oneOf\":"
                         + candidateSchemas
@@ -1160,88 +1212,6 @@ final class RecommendationReActLoop {
     private static String jsonArray(List<String> values) {
         return values.stream().map(value -> "\"" + new String(JsonStringEncoder.getInstance().quoteAsString(value)) + "\"")
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
-    }
-
-    private static ToolSpec slateReplyAction() {
-        return new ToolSpec(
-                REPLY_TOOL,
-                "Finish only when this turn needs no new candidates and its goal is already answered. playerReply is the actual natural answer shown to the player in this same call. Never narrate unfinished work or mention retrieved leads.",
-                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                        + "\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200},"
-                        + "\"referencedBggIds\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}}},"
-                        + "\"required\":[\"playerReply\"]}");
-    }
-
-    private static ToolSpec identityReplyAction(RecommendationAgentState state) {
-        String playerReply = "\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200,"
-                + "\"description\":\"The complete player-facing reply, written freely in the player's language. Lead with the useful answer, sound warm and knowledgeable, and include enough context to feel like a real conversation. Public factual clauses must stay within the selected public evidence statements. Do not mention tools, retrieval, validation, schemas, or workflow.\"}";
-        String publicEvidence = publicEvidenceProperty(state);
-        String requiredPublicEvidence = state.hasVerifiedPublicContext() ? ",\"publicEvidenceIds\"" : "";
-        if (state.hasVerifiedIdentity()) {
-            int identityCount = state.discoveredRelationshipNames.size();
-            return new ToolSpec(
-                    IDENTITY_REPLY_TOOL,
-                    "Finish when this verified identity answers the complete current request. If the player also asked for games, continue the ReAct loop. The application validates the typed identity and publishes your complete playerReply unchanged; wording, tone, background, detail, and conversational follow-up are yours.",
-                    "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"VERIFIED\"]},\"entityKind\":{\"type\":\"string\",\"enum\":[\""
-                            + state.discoveredRelationshipKind.name()
-                            + "\"]},\"entityNames\":{\"type\":\"array\",\"minItems\":"
-                            + identityCount
-                            + ",\"maxItems\":"
-                            + identityCount
-                            + ",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
-                            + jsonArray(state.discoveredRelationshipNames)
-                            + "}},"
-                            + playerReply
-                            + publicEvidence
-                            + "},\"required\":[\"status\",\"entityKind\",\"entityNames\",\"playerReply\""
-                            + requiredPublicEvidence
-                            + "]}");
-        }
-        if (state.hasVerifiedPublicContext()) {
-            return new ToolSpec(
-                    IDENTITY_REPLY_TOOL,
-                    "Finish when the source-backed public context answers the complete request. Select only evidence ids supplied by this discovery read. The application validates their ownership, publishes their sources, and shows your natural playerReply unchanged. Do not add public facts outside the selected statements.",
-                    "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                            + "\"status\":{\"type\":\"string\",\"enum\":[\"SOURCED_CONTEXT\"]},"
-                            + playerReply
-                            + publicEvidence
-                            + "},\"required\":[\"status\",\"playerReply\",\"publicEvidenceIds\"]}");
-        }
-        List<Integer> contextIds = state.verifiedIdentityContextIds();
-        String contextProperty = contextIds.isEmpty()
-                ? ""
-                : ",\"contextBggIds\":{\"type\":\"array\",\"minItems\":"
-                        + contextIds.size()
-                        + ",\"maxItems\":"
-                        + contextIds.size()
-                        + ",\"uniqueItems\":true,\"items\":{\"type\":\"integer\",\"enum\":"
-                        + contextIds
-                        + "}}";
-        String requiredContext = contextIds.isEmpty() ? "" : ",\"contextBggIds\"";
-        String failureKind = state.webResearchFailureCode.isBlank()
-                ? "INSUFFICIENT_PUBLIC_EVIDENCE"
-                : "PUBLIC_RESEARCH_UNAVAILABLE";
-        return new ToolSpec(
-                IDENTITY_REPLY_TOOL,
-                "Finish this identity check with the typed UNRESOLVED conclusion and the supplied failure kind. playerReply is the complete natural explanation shown to the player and is published unchanged. It may explain only that the identity is unverified, whether public research was unavailable or insufficient, and one honest retry/clarification option; do not invent an identity or unsupported public facts.",
-                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"UNRESOLVED\"]},"
-                        + "\"failureKind\":{\"type\":\"string\",\"enum\":[\""
-                        + failureKind
-                        + "\"]},"
-                        + playerReply
-                        + contextProperty
-                        + "},\"required\":[\"status\",\"failureKind\",\"playerReply\""
-                        + requiredContext
-                        + "]}");
-    }
-
-    private static String publicEvidenceProperty(RecommendationAgentState state) {
-        if (!state.hasVerifiedPublicContext()) return "";
-        return ",\"publicEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":4,\"uniqueItems\":true,"
-                + "\"description\":\"Evidence ids from this discovery read that support every public factual clause in playerReply.\","
-                + "\"items\":{\"type\":\"string\",\"enum\":"
-                + jsonArray(state.publicContextEvidence.keySet().stream().toList())
-                + "}}";
     }
 
     private static String preferenceSchema(List<String> preferenceEvidenceIds) {
@@ -1349,11 +1319,12 @@ final class RecommendationReActLoop {
         putIfNotEmpty(memory, "comparisonReferenceBggIds", state.comparisonReferenceIds.stream().toList());
         memory.put("referenceResolutionAttempts", state.referenceResolutionAttempts);
         if (state.namedGamePurpose != null) memory.put("namedGamePurpose", state.namedGamePurpose.name());
-        if (state.hasVerifiedIdentity()) {
-            memory.put("discoveredRelationship", Map.of(
-                    "kind", state.discoveredRelationshipKind.name(),
-                    "entityNames", state.discoveredRelationshipNames));
-        }
+        putIfNotEmpty(memory, "publicCandidateLeads", state.discoveredCandidateLeads.stream()
+                .map(lead -> Map.of(
+                        "name", lead.name(),
+                        "fitObservation", lead.fitObservation(),
+                        "sourceIndexes", lead.sourceIndexes()))
+                .toList());
         putIfNotEmpty(memory, "publicContextEvidence", state.publicContextEvidence.values().stream()
                 .map(actionExecutor::publicContextObservation)
                 .toList());
@@ -1386,10 +1357,8 @@ final class RecommendationReActLoop {
 
     private Map<String, Boolean> availableCapabilities(RecommendationAgentState state) {
         return Map.of(
-                "semanticPublicDiscovery",
-                        state.webResearchAvailable && !state.discoveryAttempted,
-                "subjectiveFitResearch",
-                        state.webResearchAvailable && !state.researchAttempted && !state.verified.isEmpty());
+                "semanticPublicDiscovery", state.webResearchAvailable,
+                "subjectiveFitResearch", state.webResearchAvailable && !state.verified.isEmpty());
     }
 
     String observation(Map<String, ?> value) {

@@ -15,6 +15,7 @@ import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
+import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
 import com.rulepilot.teaching.TeachingLessonModel.RuleFactDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
@@ -289,6 +290,16 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     private ModelInvocation composeOnce(SectionRequest request, String repairInstruction) {
+        try {
+            return composeOnceWithProvider(request, repairInstruction);
+        } catch (InvalidOutputException | ProviderFailureException classifiedFailure) {
+            throw classifiedFailure;
+        } catch (RuntimeException providerFailure) {
+            throw new ProviderFailureException(providerFailure);
+        }
+    }
+
+    private ModelInvocation composeOnceWithProvider(SectionRequest request, String repairInstruction) {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         Map<String, UUID> evidenceIds = evidenceIds(request);

@@ -115,6 +115,14 @@ public interface TeachingLessonModel {
         }
     }
 
+    /** Keeps provider transport and availability details behind the Teaching model port. */
+    final class ProviderFailureException extends RuntimeException {
+
+        public ProviderFailureException(Throwable cause) {
+            super("teaching model provider failed", cause);
+        }
+    }
+
     /**
      * Content-free request-size attribution persisted with the matching audited model activity.
      *

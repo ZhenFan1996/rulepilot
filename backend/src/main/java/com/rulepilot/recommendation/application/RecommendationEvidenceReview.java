@@ -55,7 +55,19 @@ final class RecommendationEvidenceReview {
                 "durationMinutes",
                 "complexity",
                 "type",
-                "interaction"), false);
+                "interaction"), PreferenceUpdateMode.DEDICATED);
+    }
+
+    PreferenceUpdatePlan planOptionalPreferenceUpdates(
+            JsonNode arguments,
+            RecommendationProfile current,
+            ConversationRequest request) {
+        return planPreferenceUpdates(arguments, current, request, Set.of(
+                "playerCount",
+                "durationMinutes",
+                "complexity",
+                "type",
+                "interaction"), PreferenceUpdateMode.ATTACHED);
     }
 
     PreferenceUpdatePlan planClarificationPreferenceUpdates(
@@ -67,7 +79,7 @@ final class RecommendationEvidenceReview {
                 current,
                 request,
                 CLARIFICATION_PROFILE_FIELDS,
-                true);
+                PreferenceUpdateMode.CLARIFICATION);
     }
 
     private PreferenceUpdatePlan planPreferenceUpdates(
@@ -75,19 +87,25 @@ final class RecommendationEvidenceReview {
             RecommendationProfile current,
             ConversationRequest request,
             Set<String> allowedFields,
-            boolean clarification) {
+            PreferenceUpdateMode mode) {
         if (!arguments.has("preferenceUpdates")) return PreferenceUpdatePlan.unchanged(current);
         NormalizedPreferenceUpdates normalized = normalizedPreferenceUpdates(arguments.path("preferenceUpdates"));
-        if (!clarification && !normalized.ignoredFailureCodes().isEmpty()) {
+        if (mode == PreferenceUpdateMode.DEDICATED && !normalized.ignoredFailureCodes().isEmpty()) {
             throw new InvalidAction(normalized.ignoredFailureCodes().getFirst());
         }
-        return planPreferenceUpdateList(
+        PreferenceUpdatePlan plan = planPreferenceUpdateList(
                 normalized.updates(),
                 current,
                 request,
                 allowedFields,
                 normalized.ignoredFailureCodes(),
-                clarification);
+                mode);
+        if (mode == PreferenceUpdateMode.DEDICATED && !plan.hasAcceptedUpdate()) {
+            throw new InvalidAction(plan.ignoredFailureCodes().isEmpty()
+                    ? "EMPTY_PREFERENCE_UPDATE"
+                    : plan.ignoredFailureCodes().getFirst());
+        }
+        return plan;
     }
 
     void commitPreferenceUpdates(PreferenceUpdatePlan plan, RecommendationAgentState state) {
@@ -112,7 +130,7 @@ final class RecommendationEvidenceReview {
             ConversationRequest request,
             Set<String> allowedFields,
             List<String> normalizationFailures,
-            boolean clarification) {
+            PreferenceUpdateMode mode) {
         List<String> ignoredFailures = new ArrayList<>(normalizationFailures);
         if (updates.isEmpty()) {
             return new PreferenceUpdatePlan(current, Map.of(), false, false, ignoredFailures);
@@ -131,7 +149,7 @@ final class RecommendationEvidenceReview {
                 prepared.add(new PreparedPreferenceUpdate(update, field));
                 occurrences.merge(field, 1, Integer::sum);
             } catch (InvalidAction failure) {
-                if (!clarification) throw failure;
+                if (mode == PreferenceUpdateMode.DEDICATED) throw failure;
                 ignoredFailures.add(failure.code);
             }
         }
@@ -144,7 +162,9 @@ final class RecommendationEvidenceReview {
                             .filter(entry -> field.equals(entry.field()))
                             .anyMatch(entry -> directHardUpdate(
                                     entry.update(), entry.field()));
-                    if (directHardDuplicate && (!clarification || allowedFields.contains(field))) {
+                    boolean rejectDuplicate = mode == PreferenceUpdateMode.DEDICATED
+                            || mode == PreferenceUpdateMode.CLARIFICATION && allowedFields.contains(field);
+                    if (directHardDuplicate && rejectDuplicate) {
                         throw new InvalidAction("PREFERENCE_FIELD_INVALID");
                     }
                     ignoredFailures.add("PREFERENCE_FIELD_INVALID");
@@ -157,7 +177,10 @@ final class RecommendationEvidenceReview {
             }
             JsonNode update = preparedUpdate.update();
             try {
-                if (redundantCategoricalClear(update, field, candidate, request)) continue;
+                if (redundantCategoricalClear(update, field, candidate, request)) {
+                    directUpdatesPresent = true;
+                    continue;
+                }
                 PreferenceEvidenceClassification classification = preferenceClassification(update, request);
                 if (classification.contextual()) {
                     ContextualPreference contextual = contextualPreference(
@@ -171,7 +194,7 @@ final class RecommendationEvidenceReview {
                     candidate = updated;
                 }
             } catch (InvalidAction failure) {
-                if (directHardUpdate(update, field)) throw failure;
+                if (mode != PreferenceUpdateMode.ATTACHED && directHardUpdate(update, field)) throw failure;
                 ignoredFailures.add(failure.code);
             }
         }
@@ -747,6 +770,16 @@ final class RecommendationEvidenceReview {
         static PreferenceUpdatePlan unchanged(RecommendationProfile profile) {
             return new PreferenceUpdatePlan(profile, Map.of(), false, false, List.of());
         }
+
+        boolean hasAcceptedUpdate() {
+            return profileUpdated || directUpdatesPresent || !contextualUpdates.isEmpty();
+        }
+    }
+
+    private enum PreferenceUpdateMode {
+        DEDICATED,
+        CLARIFICATION,
+        ATTACHED
     }
 
     private record NormalizedPreferenceUpdates(

@@ -1,5 +1,5 @@
-import { mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import LessonChapterList from './LessonChapterList.vue'
 
@@ -63,6 +63,22 @@ function mountDirectory(lessonSections: TestSection[] = sections) {
 }
 
 describe('LessonChapterList', () => {
+  beforeEach(() => {
+    class TestFileReader {
+      result: string | ArrayBuffer | null = null
+      onload: ((event: ProgressEvent<FileReader>) => void) | null = null
+
+      readAsDataURL() {
+        this.result = 'data:image/jpeg;base64,anBlZw=='
+        queueMicrotask(() => this.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>))
+      }
+    }
+    vi.stubGlobal('FileReader', TestFileReader)
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(new Blob(['jpeg'], { type: 'image/jpeg' }), { status: 200 }),
+    )))
+  })
+
   afterEach(() => {
     window.history.replaceState(null, '', window.location.pathname)
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -134,7 +150,7 @@ describe('LessonChapterList', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' })
   })
 
-  it('uses the same context-and-detail evidence storyboard in the shared reader', () => {
+  it('uses the same context-and-detail evidence storyboard in the shared reader', async () => {
     const wrapper = mountDirectory([{
       ...sections[0]!,
       steps: [{
@@ -151,15 +167,18 @@ describe('LessonChapterList', () => {
         },
       }],
     }])
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="lesson-visual-storyboard"]')).toBeTruthy()
     expect(wrapper.get('[data-testid="lesson-visual-context"] img').attributes('src')).toBe('/preview/2')
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toBe('/crop/2')
+    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src'))
+      .toMatch(/^data:image\/jpeg;base64,/)
+    expect(fetch).toHaveBeenCalledWith('/crop/2', expect.objectContaining({ credentials: 'include' }))
     expect(wrapper.text()).toContain('把主板放在桌面中央。')
     expect(wrapper.text()).toContain('规则含义以上方有引用的步骤为准')
   })
 
-  it('renders every visual focus attached to the same cited step', () => {
+  it('renders every visual focus attached to the same cited step', async () => {
     const first: TestVisualFocus = { pageNumber: 2, label: '行动图标', x: 100, y: 150, width: 300, height: 250 }
     const second: TestVisualFocus = { pageNumber: 3, label: '牌面示例', x: 200, y: 250, width: 320, height: 280 }
     const third: TestVisualFocus = { pageNumber: 4, label: '完整流程', x: 0, y: 0, width: 1000, height: 1000 }
@@ -172,9 +191,13 @@ describe('LessonChapterList', () => {
         visualFoci: [first, second, third],
       }],
     }])
+    await flushPromises()
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-testid="lesson-visual-detail"] img')).toHaveLength(3)
+    })
 
     expect(wrapper.get('[data-testid="lesson-step-visuals"]').findAll('[data-testid="lesson-visual-storyboard"]')).toHaveLength(3)
-    expect(wrapper.findAll('[data-testid="lesson-visual-detail"] img').map((image) => image.attributes('src')))
+    expect(vi.mocked(fetch).mock.calls.map(([input]) => String(input)))
       .toEqual(['/crop/2', '/crop/3', '/crop/4'])
   })
 
