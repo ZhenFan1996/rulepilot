@@ -28,12 +28,10 @@ const pagePreview = `
     <path d="M72 210h112" stroke="#a85d3f" stroke-width="12"/>
   </svg>`
 
-const focusedDetail = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">
-    <rect width="640" height="420" fill="#ece2c8"/>
-    <rect x="90" y="100" width="220" height="160" rx="18" fill="#214761"/>
-    <path d="M330 180h190" stroke="#a85d3f" stroke-width="20"/>
-  </svg>`
+const focusedDetail = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+)
 
 const catalogPresentation = {
   editionId: 'edition-1', gameName: 'Catalog Game', editionName: 'Catalog Game edition', language: 'en',
@@ -63,7 +61,14 @@ async function mockSharedApis(page: Page) {
   }))
   await page.route('**/api/v1/teaching-plans/plan-1/comprehension', route => route.fulfill({ status: 404 }))
   await page.route('**/pages/2/image/preview', route => route.fulfill({ contentType: 'image/svg+xml', body: pagePreview }))
-  await page.route('**/pages/2/image/crop?*', route => route.fulfill({ contentType: 'image/svg+xml', body: focusedDetail }))
+  await page.route('**/pages/2/image/crop?*', route => route.fulfill({ contentType: 'image/png', body: focusedDetail }))
+}
+
+async function expectLoadedVisualDetail(page: Page) {
+  await page.getByText('局部特写', { exact: true }).scrollIntoViewIfNeeded()
+  const detail = page.getByTestId('lesson-visual-detail')
+  await expect(detail).toBeVisible()
+  await expect(detail.locator('img')).toHaveAttribute('src', /^data:image\/png;base64,/)
 }
 
 test('uses one tabletop reading language for private and public guides', async ({ page }) => {
@@ -85,7 +90,7 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.locator('[data-testid="private-rule-step"]')).toHaveCount(2)
   await expect(page.getByTestId('lesson-visual-storyboard')).toBeVisible()
   await expect(page.getByTestId('lesson-visual-context')).toBeVisible()
-  await expect(page.getByTestId('lesson-visual-detail')).toBeVisible()
+  await expectLoadedVisualDetail(page)
   await expect(page.getByText('定位框和特写只说明图上位置与外观')).toBeVisible()
   await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/lesson/plan-1/questions')
   await expect(page.locator('#lesson-question-panel')).toHaveCount(0)
@@ -94,7 +99,7 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
   await expect(page.getByTestId('lesson-visual-storyboard')).toBeVisible()
   await expect(page.getByTestId('lesson-visual-context')).toBeVisible()
-  await expect(page.getByTestId('lesson-visual-detail')).toBeVisible()
+  await expectLoadedVisualDetail(page)
   await expect(page.locator('#public-question')).toHaveCount(0)
   await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/read/plan-1/questions')
   await page.getByTestId('lesson-questions-entry').click()
@@ -135,7 +140,7 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   const storyboard = page.getByTestId('lesson-visual-storyboard')
   await expect(storyboard).toBeVisible()
   await expect(page.getByTestId('lesson-visual-context')).toBeVisible()
-  await expect(page.getByTestId('lesson-visual-detail')).toBeVisible()
+  await expectLoadedVisualDetail(page)
   const storyboardBox = await storyboard.boundingBox()
   expect(storyboardBox).not.toBeNull()
   expect(storyboardBox!.width).toBeLessThanOrEqual(374)
@@ -162,6 +167,24 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )
   expect(hasHorizontalOverflow).toBe(false)
+})
+
+test('keeps cited lesson content when the focused crop is permanently unavailable', async ({ page }) => {
+  await mockSharedApis(page)
+  await page.route('**/pages/2/image/crop?*', route => route.fulfill({
+    status: 502,
+    headers: { 'X-RulePilot-Visual-Failure': 'PAGE_IMAGE_UNAVAILABLE' },
+  }))
+
+  await page.goto('/lesson/plan-1')
+  await page.getByText('局部特写', { exact: true }).scrollIntoViewIfNeeded()
+
+  await expect(page.getByTestId('lesson-visual-detail-failure')).toContainText('只省略此图')
+  await expect(page.getByTestId('lesson-visual-detail')).toHaveCount(0)
+  await expect(page.getByTestId('lesson-visual-context')).toBeVisible()
+  await expect(page.locator('[data-testid="private-rule-step"]')).toHaveCount(2)
+  await expect(page.getByText('把第一张灯塔牌正面朝上放在起点。')).toBeVisible()
+  await expect(page.getByRole('link', { name: '来源：第 2 页 ↗' }).last()).toBeVisible()
 })
 
 test('shows immediate Q&A feedback and preserves verified evidence at the eight-second soft boundary', async ({ page }) => {
