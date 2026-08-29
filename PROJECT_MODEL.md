@@ -142,24 +142,24 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
    独立页面的串行关键路径，不放宽该上界。不可读页面作为 typed unavailable catalog state 留痕并从 ownership
    排除；只要还有一个可验证 anchor 就继续，只有零 anchor 才在规划前停止。每次调用前还会以真实消息和工具
    schema 计算本地及全局上下文容量；若整页事实无论怎样分片都装不进 provider 合同，就在任何付费调用前拒绝。
-   Teaching run 另外按实际章节、检索、review 和可选配图的完整有界调用图取得自己的执行预算。
+   Teaching run 另外按实际章节、检索和同一 work unit 内的一次可选配图取得自己的执行预算。
 5. outline 只描述章节结构；它不能凭空补规则，每个主题必须能回到当前文档版本。章节初稿若未通过确定性
    发布校验，Agent 会收到具体诊断和同一份证据，最多返回一次完整章节替换；应用不从旧稿拣字段拼进新稿。
 6. 每章带引用正文一通过确定性边界就先写入 durable snapshot，随后才做可选图示增强；因此图示超时、预算停止、
    provider 或 crop 失败都不能擦除已经可读的正文。视觉 Agent 只能从 opaque crop candidate ID 中选择或返回
    `NO_VISUAL`；格式错误、越权选择或 provider 失败最多触发一次完整重选。crop 的临时 503 只自动重试一次，
    永久 502 或重试仍失败只省略该图，并在 UI 说明是容量、原页、传输还是浏览器解码边界。
-7. 已通过引用与结构校验的章节可先读，后续章节继续后台完成。可选整课 reviewer 不可用时保留完整 cited
-   draft；只有 confirmed defect 才把诊断和同一证据交给 Agent 生成一次完整章节替换，再做一次独立验收。
-   confirmed defect 会先从可读 snapshot 中扣留，再开始 replacement；所以替换期间取消或预算中止也不会把
-   已知有错的旧章继续标成可读。替换通过后只为新章节重新选图；再次不合格只扣留该章，不抹掉其他章节。
+7. 已通过 schema、证据归属、文档版本、引用和结构校验的章节立即标为 `SUPPORTED` 并可先读，后续章节继续
+   后台完成。语义 critic 只在显式 evaluation/canary 中运行，不是线上第二发布 owner；其不可用、误报或额外
+   延迟都不能把已经跨过确定性边界的正文重新变成草稿或失败。
 8. UI 展示后端真实 activity，不模拟百分比；关闭弹窗后任务继续，并能从“我的讲解/任务进度”找回。
 
 讲解结果按最小可用单位判定：
 
 | 发生什么 | 最终状态 | 已有内容 |
 | --- | --- | --- |
-| 某次页面/章节/视觉响应未通过合同，或某次 provider 调用失败 | 进入唯一 owner 的有限完整替换或 transient replay；这次活动不是整轮失败 | 全部保留 |
+| 某次页面/章节/视觉响应未通过 typed 合同 | 带具体拒绝原因进入唯一 owner 的一次完整 replacement；这次活动不是整轮失败 | 全部保留 |
+| 明确 timeout/transient transport failure | 只在该边界声明允许时原样 replay 一次；普通 provider/config failure 不伪装成 schema repair | 全部保留 |
 | 某页 V6 修正后仍失败、页面图片无法读取、某章证据不足 | 只把该页/章标为 unavailable；其他页和章节继续 | 全部保留 |
 | 视觉 Agent 返回 `NO_VISUAL` | 合法的局部完成；该章无图发布 | 已校验正文保持不变 |
 | 视觉完整重选仍失败、crop 无法生成、超时或容量满 | 只省略当前章图片 | 已校验正文保持不变 |
@@ -188,17 +188,23 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 1. 当前问题先进入绑定文档版本或公开讲解自己的确定性 retrieval。普通第二问、`previousQuestion`、
    `priorTurnReference` 和显式 learning intent 都不会无条件先调用 interpretation 模型；只有本轮检索确实为空、
    有前文且 provider 支持时，才用一次可选 interpretation 形成恢复候选，二次检索成功后再原子替换当前路径。
+   这条可选能力的个人模型配置读取失败时只跳过恢复并保留原检索结果，不会冒泡成未分类的请求失败。
 2. retrieval 返回带稳定 evidence ID 的片段；模型通过 typed tool 指明使用哪些证据和回答范围。ADVICE 或
    COMPLETE_LIST 的可选认证失败时保留已经验证的部分证据和未完成义务；CALCULATION 数值审计与精确前文页
    复核仍是硬边界。
 3. 最终 provider JSON 的核心回答保持严格，教学辅助只使用一个 `aid: {type, payload}` discriminated union，
    不再同时要求 12 个互斥数组。非计算 aid 的 discriminator、payload 或旧字段损坏时只丢 aid，保留 core；
    计算 aid 不完整仍硬失败并走定向完整 replacement。
-4. 发布前校验证据归属、页码、引用和硬数值；free-form prose 只用于玩家可见表达，不参与业务路由。初稿未通过
-   发布边界时，应用把具体拒绝原因与同一份 typed evidence 交回回答 Agent，最多请求一次完整 replacement；
-   禁止按字段打补丁，也禁止应用组合新旧文本。
+4. 发布前校验证据归属、页码、引用和硬数值；free-form prose 只用于玩家可见表达，不参与业务路由。初始完整
+   envelope 未通过 typed 解码或发布边界时，应用把具体拒绝原因与同一份 typed evidence 交回回答 Agent，最多
+   请求一次完整 replacement；初始调用和 replacement 是两个独立的审计、限流及预算事件，replacement 一旦发生
+   就用掉本轮唯一修订额度，后续发布失败不能再触发第三次模型调用。禁止按字段打补丁，也禁止应用组合新旧文本。
 5. 有支持的部分先回答；不支持的部分局部说明不确定，最多追问一个真正有用的问题。运行进度来自实际到达的
    execution phase，不再由终态倒推不存在的 retrieval/composition/critic；失败记录同时给出安全错误码和实际阶段。
+6. 终态区分三种模型失败：`MODEL_UNAVAILABLE` 表示配置/provider 没有接住请求，`MODEL_TIMEOUT` 表示请求超过
+   本次时限，两者都不做 schema 重放，服务恢复后可原样重试；`INVALID_MODEL_OUTPUT` 表示 provider 已返回但完整
+   结构或引用标识仍未通过一次 replacement，立即原样重试通常无益，应检查或改写问题。前端通过 typed
+   `recovery.canRetryUnchanged` 展示这一差异，不解析服务端自由文案。
 
 答疑会在证据不足时局部弃答；引用不属于当前版本、完整 replacement 仍无效、服务预算耗尽或持久化失败时
 本轮整体停止。已有讲解和推荐卡片都不会因此消失。
