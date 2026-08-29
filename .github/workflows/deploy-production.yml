@@ -1006,9 +1006,12 @@ jobs:
           set -Eeuo pipefail
           test ! -e "$HOME/.ssh/id_ed25519"
           credential_file=${RULEPILOT_PREFLIGHT_CREDENTIAL_FILE:?}
-          release_headers=$(mktemp "$RUNNER_TEMP/rulepilot-release-headers.XXXXXX")
+          preflight_dir=$(mktemp -d "$RUNNER_TEMP/rulepilot-public-preflight.XXXXXX")
           cleanup_credentials() {
-            rm -f "$credential_file" "$release_headers"
+            rm -f "$credential_file"
+            if [[ "$preflight_dir" == "$RUNNER_TEMP"/rulepilot-public-preflight.* ]]; then
+              rm -rf -- "$preflight_dir"
+            fi
           }
           trap cleanup_credentials EXIT
           mapfile -t credential_lines < "$credential_file"
@@ -1017,66 +1020,139 @@ jobs:
           test -n "$preflight_username"
           test -n "$preflight_password"
 
+          https_get() {
+            local request_url=$1 body_path=$2 headers_path=${3:-}
+            RULEPILOT_HTTPS_URL="$request_url" \
+            RULEPILOT_HTTPS_BODY_PATH="$body_path" \
+            RULEPILOT_HTTPS_HEADERS_PATH="$headers_path" \
+            RULEPILOT_HTTPS_BASIC_USERNAME="${RULEPILOT_HTTPS_BASIC_USERNAME:-}" \
+            RULEPILOT_HTTPS_BASIC_PASSWORD="${RULEPILOT_HTTPS_BASIC_PASSWORD:-}" \
+            RULEPILOT_HTTPS_ACCEPT="${RULEPILOT_HTTPS_ACCEPT:-}" \
+              python3 - <<'PY'
+          import base64
+          import os
+          import signal
+          import sys
+          from urllib import error, parse, request
+
+          TIMEOUT_SECONDS = 6
+          MAX_RESPONSE_BYTES = 1024 * 1024
+
+          def require_https_url(value):
+              parsed = parse.urlsplit(value)
+              if parsed.scheme != "https" or not parsed.hostname:
+                  raise ValueError("only absolute HTTPS URLs are allowed")
+              if parsed.username is not None or parsed.password is not None:
+                  raise ValueError("URL credentials are not allowed")
+              return parsed
+
+          class RejectRedirectHandler(request.HTTPRedirectHandler):
+              def redirect_request(self, source_request, file_pointer, code, message, headers, new_url):
+                  raise ValueError("production availability probes do not accept redirects")
+
+          def expire_request(_signal_number, _frame):
+              raise TimeoutError("HTTPS GET exceeded its total deadline")
+
+          try:
+              request_url = os.environ["RULEPILOT_HTTPS_URL"]
+              body_path = os.environ["RULEPILOT_HTTPS_BODY_PATH"]
+              headers_path = os.environ.get("RULEPILOT_HTTPS_HEADERS_PATH", "")
+              username = os.environ.get("RULEPILOT_HTTPS_BASIC_USERNAME", "")
+              password = os.environ.get("RULEPILOT_HTTPS_BASIC_PASSWORD", "")
+              accept = os.environ.get("RULEPILOT_HTTPS_ACCEPT", "")
+              require_https_url(request_url)
+              if bool(username) != bool(password):
+                  raise ValueError("Basic authentication requires both environment variables")
+
+              probe_headers = {"User-Agent": "RulePilot-Production-Preflight/1"}
+              if accept:
+                  probe_headers["Accept"] = accept
+              if username:
+                  token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+                  probe_headers["Authorization"] = f"Basic {token}"
+              probe = request.Request(request_url, headers=probe_headers, method="GET")
+
+              previous_alarm_handler = signal.signal(signal.SIGALRM, expire_request)
+              signal.setitimer(signal.ITIMER_REAL, TIMEOUT_SECONDS)
+              try:
+                  with request.build_opener(RejectRedirectHandler()).open(
+                      probe, timeout=TIMEOUT_SECONDS
+                  ) as response:
+                      require_https_url(response.geturl())
+                      body = response.read(MAX_RESPONSE_BYTES + 1)
+                      response_headers = tuple(response.headers.items())
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+                  signal.signal(signal.SIGALRM, previous_alarm_handler)
+              if len(body) > MAX_RESPONSE_BYTES:
+                  raise ValueError("HTTPS GET response exceeds the size limit")
+
+              with open(body_path, "wb") as output:
+                  output.write(body)
+              if headers_path:
+                  with open(headers_path, "w", encoding="iso-8859-1", newline="\n") as output:
+                      for name, value in response_headers:
+                          output.write(f"{name}: {value.replace(chr(13), '').replace(chr(10), ' ')}\n")
+          except error.HTTPError as failure:
+              print(f"HTTPS GET failed with HTTP status {failure.code}", file=sys.stderr)
+              raise SystemExit(1)
+          except error.URLError as failure:
+              print(
+                  f"HTTPS GET failed before an HTTP response ({type(failure.reason).__name__})",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          except (OSError, ValueError) as failure:
+              print(f"HTTPS GET failed ({type(failure).__name__})", file=sys.stderr)
+              raise SystemExit(1)
+          PY
+          }
+
           verify_public_once() {
-            local release_snapshot model_snapshot page_file csrf_payload recommendations first_bgg_id detail
-            : > "$release_headers"
-            release_snapshot=$(curl \
-              --proto '=https' \
-              --silent \
-              --show-error \
-              --fail \
-              --max-time 6 \
-              --dump-header "$release_headers" \
-              "$RULEPILOT_PUBLIC_URL/api/public/release") || return 1
+            local release_body release_headers model_body home_body csrf_body recommendations_body
+            local first_bgg_id detail_body
+            release_body="$preflight_dir/release.body"
+            release_headers="$preflight_dir/release.headers"
+            model_body="$preflight_dir/model.body"
+            home_body="$preflight_dir/home.body"
+            csrf_body="$preflight_dir/csrf.body"
+            recommendations_body="$preflight_dir/recommendations.body"
+            detail_body="$preflight_dir/detail.body"
+
+            https_get \
+              "$RULEPILOT_PUBLIC_URL/api/public/release" \
+              "$release_body" \
+              "$release_headers" || return 1
             jq -e --arg deploy_sha "$DEPLOY_SHA" --arg deploy_release_id "$DEPLOY_RELEASE_ID" '
               .commitSha == $deploy_sha
               and .releaseId == $deploy_release_id
-            ' <<< "$release_snapshot" >/dev/null || return 1
+            ' "$release_body" >/dev/null || return 1
             tr -d '\r' < "$release_headers" \
               | grep -Eiq '^cache-control:.*no-store' || return 1
 
-            model_snapshot=$(curl \
-              --proto '=https' \
-              --silent \
-              --show-error \
-              --fail \
-              --max-time 6 \
-              --header 'Accept: application/json' \
-              --user "$preflight_username:$preflight_password" \
-              "$RULEPILOT_PUBLIC_URL/api/v1/model-configuration") || return 1
+            RULEPILOT_HTTPS_BASIC_USERNAME="$preflight_username" \
+            RULEPILOT_HTTPS_BASIC_PASSWORD="$preflight_password" \
+            RULEPILOT_HTTPS_ACCEPT="application/json" \
+              https_get \
+                "$RULEPILOT_PUBLIC_URL/api/v1/model-configuration" \
+                "$model_body" || return 1
             jq -e '
               .recommendationModel.provider == "qwen"
               and .recommendationModel.model == "qwen3.8-flash"
-            ' <<< "$model_snapshot" >/dev/null || return 1
+            ' "$model_body" >/dev/null || return 1
 
-            page_file=$(mktemp "$RUNNER_TEMP/rulepilot-public-page.XXXXXX")
-            if ! curl \
-                --proto '=https' \
-                --silent \
-                --show-error \
-                --fail \
-                --max-time 6 \
-                --max-filesize 1048576 \
-                "$RULEPILOT_PUBLIC_URL/" \
-                --output "$page_file"; then
-              rm -f "$page_file"
-              return 1
-            fi
-            if [[ ! -s "$page_file" ]]; then
-              rm -f "$page_file"
-              return 1
-            fi
-            rm -f "$page_file"
-            csrf_payload=$(curl \
-              --proto '=https' --silent --show-error --fail --max-time 6 \
-              "$RULEPILOT_PUBLIC_URL/api/auth/csrf") || return 1
+            https_get "$RULEPILOT_PUBLIC_URL/" "$home_body" || return 1
+            [[ -s "$home_body" ]] || return 1
+
+            https_get "$RULEPILOT_PUBLIC_URL/api/auth/csrf" "$csrf_body" || return 1
             jq -e '
               (.token | type == "string" and length > 0)
               and (.headerName | type == "string" and length > 0)
-            ' <<< "$csrf_payload" >/dev/null || return 1
-            recommendations=$(curl \
-              --proto '=https' --silent --show-error --fail --max-time 6 \
-              "$RULEPILOT_PUBLIC_URL/api/v1/bgg/recommendations") || return 1
+            ' "$csrf_body" >/dev/null || return 1
+
+            https_get \
+              "$RULEPILOT_PUBLIC_URL/api/v1/bgg/recommendations" \
+              "$recommendations_body" || return 1
             first_bgg_id=$(jq -er '
               .[0]
               | select(
@@ -1087,17 +1163,18 @@ jobs:
                   and (.name | length) > 0
                 )
               | .bggId
-            ' <<< "$recommendations") || return 1
-            detail=$(curl \
-              --proto '=https' --silent --show-error --fail --max-time 6 \
-              "$RULEPILOT_PUBLIC_URL/api/v1/bgg/games/${first_bgg_id}?locale=zh-CN") || return 1
+            ' "$recommendations_body") || return 1
+
+            https_get \
+              "$RULEPILOT_PUBLIC_URL/api/v1/bgg/games/${first_bgg_id}?locale=zh-CN" \
+              "$detail_body" || return 1
             jq -e --argjson bgg_id "$first_bgg_id" '
               .bggId == $bgg_id
               and (.description | type) == "string"
               and (.descriptionTranslated | type) == "boolean"
               and (.categories | type) == "array"
               and (.mechanics | type) == "array"
-            ' <<< "$detail" >/dev/null
+            ' "$detail_body" >/dev/null
           }
 
           verified=false

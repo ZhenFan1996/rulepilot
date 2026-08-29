@@ -1247,6 +1247,7 @@ test('production SSH authority is unavailable to build and local verification co
   assert.match(localPublicVerification,
     /\/api\/public\/release[\s\S]*?no-store[\s\S]*?\/api\/v1\/model-configuration[\s\S]*?\/api\/v1\/bgg\/recommendations/)
   assert.doesNotMatch(localPublicVerification, /node\s|npm\s|scripts\//)
+  assert.doesNotMatch(localPublicVerification, /\bcurl\b/)
   assert.match(deploymentWorkflow,
     /name: Remove runner-side production credentials[\s\S]*?if: always\(\)[\s\S]*?id_ed25519/)
 })
@@ -2561,20 +2562,46 @@ test('deploy-only reruns retain the immutable identity of the successful build a
 })
 
 test('deployment availability is deterministic and does not invoke a paid Agent', () => {
+  const publicAvailability = workflowRunBlock(
+    deploymentWorkflow,
+    'Verify public release availability without repository code or production SSH authority',
+  )
   assert.match(deploymentWorkflow, /name: Verify public release availability/)
   assert.match(deploymentWorkflow, /::add-mask::\$preflight_username/)
   assert.match(deploymentWorkflow, /::add-mask::\$preflight_password/)
-  assert.match(deploymentWorkflow,
-    /--user "\$preflight_username:\$preflight_password"[\s\S]*?\/api\/v1\/model-configuration/)
+  assert.doesNotMatch(publicAvailability, /\bcurl\b/)
+  assert.match(publicAvailability, /python3 - <<'PY'/)
+  assert.match(publicAvailability, /TIMEOUT_SECONDS = 6/)
+  assert.match(publicAvailability,
+    /signal\.setitimer\(signal\.ITIMER_REAL, TIMEOUT_SECONDS\)[\s\S]*?signal\.setitimer\(signal\.ITIMER_REAL, 0\)/)
+  assert.match(publicAvailability, /MAX_RESPONSE_BYTES = 1024 \* 1024/)
+  assert.match(publicAvailability, /response\.read\(MAX_RESPONSE_BYTES \+ 1\)/)
+  assert.match(publicAvailability,
+    /parsed\.scheme != "https"[\s\S]*?URL credentials are not allowed/)
+  assert.match(publicAvailability,
+    /class RejectRedirectHandler[\s\S]*?production availability probes do not accept redirects/)
+  assert.match(publicAvailability,
+    /RULEPILOT_HTTPS_BASIC_USERNAME="\$preflight_username"[\s\S]{0,160}?RULEPILOT_HTTPS_BASIC_PASSWORD="\$preflight_password"[\s\S]{0,240}?\/api\/v1\/model-configuration/)
+  assert.match(publicAvailability,
+    /probe_headers\["Authorization"\] = f"Basic \{token\}"/)
+  assert.equal(
+    [...publicAvailability.matchAll(/^\s*https_get(?:\s|\\)/gm)].length,
+    6,
+    'production availability must perform exactly the six bounded HTTPS GET probes',
+  )
   assert.match(deploymentWorkflow,
     /\.recommendationModel\.provider == "qwen"[\s\S]*?\.recommendationModel\.model == "qwen3\.8-flash"/)
   assert.match(deploymentWorkflow,
     /verify_public_once\(\)[\s\S]*?\/api\/public\/release[\s\S]*?\.commitSha == \$deploy_sha[\s\S]*?\.releaseId == \$deploy_release_id[\s\S]*?cache-control:.*no-store/)
+  assert.match(publicAvailability, /\[\[ -s "\$home_body" \]\]/)
+  assert.match(publicAvailability,
+    /\.token \| type == "string" and length > 0[\s\S]*?\.headerName \| type == "string" and length > 0/)
   assert.match(deploymentWorkflow,
     /for attempt in 1 2 3; do[\s\S]{0,180}?if verify_public_once; then/)
-  assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendations/)
-  assert.match(deploymentWorkflow,
-    /\/api\/v1\/bgg\/games\/\$\{first_bgg_id\}\?locale=zh-CN/)
+  assert.match(publicAvailability,
+    /\/api\/v1\/bgg\/recommendations[\s\S]*?\.bggId > 0[\s\S]*?\.name \| type\) == "string"/)
+  assert.match(publicAvailability,
+    /\/api\/v1\/bgg\/games\/\$\{first_bgg_id\}\?locale=zh-CN[\s\S]*?\.bggId == \$bgg_id[\s\S]*?\.descriptionTranslated \| type\) == "boolean"/)
   assert.doesNotMatch(deploymentWorkflow, /recommendation-agent\/stream/)
   assert.doesNotMatch(deploymentWorkflow,
     /verify-production-(?:model-configuration|availability)\.mjs/)
