@@ -37,7 +37,7 @@ class RecommendationTerminalEnvelopeContractTest {
     }
 
     @Test
-    void preferenceActionMutatesOnlyTypedMemoryAndDoesNotCarryPlayerProse() {
+    void preferenceActionCanPublishItsCompleteTypedPlayerReply() {
         ConversationRequest request = request();
         RecommendationAgentState state = state(request);
 
@@ -45,7 +45,8 @@ class RecommendationTerminalEnvelopeContractTest {
                 new ToolCall(
                         "call-2",
                         BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL,
-                        "{\"preferenceUpdates\":{\"evidence\":\"U1\",\"playerCount\":4}}"),
+                        "{\"preferenceUpdates\":{\"evidence\":\"U1\",\"playerCount\":4},"
+                                + "\"playerReply\":\"记住了：以后默认按四个人玩。\"}"),
                 state,
                 request,
                 "zh-CN",
@@ -54,7 +55,9 @@ class RecommendationTerminalEnvelopeContractTest {
         assertThat(outcome.rejected())
                 .withFailMessage("unexpected rejection: %s / %s", outcome.rejectionCode(), outcome.observation())
                 .isFalse();
-        assertThat(outcome.response()).isNull();
+        assertThat(outcome.response()).isNotNull();
+        assertThat(outcome.response().assistantMessage()).isEqualTo("记住了：以后默认按四个人玩。");
+        assertThat(outcome.observation()).isEmpty();
         assertThat(state.profile.playerCount().minimum()).isEqualTo(4);
         assertThat(state.profile.playerCount().maximum()).isEqualTo(4);
         assertThat(state.actions).containsExactly("UPDATE_PREFERENCES");

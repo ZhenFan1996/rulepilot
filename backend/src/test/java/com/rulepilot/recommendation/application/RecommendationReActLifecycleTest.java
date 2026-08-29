@@ -150,7 +150,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "browse-before-terminal",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}")));
+                "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}")));
         RecommendationReActLoop loop = loop(
                 model,
                 new BoardGameRecommendationTools(
@@ -184,7 +184,7 @@ class RecommendationReActLifecycleTest {
                 new ToolCall(
                         "parallel-browse",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"),
+                        "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}"),
                 new ToolCall(
                         "parallel-update",
                         BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL,
@@ -224,7 +224,7 @@ class RecommendationReActLifecycleTest {
                 new ToolCall(
                         "parallel-browse",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"),
+                        "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}"),
                 new ToolCall(
                         "parallel-update",
                         BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL,
@@ -254,7 +254,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "browse-before-correction",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"),
+                        "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}"),
                 action(
                         "invalid-terminal-reply",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -291,7 +291,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "browse-two-for-partial-publication",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}"),
+                        "{\"limit\":2,\"requestedCount\":2,\"evidence\":\"U1\"}"),
                 action(
                         "recommend-with-local-defects",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -357,7 +357,7 @@ class RecommendationReActLifecycleTest {
                         """
                         {
                           "limit":1,
-                          "requestedCount":1,"requestedCountBasis":"U1",
+                          "requestedCount":1,"evidence":"U1",
                           "preferenceUpdates":{"evidence":"U1","playerCount":4,"durationMinutes":{"maximum":60}}
                         }
                         """),
@@ -470,7 +470,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "browse-one",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"),
+                        "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}"),
                 action(
                         "invalid-candidate",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -519,7 +519,7 @@ class RecommendationReActLifecycleTest {
                 .thenReturn(action(
                         "browse-before-failure",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"))
+                        "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}"))
                 .thenThrow(new IllegalStateException("provider stopped before terminal reply"));
         RecommendationReActLoop loop = loop(
                 model,
@@ -551,7 +551,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "shorter-window",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"preferenceUpdates\":[{\"field\":\"durationMinutes\",\"value\":{\"maximum\":45},\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}")));
+                "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\",\"preferenceUpdates\":[{\"field\":\"durationMinutes\",\"value\":{\"maximum\":45},\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}")));
         RecommendationReActLoop loop = loop(
                 model,
                 new RecordingCatalog(game(498, "Short Window", "短时段", "A bounded fixture.")));
@@ -581,7 +581,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "open-categories",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\","
+                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\","
                         + "\"preferenceUpdates\":["
                         + "{\"field\":\"type\",\"value\":null,\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"},"
                         + "{\"field\":\"interaction\",\"value\":null,\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}")));
@@ -688,7 +688,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "browse",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":6,\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}")));
+                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":6,\"requestedCount\":2,\"evidence\":\"U1\"}")));
         RecommendationReActLoop loop = loop(
                 model,
                 new RecordingCatalog(
@@ -735,7 +735,7 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void usesTheConfiguredCardCountWhenTheTypedBrowseActionDeclaresTheDefaultWithoutEvidence() {
+    void usesTheConfiguredCardCountWhenTheTypedBrowseActionOmitsAnExplicitCount() {
         var registry = ObservationRegistry.create();
         var stopped = new ArrayList<RecordedOperation>();
         registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
@@ -757,7 +757,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "browse",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":6,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}")));
+                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":6}")));
         RecommendationReActLoop loop = loop(
                 model,
                 new RecordingCatalog(
@@ -790,18 +790,18 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void rejectsANonDefaultValueClaimingProductDefaultBeforeReadingTheCatalog() {
+    void rejectsAnExplicitCardCountWithoutCurrentTurnEvidenceBeforeReadingTheCatalog() {
         ScriptedModel model = new ScriptedModel(List.of(
                 action(
-                        "invalid-product-default",
+                        "count-without-evidence",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":3,\"requestedCount\":2,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}"),
-                answer("默认数量没有通过契约校验，所以这次没有读取目录。")));
+                        "{\"limit\":3,\"requestedCount\":2}"),
+                answer("明确数量没有当前轮证据，所以这次没有读取目录。")));
         RecordingCatalog catalog = new RecordingCatalog(game(114, "Never Read", "不会读取", "Unused."));
         RecommendationReActLoop loop = loop(model, catalog);
 
         var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "给我一些候选。"),
+                new ConversationRequest(RecommendationProfile.empty(), "给我两款候选。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -809,7 +809,7 @@ class RecommendationReActLifecycleTest {
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(catalog.searches).hasValue(0);
         assertThat(response.harness().actions())
-                .contains("REJECTED_ACTION:REQUESTED_COUNT_DEFAULT_INVALID", "FINAL_ANSWER");
+                .contains("REJECTED_ACTION:REQUESTED_COUNT_EVIDENCE_REQUIRED", "FINAL_ANSWER");
         loop.stopBoundedCalls();
     }
 
@@ -819,7 +819,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "stale-count-evidence",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":3,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"),
+                        "{\"limit\":3,\"requestedCount\":1,\"evidence\":\"U1\"}"),
                 answer("你已经撤回上一轮的数量要求，我不会继续沿用。")));
         RecordingCatalog catalog = new RecordingCatalog(game(115, "Stale Count", "旧数量", "Unused."));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -850,7 +850,8 @@ class RecommendationReActLifecycleTest {
                         .findFirst()
                         .orElseThrow()
                         .inputSchema())
-                .contains("\"enum\":[\"PRODUCT_DEFAULT\",\"U2\"]");
+                .contains("Current user-turn evidence", "\"enum\":[\"U2\"]")
+                .doesNotContain("requestedCountBasis", "PRODUCT_DEFAULT");
         loop.stopBoundedCalls();
     }
 
@@ -859,7 +860,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "browse",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":5,\"requestedCountBasis\":\"U1\"}")));
+                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":5,\"evidence\":\"U1\"}")));
         RecommendationReActLoop loop = loop(
                 model,
                 new RecordingCatalog(
@@ -929,7 +930,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "browse-after-shown",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}")));
+                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"evidence\":\"U1\"}")));
         RecommendationReActLoop loop = loop(
                 model, new BoardGameRecommendationTools(catalog, noResearch));
 
@@ -1008,7 +1009,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "browse-strategy",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}")));
+                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}")));
         RecommendationReActLoop loop = loop(model, new BoardGameRecommendationTools(catalog, noResearch()));
         RecommendationProfile profile = new RecommendationProfile(
                 null,
@@ -1079,7 +1080,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "browse-distinct-candidate",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}")));
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}")));
         RecommendationReActLoop loop = loop(model, new BoardGameRecommendationTools(catalog, noResearch()));
 
         var response = loop.converse(
@@ -1182,7 +1183,6 @@ class RecommendationReActLifecycleTest {
                   "titleConstraint":{"operator":"CONTAINS","value":"  HARBOR  "},
                   "evidence":"U1",
                   "requestedCount":2,
-                  "requestedCountBasis":"U1",
                   "limit":3
                 }
                 """)));
@@ -1219,7 +1219,6 @@ class RecommendationReActLifecycleTest {
                   "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
                   "evidence":"U1",
                   "requestedCount":3,
-                  "requestedCountBasis":"U1",
                   "limit":3
                 }
                 """)));
@@ -1255,9 +1254,7 @@ class RecommendationReActLifecycleTest {
                         """
                         {
                           "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
-                          "evidence":"U1",
-                          "requestedCount":2,
-                          "requestedCountBasis":"U2"
+                          "evidence":"U1"
                         }
                         """),
                 answer("我没有把旧一轮的标题条件冒充成本轮选择边界。")));
@@ -1300,7 +1297,6 @@ class RecommendationReActLifecycleTest {
                           "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
                           "evidence":"U1",
                           "requestedCount":1,
-                          "requestedCountBasis":"U1",
                           "limit":2
                         }
                         """),
@@ -1320,7 +1316,7 @@ class RecommendationReActLifecycleTest {
                         """
                         {
                           "requestedCount":1,
-                          "requestedCountBasis":"U1",
+                          "evidence":"U1",
                           "limit":2
                         }
                         """)));
@@ -1359,11 +1355,11 @@ class RecommendationReActLifecycleTest {
                 action(
                         "invalid-mechanic-read",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"mechanics\":\"Deck Building\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}"),
+                        "{\"mechanics\":\"Deck Building\",\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}"),
                 action(
                         "validated-mechanic-read",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"mechanics\":[\"Deck Building\"],\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}")));
+                        "{\"mechanics\":[\"Deck Building\"],\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}")));
         List<ProgressUpdate> progress = new ArrayList<>();
         RecordingCatalog catalog = new RecordingCatalog(game(
                 499,
@@ -1415,7 +1411,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "mixed-invalid-read",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\",\"preferenceUpdates\":["
+                        "{\"limit\":1,\"preferenceUpdates\":["
                                 + "{\"field\":\"durationMinutes\",\"value\":{\"minimum\":null,\"maximum\":60},\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"},"
                                 + "{\"field\":\"playerCount\",\"value\":99,\"evidence\":\"U1\",\"evidenceClassification\":\"INFERRED_GROUP_MEMBER_COUNT\"}]}"),
                 answer("我刚才没有可靠地读出完整桌面人数，所以不会把这个猜测写进条件；你可以直接告诉我总人数，我再继续挑。")));
@@ -1450,7 +1446,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "malformed-direct-player-count",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"preferenceUpdates\":["
+                "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\",\"preferenceUpdates\":["
                         + "{\"field\":\"durationMinutes\",\"value\":{\"maximum\":60},\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"},"
                         + "{\"field\":\"playerCount\",\"value\":\"four\",\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}")));
         RecordingCatalog catalog = new RecordingCatalog(
@@ -1484,7 +1480,7 @@ class RecommendationReActLifecycleTest {
         ScriptedModel model = new ScriptedModel(List.of(action(
                 "invalid-direct-type",
                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                "{\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\",\"preferenceUpdates\":["
+                "{\"limit\":1,\"preferenceUpdates\":["
                         + "{\"field\":\"type\",\"value\":\"PUZZLE\",\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}")));
         RecordingCatalog catalog = new RecordingCatalog(
                 game(516, "Party Harbor", "聚会港", "A party game for a conversational table."));
@@ -1510,7 +1506,7 @@ class RecommendationReActLifecycleTest {
 
     @Test
     void dropsAnUngroundedAttachedConstraintWithoutBlockingBrowse() {
-        String invalidBrowse = "{\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"preferenceUpdates\":[{\"field\":\"playerCount\",\"value\":4,\"evidence\":\"U99\",\"evidenceClassification\":\"DIRECT\"}]}";
+        String invalidBrowse = "{\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\",\"preferenceUpdates\":[{\"field\":\"playerCount\",\"value\":4,\"evidence\":\"U99\",\"evidenceClassification\":\"DIRECT\"}]}";
         ScriptedModel model = new ScriptedModel(List.of(
                 action("invalid-read-1", BoardGameRecommendationAgent.BROWSE_TOOL, invalidBrowse)));
         RecordingCatalog catalog = new RecordingCatalog(game(501, "Open Table", "开放桌面", "A social game."));
@@ -1546,11 +1542,11 @@ class RecommendationReActLifecycleTest {
                 action(
                         "invalid-object-contract",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"limit\":1,\"audience\":\"new players\"}"),
+                        "{\"requestedCount\":1,\"evidence\":\"U1\",\"limit\":1,\"audience\":\"new players\"}"),
                 action(
                         "repaired-object-contract",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"limit\":1}")));
+                        "{\"requestedCount\":1,\"evidence\":\"U1\",\"limit\":1}")));
         RecordingCatalog catalog = new RecordingCatalog(game(
                 520,
                 "First Evening",
@@ -1596,11 +1592,11 @@ class RecommendationReActLifecycleTest {
                 action(
                         "invalid-contract-first",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"limit\":1,\"rankingPolicy\":\"recent\"}"),
+                        "{\"requestedCount\":1,\"evidence\":\"U1\",\"limit\":1,\"rankingPolicy\":\"recent\"}"),
                 action(
                         "invalid-contract-reordered",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{ \"rankingPolicy\" : \"recent\", \"requestedCountBasis\" : \"U1\", \"limit\" : 1, \"requestedCount\" : 1 }")));
+                        "{ \"rankingPolicy\" : \"recent\", \"evidence\" : \"U1\", \"limit\" : 1, \"requestedCount\" : 1 }")));
         RecordingCatalog catalog = new RecordingCatalog(game(
                 521,
                 "Bounded Retry",
@@ -1631,8 +1627,8 @@ class RecommendationReActLifecycleTest {
 
     @Test
     void reusesASuccessfulReadWhileKeepingOneBoundedCurrentStateViewAndEveryCallResultPair() {
-        String browse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}";
-        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}";
+        String browse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}";
+        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"evidence\":\"U1\"}";
         String userRequest = "先核对 Avery Stone 是否确实是目录游戏的设计师，再从核对过的方向里给我一款四个人第一次见面也不会冷场的桌游。";
         ScriptedModel model = new ScriptedModel(List.of(
                 action("read-1", BoardGameRecommendationAgent.BROWSE_TOOL, browse),
@@ -1682,10 +1678,10 @@ class RecommendationReActLifecycleTest {
     @Test
     void executesOneMateriallyDifferentSupplementAfterAnEmptyReadButReusesAnIdenticalRetry() {
         String strictBrowse = "{\"purpose\":\"SELECTABLE_CARDS\","
-                + "\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"limit\":8,"
+                + "\"requestedCount\":1,\"evidence\":\"U1\",\"limit\":8,"
                 + "\"mechanics\":[\"Negotiation\",\"Bluffing\"]}";
         String relaxedBrowse = "{\"purpose\":\"SELECTABLE_CARDS\","
-                + "\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"limit\":8,"
+                + "\"requestedCount\":1,\"evidence\":\"U1\",\"limit\":8,"
                 + "\"mechanics\":[\"Negotiation\"]}";
         ScriptedModel model = new ScriptedModel(List.of(
                 action("strict-read", BoardGameRecommendationAgent.BROWSE_TOOL, strictBrowse),
@@ -1787,7 +1783,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "empty-current-browse",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"textQuery\":\"a materially different request\",\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\"}"),
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"textQuery\":\"a materially different request\",\"limit\":1}"),
                 answer("这次目录检索没有找到符合新方向的选择；我不会把上一轮的候选冒充成本轮结果。")));
         RecordingCatalog emptyCatalog = new RecordingCatalog();
         RecommendationReActLoop loop = loop(model, emptyCatalog);
@@ -1808,12 +1804,12 @@ class RecommendationReActLifecycleTest {
 
     @Test
     void readsAgainWhenAnInterveningActionChangesThePreferenceState() {
-        String initialBrowse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}";
-        String correctedBrowse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\","
+        String initialBrowse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}";
+        String correctedBrowse = "{\"purpose\":\"IDENTITY_ONLY\",\"designers\":[\"Avery Stone\"],\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\","
                 + "\"preferenceUpdates\":[{\"field\":\"durationMinutes\","
                 + "\"value\":{\"minimum\":null,\"maximum\":60},"
                 + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}";
-        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}";
+        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":0,\"requestedCount\":1,\"evidence\":\"U1\"}";
         ScriptedModel model = new ScriptedModel(List.of(
                 action("initial-read", BoardGameRecommendationAgent.BROWSE_TOOL, initialBrowse),
                 action("corrected-read", BoardGameRecommendationAgent.BROWSE_TOOL, correctedBrowse),
@@ -1855,7 +1851,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "read-candidate",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}")));
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\"}")));
         RecordingCatalog catalog = new RecordingCatalog(game(
                 503,
                 "Shared Signals",
@@ -1925,7 +1921,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "publish-after-research",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"titleConstraint\":{\"operator\":\"CONTAINS\",\"value\":\"Single Research\"},\"evidence\":\"U1\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\"}")));
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"titleConstraint\":{\"operator\":\"CONTAINS\",\"value\":\"Single Research\"},\"evidence\":\"U1\",\"limit\":1,\"requestedCount\":1}")));
         RecommendationReActLoop loop = loop(model, new BoardGameRecommendationTools(catalog, research));
 
         var response = loop.converse(
@@ -1961,12 +1957,12 @@ class RecommendationReActLifecycleTest {
                         action(
                                 "invalid-page",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"offset\":201,\"preferenceUpdates\":"
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\",\"offset\":201,\"preferenceUpdates\":"
                                         + preference + "}"),
                         action(
                                 "repaired-page",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"offset\":0,\"preferenceUpdates\":"
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"evidence\":\"U1\",\"offset\":0,\"preferenceUpdates\":"
                                         + preference + "}")));
         RecordingCatalog catalog = new RecordingCatalog(game(
                 505,
@@ -1998,7 +1994,7 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void rejectsAnExplicitCardCountWithoutItsCurrentTurnBasisBeforeMutatingOrReading() {
+    void rejectsAnExplicitCardCountWithoutItsCurrentTurnEvidenceBeforeMutatingOrReading() {
         ScriptedModel model = new ScriptedModel(List.of(
                 action(
                         "count-without-evidence",
@@ -2025,7 +2021,7 @@ class RecommendationReActLifecycleTest {
         assertThat(catalog.searches).hasValue(0);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().actions())
-                .contains("REJECTED_ACTION:REQUESTED_COUNT_BASIS_REQUIRED", "FINAL_ANSWER");
+                .contains("REJECTED_ACTION:REQUESTED_COUNT_EVIDENCE_REQUIRED", "FINAL_ANSWER");
         loop.stopBoundedCalls();
     }
 
@@ -2035,7 +2031,7 @@ class RecommendationReActLifecycleTest {
                 action(
                         "unsupported-context",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":1,\"requestedCount\":3,\"requestedCountBasis\":\"PRODUCT_DEFAULT\",\"preferenceUpdates\":["
+                        "{\"limit\":1,\"preferenceUpdates\":["
                                 + "{\"field\":\"durationMinutes\",\"value\":{\"minimum\":null,\"maximum\":60},\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"},"
                                 + "{\"field\":\"interaction\",\"value\":\"COMPETITIVE\",\"evidence\":\"U1\",\"evidenceClassification\":\"INFERRED_GROUP_MEMBER_COUNT\"}]}"),
                 answer("你没有说明合作或对抗偏好，我不会把它悄悄变成筛选条件。")));

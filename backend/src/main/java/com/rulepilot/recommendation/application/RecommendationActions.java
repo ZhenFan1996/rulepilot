@@ -116,7 +116,7 @@ final class RecommendationActions {
         try {
             JsonNode arguments = actionJson.readTree(call.argumentsJson());
             return switch (call.name()) {
-                case UPDATE_PREFERENCES_TOOL -> updatePreferences(arguments, state, request);
+                case UPDATE_PREFERENCES_TOOL -> updatePreferences(arguments, state, request, locale);
                 case ASK_TOOL -> ask(arguments, state, request, locale);
                 case RESOLVE_TOOL -> resolve(arguments, state, request, locale, progress);
                 case BROWSE_TOOL -> browse(arguments, state, request, progress);
@@ -158,11 +158,22 @@ final class RecommendationActions {
     private ActionOutcome updatePreferences(
             JsonNode arguments,
             RecommendationAgentState state,
-            ConversationRequest request) {
-        requireObject(arguments, Set.of("preferenceUpdates"), Set.of());
+            ConversationRequest request,
+            String locale) {
+        requireObject(arguments, Set.of("preferenceUpdates"), Set.of("playerReply"));
         PreferenceUpdatePlan preferencePlan =
                 evidenceReview.planPreferenceUpdates(arguments, state.profile, request);
+        String reply = arguments.has("playerReply") ? playerReply(arguments) : null;
         evidenceReview.commitPreferenceUpdates(preferencePlan, state);
+        if (reply != null) {
+            return ActionOutcome.terminal(response(
+                    Outcome.CONVERSATION,
+                    reply,
+                    state,
+                    locale,
+                    null,
+                    List.of()));
+        }
         return ActionOutcome.observation(runtime.observation(Map.of(
                 "status", "PREFERENCES_UPDATED",
                 "currentProfile", evidenceReview.profileForAgent(state.profile))));
@@ -617,7 +628,7 @@ final class RecommendationActions {
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(
                 arguments,
-                Set.of("requestedCount"),
+                Set.of(),
                 Set.of(
                         "purpose",
                         "types",
@@ -635,7 +646,7 @@ final class RecommendationActions {
                         "evidence",
                         "sort",
                         "limit",
-                        "requestedCountBasis",
+                        "requestedCount",
                         "offset",
                         "preferenceUpdates"));
         PreferenceUpdatePlan preferencePlan =
@@ -1457,22 +1468,21 @@ final class RecommendationActions {
     }
 
     private int publicationCount(JsonNode arguments, ConversationRequest request) {
-        if (!arguments.has("requestedCountBasis")) {
-            throw new InvalidAction("REQUESTED_COUNT_BASIS_REQUIRED");
+        if (!arguments.has("requestedCount")) {
+            return properties.resultCount();
         }
         int requestedCount = integer(
                 arguments.path("requestedCount"),
                 1,
                 runtime.maximumRecommendationResults(),
                 "REQUESTED_COUNT_OUT_OF_RANGE");
-        String basis = text(arguments.path("requestedCountBasis"), 1, 32);
-        if ("PRODUCT_DEFAULT".equals(basis)) {
-            if (requestedCount != properties.resultCount()) {
-                throw new InvalidAction("REQUESTED_COUNT_DEFAULT_INVALID");
-            }
-            return requestedCount;
+        if (!arguments.has("evidence")) {
+            throw new InvalidAction(
+                    "REQUESTED_COUNT_EVIDENCE_REQUIRED",
+                    "An explicit requestedCount must cite the current user turn in evidence; omit requestedCount when the player stated no count.");
         }
-        evidenceReview.requireCurrentTurnUserEvidence(basis, request);
+        String evidenceId = text(arguments.path("evidence"), 1, 32);
+        evidenceReview.requireCurrentTurnUserEvidence(evidenceId, request);
         return requestedCount;
     }
 

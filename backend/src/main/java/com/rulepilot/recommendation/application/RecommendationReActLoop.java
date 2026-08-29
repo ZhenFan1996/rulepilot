@@ -292,10 +292,7 @@ final class RecommendationReActLoop {
         List<String> currentTurnEvidenceIds = preferenceEvidenceIds.isEmpty()
                 ? List.of()
                 : List.of(preferenceEvidenceIds.getLast());
-        List<ToolSpec> actions = actions(
-                preferenceEvidenceIds,
-                currentTurnEvidenceIds,
-                properties.resultCount());
+        List<ToolSpec> actions = actions(preferenceEvidenceIds, currentTurnEvidenceIds);
 
         String input = agentInput(request, state, locale);
         List<Message> actionFoundation = List.of(
@@ -856,7 +853,6 @@ final class RecommendationReActLoop {
             }
             putIfNotEmpty(data, "shownBggIds", request.shownBggIds());
             putIfNotEmpty(data, "excludedBggIds", request.excludedBggIds());
-            data.put("defaultRecommendationCount", properties.resultCount());
             return json.writeValueAsString(data);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation Agent input could not be serialized", exception);
@@ -869,7 +865,7 @@ final class RecommendationReActLoop {
 
                 Use a supplied typed action only when the turn needs its machine-owned state change, retrieval, or structured UI artifact. Otherwise answer the player directly in natural prose. After every action result, either choose the next useful action or finish with the complete answer; never call an action merely to wrap prose. Typed arguments and cited user evidence own routing and memory, while direct prose is player-facing output only. Retrieve game facts instead of guessing. Ask at most one question, and only when one missing player choice materially changes the answer.
 
-                Every candidate read must set requestedCount plus requestedCountBasis. When no count is stated, use defaultRecommendationCount and PRODUCT_DEFAULT. For an explicitly stated count, requestedCountBasis is that current user turn's U id; never reuse an older turn's count. limit is only retrieval size. preferenceUpdates is one evidence-scoped patch for player-stated preferences: playerCount, durationMinutes, and complexity are numeric; type is a BGG product class; interaction is COMPETITIVE, COOPERATIVE, or TEAM. Never save clarification options or inferred mood. Range patches preserve omitted bounds. Cited numbers are DIRECT; INFERRED_GROUP_MEMBER_COUNT means counting stated members.
+                Omit requestedCount when the player did not state a count; the host applies the product default. For an explicitly stated count, set requestedCount and cite that current user turn's U id in evidence; never reuse an older turn's count. limit is only retrieval size. preferenceUpdates is one evidence-scoped patch for player-stated preferences: playerCount, durationMinutes, and complexity are numeric; type is a BGG product class; interaction is COMPETITIVE, COOPERATIVE, or TEAM. Never save clarification options or inferred mood. Range patches preserve omitted bounds. Cited numbers are DIRECT; INFERRED_GROUP_MEMBER_COUNT means counting stated members.
 
                 Prefer browse_bgg_catalog for cards and BGG facts; use resolve_bgg_game for an exact player-written title. Use public discovery when an uncertain or current relationship involving a person, event, organization, game, or other entity needs attributed evidence. Its result returns atomic public context and optional title leads. After every observation, decide whether it is sufficient, another genuinely relevant capability can add the missing evidence, or the truthful answer is that the evidence is unavailable. Never repeat the same read or use an unrelated BGG read merely because public search failed. SELECTABLE_CARDS title leads still require BGG verification before cards. Use textQuery for concepts rather than inventing taxonomy.
 
@@ -899,10 +895,7 @@ final class RecommendationReActLoop {
                 .filter(action -> comparableIds.size() >= 2 || !COMPARE_TOOL.equals(action.name()))
                 .filter(action -> !relaxableSubjects.isEmpty() || !NO_MATCH_TOOL.equals(action.name()))
                 .map(action -> BROWSE_TOOL.equals(action.name())
-                                ? catalogAction(
-                                        preferenceEvidenceIds,
-                                        currentTurnEvidenceIds,
-                                        properties.resultCount())
+                                ? catalogAction(preferenceEvidenceIds, currentTurnEvidenceIds)
                         : COMPARE_TOOL.equals(action.name())
                                 ? comparisonAction(
                                         comparableIds,
@@ -1002,16 +995,15 @@ final class RecommendationReActLoop {
 
     private static List<ToolSpec> actions(
             List<String> preferenceEvidenceIds,
-            List<String> currentTurnEvidenceIds,
-            int defaultRecommendationCount) {
+            List<String> currentTurnEvidenceIds) {
         String preferences = preferenceSchema(preferenceEvidenceIds);
         return List.of(
                 new ToolSpec(
                         UPDATE_PREFERENCES_TOOL,
-                        "Persist explicit player-stated preferences without retrieval. This action changes machine-owned memory only and returns an observation; after it returns, answer the player directly unless another useful action is needed.",
+                        "Persist explicit player-stated preferences without retrieval. Include the complete locale-matched playerReply when this update finishes the turn; omit it only when another useful action still needs the resulting observation.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"preferenceUpdates\":"
                                 + preferences
-                                + "},\"required\":[\"preferenceUpdates\"]}"),
+                                + ",\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched answer to publish unchanged when the preference update finishes this turn.\",\"minLength\":1,\"maxLength\":1200}},\"required\":[\"preferenceUpdates\"]}"),
                 new ToolSpec(
                         ASK_TOOL,
                         "Ask one natural high-value question only when a missing player choice changes the slate. preferenceUpdates keep stated numeric facts, never proposed options. Do not ask after read failure or when discovery/immediate cards can answer.",
@@ -1027,10 +1019,7 @@ final class RecommendationReActLoop {
                 new ToolSpec(
                         BROWSE_TOOL,
                         catalogActionDescription(),
-                        catalogActionSchema(
-                                preferenceEvidenceIds,
-                                currentTurnEvidenceIds,
-                                defaultRecommendationCount)),
+                        catalogActionSchema(preferenceEvidenceIds, currentTurnEvidenceIds)),
                 new ToolSpec(
                         DISCOVER_TOOL,
                         "Search public sources once for an uncertain/current relationship, alias, event, organization, award, list, or source-backed title lead. subject is the exact cited identity phrase, not a guessed answer. goal selects the shape of this search result only; it never triggers a hidden BGG lookup or recommendation. After the observation, answer naturally or choose a separate catalog action.",
@@ -1059,15 +1048,11 @@ final class RecommendationReActLoop {
 
     private static ToolSpec catalogAction(
             List<String> preferenceEvidenceIds,
-            List<String> currentTurnEvidenceIds,
-            int defaultRecommendationCount) {
+            List<String> currentTurnEvidenceIds) {
         return new ToolSpec(
                 BROWSE_TOOL,
                 catalogActionDescription(),
-                catalogActionSchema(
-                        preferenceEvidenceIds,
-                        currentTurnEvidenceIds,
-                        defaultRecommendationCount));
+                catalogActionSchema(preferenceEvidenceIds, currentTurnEvidenceIds));
     }
 
     private static boolean isDiscoveryAction(String action) {
@@ -1075,21 +1060,18 @@ final class RecommendationReActLoop {
     }
 
     private static String catalogActionDescription() {
-        return "Search the local BGG catalog. SELECTABLE_CARDS returns a verified slate and its facts; recommend_games then writes and publishes the complete reply. IDENTITY_ONLY reads creator identity context. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. requestedCount/requestedCountBasis use defaultRecommendationCount+PRODUCT_DEFAULT when unstated, else explicit count+current-turn U id. Numeric/type constraints use preferenceUpdates.";
+        return "Search the local BGG catalog. SELECTABLE_CARDS returns a verified slate and its facts; recommend_games then writes and publishes the complete reply. IDENTITY_ONLY reads creator identity context. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. Omit requestedCount when unstated so the host applies its product default; an explicit requestedCount must cite the current-turn U id in evidence. Numeric/type constraints use preferenceUpdates.";
     }
 
     private static String catalogActionSchema(
             List<String> preferenceEvidenceIds,
-            List<String> currentTurnEvidenceIds,
-            int defaultRecommendationCount) {
+            List<String> currentTurnEvidenceIds) {
         return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"types\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
-                + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"titleConstraint\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"operator\":{\"type\":\"string\",\"enum\":[\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"required\":[\"operator\",\"value\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
+                + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"titleConstraint\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"operator\":{\"type\":\"string\",\"enum\":[\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"required\":[\"operator\",\"value\"]},\"evidence\":{\"type\":\"string\",\"description\":\"Current user-turn evidence for an explicit requestedCount and/or titleConstraint.\",\"enum\":"
                 + jsonArray(currentTurnEvidenceIds)
-                + "},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
-                + requestedCountBasisSchema(currentTurnEvidenceIds)
-                + ",\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
+                + "},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
                 + preferenceSchema(preferenceEvidenceIds)
-                + "},\"required\":[\"requestedCount\",\"requestedCountBasis\"]}";
+                + "}}";
     }
 
     private ToolSpec recommendationAction(
@@ -1258,15 +1240,6 @@ final class RecommendationReActLoop {
                 + ",\"maximum\":"
                 + maximum
                 + "},{\"type\":\"null\"}]}}}";
-    }
-
-    private static String requestedCountBasisSchema(List<String> currentTurnEvidenceIds) {
-        List<String> allowed = new ArrayList<>();
-        allowed.add("PRODUCT_DEFAULT");
-        allowed.addAll(currentTurnEvidenceIds);
-        return "{\"type\":\"string\",\"description\":\"PRODUCT_DEFAULT only when the user stated no count; otherwise the current user turn U id that states it.\",\"enum\":"
-                + jsonArray(allowed)
-                + "}";
     }
 
     private static String evidenceEnum(List<String> preferenceEvidenceIds) {
