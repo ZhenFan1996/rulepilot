@@ -56,7 +56,7 @@ class BggRecommendationAgentStreamControllerTest {
                 () -> "player");
 
         assertThat(emitter.getTimeout()).isEqualTo(50_000L);
-        verify(agent, never()).converse(any(), any(), any(), any());
+        verify(agent, never()).converse(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -82,7 +82,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("event:progress")
                 .contains("understanding_request")
                 .contains("\"elapsedMs\":0");
-        verify(agent, never()).converse(any(), any(), any(), any());
+        verify(agent, never()).converse(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -90,9 +90,12 @@ class BggRecommendationAgentStreamControllerTest {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         String accepted = "😀".repeat(1_500) + "  A\n中";
-        when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any())).thenAnswer(invocation -> {
             var command = invocation.getArgument(0, BoardGameRecommendationAgent.ConversationRequest.class);
             assertThat(command.message()).isEqualTo(accepted);
+            Consumer<String> answerPart = invocation.getArgument(4);
+            answerPart.accept("完整");
+            answerPart.accept("完整收到。");
             return new ConversationResponse(
                     Outcome.CONVERSATION,
                     DecisionMode.MODEL_ASSISTED,
@@ -123,8 +126,11 @@ class BggRecommendationAgentStreamControllerTest {
                 .andReturn()
                 .getResponse()
                 .getContentAsString(StandardCharsets.UTF_8);
-        assertThat(stream).contains("event:result", "完整收到。");
-        verify(agent).converse(any(), eq("zh-CN"), eq("player"), any());
+        assertThat(stream)
+                .contains("event:answer_part", "{\"text\":\"完整\"}", "{\"text\":\"完整收到。\"}")
+                .contains("event:result", "完整收到。")
+                .containsSubsequence("event:answer_part", "event:result");
+        verify(agent).converse(any(), eq("zh-CN"), eq("player"), any(), any());
     }
 
     @Test
@@ -134,7 +140,7 @@ class BggRecommendationAgentStreamControllerTest {
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
-        when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any())).thenAnswer(invocation -> {
             Consumer<ProgressUpdate> progress = invocation.getArgument(3);
             progress.accept(new ProgressUpdate(
                     ProgressStage.UNDERSTANDING_REQUEST,

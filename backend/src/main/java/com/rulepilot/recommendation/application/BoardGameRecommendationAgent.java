@@ -22,8 +22,7 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class BoardGameRecommendationAgent {
 
-    static final String REPLY_TOOL = "reply_to_user";
-    static final String IDENTITY_REPLY_TOOL = "finish_identity_check";
+    static final String UPDATE_PREFERENCES_TOOL = "update_preferences";
     static final String ASK_TOOL = "ask_only_if_no_useful_answer";
     static final String RESOLVE_TOOL = "resolve_bgg_game";
     static final String BROWSE_TOOL = "browse_bgg_catalog";
@@ -33,7 +32,7 @@ public class BoardGameRecommendationAgent {
     static final String RECOMMEND_TOOL = "recommend_games";
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
-    static final String PROMPT_VERSION = "recommendation-agent-v83-model-authored-cards";
+    static final String PROMPT_VERSION = "recommendation-agent-v86-adaptive-react";
 
     private final RecommendationReActLoop loop;
 
@@ -88,6 +87,20 @@ public class BoardGameRecommendationAgent {
         return loop.converse(input, requestedLocale, modelConfigurationOwner, progressListener);
     }
 
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
+        return loop.converse(
+                input,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener);
+    }
+
     ConversationRequest validatedConversationRequest(ConversationRequest input) {
         return loop.validate(input);
     }
@@ -97,12 +110,11 @@ public class BoardGameRecommendationAgent {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener) {
-        return conversePersisted(
+        return loop.converseValidated(
                 validatedRequestWithServerMemory,
                 requestedLocale,
                 modelConfigurationOwner,
-                progressListener,
-                ignored -> {});
+                progressListener);
     }
 
     ConversationResponse conversePersisted(
@@ -116,6 +128,22 @@ public class BoardGameRecommendationAgent {
                 requestedLocale,
                 modelConfigurationOwner,
                 progressListener,
+                checkpointListener);
+    }
+
+    ConversationResponse conversePersisted(
+            ConversationRequest validatedRequestWithServerMemory,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
+        return loop.converseValidated(
+                validatedRequestWithServerMemory,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
                 checkpointListener);
     }
 
@@ -465,14 +493,15 @@ public class BoardGameRecommendationAgent {
             boolean fallbackUsed,
             List<String> actions,
             long totalElapsedMs,
-            List<Long> modelCallElapsedMs) {
+            List<Long> modelCallElapsedMs,
+            FailureReason failureReason) {
         public HarnessTrace(
                 int modelCalls,
                 int catalogCalls,
                 int webResearchCalls,
                 boolean fallbackUsed,
                 List<String> actions) {
-            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, 0, List.of());
+            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, 0, List.of(), null);
         }
 
         public HarnessTrace(
@@ -482,7 +511,26 @@ public class BoardGameRecommendationAgent {
                 boolean fallbackUsed,
                 List<String> actions,
                 long totalElapsedMs) {
-            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, totalElapsedMs, List.of());
+            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, totalElapsedMs, List.of(), null);
+        }
+
+        public HarnessTrace(
+                int modelCalls,
+                int catalogCalls,
+                int webResearchCalls,
+                boolean fallbackUsed,
+                List<String> actions,
+                long totalElapsedMs,
+                List<Long> modelCallElapsedMs) {
+            this(
+                    modelCalls,
+                    catalogCalls,
+                    webResearchCalls,
+                    fallbackUsed,
+                    actions,
+                    totalElapsedMs,
+                    modelCallElapsedMs,
+                    null);
         }
 
         public HarnessTrace {
@@ -624,6 +672,21 @@ public class BoardGameRecommendationAgent {
         RECOMMENDATIONS,
         NO_MATCH,
         UNAVAILABLE
+    }
+
+    /** Stable player-safe cause for a recommendation turn that reached no publishable terminal result. */
+    public enum FailureReason {
+        TIME_LIMIT,
+        MODEL_NOT_CONFIGURED,
+        PROVIDER_CALL_FAILED,
+        PROVIDER_PROTOCOL_INVALID,
+        PROVIDER_OUTPUT_TRUNCATED,
+        EMPTY_MODEL_RESPONSE,
+        REPEATED_INCOMPATIBLE_ACTIONS,
+        REPEATED_INVALID_ACTION,
+        ACTION_BUDGET_EXHAUSTED,
+        PUBLICATION_REJECTED,
+        SERVICE_FAILURE
     }
 
     public enum DecisionMode {

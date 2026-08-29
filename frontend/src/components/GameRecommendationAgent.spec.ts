@@ -174,6 +174,96 @@ describe('GameRecommendationAgent', () => {
     expect(turn.text()).toContain('<script>alert(1)</script>')
   })
 
+  it('shows a cumulative answer before the delayed result, clears revoked text, and commits one final turn', async () => {
+    const encoder = new TextEncoder()
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller },
+      }), { headers: { 'Content-Type': 'text/event-stream' } })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('先告诉我你已经确定的方向')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    streamController?.enqueue(encoder.encode('event: answer_part\ndata: {"text":"我会先从互动明确、规则不拖沓的游戏里挑。"}\n\n'))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="pending-assistant-preview"]').text())
+      .toBe('我会先从互动明确、规则不拖沓的游戏里挑。')
+    expect(wrapper.find('[data-testid="player-work-status"]').exists()).toBe(true)
+
+    streamController?.enqueue(encoder.encode('event: answer_part\ndata: {"text":""}\n\n'))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="pending-assistant-preview"]').exists()).toBe(false)
+
+    const finalAnswer = '我会先从互动明确、规则不拖沓的游戏里挑；最终建议先试《展翅翱翔》。'
+    streamController?.enqueue(encoder.encode(`event: answer_part\ndata: ${JSON.stringify({ text: finalAnswer })}\n\n`))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="pending-assistant-preview"]').text()).toBe(finalAnswer)
+
+    streamController?.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({
+      outcome: 'conversation', mode: 'model_assisted', assistantMessage: finalAnswer,
+      profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+    })}\n\n`))
+    streamController?.close()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-assistant-preview"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-conversation-message]')
+      .filter(turn => turn.text().includes(finalAnswer))).toHaveLength(1)
+  })
+
+  it('removes an unfinished answer on stream failure and starts retry without internal event data', async () => {
+    const encoder = new TextEncoder()
+    let firstStreamController: ReadableStreamDefaultController<Uint8Array> | undefined
+    let recommendationCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      recommendationCalls += 1
+      if (recommendationCalls === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { firstStreamController = controller },
+        }), { headers: { 'Content-Type': 'text/event-stream' } })
+      }
+      return recommendationStreamResult({
+        outcome: 'conversation', mode: 'model_assisted', assistantMessage: '重试后的完整回答。',
+        profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('请继续回答')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    firstStreamController?.enqueue(encoder.encode('event: answer_part\ndata: {"text":"尚未完成的自然回答。"}\n\n'))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="pending-assistant-preview"]').text()).toBe('尚未完成的自然回答。')
+
+    firstStreamController?.enqueue(encoder.encode('event: tool_activity\ndata: {"query":"internal adapter payload"}\n\n'))
+    firstStreamController?.enqueue(encoder.encode('event: error\ndata: {"code":"recommendation_unavailable"}\n\n'))
+    firstStreamController?.close()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-assistant-preview"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('internal adapter payload')
+    const retryButton = wrapper.findAll('button').find(button => button.text() === '重试')
+    expect(retryButton).toBeDefined()
+
+    await retryButton!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-assistant-preview"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('重试后的完整回答。')
+  })
+
   it('renders the assistant narrative and card tradeoffs from one result', async () => {
     const assistantMessage = '如果你们四个人今晚想玩一局，我会先选《展翅翱翔》：人数和约 70 分钟时长都在你给出的范围内；它的卡牌组合会让每个人都有规划空间。取舍是卡牌文字较多，第一次讲解最好预留一点时间。'
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -227,7 +317,7 @@ describe('GameRecommendationAgent', () => {
     expect(turn.findAll('dt').filter(label => label.text() === '需要留意')).toHaveLength(1)
   })
 
-  it('restores an account-scoped transcript, preferences, and verified candidate names after route remount', async () => {
+  it('restores account-scoped transcript, preferences, and candidate identity without synthesizing an assistant reply', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') {
         return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -255,7 +345,7 @@ describe('GameRecommendationAgent', () => {
     const returned = await mountAgent({}, { sessionIdentity: 'alice' })
     expect(returned.text()).toContain('想找 4 人、90 分钟内的自然主题游戏')
     expect(returned.text()).toContain('我核对了这款候选，可以继续比较。')
-    expect(returned.text()).toContain('上次已核对候选：展翅翱翔')
+    expect(returned.text()).not.toContain('上次已核对候选：展翅翱翔')
     expect(returned.text()).toContain('4 人')
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/bgg/recommendation-agent/session')
@@ -609,6 +699,7 @@ describe('GameRecommendationAgent', () => {
             mode: 'model_assisted',
             assistantMessage: unavailableMessage,
             failureBoundary: 'model_response',
+            failureReason: 'provider_protocol_invalid',
             profile: baseProfile,
             clarification: null,
             sourceCount: 179737,
@@ -640,7 +731,7 @@ describe('GameRecommendationAgent', () => {
 
     const failedTurn = wrapper.get('[role="alert"]')
     expect(failedTurn.text()).toContain('这次推荐没有完成，也没有写入对话结果')
-    expect(failedTurn.text()).toContain('模型这次没有返回完整、可执行的结构')
+    expect(failedTurn.text()).toContain('模型返回的工具协议无法安全解析')
     expect(failedTurn.text()).not.toContain(unavailableMessage)
     expect(wrapper.get('[data-testid="recommendation-failed-assistant-reply"]').text())
       .toBe(unavailableMessage)
@@ -1505,7 +1596,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('我会结合这些细节一起判断')
   })
 
-  it('keeps the browser fallback recovery summary in the last successful response language', async () => {
+  it('restores only actual conversation output when the interface language changes', async () => {
     setLocale('en')
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
@@ -1530,7 +1621,8 @@ describe('GameRecommendationAgent', () => {
     const restored = await mountAgent({}, { sessionIdentity: 'alice' })
     await flushPromises()
 
-    expect(restored.text()).toContain('Previously verified candidates: Wingspan. You can continue comparing them here.')
+    expect(restored.text()).toContain('I verified this candidate and kept it available.')
+    expect(restored.text()).not.toContain('Previously verified candidates: Wingspan')
     expect(restored.text()).not.toContain('上次已核对候选：Wingspan')
   })
 

@@ -151,7 +151,7 @@ describe('derivePlayerJourney', () => {
     })
   })
 
-  it('keeps a causal teaching workflow failure non-retryable when preparation stopped with it', () => {
+  it('recovers a historical generic teaching failure with a fresh preparation run', () => {
     const preparation = run('FAILED')
     preparation.run.lastErrorCode = 'TEACHING_WORKFLOW_FAILED'
     const teaching = run('FAILED')
@@ -167,9 +167,9 @@ describe('derivePlayerJourney', () => {
       preparationRun: preparation,
       teachingRun: teaching,
     }))).toMatchObject({
-      phase: 'FAILED', state: 'failed', retryAction: null,
+      phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
       errorCode: 'TEACHING_WORKFLOW_FAILED', canReadRulebook: true, canReadLesson: false,
-      failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+      failureClassification: 'preserved-stop', failureRecovery: 'restart-from-completed',
     })
   })
 
@@ -224,6 +224,20 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('keeps deterministic invalid teaching input in manual repair even when the server suggests retry', () => {
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'FAILED',
+        teachingErrorCode: 'TEACHING_PLAN_INVALID', teachingNextAction: 'RETRY_TEACHING',
+      }),
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: null,
+      errorCode: 'TEACHING_PLAN_INVALID',
+      failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+    })
+  })
+
   it('classifies a user cancellation as a preserved stop with an explicit new run', () => {
     const cancelled = run('FAILED')
     cancelled.run.lastErrorCode = 'AGENT_CANCELLED'
@@ -264,7 +278,36 @@ describe('derivePlayerJourney', () => {
     })
   })
 
-  it('does not offer an identical retry for an unknown teaching workflow failure', () => {
+  it.each([
+    'TEACHING_PLAN_RETRIEVAL_FAILED',
+    'TEACHING_EVIDENCE_RETRIEVAL_FAILED',
+    'TEACHING_MODEL_PROVIDER_FAILED',
+    'TEACHING_PERSISTENCE_FAILED',
+    'TEACHING_CONTINUATION_FAILED',
+    'TEACHING_COMPLETION_FAILED',
+  ])('restarts %s from the already published chapter', (errorCode) => {
+    const stopped = run('FAILED')
+    stopped.run.lastErrorCode = errorCode
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+      }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
+      ] },
+      teachingRun: stopped,
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+    }))).toMatchObject({
+      phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
+      errorCode, canReadRulebook: true, canReadLesson: true, availableSections: 1,
+      failureClassification: 'preserved-stop', failureRecovery: 'restart-from-completed',
+    })
+  })
+
+  it('makes a historical generic teaching workflow failure safely restartable', () => {
     const failed = run('FAILED')
     failed.run.lastErrorCode = 'TEACHING_WORKFLOW_FAILED'
     expect(derivePlayerJourney(input({
@@ -274,9 +317,9 @@ describe('derivePlayerJourney', () => {
       }),
       teachingRun: failed,
     }))).toMatchObject({
-      phase: 'FAILED', state: 'failed', retryAction: null,
+      phase: 'FAILED', state: 'failed', retryAction: 'GENERATE_LESSON',
       errorCode: 'TEACHING_WORKFLOW_FAILED',
-      failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+      failureClassification: 'preserved-stop', failureRecovery: 'restart-from-completed',
     })
   })
 

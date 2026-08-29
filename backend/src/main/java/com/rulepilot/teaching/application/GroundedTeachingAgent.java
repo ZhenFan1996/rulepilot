@@ -181,7 +181,7 @@ public class GroundedTeachingAgent {
                     reusable,
                     assistantRunId,
                     queriesPerTopic);
-            outcome = enrichForPublicationPreservingValidatedTextOnStop(
+            outcome = publishValidatedSectionThenEnrich(
                     plan,
                     outcome,
                     sections,
@@ -193,13 +193,6 @@ public class GroundedTeachingAgent {
                     && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
                 reviewCandidates.add(outcome.reviewCandidate());
             }
-            sections.add(outcome.section());
-            publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-            recordPublication(
-                    assistantRunId,
-                    planned,
-                    outcome.publicationOutcome(),
-                    outcome.publicationCategory());
             if (outcome.section().evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE) break;
         }
 
@@ -246,7 +239,7 @@ public class GroundedTeachingAgent {
                     reusable,
                     assistantRunId,
                     queriesPerTopic);
-            outcome = enrichForPublicationPreservingValidatedTextOnStop(
+            outcome = publishValidatedSectionThenEnrich(
                     plan,
                     outcome,
                     sections,
@@ -255,13 +248,6 @@ public class GroundedTeachingAgent {
                     createdAt,
                     progressPublisher);
             continuation.track(outcome);
-            sections.add(outcome.section());
-            publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-            recordPublication(
-                    assistantRunId,
-                    outcome.planned(),
-                    outcome.publicationOutcome(),
-                    outcome.publicationCategory());
             if (continuation.hasRemainingWork()) {
                 return new BaseWorkUnitResult(lesson(lessonId, plan, sections, createdAt), false);
             }
@@ -491,7 +477,7 @@ public class GroundedTeachingAgent {
                     sections.size(),
                     GenerationMode.COMPATIBILITY_COMPLETE,
                     true);
-            outcome = enrichForPublicationPreservingValidatedTextOnStop(
+            outcome = publishValidatedSectionThenEnrich(
                     plan,
                     outcome,
                     sections,
@@ -499,17 +485,10 @@ public class GroundedTeachingAgent {
                     lessonId,
                     createdAt,
                     progressPublisher);
-            sections.add(outcome.section());
             if (outcome.reviewCandidate() != null
                     && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
                 reviewCandidates.add(outcome.reviewCandidate());
             }
-            publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-            recordPublication(
-                    assistantRunId,
-                    planned,
-                    outcome.publicationOutcome(),
-                    outcome.publicationCategory());
         }
 
         IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
@@ -547,38 +526,35 @@ public class GroundedTeachingAgent {
         progressPublisher.accept(lessonAssembly.snapshot(lessonId, plan, sections, GENERATOR_VERSION, createdAt));
     }
 
-    private SectionOutcome enrichForPublication(
+    private SectionOutcome publishValidatedSectionThenEnrich(
             TeachingPlan plan,
             SectionOutcome outcome,
-            List<LessonSection> alreadyPublished,
-            UUID assistantRunId) {
-        return outcome.withSection(enrichValidatedSection(
-                plan, outcome.planned(), outcome.section(), alreadyPublished, assistantRunId));
-    }
-
-    private SectionOutcome enrichForPublicationPreservingValidatedTextOnStop(
-            TeachingPlan plan,
-            SectionOutcome outcome,
-            List<LessonSection> alreadyPublished,
+            List<LessonSection> sections,
             UUID assistantRunId,
             UUID lessonId,
             Instant createdAt,
             Consumer<IllustratedLesson> progressPublisher) {
-        try {
-            return enrichForPublication(plan, outcome, alreadyPublished, assistantRunId);
-        } catch (AgentExecutionStoppedException stopped) {
-            // A whole-run stop remains authoritative, but optional image work must not erase the cited chapter that
-            // already passed deterministic validation. Publish that exact text snapshot before the lifecycle owner
-            // records AGENT_CANCELLED / AGENT_*_BUDGET / AGENT_TIMEOUT.
-            alreadyPublished.add(outcome.section());
-            publishProgress(progressPublisher, lessonId, plan, alreadyPublished, createdAt);
-            recordPublication(
-                    assistantRunId,
-                    outcome.planned(),
-                    outcome.publicationOutcome(),
-                    outcome.publicationCategory());
-            throw stopped;
+        int sectionIndex = sections.size();
+        LessonSection citedText = outcome.section();
+        sections.add(citedText);
+        publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+        recordPublication(
+                assistantRunId,
+                outcome.planned(),
+                outcome.publicationOutcome(),
+                outcome.publicationCategory());
+
+        LessonSection enriched = enrichValidatedSection(
+                plan,
+                outcome.planned(),
+                citedText,
+                List.copyOf(sections.subList(0, sectionIndex)),
+                assistantRunId);
+        if (!enriched.equals(citedText)) {
+            sections.set(sectionIndex, enriched);
+            publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
         }
+        return outcome.withSection(enriched);
     }
 
     private LessonSection enrichValidatedSection(
@@ -612,7 +588,14 @@ public class GroundedTeachingAgent {
                     enriched.outcome().summary());
             return enriched.section();
         } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
+            if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) {
+                throw stopped;
+            }
+            log.warn(
+                    "Optional visual enrichment stopped for teaching topic {}; retaining cited text ({})",
+                    planned.topicKey(),
+                    stopped.reason());
+            return section;
         } catch (RuntimeException visualFailure) {
             log.warn(
                     "Optional visual enrichment failed for teaching topic {}; publishing cited text: {}",

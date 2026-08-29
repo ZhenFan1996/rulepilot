@@ -186,30 +186,28 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 exactPageGroups.size(),
                 exactPageGroups.stream().mapToInt(Set::size).sum());
         if (!requiredEvidenceTools.isEmpty() && exactPageGroups.isEmpty()) {
-            boolean certificationRequired = usesPriorPages(questionPlan, context)
-                    || requiresSourceAuthoredAdvice(questionPlan)
-                    || requiresCompleteListCertification(questionPlan)
-                    || requiresNumericalScopeAudit(questionPlan);
+            if (usesPriorPages(questionPlan, context) || requiresNumericalScopeAudit(questionPlan)) {
+                LOGGER.info(
+                        "Answer evidence refinement did not complete the required prior-reference or calculation exact-page audit; withholding deterministic evidence");
+                return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
+            }
             LOGGER.info(
-                    "Answer evidence refinement did not complete its required exact-page confirmation; {} deterministic evidence",
-                    certificationRequired ? "withholding" : "preserving");
-            return certificationRequired
-                    ? new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY)
-                    : deterministic;
+                    "Answer evidence refinement did not complete its required exact-page confirmation; preserving deterministic evidence with its typed uncovered obligations");
+            return deterministic;
         }
         if (requiresSourceAuthoredAdvice(questionPlan)
                 && (result.status() != RunStatus.COMPLETED
                         || result.terminalStatus() != TerminalStatus.EVIDENCE_READY)) {
             LOGGER.info(
-                    "Answer evidence refinement did not certify source-authored advice; withholding candidate evidence");
-            return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
+                    "Answer evidence refinement did not certify source-authored advice; preserving deterministic evidence and the ADVICE obligation");
+            return deterministic;
         }
         if (requiresCompleteListCertification(questionPlan)
                 && (result.status() != RunStatus.COMPLETED
                         || result.terminalStatus() != TerminalStatus.EVIDENCE_READY)) {
             LOGGER.info(
-                    "Answer evidence refinement did not certify complete-list coverage; withholding candidate evidence");
-            return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
+                    "Answer evidence refinement did not certify complete-list coverage; preserving deterministic evidence and the COMPLETE_LIST obligation");
+            return deterministic;
         }
         // An exact-page observation is canonical application evidence even if a non-certifying Agent spends its
         // remaining turn on an unnecessary search and reaches its loop budget. Advice and complete-list plans have

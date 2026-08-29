@@ -8,14 +8,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
-import com.openai.core.ObjectMappers;
-import com.openai.models.chat.completions.ChatCompletionToolChoiceOption;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -27,11 +26,54 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import reactor.core.publisher.Flux;
 
 class SpringAiBoardGameRecommendationModelTest {
 
     @Test
-    void requiresOneOfTheAdvertisedNativeActionsFromGemini() {
+    void publishesNaturalTextOnceTheProviderHasFinishedWithoutChoosingATool() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
+                textResponse("你", null),
+                textResponse("好", "stop")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        List<String> parts = new ArrayList<>();
+
+        var turn = adapter.stream(
+                request(List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}"))),
+                null,
+                parts::add);
+
+        assertThat(parts).containsExactly("你好");
+        assertThat(turn.text()).isEqualTo("你好");
+        assertThat(turn.toolCalls()).isEmpty();
+    }
+
+    @Test
+    void neverPublishesAProvisionalPreviewWhenTheProviderChoosesATool() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
+                textResponse("我先看看。", null),
+                response(
+                        "tool_calls",
+                        new AssistantMessage.ToolCall("browse-1", "function", "browse", "{}"))));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        List<String> parts = new ArrayList<>();
+
+        var turn = adapter.stream(
+                request(List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}"))),
+                null,
+                parts::add);
+
+        assertThat(parts).isEmpty();
+        assertThat(turn.toolCalls()).singleElement().satisfies(call ->
+                assertThat(call.name()).isEqualTo("browse"));
+    }
+
+    @Test
+    void letsGeminiChooseAnActionOrFinishNaturally() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
@@ -53,7 +95,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).call(prompt.capture());
         GoogleGenAiChatOptions options = (GoogleGenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).satisfies(choice -> {
-            assertThat(choice.mode()).isEqualTo(GoogleGenAiChatOptions.ToolChoice.Mode.ANY);
+            assertThat(choice.mode()).isEqualTo(GoogleGenAiChatOptions.ToolChoice.Mode.AUTO);
             assertThat(choice.allowedFunctionNames()).containsExactly("reply_to_user", "search_bgg");
         });
         assertThat(options.getToolCallbacks())
@@ -62,7 +104,7 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void keepsDeepSeekRequiredWireModeForOneActionWithoutEnablingThinking() {
+    void keepsDeepSeekAutoWireModeForOneActionWithoutEnablingThinking() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "deepseek", "deepseek-v4-flash");
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
@@ -78,14 +120,14 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
     }
 
     @Test
-    void selectsTheOnlyQwenActionByExactName() throws Exception {
+    void keepsQwenAutoEvenWhenOneActionIsAvailable() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
         when(chatModel.call(any(Prompt.class))).thenReturn(response(
@@ -98,7 +140,7 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertNamedFunctionChoice(options, "browse");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
     }
@@ -125,7 +167,7 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void keepsDeepSeekRequiredWireModeWhenSeveralTypedActionsAreAvailable() {
+    void keepsDeepSeekAutoWireModeWhenSeveralTypedActionsAreAvailable() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "deepseek", "deepseek-v4-flash");
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
@@ -143,14 +185,14 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
     }
 
     @Test
-    void keepsRequiredWireModeForOtherOpenAiCompatibleProvidersWithSeveralActions() {
+    void keepsAutoWireModeForOtherOpenAiCompatibleProvidersWithSeveralActions() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "openai", "gpt-test");
         when(chatModel.call(any(Prompt.class))).thenReturn(response(
@@ -165,13 +207,13 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody()).isNullOrEmpty();
     }
 
     @Test
-    void keepsRequiredWireModeForAGenericCompatibleProviderWithOneAction() {
+    void keepsAutoWireModeForAGenericCompatibleProviderWithOneAction() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "compatible", "vendor-model");
         when(chatModel.call(any(Prompt.class))).thenReturn(response(
@@ -185,7 +227,7 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody()).isNullOrEmpty();
     }
@@ -233,7 +275,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
-        assertNamedFunctionChoice(options, "browse");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
     }
 
     @Test
@@ -242,7 +284,7 @@ class SpringAiBoardGameRecommendationModelTest {
                         List.of(Message.system("Choose an action."), Message.user("Help me choose.")),
                         List.of(),
                         512,
-                        ToolChoice.REQUIRED))
+                        ToolChoice.AUTO))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -267,21 +309,7 @@ class SpringAiBoardGameRecommendationModelTest {
                 List.of(Message.system("Choose one typed action."), Message.user("Help me choose.")),
                 tools,
                 512,
-                ToolChoice.REQUIRED);
-    }
-
-    private void assertNamedFunctionChoice(OpenAiChatOptions options, String expectedName) throws Exception {
-        assertThat(options.getToolChoice()).isInstanceOf(ChatCompletionToolChoiceOption.class);
-        ChatCompletionToolChoiceOption choice = (ChatCompletionToolChoiceOption) options.getToolChoice();
-        assertThat(choice.isNamedToolChoice()).isTrue();
-        assertThat(choice.asNamedToolChoice().function().name()).isEqualTo(expectedName);
-
-        var wire = ObjectMappers.jsonMapper()
-                .readTree(ObjectMappers.jsonMapper().writeValueAsString(choice));
-        assertThat(wire.size()).isEqualTo(2);
-        assertThat(wire.path("type").asText()).isEqualTo("function");
-        assertThat(wire.path("function").size()).isOne();
-        assertThat(wire.path("function").path("name").asText()).isEqualTo(expectedName);
+                ToolChoice.AUTO);
     }
 
     private ChatResponse response(
@@ -294,5 +322,14 @@ class SpringAiBoardGameRecommendationModelTest {
         return new ChatResponse(List.of(new Generation(
                 output,
                 ChatGenerationMetadata.builder().finishReason(finishReason).build())));
+    }
+
+    private ChatResponse textResponse(String text, String finishReason) {
+        AssistantMessage output = AssistantMessage.builder()
+                .content(text)
+                .build();
+        ChatGenerationMetadata.Builder metadata = ChatGenerationMetadata.builder();
+        if (finishReason != null) metadata.finishReason(finishReason);
+        return new ChatResponse(List.of(new Generation(output, metadata.build())));
     }
 }

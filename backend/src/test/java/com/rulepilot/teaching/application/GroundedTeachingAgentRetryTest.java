@@ -163,7 +163,7 @@ class GroundedTeachingAgentRetryTest {
     }
 
     @Test
-    void publishesTheValidatedChapterAndItsSelectedImageInTheSameSnapshot() {
+    void publishesValidatedTextBeforeReplacingItWithTheSelectedImage() {
         UUID versionId = UUID.randomUUID();
         UUID evidenceId = UUID.randomUUID();
         AssistantReadTools tools = request -> List.of(new RuleEvidence(
@@ -219,8 +219,10 @@ class GroundedTeachingAgentRetryTest {
 
         var lesson = agent.createBase(plan, UUID.randomUUID(), null, snapshots::add);
 
-        assertThat(snapshots).isNotEmpty();
+        assertThat(snapshots).hasSize(2);
         assertThat(snapshots.getFirst().sections().getFirst().steps().getFirst().visualFoci())
+                .isEmpty();
+        assertThat(snapshots.getLast().sections().getFirst().steps().getFirst().visualFoci())
                 .containsExactly(focus);
         assertThat(lesson.sections().getFirst().steps().getFirst().visualFoci()).containsExactly(focus);
     }
@@ -269,8 +271,8 @@ class GroundedTeachingAgentRetryTest {
     }
 
     @ParameterizedTest
-    @EnumSource(StopReason.class)
-    void propagatesAWholeRunStopFromTheFinalSectionVisualAttempt(StopReason stopReason) {
+    @EnumSource(value = StopReason.class, names = "CANCELLED", mode = EnumSource.Mode.EXCLUDE)
+    void keepsTheCitedChapterWhenOptionalVisualWorkExhaustsItsBoundary(StopReason stopReason) {
         UUID versionId = UUID.randomUUID();
         UUID evidenceId = UUID.randomUUID();
         AssistantReadTools tools = request -> List.of(new RuleEvidence(
@@ -301,9 +303,7 @@ class GroundedTeachingAgentRetryTest {
                 visuals);
         List<com.rulepilot.teaching.domain.IllustratedLesson> snapshots = new ArrayList<>();
 
-        assertThatThrownBy(() -> agent.createBase(plan(versionId), UUID.randomUUID(), null, snapshots::add))
-                .isInstanceOf(AgentExecutionStoppedException.class)
-                .hasFieldOrPropertyWithValue("reason", stopReason);
+        var lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, snapshots::add);
 
         assertThat(snapshots).singleElement().satisfies(snapshot ->
                 assertThat(snapshot.sections()).singleElement().satisfies(section -> {
@@ -311,6 +311,48 @@ class GroundedTeachingAgentRetryTest {
                     assertThat(section.steps().getFirst().text()).isEqualTo("把主棋盘放在桌面中央。");
                     assertThat(section.steps().getFirst().visualFoci()).isEmpty();
                 }));
+        assertThat(lesson.sections()).singleElement().satisfies(section ->
+                assertThat(section.steps().getFirst().visualFoci()).isEmpty());
+    }
+
+    @Test
+    void preservesTheCitedChapterButStillHonorsPlayerCancellation() {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        AssistantReadTools tools = request -> List.of(new RuleEvidence(
+                evidenceId,
+                versionId,
+                "SETUP",
+                "Central board",
+                "Place the central board in the middle before the first turn.",
+                2,
+                2));
+        CountingInvocations invocations = new CountingInvocations();
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
+        VisualLessonEnricher visuals = mock(VisualLessonEnricher.class);
+        when(visuals.supportsVisualEvidence("player")).thenReturn(true);
+        when(visuals.enrichSection(
+                        eq(versionId), any(LessonSection.class), any(), eq("player"), any(), any()))
+                .thenThrow(new AgentExecutionStoppedException(StopReason.CANCELLED));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                request -> validDraft(evidenceId),
+                new PolicyEvidenceVerifier(),
+                cleanCritic(),
+                invocations,
+                visualFacts,
+                3,
+                null,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts),
+                visuals);
+        List<com.rulepilot.teaching.domain.IllustratedLesson> snapshots = new ArrayList<>();
+
+        assertThatThrownBy(() -> agent.createBase(plan(versionId), UUID.randomUUID(), null, snapshots::add))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue("reason", StopReason.CANCELLED);
+        assertThat(snapshots).singleElement().satisfies(snapshot ->
+                assertThat(snapshot.sections()).singleElement().satisfies(section ->
+                        assertThat(section.steps().getFirst().visualFoci()).isEmpty()));
     }
 
     @Test

@@ -19,16 +19,31 @@ class AnswerRunProgressPolicyTest {
     @Test
     void stops_after_clarification_without_claiming_retrieval_or_composition() {
         assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(
-                        AnswerStatus.CLARIFICATION_REQUIRED, AnswerConfidence.LOW))))
+                        AnswerStatus.CLARIFICATION_REQUIRED, AnswerConfidence.LOW),
+                        AnswerRunProgressPolicy.ExecutionPhase.QUESTION_UNDERSTANDING)))
                 .containsExactly(
                         AssistantRunState.QUESTION_UNDERSTANDING,
                         AssistantRunState.NEED_CLARIFICATION);
     }
 
     @Test
+    void recovered_clarification_keeps_the_retrieval_phases_that_actually_ran() {
+        assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(
+                        AnswerStatus.CLARIFICATION_REQUIRED, AnswerConfidence.LOW),
+                        AnswerRunProgressPolicy.ExecutionPhase.VERIFYING_EVIDENCE)))
+                .containsExactly(
+                        AssistantRunState.QUESTION_UNDERSTANDING,
+                        AssistantRunState.RETRIEVAL_PLANNING,
+                        AssistantRunState.RETRIEVING,
+                        AssistantRunState.VERIFYING_EVIDENCE,
+                        AssistantRunState.NEED_CLARIFICATION);
+    }
+
+    @Test
     void reports_evidence_insufficiency_after_the_source_scope_has_been_checked() {
         assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(
-                        AnswerStatus.INSUFFICIENT_EVIDENCE, AnswerConfidence.LOW))))
+                        AnswerStatus.INSUFFICIENT_EVIDENCE, AnswerConfidence.LOW),
+                        AnswerRunProgressPolicy.ExecutionPhase.VERIFYING_EVIDENCE)))
                 .containsExactly(
                         AssistantRunState.QUESTION_UNDERSTANDING,
                         AssistantRunState.RETRIEVAL_PLANNING,
@@ -36,36 +51,51 @@ class AnswerRunProgressPolicyTest {
                         AssistantRunState.VERIFYING_EVIDENCE,
                         AssistantRunState.INSUFFICIENT_EVIDENCE);
         assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(
-                        AnswerStatus.VERSION_CONFLICT, AnswerConfidence.LOW))))
+                        AnswerStatus.VERSION_CONFLICT, AnswerConfidence.LOW),
+                        AnswerRunProgressPolicy.ExecutionPhase.VERIFYING_EVIDENCE)))
                 .endsWith(AssistantRunState.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
-    void marks_non_answered_generation_as_degraded_after_composition() {
+    void a_precomposition_failure_stops_at_the_actual_evidence_phase() {
         assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(
-                        AnswerStatus.MODEL_TIMEOUT, AnswerConfidence.LOW))))
+                        AnswerStatus.MODEL_TIMEOUT, AnswerConfidence.LOW),
+                        AnswerRunProgressPolicy.ExecutionPhase.VERIFYING_EVIDENCE)))
                 .containsExactly(
                         AssistantRunState.QUESTION_UNDERSTANDING,
                         AssistantRunState.RETRIEVAL_PLANNING,
                         AssistantRunState.RETRIEVING,
                         AssistantRunState.VERIFYING_EVIDENCE,
-                        AssistantRunState.ANSWER_COMPOSITION,
-                        AssistantRunState.DEGRADED);
+                        AssistantRunState.DEGRADED)
+                .doesNotContain(AssistantRunState.ANSWER_COMPOSITION, AssistantRunState.CRITIQUING);
     }
 
     @Test
-    void adds_critique_only_for_a_low_confidence_completed_answer() {
-        assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(AnswerStatus.ANSWERED, AnswerConfidence.LOW))))
+    void adds_critique_only_when_the_review_phase_was_actually_reached() {
+        assertThat(states(AnswerRunProgressPolicy.updatesFor(
+                        answer(AnswerStatus.ANSWERED, AnswerConfidence.LOW),
+                        AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING)))
                 .containsSequence(AssistantRunState.ANSWER_COMPOSITION, AssistantRunState.CRITIQUING, AssistantRunState.COMPLETED);
-        assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(AnswerStatus.ANSWERED, AnswerConfidence.HIGH))))
+        assertThat(states(AnswerRunProgressPolicy.updatesFor(
+                        answer(AnswerStatus.ANSWERED, AnswerConfidence.LOW),
+                        AnswerRunProgressPolicy.ExecutionPhase.ANSWER_COMPOSITION)))
                 .containsSequence(AssistantRunState.ANSWER_COMPOSITION, AssistantRunState.COMPLETED)
                 .doesNotContain(AssistantRunState.CRITIQUING);
     }
 
     @Test
+    void confirmed_or_cached_answers_do_not_invent_retrieval_and_composition() {
+        assertThat(states(AnswerRunProgressPolicy.updatesFor(
+                        answer(AnswerStatus.ANSWERED, AnswerConfidence.HIGH),
+                        AnswerRunProgressPolicy.ExecutionPhase.QUESTION_UNDERSTANDING)))
+                .containsExactly(AssistantRunState.QUESTION_UNDERSTANDING, AssistantRunState.COMPLETED);
+    }
+
+    @Test
     void records_a_warned_answer_as_a_completed_degraded_result() {
         assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(
-                        AnswerStatus.ANSWERED_WITH_WARNING, AnswerConfidence.HIGH))))
+                        AnswerStatus.ANSWERED_WITH_WARNING, AnswerConfidence.HIGH),
+                        AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING)))
                 .endsWith(AssistantRunState.DEGRADED)
                 .doesNotContain(AssistantRunState.INSUFFICIENT_EVIDENCE);
     }

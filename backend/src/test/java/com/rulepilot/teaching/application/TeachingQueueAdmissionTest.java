@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -37,7 +38,7 @@ class TeachingQueueAdmissionTest {
                 UUID.randomUUID(),
                 reason -> {
                     recorded.add(reason);
-                    return true;
+                    return TeachingTerminalRecordResult.SETTLED;
                 });
 
         admission.scheduleExpiry();
@@ -64,16 +65,34 @@ class TeachingQueueAdmissionTest {
                 recovery,
                 Duration.ofMinutes(2),
                 UUID.randomUUID(),
-                reason -> attempts.incrementAndGet() == 2);
+                reason -> attempts.incrementAndGet() == 1
+                        ? TeachingTerminalRecordResult.RETRYABLE
+                        : TeachingTerminalRecordResult.SETTLED);
 
         admission.scheduleExpiry();
         expiry.get().run();
         @SuppressWarnings("unchecked")
-        ArgumentCaptor<Supplier<Boolean>> recorder = ArgumentCaptor.forClass(Supplier.class);
+        ArgumentCaptor<Supplier<TeachingTerminalRecordResult>> recorder = ArgumentCaptor.forClass(Supplier.class);
         verify(recovery).register(any(UUID.class), recorder.capture());
-        assertThat(recorder.getValue().get()).isTrue();
+        assertThat(recorder.getValue().get()).isEqualTo(TeachingTerminalRecordResult.SETTLED);
 
         assertThat(attempts).hasValue(2);
+        assertThat(admission.activate()).isFalse();
+    }
+
+    @Test
+    void aSettledTerminalWinnerNeverEntersRecovery() {
+        TeachingTerminalRecovery recovery = mock(TeachingTerminalRecovery.class);
+        var admission = new TeachingQueueAdmission(
+                null,
+                recovery,
+                Duration.ofMinutes(2),
+                UUID.randomUUID(),
+                reason -> TeachingTerminalRecordResult.SETTLED);
+
+        admission.reject();
+
+        verifyNoInteractions(recovery);
         assertThat(admission.activate()).isFalse();
     }
 
@@ -90,7 +109,7 @@ class TeachingQueueAdmissionTest {
                 UUID.randomUUID(),
                 reason -> {
                     recorded.add(reason);
-                    return true;
+                    return TeachingTerminalRecordResult.SETTLED;
                 });
 
         admission.scheduleExpiry();
@@ -114,7 +133,7 @@ class TeachingQueueAdmissionTest {
                 UUID.randomUUID(),
                 reason -> {
                     recorded.add(reason);
-                    return true;
+                    return TeachingTerminalRecordResult.SETTLED;
                 });
         admission.scheduleExpiry();
         Thread.sleep(1);

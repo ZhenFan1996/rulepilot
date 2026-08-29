@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setLocale } from '@/lib/locale'
 import PublicLessonView from './PublicLessonView.vue'
@@ -58,6 +58,19 @@ function publicAnswerPayload(verdict: string) {
 }
 
 describe('PublicLessonView', () => {
+  beforeEach(() => {
+    class TestFileReader {
+      result: string | ArrayBuffer | null = null
+      onload: ((event: ProgressEvent<FileReader>) => void) | null = null
+
+      readAsDataURL() {
+        this.result = 'data:image/jpeg;base64,anBlZw=='
+        queueMicrotask(() => this.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>))
+      }
+    }
+    vi.stubGlobal('FileReader', TestFileReader)
+  })
+
   afterEach(() => {
     setLocale('zh-CN')
     localStorage.clear()
@@ -67,8 +80,12 @@ describe('PublicLessonView', () => {
   })
 
   it('renders a no-login lesson with cited visual crops and an official source link', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes('/api/auth/session')) return new Response(null, { status: 401 })
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
+      if (path.includes('/pages/') && path.includes('/image/crop?')) {
+        return new Response(new Blob(['jpeg'], { type: 'image/jpeg' }), { status: 200 })
+      }
       return Response.json({
       teachingPlanId: 'plan-1',
       documentVersionId: 'version-1',
@@ -96,7 +113,8 @@ describe('PublicLessonView', () => {
         }],
       },
       })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -127,6 +145,8 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('玩家板左侧排列资源标记，右侧是行动格。')
     expect(wrapper.get('a[href="/api/public/lessons/plan-1/rulebook"]').text()).toContain('官方原规则书')
     expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="玩家板设置"]').attributes('src'))
+      .toMatch(/^data:image\/jpeg;base64,/)
+    expect(fetchMock.mock.calls.map(([input]) => String(input)))
       .toContain('/api/public/lessons/plan-1/pages/2/image/crop?x=100&y=200&width=500&height=300')
     expect(wrapper.find('#public-question').exists()).toBe(false)
     expect(wrapper.get('a[href="/read/plan-1/questions"]').text()).toContain('规则答疑')

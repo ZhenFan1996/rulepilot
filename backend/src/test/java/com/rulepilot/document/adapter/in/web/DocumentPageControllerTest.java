@@ -7,7 +7,9 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentPageImages.PageImage;
+import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
@@ -16,6 +18,7 @@ import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -101,6 +104,69 @@ class DocumentPageControllerTest {
 
         assertThat(response.getBody()).containsExactly(jpeg);
         assertThat(response.getHeaders().getCacheControl()).contains("private").contains("max-age");
+    }
+
+    @Test
+    void classifiesPrivateCropDecodeCapacityAsRetryableWithoutChangingDocumentState() {
+        UUID versionId = UUID.randomUUID();
+        var stored = new PageImage(4, "image/png", new byte[] {1}, 800, 1_200);
+        var cropper = mock(DocumentPageImageCropper.class);
+        var cropController = new DocumentPageController(documents, pageImages, cropper, versions);
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "player", "Rules")));
+        when(pageImages.read(versionId, Set.of(4))).thenReturn(List.of(stored));
+        when(cropper.crop(stored, 100, 200, 300, 400))
+                .thenThrow(new RejectedExecutionException("decode work is saturated"));
+
+        var response = cropController.pageImageCrop(versionId, 4, 100, 200, 300, 400, () -> "player");
+
+        assertThat(response.getStatusCode().value()).isEqualTo(503);
+        assertThat(response.getHeaders().getFirst("Retry-After")).isEqualTo("1");
+        assertThat(response.getHeaders().getFirst("X-RulePilot-Visual-Failure"))
+                .isEqualTo("DECODE_CAPACITY_EXCEEDED");
+        assertThat(response.getHeaders().getCacheControl()).contains("no-store");
+        assertThat(response.getBody()).isEmpty();
+    }
+
+    @Test
+    void classifiesTransientPrivateCropStorageFailureAsRetryable() {
+        UUID versionId = UUID.randomUUID();
+        var cropper = mock(DocumentPageImageCropper.class);
+        var cropController = new DocumentPageController(documents, pageImages, cropper, versions);
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "player", "Rules")));
+        when(pageImages.read(versionId, Set.of(4)))
+                .thenThrow(new RetryableDocumentProcessingException(
+                        "page image storage is temporarily unavailable", new IllegalStateException("storage")));
+
+        var response = cropController.pageImageCrop(versionId, 4, 100, 200, 300, 400, () -> "player");
+
+        assertThat(response.getStatusCode().value()).isEqualTo(503);
+        assertThat(response.getHeaders().getFirst("Retry-After")).isEqualTo("1");
+        assertThat(response.getHeaders().getFirst("X-RulePilot-Visual-Failure"))
+                .isEqualTo("PAGE_IMAGE_TEMPORARILY_UNAVAILABLE");
+    }
+
+    @Test
+    void classifiesPermanentlyUnreadablePrivateCropAsBadGatewayWithoutRetryAdvice() {
+        UUID versionId = UUID.randomUUID();
+        var stored = new PageImage(4, "image/png", new byte[] {1}, 800, 1_200);
+        var cropper = mock(DocumentPageImageCropper.class);
+        var cropController = new DocumentPageController(documents, pageImages, cropper, versions);
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "player", "Rules")));
+        when(pageImages.read(versionId, Set.of(4))).thenReturn(List.of(stored));
+        when(cropper.crop(stored, 100, 200, 300, 400))
+                .thenThrow(new IllegalStateException("document page image cannot be decoded"));
+
+        var response = cropController.pageImageCrop(versionId, 4, 100, 200, 300, 400, () -> "player");
+
+        assertThat(response.getStatusCode().value()).isEqualTo(502);
+        assertThat(response.getHeaders().getFirst("Retry-After")).isNull();
+        assertThat(response.getHeaders().getFirst("X-RulePilot-Visual-Failure"))
+                .isEqualTo("PAGE_IMAGE_UNAVAILABLE");
+        assertThat(response.getHeaders().getCacheControl()).contains("no-store");
+        assertThat(response.getBody()).isEmpty();
     }
 
     @Test

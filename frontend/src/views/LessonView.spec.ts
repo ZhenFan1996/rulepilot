@@ -6,11 +6,25 @@ import LessonView from './LessonView.vue'
 import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
 import { setLocale } from '@/lib/locale'
 
+function visualImageResponse() {
+  return new Response(new Blob(['jpeg'], { type: 'image/jpeg' }), { status: 200 })
+}
+
 describe('LessonView progressive reading', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-21T00:02:00Z'))
+    class TestFileReader {
+      result: string | ArrayBuffer | null = null
+      onload: ((event: ProgressEvent<FileReader>) => void) | null = null
+
+      readAsDataURL() {
+        this.result = 'data:image/jpeg;base64,anBlZw=='
+        queueMicrotask(() => this.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>))
+      }
+    }
+    vi.stubGlobal('FileReader', TestFileReader)
   })
 
   afterEach(() => {
@@ -92,6 +106,7 @@ describe('LessonView progressive reading', () => {
           readyVisualTaskCount: 2, visualAidRatedCount: 2, visualAidHelpfulCount: 2, visualAidHelpfulPercent: 100, tasks: [], visualAids: [],
         })
       }
+      if (path.includes('/pages/') && path.includes('/image/crop?')) return visualImageResponse()
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       return new Response(null, { status: 404 })
     })
@@ -140,7 +155,9 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('4 人 ·')
     expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
-      .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
+      .toMatch(/^data:image\/jpeg;base64,/)
+    expect(fetchMock.mock.calls.map(([input]) => String(input)))
+      .toContain('/api/v1/document-versions/version-1/pages/1/image/crop?x=100&y=200&width=500&height=400')
     expect(wrapper.findAll('[data-testid="private-rule-step"]')).toHaveLength(5)
     expect(qualityReads).toBe(0)
 
@@ -708,6 +725,7 @@ describe('LessonView progressive reading', () => {
             : [published],
         })
       }
+      if (path.includes('/pages/') && path.includes('/image/crop?')) return visualImageResponse()
       return new Response(null, { status: 404 })
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -725,7 +743,9 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
-      .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
+      .toMatch(/^data:image\/jpeg;base64,/)
+    expect(fetchMock.mock.calls.map(([input]) => String(input)))
+      .toContain('/api/v1/document-versions/version-plan-1/pages/1/image/crop?x=100&y=200&width=500&height=400')
     expect(fetchMock.mock.calls.map(([input]) => String(input)).some(path => path.includes('mode=VISUAL_ENRICHMENT'))).toBe(false)
     expect(runReads).toBe(2)
     expect(lessonReads).toBe(2)

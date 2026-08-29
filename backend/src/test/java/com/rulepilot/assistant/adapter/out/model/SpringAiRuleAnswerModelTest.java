@@ -301,10 +301,7 @@ class SpringAiRuleAnswerModelTest {
                         {"answerable":true,"insufficiencyReason":null,
                          "shortVerdict":"Yes.","explanation":"Direct rule.",
                          "citationIds":["%s"],"exceptions":[],"confidence":"HIGH",
-                         "answerBasis":"DIRECT_RULE","calculations":[],"walkthroughSteps":[],
-                         "decisionBranches":[],"exceptionClauses":[],"termDefinitions":[],
-                         "workedExamples":[],"priorityResolutions":[],"timingResolutions":[],
-                         "tieResolutions":[],"scopeResolutions":[],"conceptComparisons":[],"ruleOptions":[]}
+                         "answerBasis":"DIRECT_RULE","aid":{"type":"NONE"}}
                         """.formatted(citation))))));
         SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.07);
 
@@ -316,8 +313,15 @@ class SpringAiRuleAnswerModelTest {
 
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
-        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getTemperature())
-                .isEqualTo(0.42);
+        OpenAiChatOptions answerOptions = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(answerOptions.getTemperature()).isEqualTo(0.42);
+        assertThat(answerOptions.getResponseFormat().getJsonSchema())
+                .contains("\"aid\"", "\"NONE\"")
+                .doesNotContain("\"calculations\"", "\"walkthroughSteps\"");
+        assertThat(prompt.getValue().getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text)
+                        .contains("final provider response contract", "no legacy top-level aid arrays"));
     }
     @Test
     void rejectsInvalidConfiguredTemperatures() {

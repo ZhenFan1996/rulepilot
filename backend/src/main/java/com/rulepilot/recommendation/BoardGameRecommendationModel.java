@@ -1,6 +1,7 @@
 package com.rulepilot.recommendation;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /** Provider-neutral generation port for conversational replies and native recommendation actions. */
 public interface BoardGameRecommendationModel {
@@ -16,6 +17,21 @@ public interface BoardGameRecommendationModel {
 
     default Turn next(Request request, String ownerUsername) {
         return next(request);
+    }
+
+    /**
+     * Delivers player-facing text as soon as the provider has completed a natural-text turn. Implementations must
+     * buffer text until they know that the same turn contains no action calls, and must never emit tool arguments.
+     */
+    default Turn stream(
+            Request request,
+            String ownerUsername,
+            Consumer<String> accumulatedTextListener) {
+        Turn turn = next(request, ownerUsername);
+        if (turn.toolCalls().isEmpty() && !turn.text().isBlank()) {
+            accumulatedTextListener.accept(turn.text());
+        }
+        return turn;
     }
 
     record ToolSpec(String name, String description, String inputSchema) {
@@ -67,13 +83,17 @@ public interface BoardGameRecommendationModel {
             return new Message(Role.ASSISTANT, content == null ? "" : content, List.of(toolCall), null, null);
         }
 
+        public static Message assistant(String content, List<ToolCall> toolCalls) {
+            return new Message(Role.ASSISTANT, content == null ? "" : content, toolCalls, null, null);
+        }
+
         public static Message tool(ToolCall call, String observation) {
             return new Message(Role.TOOL, observation, List.of(), call.id(), call.name());
         }
     }
 
     enum ToolChoice {
-        REQUIRED
+        AUTO
     }
 
     record Request(
@@ -88,7 +108,7 @@ public interface BoardGameRecommendationModel {
                     || tools.isEmpty()
                     || maxOutputTokens < 128
                     || maxOutputTokens > 2_048
-                    || toolChoice != ToolChoice.REQUIRED) {
+                    || toolChoice != ToolChoice.AUTO) {
                 throw new IllegalArgumentException("recommendation model request is invalid");
             }
             messages = List.copyOf(messages);

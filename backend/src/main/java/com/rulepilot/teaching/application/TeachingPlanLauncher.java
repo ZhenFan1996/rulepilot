@@ -179,7 +179,7 @@ public class TeachingPlanLauncher {
         return new PlanLaunch(run.id(), run.state(), false);
     }
 
-    private boolean recordQueueTerminal(
+    private TeachingTerminalRecordResult recordQueueTerminal(
             RunSnapshot run,
             String ownerUsername,
             UUID activationId,
@@ -197,7 +197,7 @@ public class TeachingPlanLauncher {
         return failQueuedRun(run, ownerUsername, activationId, errorCode, summary, expiry);
     }
 
-    private boolean failQueuedRun(
+    private TeachingTerminalRecordResult failQueuedRun(
             RunSnapshot queued,
             String ownerUsername,
             UUID activationId,
@@ -211,10 +211,19 @@ public class TeachingPlanLauncher {
             } else {
                 runs.failQueuedIfUnactivated(queued.id(), ownerUsername, errorCode, summary);
             }
-            return true;
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (AgentExecutionStoppedException | AgentWorkAlreadyClaimedException settledRace) {
+            LOGGER.info("Teaching preparation run {} queue terminal intent already has a durable winner", queued.id());
+            return TeachingTerminalRecordResult.SETTLED;
+        } catch (IllegalArgumentException permanentFailure) {
+            LOGGER.error(
+                    "Teaching preparation run {} queue terminal intent was permanently rejected",
+                    queued.id(),
+                    permanentFailure);
+            return TeachingTerminalRecordResult.SETTLED;
         } catch (RuntimeException concurrentChange) {
             LOGGER.warn("Teaching preparation run {} queue terminal state could not yet be recorded", queued.id());
-            return false;
+            return TeachingTerminalRecordResult.RETRYABLE;
         }
     }
 

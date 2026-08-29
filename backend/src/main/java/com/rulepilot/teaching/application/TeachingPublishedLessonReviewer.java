@@ -65,7 +65,11 @@ final class TeachingPublishedLessonReviewer {
             review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, plan.createdBy());
         } catch (AgentExecutionStoppedException stopped) {
             retainCitedDrafts(candidates, assistantRunId, "POST_PUBLICATION_REVIEW_STOPPED_RETAINING_CITED_DRAFT");
-            throw stopped;
+            if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) throw stopped;
+            log.warn(
+                    "Whole-lesson review stopped after cited chapters were published; retaining them ({})",
+                    stopped.reason());
+            return ReviewResult.none();
         } catch (RuntimeException reviewFailure) {
             log.warn("Whole-lesson review failed; retaining cited drafts: {}", reviewFailure.getMessage());
             retainCitedDrafts(candidates, assistantRunId, "POST_PUBLICATION_REVIEW_FAILED_RETAINING_CITED_DRAFT");
@@ -172,7 +176,18 @@ final class TeachingPublishedLessonReviewer {
                     replacement,
                     validated);
         } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
+            if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) throw stopped;
+            log.warn(
+                    "Whole-lesson replacement stopped for topic {}; keeping the confirmed defect withheld ({})",
+                    candidate.planned().topicKey(),
+                    stopped.reason());
+            sectionDraftComposer.recordValidation(
+                    assistantRunId,
+                    candidate.planned(),
+                    1,
+                    ActivityOutcome.REJECTED,
+                    "POST_PUBLICATION_COMPLETE_REPLACEMENT_STOPPED_REMAINS_WITHHELD");
+            return null;
         } catch (RuntimeException invalidReplacement) {
             log.warn(
                     "Whole-lesson review replacement failed for topic {}: {}",
@@ -206,7 +221,11 @@ final class TeachingPublishedLessonReviewer {
                     sections,
                     assistantRunId,
                     "POST_PUBLICATION_ACCEPTANCE_STOPPED_WITHHELD_UNVERIFIED_REPLACEMENT");
-            throw stopped;
+            if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) throw stopped;
+            log.warn(
+                    "Whole-lesson replacement acceptance stopped; keeping unverified replacements withheld ({})",
+                    stopped.reason());
+            return List.of();
         } catch (RuntimeException reviewFailure) {
             log.warn("Whole-lesson replacement acceptance failed: {}", reviewFailure.getMessage());
             withholdAll(

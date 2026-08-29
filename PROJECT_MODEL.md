@@ -27,7 +27,7 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 
 | 结果 | 必要输入 | 成功标准 | 不依赖什么 |
 | --- | --- | --- | --- |
-| 推荐 | 玩家请求、会话、已验证的桌游目录 | 自然回复和身份明确的游戏卡片 | 公开讲解库、规则书是否现成、讲解状态 |
+| 推荐 | 玩家请求、会话、已验证的桌游目录 | 普通对话有自然回复；真正推荐时另有身份明确的游戏卡片 | 公开讲解库、规则书是否现成、讲解状态 |
 | 规则书取得 | 玩家明确选中的游戏 | 可读取且身份已绑定的规则书版本 | 推荐模型、公开讲解是否存在 |
 | 讲解 | 已选规则书版本及其页面证据 | 至少有可读、有引用、已持久化的章节 | 可选图示、OCR、公开发布 |
 | 规则答疑 | 当前规则书或讲解证据 | 支持的部分带引用发布；不足处明确说明 | 推荐链路、公开库收录状态 |
@@ -52,6 +52,11 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 模型、HTTP、消息与对象存储都在 adapter；模块不能直接读取另一个模块的 repository 或 persistence entity。
 这样保留单体的部署效率，又能用业务边界控制耦合。
 
+生产环境把推荐决策和其公开资料搜索都显式固定为 `qwen3.8-flash`，避免继承通用 Qwen 角色的较慢默认模型；
+公开资料 adapter 让模型在内置 web search 后直接提交 typed function result，并记录内部搜索次数、source ownership
+和总耗时。公网 Caddy 明确协商 X25519 / P-256，避免仅支持传统 TLS group 的 LibreSSL 客户端在 Caddy 默认混合
+后量子 group 上于 HTTP 前断连；部署后同时用 OpenSSL group 探测、普通 curl 和真实浏览器验收。
+
 ## 模块职责
 
 | 模块 | 负责 | 明确不负责 |
@@ -68,19 +73,22 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 ### 1. 推荐
 
 1. 前端为一轮对话提交 `conversationId`、revision 和 `clientTurnId`，避免重复或过期结果覆盖新一轮。
-2. SSE 在任务进入后台 executor 前先发出真实的 `understanding_request` 活动；之后只传 `progress/result/error`，
-   不把尚未提交的文案碎片伪装成流式结果。
-3. 一个有界 Agent 循环自主选择 allow-list 内的 typed tools；偏好、候选、数量和最终提交都通过 JSON schema
-   返回。直接回答和真正需要澄清的回合只调用一次模型；需要新候选的普通回合通常是一次目录读取决策，
-   再由同一个 Agent 在看到已验证事实后做一次终态发布。
-4. catalog tool 提供身份已验证的游戏事实。可选网络研究只能补候选证据，不能代替最终身份校验；一旦形成
-   仍满足硬条件且有可引用依据的 selectable slate，状态机只再暴露 `recommend_games`，不允许模型绕回搜索、
-   研究、澄清或普通回复。
-5. `recommend_games` 必须一次返回完整的自然 `playerReply`，以及每张卡的 `why` 和可选 `tradeoff`；应用只校验
-   Unicode 长度、候选身份、硬条件、证据 allow-list 与候选证据归属，然后逐字发布，不拼接、补写、截断或
-   用模板替换模型的正常回复。
-6. 只有在候选已经验证、终态文案却因 provider 或协议失败无法取得时，应用才允许发布明确标注为降级的
-   固定故障说明和已验证卡片；它不是正常成功路径。前端从持久会话恢复结果，选中卡片后才创建规则书接力。
+2. SSE 在任务进入后台 executor 前先发出真实的 `understanding_request` 活动；之后传 `progress/result/error`。
+   provider 只有在整轮确认没有选择工具后，才把自然回答作为一个完整 `answer_part` 发布；模型先写一句前导语、
+   随后又选择工具时，该前导语只留在 Agent transcript，不会在玩家界面闪现后撤回。
+3. 一个有界 ReAct Agent 自主选择 allow-list 内的 typed tools。每次工具 observation 都回到同一个模型；模型可以
+   继续选择真正有用的下一步，也可以直接用自然文字结束。应用不规定“必须两次”、不强制自然回复后再调用一次，
+   也不在某次读取后把能力表收缩成固定流水线；模型调用和工具调用上限只承担防无限循环的安全职责。
+4. catalog tool 提供身份已验证的游戏事实。公开资料发现把候选线索与有来源的公开事实作为一个原子结果返回；
+   坏的候选、公开事实、研究 observation 或附带偏好 patch 只丢当前 item，合法 sibling 继续。公开搜索不能代替
+   BGG 身份校验，重复同一 typed read 会被阻止；是否继续查目录、研究体验或结束，由 Agent 根据 observation 决定。
+5. `recommend_games` 一次返回完整自然 `playerReply`，以及每张卡的 evidence-bound `why` 和可选 `tradeoff`。
+   应用不再用 80 字 lead、12 字卡片说明或 exact selection count 充当安全边界：generic lead 可以没有 evidence ID，
+   只要非空即可；候选身份、排除/硬条件、证据 allow-list 和同候选归属仍严格。坏的可选 tradeoff 只省略该字段，
+   坏的单张卡只省略该卡并形成真实 shortfall，合法卡片和模型原文逐字发布。
+6. provider、协议、输出长度、空响应、重复无效动作、预算、发布边界或服务失败都不会触发应用拼写成功回复，
+   也不会只凭“已核验候选”生成卡片。本轮返回 typed `failureReason` 和玩家安全的具体说明；请求、偏好与已核验
+   会话状态保留供重试。前端从持久会话恢复真实模型输出，选中真实发布的卡片后才创建规则书接力。
 7. 会话把“最近完成回合”与“最近已发布回合”分开持久化：前者保留失败回合的精确幂等重放，后者负责刷新
    后恢复完整卡片、比较结构、原 locale 和 turn identity。`UNAVAILABLE` 不进入对话 transcript，也不覆盖
    上一次成功发布；第一轮就不可用时则保持没有已发布结果，不能根据 known games 猜造卡片。
@@ -90,16 +98,23 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 | 条件 | 对玩家的结果 | 是否会丢失已确认会话 |
 | --- | --- | --- |
 | 目录中没有满足硬条件的候选 | 成功返回 `no_match`，说明最小可行调整 | 否 |
-| 还没有合法候选时，模型未配置、provider 调用失败、输出截断或 typed action 无法解析 | 本轮不发布临时文字，保留请求供重试 | 否 |
-| 已有合法候选，但完整终态回复在有限处理后仍无法取得 | 明确显示降级故障说明，并只交付已经验证的卡片 | 否 |
+| 模型未配置、provider 连接失败、协议无法解析、输出截断或空响应 | 本轮不发布临时/模板成功结果；显示具体失败原因并保留请求 | 否 |
+| 已有合法候选，但完整终态回复仍无法取得 | 同样返回 `UNAVAILABLE`；候选留在内部 checkpoint，不能冒充已发布卡片 | 否 |
 | 六次 action 预算或整轮 deadline 用尽，仍没有终态 | 以明确的 action/time failure boundary 停止 | 否 |
-| 最终回复过短、选错身份、违反排除/硬条件、引用未知证据或把一款游戏的依据写到另一张卡 | 同一个终态 action 收到结构化拒绝；预算内返回一份完整替换，不能字段修补 | 否 |
+| 一组并行动作没有逐步观察，或完全相同的无效动作再次出现 | 第一次作为 typed observation 交回模型；完全相同的重复才停止，避免无意义循环 | 否 |
+| 单张卡、可选 tradeoff 或附带偏好 patch 无效 | 只丢局部坏 item；其余合法结果继续，卡片不足时显示 shortfall | 否 |
+| 所有卡都选错身份、违反排除/硬条件，或引用未知/别的候选证据 | 当前 action 收到结构化拒绝；模型可根据 observation 另选动作或完整重交 | 否 |
 | revision 冲突、并发 turn、checkpoint/最终持久化或任务排队失败 | 不把未提交结果显示成成功；从服务端会话恢复 | 否 |
 
+`UNAVAILABLE` 的对外原因不是一条笼统“生成失败”，而是稳定区分为 `time_limit`、`model_not_configured`、
+`provider_call_failed`、`provider_protocol_invalid`、`provider_output_truncated`、`empty_model_response`、
+`repeated_incompatible_actions`、`repeated_invalid_action`、`action_budget_exhausted`、`publication_rejected` 和
+`service_failure`。前端按这个精确原因解释发生了什么，同时把未知新原因回退到较宽的安全边界；任何一种都
+不会把内部 checkpoint 或应用模板冒充成一次成功推荐。
+
 read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以换工具、缩小目标或诚实结束；只有预算内仍
-无法形成合法终态才使本轮失败。调用数是路径结果，不是全局常量：直接回复/澄清通常为 1，新目录候选通常
-为 2，只有身份发现、比较研究或合同纠正才增加调用。公开库为空、规则书导入失败或讲解失败从来不是推荐
-失败条件。
+无法形成合法终态才使本轮失败。调用数只是实际决策路径的观测值，不是测试合同；验收关注是否重复相同读取、
+是否在总预算内、是否发布有用且有归属的结果。公开库为空、规则书导入失败或讲解失败从来不是推荐失败条件。
 
 ### 2. 规则书取得与绑定
 
@@ -130,9 +145,10 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
    Teaching run 另外按实际章节、检索、review 和可选配图的完整有界调用图取得自己的执行预算。
 5. outline 只描述章节结构；它不能凭空补规则，每个主题必须能回到当前文档版本。章节初稿若未通过确定性
    发布校验，Agent 会收到具体诊断和同一份证据，最多返回一次完整章节替换；应用不从旧稿拣字段拼进新稿。
-6. 局部图示在每章发布前同步处理并与该章正文进入同一 durable snapshot，不再启动独立
-   `VISUAL_ENRICHMENT` workflow。视觉 Agent 只能从 opaque crop candidate ID 中选择或返回 `NO_VISUAL`；
-   格式错误、越权选择或 provider 失败最多触发一次完整重选，最终失败只省略该章图片。
+6. 每章带引用正文一通过确定性边界就先写入 durable snapshot，随后才做可选图示增强；因此图示超时、预算停止、
+   provider 或 crop 失败都不能擦除已经可读的正文。视觉 Agent 只能从 opaque crop candidate ID 中选择或返回
+   `NO_VISUAL`；格式错误、越权选择或 provider 失败最多触发一次完整重选。crop 的临时 503 只自动重试一次，
+   永久 502 或重试仍失败只省略该图，并在 UI 说明是容量、原页、传输还是浏览器解码边界。
 7. 已通过引用与结构校验的章节可先读，后续章节继续后台完成。可选整课 reviewer 不可用时保留完整 cited
    draft；只有 confirmed defect 才把诊断和同一证据交给 Agent 生成一次完整章节替换，再做一次独立验收。
    confirmed defect 会先从可读 snapshot 中扣留，再开始 replacement；所以替换期间取消或预算中止也不会把
@@ -153,6 +169,12 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 | 已有 plan 的独立 Teaching 入口在 2 分钟内没有 worker 接手 | `TEACHING_QUEUE_TIMEOUT`；迟到 runnable 被抑制，尚未开始模型调用 | 规则书、plan 与之前的 durable 内容保留 |
 | worker 已到达但 durable claim 在有限同 token 重放后仍失败 | `*_WORKER_ADMISSION_FAILED`；尚未开始模型调用，可直接重试 | 其他 worker 已有的 claim 不会被覆盖；规则书、plan 与 durable 内容保留 |
 | 第一段带引用讲解已发布，但其余章节在 continuation 队列 30 分钟内没有 worker 或接管失败 | `TEACHING_CONTINUATION_QUEUE_TIMEOUT` / `TEACHING_CONTINUATION_ADMISSION_FAILED` | 第一段保持可读，玩家可以明确重试剩余工作 |
+| plan/source 读取失败 | `TEACHING_PLAN_RETRIEVAL_FAILED` | 从原规则书发起新 run；已有 durable 章节保留 |
+| 首章或旧式生成所需证据读取失败 | `TEACHING_EVIDENCE_RETRIEVAL_FAILED` | 复用已有章节后重新生成缺失内容 |
+| 教学模型配置、provider 或模型合同失败 | `TEACHING_MODEL_PROVIDER_FAILED` | 复用已有章节后发起新 run；不把 provider 私有错误暴露给玩家 |
+| lesson/progress/run state 持久化失败 | `TEACHING_PERSISTENCE_FAILED` | 从最后 durable snapshot 发起新 run |
+| 后续章节失败 | `TEACHING_CONTINUATION_FAILED` | 已发布章节继续可读，只重启剩余工作 |
+| 输入缺失、越权、过期或结构无效 | `TEACHING_PLAN_INVALID` | 不自动重试；玩家修复输入或重新选择规则书 |
 | preparation 的精确本地/全局上下文预检不满足 provider 容量 | 在任何付费模型调用前停止并说明容量 owner | 规则书与之前的 durable 内容保留 |
 | 用户取消/会话失效，或全局 step/tool/model/token/deadline 用尽 | 当前 durable run 停止 | 已确认页面和已发布章节保留 |
 | 最终持久化、队列或服务在有限恢复后仍失败 | 当前 durable run 停止并显示具体 owner | 上游推荐、规则书和最后一次 durable snapshot 不回滚 |
@@ -163,13 +185,20 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 
 ### 4. 规则答疑
 
-1. 问题进入当前文档版本或公开讲解自己的证据范围。
-2. retrieval 返回带稳定 evidence ID 的片段；模型通过 typed tool 指明使用哪些证据和回答范围。
-3. 发布前校验证据归属、页码、引用和硬数值；free-form prose 只用于玩家可见表达，不参与业务路由。
-4. 初稿未通过发布边界时，应用把具体拒绝原因与同一份 typed evidence 交回回答 Agent，最多请求一次完整
-   replacement；禁止按 `answer/caveat/clarification` 等字段打补丁，也禁止应用组合新旧文本。
-5. 有支持的部分先回答；不支持的部分局部说明不确定，最多追问一个真正有用的问题。可选评价 reviewer
-   失败或发现非确定性问题时只记录诊断，不能销毁一份已经通过确定性边界的完整回答。
+1. 当前问题先进入绑定文档版本或公开讲解自己的确定性 retrieval。普通第二问、`previousQuestion`、
+   `priorTurnReference` 和显式 learning intent 都不会无条件先调用 interpretation 模型；只有本轮检索确实为空、
+   有前文且 provider 支持时，才用一次可选 interpretation 形成恢复候选，二次检索成功后再原子替换当前路径。
+2. retrieval 返回带稳定 evidence ID 的片段；模型通过 typed tool 指明使用哪些证据和回答范围。ADVICE 或
+   COMPLETE_LIST 的可选认证失败时保留已经验证的部分证据和未完成义务；CALCULATION 数值审计与精确前文页
+   复核仍是硬边界。
+3. 最终 provider JSON 的核心回答保持严格，教学辅助只使用一个 `aid: {type, payload}` discriminated union，
+   不再同时要求 12 个互斥数组。非计算 aid 的 discriminator、payload 或旧字段损坏时只丢 aid，保留 core；
+   计算 aid 不完整仍硬失败并走定向完整 replacement。
+4. 发布前校验证据归属、页码、引用和硬数值；free-form prose 只用于玩家可见表达，不参与业务路由。初稿未通过
+   发布边界时，应用把具体拒绝原因与同一份 typed evidence 交回回答 Agent，最多请求一次完整 replacement；
+   禁止按字段打补丁，也禁止应用组合新旧文本。
+5. 有支持的部分先回答；不支持的部分局部说明不确定，最多追问一个真正有用的问题。运行进度来自实际到达的
+   execution phase，不再由终态倒推不存在的 retrieval/composition/critic；失败记录同时给出安全错误码和实际阶段。
 
 答疑会在证据不足时局部弃答；引用不属于当前版本、完整 replacement 仍无效、服务预算耗尽或持久化失败时
 本轮整体停止。已有讲解和推荐卡片都不会因此消失。
@@ -177,8 +206,9 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 ## 长任务、并发与恢复
 
 - PostgreSQL 中的 durable state 是 import、assistant run、teaching plan、lesson 和 conversation 的权威来源。
-- SSE 用于及时展示活动，轮询负责断线恢复；同一个 lifecycle 只能有一个 mutation/polling owner。讲解正文与
-  同步可选配图现在共用 `TEACHING` run 和章节 snapshot，历史 `VISUAL_ENRICHMENT` 只保留存量读取/删除兼容。
+- SSE 用于及时展示活动，轮询负责断线恢复；同一个 lifecycle 只能有一个 mutation/polling owner。讲解正文先写
+  `TEACHING` durable snapshot，可选配图随后在同一个 run 内写更新 snapshot；历史 `VISUAL_ENRICHMENT` 只保留
+  存量读取/删除兼容。
 - revision、lease、fencing token、幂等键和 transactional outbox 防止重复消费、旧 worker 覆盖新状态或事务提交后丢事件。
 - `RECEIVED` 只表示排队；普通 preparation 或已有 plan 的独立 Teaching 必须在 2 分钟、纯图片长书必须在独立
   有界队列的 30 分钟内被唯一 worker 原子领取，否则以可重试的 queue timeout 结束。后台公共课候选也有
@@ -216,13 +246,14 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
    `Cache-Control: no-store` release identity 任一不满足都回滚到经过重新校验的旧 topology。公开 `current`
    只在 commit checkpoint 后成为新 release。
 3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 验证一次登录用户的新目录推荐、完整回复、
-   每卡证据文案、持久化和页面逐字呈现。固定 fresh 路径通常是 2 次模型、1 次目录、0 次网页研究；若 provider
-   漏掉 required typed action，只允许一次有界协议修复，最终结果仍需在 6 次 Agent 总预算和 20 秒页面 SLO
-   内完成，不能把已经通过全部硬约束的修复结果误判成失败。随后选择其中一张卡，证明相同 BGG 身份被绑定到
+   每卡证据文案、持久化和页面逐字呈现，同时记录实际模型/工具调用图但不规定 exact 次数；门禁只要求没有
+   完全相同的重复读取、没有超过 Agent 总安全预算，并在页面 SLO 内形成正确结果。provider 修复后只要仍满足
+   硬边界就不应被调用次数误判为失败。随后选择其中一张卡，证明相同 BGG 身份被绑定到
    game/edition，并且只恢复
    该 edition 的既有旅程或在同 edition discovery 边界停下。首个进度、持久化终态与页面渲染分别记录延迟。
    普通用户 canary 使用私有上传
-   验证规则书、动态 preparation、`IN_TEACHING` 同步局部图示、局部 unavailable 页面和引用答疑，并在结束
+   验证规则书、动态 preparation、正文先持久化后在同一 `TEACHING` run 内可选追加的局部图示、局部
+   unavailable 页面和引用答疑，并在结束
    后清理测试数据。
 4. canary 的 sanitizer 总会先删除原始输出和凭据并生成有界诊断 artifact；独立 final success gate 再要求
    `completed`/`SUCCEEDED` 的完整验收合同。测试被 skip、报告不完整或 sanitizer 只成功保存失败诊断时，workflow
@@ -244,11 +275,11 @@ typed JSON 参数返回，并校验 schema、范围、实体身份、证据归�
 外部目录的 `playingtime`、`minplaytime`、`maxplaytime` 非正值在 catalog 边界统一归为未知；selector 对历史
 遗留的非正时长也只能生成 `UNKNOWN` claim，不能用“0 分钟”证明满足玩家的硬时长上限。
 
-普通路径优先“每个独立责任一次能力足够的模型调用 + 当时需要的证据”，调用数由路径决定：能直接回答就
-一次；模型必须先读取新事实时，读取和看见 observation 后的终态各一次；只有 typed contract 拒绝、明确
-研究需求或 transient timeout 才增加调用。新增阶段必须拥有独立、可测量的责任；critic、视觉或本地化失败
-时不得销毁已验证内容。任何 correction 都返回完整对象，禁止字段级 patch 或应用拼接。真实语料事故只转成
-脱敏评测，不把游戏名、页码、同义词或某次输出写成生产 special case。
+普通路径让同一个 Agent 在每个真实 observation 后判断继续还是结束；测试不把 exact 模型调用数或固定阶段顺序
+写成产品合同。调用、工具、token 与 deadline 仍有安全上限，重复完全相同的读取或无效动作会被阻止。新增阶段
+必须拥有独立、可测量的责任；critic、视觉或本地化失败时不得销毁已验证内容。任何 correction 都返回完整对象，
+禁止字段级 patch 或应用拼接。真实语料事故只转成脱敏评测，不把游戏名、页码、同义词或某次输出写成生产
+special case。
 
 推荐 Agent 的设计参考了 [ReAct](https://arxiv.org/abs/2210.03629)、
 [OpenAI Agents](https://openai.github.io/openai-agents-python/running_agents/)、
@@ -271,8 +302,8 @@ Agent framework；新框架会复制状态、重试和观测 owner，却不会�
 ### 问题二：同一个视觉任务有多个 owner
 
 规则书接力和讲解弹窗曾同时轮询、settle、恢复同一 `VISUAL_ENRICHMENT` run，页面会出现互相矛盾的
-状态。现在独立视觉 workflow 已退休：每章在正文校验后同步选图，正文与图一起写入同一教学 snapshot；
-弹窗和阅读器只读取 `TEACHING` run，不再发现、轮询或猜测第二个视觉任务。历史枚举和存量删除路径只为
+状态。现在独立视觉 workflow 已退休：每章正文校验后先写入教学 snapshot，再在同一个 `TEACHING` run 内
+可选选图并更新该 snapshot；弹窗和阅读器不再发现、轮询或猜测第二个视觉任务。历史枚举和存量删除路径只为
 数据库兼容存在，不能创建新任务。
 
 ### 问题三：旧协议删除不完整
@@ -386,10 +417,10 @@ ArchUnit/Modulith 边界和 outbox 已经提供足够隔离，拆服务只会提
 ## 当前限制
 
 - 外部来源和模型仍会受网络、限流与 provider 协议漂移影响，所以真实 canary 与普通 CI 分开运行。
-- 应用的推荐合同始终要求 exactly one typed action；Qwen OpenAI-compatible adapter 在 wire 层使用
-  `tool_choice=auto`，因为该 provider 的 `required` 会触发 400 或极慢路径。`auto` 合法返回零工具时，应用只做
-  一次不发布自由文本的 typed-action 修复；再次零工具才明确失败，多种工具、未知工具和非法 schema 仍由应用
-  拒绝。推荐角色独立使用 `qwen3.8-flash`，其他共享 Qwen 角色继续使用 `qwen3.7`；模型配置
+- 推荐 adapter 在 wire 层使用 `tool_choice=auto`：模型可以选择 typed tool，也可以用自然文字直接结束；应用
+  不为零工具自然回复强制追加一次模型调用。空回复、未知工具、非法 schema 和重复不兼容动作仍会按具体
+  `failureReason` 停止；多种互不兼容的并行动作第一次作为 observation 交回 Agent，只有完全相同的重复才终止。
+  推荐与其公开资料搜索独立使用 `qwen3.8-flash`，其他共享 Qwen 角色继续使用 `qwen3.7-plus`；模型配置
   以一份原子 release 环境发布，避免为推荐提速时无意改变讲解或答疑。单次线上 canary 只能证明一个样本及其
   延迟，不能推导总体失败率。
 - 页面视觉理解是可选增强，复杂图表可能只保留原页而没有可靠 crop；系统选择诚实降级，不伪造图示。

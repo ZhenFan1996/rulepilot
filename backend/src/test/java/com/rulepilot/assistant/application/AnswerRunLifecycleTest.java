@@ -38,7 +38,8 @@ class AnswerRunLifecycleTest {
         AnswerRunLifecycle lifecycle = new AnswerRunLifecycle(runs);
         RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
 
-        RunSnapshot completed = lifecycle.finish(received, answered());
+        RunSnapshot completed = lifecycle.finish(
+                received, answered(), AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING);
 
         assertThat(runs.advances()).extracting(Advance::nextState).containsExactly(
                 AssistantRunState.QUESTION_UNDERSTANDING,
@@ -60,10 +61,21 @@ class AnswerRunLifecycleTest {
         AnswerRunLifecycle lifecycle = new AnswerRunLifecycle(runs);
         IllegalArgumentException workflowFailure = new IllegalArgumentException("answer workflow failed");
 
-        lifecycle.fail(run(AssistantRunState.RETRIEVING, 4), "ANSWER_FAILED", "Answer workflow failed safely", workflowFailure);
-        lifecycle.fail(run(AssistantRunState.COMPLETED, 8), "ANSWER_FAILED", "Already terminal", workflowFailure);
+        lifecycle.fail(
+                run(AssistantRunState.RETRIEVING, 4),
+                AnswerRunProgressPolicy.ExecutionPhase.RETRIEVING,
+                "ANSWER_FAILED",
+                "Answer workflow failed safely",
+                workflowFailure);
+        lifecycle.fail(
+                run(AssistantRunState.COMPLETED, 8),
+                AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING,
+                "ANSWER_FAILED",
+                "Already terminal",
+                workflowFailure);
 
-        assertThat(runs.failures()).containsExactly(new Failure("ANSWER_FAILED", "Answer workflow failed safely", 4));
+        assertThat(runs.failures()).containsExactly(new Failure(
+                "ANSWER_FAILED", "Answer workflow failed safely during RETRIEVING", 4));
         assertThat(workflowFailure.getSuppressed())
                 .singleElement()
                 .satisfies(trackingFailure -> assertThat(trackingFailure).hasMessage("run storage unavailable"));

@@ -20,19 +20,32 @@ final class AnswerRunLifecycle {
         return runs.start(mode, subjectId, ownerUsername);
     }
 
-    RunSnapshot finish(RunSnapshot run, StructuredRuleAnswer answer) {
-        for (AnswerRunProgressPolicy.ProgressUpdate update : AnswerRunProgressPolicy.updatesFor(answer)) {
+    RunSnapshot finish(
+            RunSnapshot run,
+            StructuredRuleAnswer answer,
+            AnswerRunProgressPolicy.ExecutionPhase lastReachedPhase) {
+        for (AnswerRunProgressPolicy.ProgressUpdate update :
+                AnswerRunProgressPolicy.updatesFor(answer, lastReachedPhase)) {
             run = runs.advance(run.id(), run.revision(), update.state(), update.summary());
         }
         return run;
     }
 
-    void fail(RunSnapshot run, String errorCode, String summary, RuntimeException workflowFailure) {
+    void fail(
+            RunSnapshot run,
+            AnswerRunProgressPolicy.ExecutionPhase failurePhase,
+            String errorCode,
+            String summary,
+            RuntimeException workflowFailure) {
         if (run.state().terminal()) {
             return;
         }
         try {
-            runs.fail(run.id(), run.revision(), errorCode, summary);
+            runs.fail(
+                    run.id(),
+                    run.revision(),
+                    errorCode,
+                    summary + " during " + failurePhase.name());
         } catch (RuntimeException trackingFailure) {
             workflowFailure.addSuppressed(trackingFailure);
         }

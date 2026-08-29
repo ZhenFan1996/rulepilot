@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.List;
 import java.util.Set;
@@ -52,11 +53,15 @@ public record AnswerQuestionPlan(
     }
 
     static AnswerQuestionPlan fallback(UnderstoodQuestion question) {
+        return fallback(question, null);
+    }
+
+    static AnswerQuestionPlan fallback(UnderstoodQuestion question, LearningIntent learningIntent) {
         if (question == null) throw new IllegalArgumentException("understood question is required");
         return new AnswerQuestionPlan(
                 List.of(new Subquestion(question.originalQuestion(), Set.of(EvidenceNeed.DIRECT_RULE))),
                 false,
-                AnswerAid.NONE,
+                AnswerAid.forLearningIntent(learningIntent),
                 ReferenceBinding.CURRENT_QUESTION);
     }
 

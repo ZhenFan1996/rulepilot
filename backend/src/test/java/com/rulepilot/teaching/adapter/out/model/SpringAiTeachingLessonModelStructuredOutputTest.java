@@ -2,13 +2,22 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
+import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
+import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
+import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
+import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 
 class SpringAiTeachingLessonModelStructuredOutputTest {
 
@@ -43,6 +52,44 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
         assertThat(model.providerId()).isEqualTo("deepseek");
         assertThat(model.supportsVisualEvidence()).isFalse();
         assertThat(model.supportsVisualEvidence("player")).isFalse();
+    }
+
+    @Test
+    void exposesProviderTransportFailureThroughTheSafeTeachingPortType() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.providerFor(Role.TEACHING, "alice")).thenReturn("deepseek");
+        when(configuration.modelFor(Role.TEACHING, "alice")).thenReturn(chatModel);
+        when(configuration.modelNameFor(Role.TEACHING, "alice")).thenReturn("private-model-name");
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
+        when(chatModel.call(any(Prompt.class)))
+                .thenThrow(new IllegalStateException("private provider endpoint"));
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Return cited teaching JSON.");
+        when(prompts.teachingUser()).thenReturn("""
+                {section} {objective} {coverage} {requiredRules} {teachingUnits} {wholeGameContext}
+                {continuity} {chapterScope} {evidence} {repair}
+                """);
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(configuration, prompts);
+        EvidenceInput evidence = new EvidenceInput(
+                UUID.randomUUID(), "RULE", "Setup", "Place the token.", 1, 1);
+        SectionRequest request = new SectionRequest(
+                "setup",
+                "Setup",
+                "Learn setup",
+                List.of("setup"),
+                List.of(),
+                List.of(evidence),
+                List.of(),
+                List.of(),
+                List.of(),
+                "alice",
+                "Setup only");
+
+        assertThatThrownBy(() -> model.composeInvocation(request))
+                .isInstanceOf(ProviderFailureException.class)
+                .hasMessage("teaching model provider failed")
+                .hasRootCauseMessage("private provider endpoint");
     }
 
     @Test

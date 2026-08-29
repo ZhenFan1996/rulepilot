@@ -16,8 +16,6 @@ public interface BoardGameRecommendationWebResearch {
         return Optional.empty();
     }
 
-    default void rememberVerifiedIdentity(DiscoveryRequest request, CandidateDiscovery discovery) {}
-
     /** Signals that the configured public-research capability cannot serve this run. */
     final class WebResearchUnavailableException extends RuntimeException {
         private final String code;
@@ -84,13 +82,6 @@ public interface BoardGameRecommendationWebResearch {
         SELECTABLE_CARDS
     }
 
-    enum RelationshipKind {
-        DESIGNER,
-        DESIGNER_GROUP,
-        GAME,
-        OTHER
-    }
-
     /** Public subject class used for source-backed context that does not need a BGG identity. */
     enum PublicSubjectKind {
         PERSON,
@@ -128,17 +119,9 @@ public interface BoardGameRecommendationWebResearch {
     record CandidateDiscovery(
             List<CandidateLead> candidates,
             List<Source> sources,
-            ResolvedRelationship relationship,
             List<PublicContextEvidence> publicContext) {
         public CandidateDiscovery(List<CandidateLead> candidates, List<Source> sources) {
-            this(candidates, sources, null, List.of());
-        }
-
-        public CandidateDiscovery(
-                List<CandidateLead> candidates,
-                List<Source> sources,
-                ResolvedRelationship relationship) {
-            this(candidates, sources, relationship, List.of());
+            this(candidates, sources, List.of());
         }
 
         public CandidateDiscovery {
@@ -178,39 +161,6 @@ public interface BoardGameRecommendationWebResearch {
                 throw new IllegalArgumentException(field + " is invalid");
             }
             return normalized;
-        }
-    }
-
-    /** Source-backed external relationship; BGG metadata must still canonicalize its entity. */
-    record ResolvedRelationship(
-            RelationshipKind kind,
-            List<String> entityNames,
-            List<Integer> sourceIndexes) {
-        public ResolvedRelationship(RelationshipKind kind, String entityName, List<Integer> sourceIndexes) {
-            this(kind, entityName == null ? List.of() : List.of(entityName), sourceIndexes);
-        }
-
-        public ResolvedRelationship {
-            entityNames = entityNames == null
-                    ? List.of()
-                    : entityNames.stream()
-                            .filter(java.util.Objects::nonNull)
-                            .map(String::strip)
-                            .filter(name -> !name.isBlank())
-                            .distinct()
-                            .toList();
-            sourceIndexes = sourceIndexes == null ? List.of() : List.copyOf(sourceIndexes);
-            int requiredNames = kind == RelationshipKind.DESIGNER_GROUP ? 2 : 1;
-            if (kind == null
-                    || entityNames.size() < requiredNames
-                    || entityNames.size() > 4
-                    || entityNames.stream().anyMatch(name -> name.length() > 160)) {
-                throw new IllegalArgumentException("external relationship entity names are invalid");
-            }
-        }
-
-        public String entityName() {
-            return String.join(", ", entityNames);
         }
     }
 

@@ -7,16 +7,19 @@ import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AgentWorkAlreadyClaimedException;
 import com.rulepilot.document.DocumentVersionScopeLookup;
+import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
+import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
-import java.time.Duration;
-import java.util.Optional;
-import java.util.List;
-import java.util.UUID;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -150,8 +153,11 @@ public class IllustratedLessonService {
         TeachingPlan plan;
         try {
             plan = requireReadyPlan(teachingPlanId, ownerUsername);
+        } catch (IllegalArgumentException invalidPlan) {
+            failRun(initialRun, TeachingFailure.INVALID_PLAN, invalidPlan);
+            throw invalidPlan;
         } catch (RuntimeException failure) {
-            failRun(initialRun, "TEACHING_WORKFLOW_FAILED", "Teaching plan could not be loaded", failure);
+            failRun(initialRun, TeachingFailure.PLAN_RETRIEVAL, failure);
             throw failure;
         }
         return startClaimedGenerationObserved(plan, initialRun);
@@ -172,12 +178,12 @@ public class IllustratedLessonService {
             run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
-            IllustratedLesson previousLesson = repository.findLatestByPlan(plan.id()).orElse(null);
+            IllustratedLesson previousLesson = reusableLesson(plan.id());
             var base = agent.startBase(
                     plan,
                     run.id(),
                     previousLesson,
-                    progressPublisher::publish);
+                    progressPublisher(GenerationTarget.ACTIVE));
             return new GenerationContinuation(run, base);
         } catch (AgentWorkAlreadyClaimedException duplicateDelivery) {
             throw duplicateDelivery;
@@ -186,7 +192,7 @@ public class IllustratedLessonService {
             throw stopped;
         } catch (RuntimeException exception) {
             log.error("Teaching first-section workflow failed for plan {} and run {}", plan.id(), run.id(), exception);
-            failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
+            failRun(run, failureFor(exception, GenerationPhase.FIRST_SECTION), exception);
             throw exception;
         }
     }
@@ -196,7 +202,7 @@ public class IllustratedLessonService {
         try {
             GroundedTeachingAgent.BaseWorkUnitResult result = agent.continueBaseWorkUnit(
                     continuation.base(),
-                    progressPublisher::publish);
+                    progressPublisher(GenerationTarget.ACTIVE));
             IllustratedLesson lesson = result.lesson();
             if (!result.complete()) {
                 return new GenerationOutcome(run, lesson.status(), continuation);
@@ -210,7 +216,7 @@ public class IllustratedLessonService {
             throw stopped;
         } catch (RuntimeException exception) {
             log.error("Teaching continuation failed for run {}", run.id(), exception);
-            failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
+            failRun(run, failureFor(exception, GenerationPhase.CONTINUATION), exception);
             throw exception;
         }
     }
@@ -220,23 +226,30 @@ public class IllustratedLessonService {
             String ownerUsername,
             RunSnapshot initialRun,
             GenerationTarget target) {
+        TeachingPlan plan;
+        try {
+            plan = requireReadyPlan(teachingPlanId, ownerUsername);
+        } catch (IllegalArgumentException invalidPlan) {
+            failRun(initialRun, TeachingFailure.INVALID_PLAN, invalidPlan);
+            throw invalidPlan;
+        } catch (RuntimeException failure) {
+            failRun(initialRun, TeachingFailure.PLAN_RETRIEVAL, failure);
+            throw failure;
+        }
         RunSnapshot run = initialRun;
         try {
-            var plan = requireReadyPlan(teachingPlanId, ownerUsername);
             run = advance(run, AssistantRunState.DOCUMENT_READINESS, "Rule document readiness is checked");
             run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
             IllustratedLesson previousLesson = target == GenerationTarget.ACTIVE
-                    ? repository.findLatestByPlan(teachingPlanId).orElse(null)
+                    ? reusableLesson(teachingPlanId)
                     : null;
             IllustratedLesson lesson = agent.createBase(
                     plan,
                     run.id(),
                     previousLesson,
-                    target == GenerationTarget.ACTIVE
-                            ? progressPublisher::publish
-                            : progressPublisher::publishCandidate);
+                    progressPublisher(target));
             run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
         } catch (AgentWorkAlreadyClaimedException duplicateDelivery) {
@@ -246,7 +259,7 @@ public class IllustratedLessonService {
             throw stopped;
         } catch (RuntimeException exception) {
             log.error("Teaching workflow failed for plan {} and run {}", teachingPlanId, run.id(), exception);
-            failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
+            failRun(run, failureFor(exception, GenerationPhase.LEGACY_FULL), exception);
             throw exception;
         }
     }
@@ -288,6 +301,58 @@ public class IllustratedLessonService {
         }
     }
 
+    private void failRun(RunSnapshot run, TeachingFailure failure, RuntimeException exception) {
+        failRun(run, failure.errorCode, failure.summary, exception);
+    }
+
+    private IllustratedLesson reusableLesson(UUID teachingPlanId) {
+        try {
+            return repository.findLatestByPlan(teachingPlanId).orElse(null);
+        } catch (RuntimeException persistenceFailure) {
+            throw new TeachingPersistenceFailure(persistenceFailure);
+        }
+    }
+
+    private Consumer<IllustratedLesson> progressPublisher(GenerationTarget target) {
+        return lesson -> {
+            try {
+                if (target == GenerationTarget.ACTIVE) {
+                    progressPublisher.publish(lesson);
+                } else {
+                    progressPublisher.publishCandidate(lesson);
+                }
+            } catch (RuntimeException persistenceFailure) {
+                throw new TeachingPersistenceFailure(persistenceFailure);
+            }
+        };
+    }
+
+    private TeachingFailure failureFor(RuntimeException failure, GenerationPhase phase) {
+        if (causedBy(failure, TeachingPersistenceFailure.class)) {
+            return TeachingFailure.PERSISTENCE;
+        }
+        if (causedBy(failure, InvalidOutputException.class)
+                || causedBy(failure, ProviderFailureException.class)) {
+            return TeachingFailure.MODEL_PROVIDER;
+        }
+        if (causedBy(failure, IllegalArgumentException.class)) {
+            return TeachingFailure.INVALID_PLAN;
+        }
+        return phase == GenerationPhase.CONTINUATION
+                ? TeachingFailure.CONTINUATION
+                : TeachingFailure.EVIDENCE_RETRIEVAL;
+    }
+
+    private boolean causedBy(Throwable failure, Class<? extends Throwable> type) {
+        Throwable current = failure;
+        while (current != null) {
+            if (type.isInstance(current)) return true;
+            if (current.getCause() == current) return false;
+            current = current.getCause();
+        }
+        return false;
+    }
+
     @Transactional(readOnly = true)
     public Optional<IllustratedLesson> latest(UUID teachingPlanId) {
         return repository.findLatestByPlan(teachingPlanId);
@@ -318,11 +383,23 @@ public class IllustratedLessonService {
     }
 
     private RunSnapshot advance(RunSnapshot run, AssistantRunState state, String summary) {
-        return runs.advance(run.id(), run.revision(), state, summary);
+        try {
+            return runs.advance(run.id(), run.revision(), state, summary);
+        } catch (AgentWorkAlreadyClaimedException | AgentExecutionStoppedException definitive) {
+            throw definitive;
+        } catch (RuntimeException persistenceFailure) {
+            throw new TeachingPersistenceFailure(persistenceFailure);
+        }
     }
 
     private RunSnapshot advanceAfterWork(RunSnapshot run, AssistantRunState state, String summary) {
-        return runs.advanceAfterWork(run.id(), run.revision(), state, summary);
+        try {
+            return runs.advanceAfterWork(run.id(), run.revision(), state, summary);
+        } catch (AgentWorkAlreadyClaimedException | AgentExecutionStoppedException definitive) {
+            throw definitive;
+        } catch (RuntimeException persistenceFailure) {
+            throw new TeachingPersistenceFailure(persistenceFailure);
+        }
     }
 
     private TeachingPlan requireReadyPlan(UUID teachingPlanId, String ownerUsername) {
@@ -395,5 +472,43 @@ public class IllustratedLessonService {
     private enum GenerationTarget {
         ACTIVE,
         CANDIDATE
+    }
+
+    private enum GenerationPhase {
+        FIRST_SECTION,
+        CONTINUATION,
+        LEGACY_FULL
+    }
+
+    private enum TeachingFailure {
+        INVALID_PLAN("TEACHING_PLAN_INVALID", "Teaching input is no longer valid"),
+        PLAN_RETRIEVAL("TEACHING_PLAN_RETRIEVAL_FAILED", "Teaching plan and source scope could not be loaded"),
+        EVIDENCE_RETRIEVAL(
+                "TEACHING_EVIDENCE_RETRIEVAL_FAILED",
+                "Teaching evidence could not be loaded; any published chapters remain available"),
+        MODEL_PROVIDER(
+                "TEACHING_MODEL_PROVIDER_FAILED",
+                "Teaching model work could not complete; any published chapters remain available"),
+        PERSISTENCE(
+                "TEACHING_PERSISTENCE_FAILED",
+                "Teaching progress could not be persisted; any previously published chapters remain available"),
+        CONTINUATION(
+                "TEACHING_CONTINUATION_FAILED",
+                "Remaining teaching chapters could not continue; published chapters remain available");
+
+        private final String errorCode;
+        private final String summary;
+
+        TeachingFailure(String errorCode, String summary) {
+            this.errorCode = errorCode;
+            this.summary = summary;
+        }
+    }
+
+    private static final class TeachingPersistenceFailure extends RuntimeException {
+
+        TeachingPersistenceFailure(RuntimeException cause) {
+            super("Teaching persistence boundary failed", cause);
+        }
     }
 }

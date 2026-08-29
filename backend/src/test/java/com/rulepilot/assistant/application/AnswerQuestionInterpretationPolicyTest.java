@@ -27,15 +27,15 @@ class AnswerQuestionInterpretationPolicyTest {
     private final UUID versionId = UUID.randomUUID();
 
     @Test
-    void keepsAStandaloneCurrentTurnOnTheSingleAnswerModelPath() {
-        assertThat(policy.requiresModelInterpretation(new QuestionContext(versionId))).isFalse();
-        assertThat(policy.requiresModelInterpretation(
+    void aStandaloneCurrentTurnIsNotForcedIntoContextRecovery() {
+        assertThat(policy.canRecoverEmptyEvidence(new QuestionContext(versionId))).isFalse();
+        assertThat(policy.canRecoverEmptyEvidence(
                         new QuestionContext(versionId, null, null, PlayerLocale.EN)))
                 .isFalse();
     }
 
     @Test
-    void interpretsOnlyWhenEarlierContextOrAnExplicitLearningMoveNeedsResolution() {
+    void onlyEarlierContextIsEligibleForEmptyEvidenceRecovery() {
         QuestionContext priorQuestion = new QuestionContext(
                 versionId, "What happens after sailing?", null, PlayerLocale.EN);
         QuestionContext learningMove = new QuestionContext(
@@ -51,9 +51,9 @@ class AnswerQuestionInterpretationPolicyTest {
                         "Sailing ends after movement.",
                         List.of(new PriorCitationReference(UUID.randomUUID(), versionId, 2, 2))));
 
-        assertThat(policy.requiresModelInterpretation(priorQuestion)).isTrue();
-        assertThat(policy.requiresModelInterpretation(learningMove)).isTrue();
-        assertThat(policy.requiresModelInterpretation(groundedTurn)).isTrue();
+        assertThat(policy.canRecoverEmptyEvidence(priorQuestion)).isTrue();
+        assertThat(policy.canRecoverEmptyEvidence(learningMove)).isFalse();
+        assertThat(policy.canRecoverEmptyEvidence(groundedTurn)).isTrue();
     }
 
     @Test

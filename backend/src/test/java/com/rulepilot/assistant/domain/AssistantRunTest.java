@@ -74,6 +74,32 @@ class AssistantRunTest {
     }
 
     @Test
+    void questionRunCanTerminateFromThePhaseThatActuallyProducedItsOutcome() {
+        AssistantRun cached = AssistantRun.start(
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
+                .advance(AssistantRunState.QUESTION_UNDERSTANDING, STARTED.plusSeconds(1))
+                .advance(AssistantRunState.COMPLETED, STARTED.plusSeconds(2));
+        AssistantRun recoveredClarification = AssistantRun.start(
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
+                .advance(AssistantRunState.QUESTION_UNDERSTANDING, STARTED.plusSeconds(1))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, STARTED.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVING, STARTED.plusSeconds(3))
+                .advance(AssistantRunState.VERIFYING_EVIDENCE, STARTED.plusSeconds(4))
+                .advance(AssistantRunState.NEED_CLARIFICATION, STARTED.plusSeconds(5));
+        AssistantRun preCompositionFailure = AssistantRun.start(
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
+                .advance(AssistantRunState.QUESTION_UNDERSTANDING, STARTED.plusSeconds(1))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, STARTED.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVING, STARTED.plusSeconds(3))
+                .advance(AssistantRunState.VERIFYING_EVIDENCE, STARTED.plusSeconds(4))
+                .advance(AssistantRunState.DEGRADED, STARTED.plusSeconds(5));
+
+        assertThat(cached.state()).isEqualTo(AssistantRunState.COMPLETED);
+        assertThat(recoveredClarification.state()).isEqualTo(AssistantRunState.NEED_CLARIFICATION);
+        assertThat(preCompositionFailure.state()).isEqualTo(AssistantRunState.DEGRADED);
+    }
+
+    @Test
     void rejectsCrossWorkflowAndTerminalTransitions() {
         AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, UUID.randomUUID(), "teacher", STARTED);
 

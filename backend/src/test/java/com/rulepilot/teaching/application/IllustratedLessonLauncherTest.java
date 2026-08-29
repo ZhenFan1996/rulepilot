@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -521,6 +522,55 @@ class IllustratedLessonLauncherTest {
         verify(lessons, never()).admitContinuation(
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         verify(lessons, never()).continueGeneration(continuation);
+    }
+
+    @Test
+    void aMissingContinuationRunSettlesItsTerminalIntentWithoutRetryingForever() {
+        RunSnapshot received = run(AssistantRunState.RECEIVED);
+        RunSnapshot active = run(AssistantRunState.RETRIEVING);
+        var continuation = continuation(active);
+        AtomicReference<Runnable> queuedContinuation = new AtomicReference<>();
+        List<Runnable> expiries = new java.util.ArrayList<>();
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        TeachingTerminalRecovery recovery = mock(TeachingTerminalRecovery.class);
+        ScheduledFuture<?> expiry = mock(ScheduledFuture.class);
+        when(scheduler.schedule(
+                        org.mockito.ArgumentMatchers.any(Runnable.class),
+                        org.mockito.ArgumentMatchers.any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    expiries.add(invocation.getArgument(0));
+                    return expiry;
+                });
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
+        when(lessons.begin(planId, "alice")).thenReturn(received);
+        when(lessons.startGeneration(planId, "alice", received)).thenReturn(continuation);
+        when(runs.failActiveIfOwned(
+                        active.id(),
+                        "alice",
+                        "TEACHING_CONTINUATION_QUEUE_TIMEOUT",
+                        "The first cited section is readable but remaining teaching work waited too long for a worker"))
+                .thenReturn(false);
+        var launcher = new IllustratedLessonLauncher(
+                lessons,
+                runs,
+                Runnable::run,
+                queuedContinuation::set,
+                scheduler,
+                recovery,
+                Duration.ofMinutes(2),
+                Duration.ofMinutes(30));
+
+        launcher.launch(planId, "alice");
+        expiries.get(1).run();
+
+        verify(runs).failActiveIfOwned(
+                active.id(),
+                "alice",
+                "TEACHING_CONTINUATION_QUEUE_TIMEOUT",
+                "The first cited section is readable but remaining teaching work waited too long for a worker");
+        verifyNoInteractions(recovery);
+        verify(lessons, never()).admitContinuation(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
     @Test

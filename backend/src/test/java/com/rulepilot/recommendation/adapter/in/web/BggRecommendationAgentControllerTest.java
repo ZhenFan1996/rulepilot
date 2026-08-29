@@ -26,6 +26,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Clarification;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.FailureReason;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
@@ -186,7 +187,10 @@ class BggRecommendationAgentControllerTest {
                         0,
                         0,
                         false,
-                        List.of("RUN_DEADLINE_EXCEEDED", "UNAVAILABLE:RUN_DEADLINE_EXCEEDED")),
+                        List.of("RUN_DEADLINE_EXCEEDED", "UNAVAILABLE:RUN_DEADLINE_EXCEEDED"),
+                        913,
+                        List.of(901L),
+                        FailureReason.TIME_LIMIT),
                 List.of(),
                 null);
 
@@ -201,6 +205,7 @@ class BggRecommendationAgentControllerTest {
                 false);
 
         assertThat(response.failureBoundary()).isEqualTo("time_budget");
+        assertThat(response.failureReason()).isEqualTo("time_limit");
         assertThat(response.completedWork()).isEmpty();
     }
 

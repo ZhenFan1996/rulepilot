@@ -41,6 +41,33 @@ describe('streamGameRecommendation', () => {
     expect(result).toMatchObject(payload)
   })
 
+  it('publishes cumulative answer snapshots, including an explicit preview clear', async () => {
+    const payload = {
+      outcome: 'conversation', mode: 'model_assisted', assistantMessage: '最终回答。',
+      profile: emptyProfile,
+      clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: answer_part\ndata: {"text":"先给你一个方向。"}\n\n`
+      + 'event: tool_activity\ndata: {"query":"internal adapter payload"}\n\n'
+      + 'event: answer_part\ndata: {"text":""}\n\n'
+      + `event: answer_part\ndata: {"text":"最终回答。"}\n\n`
+      + `event: result\ndata: ${JSON.stringify(payload)}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )))
+    const answerSnapshots: string[] = []
+
+    const result = await streamGameRecommendation(
+      '/stream',
+      { method: 'POST' },
+      () => undefined,
+      text => answerSnapshots.push(text),
+    )
+
+    expect(answerSnapshots).toEqual(['先给你一个方向。', '', '最终回答。'])
+    expect(result).toMatchObject(payload)
+  })
+
   it('publishes the terminal result without waiting for the proxy to close the SSE connection', async () => {
     const encoder = new TextEncoder()
     const payload = {

@@ -14,6 +14,7 @@ import type {
   RecommendationAgentResponse,
   RecommendationClarification,
   RecommendationFailureBoundary,
+  RecommendationFailureReason,
   RecommendationGame,
   RecommendationMessage,
   RecommendationProgressAction,
@@ -43,7 +44,7 @@ const copy = {
     description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…', workingReply: '正在回复', workingSearch: '正在查找桌游', workingRecommendation: '正在整理推荐', replyingDetail: '正在生成回复…',
-    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', failureTimeBudget: '失败原因：查找、核对或生成没有在本轮时间上限内完成。', failureModelResponse: '失败原因：模型这次没有返回完整、可执行的结构，因此未发布临时文字。', failureServiceConfiguration: '失败原因：推荐模型或所需能力当前没有可用配置。', failureActionBudget: '失败原因：在限定步骤内仍未形成可安全发布的结果。', failurePublicationBoundary: '失败原因：最终结果没有在安全发布边界内完整交付。', failureService: '失败原因：推荐服务没有完成本轮请求。', retry: '重试', profile: '这次想找',
+    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', failureTimeBudget: '失败原因：查找、核对或生成没有在本轮时间上限内完成。', failureModelResponse: '失败原因：模型这次没有返回完整、可执行的结构，因此未发布临时文字。', failureServiceConfiguration: '失败原因：推荐模型或所需能力当前没有可用配置。', failureActionBudget: '失败原因：在限定步骤内仍未形成可安全发布的结果。', failurePublicationBoundary: '失败原因：最终结果没有在安全发布边界内完整交付。', failureService: '失败原因：推荐服务没有完成本轮请求。', failureTimeLimit: '失败原因：整轮总时限已用完，模型或检索仍未形成完整结果。', failureModelNotConfigured: '失败原因：当前账号没有可用的推荐模型配置。', failureProviderCall: '失败原因：推荐模型连接失败或提前中断；这不代表没有匹配候选。', failureProviderProtocol: '失败原因：模型返回的工具协议无法安全解析，因此没有执行不确定动作。', failureProviderTruncated: '失败原因：模型输出达到长度上限，回答或工具参数不完整。', failureEmptyModel: '失败原因：模型既没有自然回答也没有选择工具；系统没有伪造回复或强制再调用一次。', failureRepeatedParallel: '失败原因：模型在看到逐步执行提示后，仍重复同一组并行动作。', failureRepeatedInvalid: '失败原因：模型在看到参数错误后，仍重复完全相同的无效动作。', failureBudgetExhausted: '失败原因：Agent 已用完本轮安全预算，但仍未自然结束或提交可发布结果。', failurePublicationRejected: '失败原因：候选、证据归属或完整回复没有通过发布校验，因此未展示未经支持的推荐。', failureUnclassified: '失败原因：推荐服务遇到未能归类的运行故障，没有写入未完成结果。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '可核对的 BGG 资料 · 从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     researchSources: '资料来源',
@@ -61,14 +62,13 @@ const copy = {
     loginRequired: '推荐需要登录；你写的条件已保留在这个浏览器会话中。登录后回来检查一下，再发送。',
     login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
     resetFailed: '服务器没有确认删除，当前对话仍然保留。请重试。',
-    restoredGames: '上次已核对候选：{games}。可以直接继续比较。',
   },
   en: {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
     description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
-    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', failureTimeBudget: 'Why it failed: search, verification, or generation did not finish within this turn’s time limit.', failureModelResponse: 'Why it failed: the model did not return a complete executable structure, so provisional text was not published.', failureServiceConfiguration: 'Why it failed: the recommendation model or a required capability is not currently configured.', failureActionBudget: 'Why it failed: the bounded steps ended before a result was safe to publish.', failurePublicationBoundary: 'Why it failed: the final result did not complete inside the safe publication boundary.', failureService: 'Why it failed: the recommendation service did not complete this turn.', retry: 'Retry', profile: 'Looking for',
+    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', failureTimeBudget: 'Why it failed: search, verification, or generation did not finish within this turn’s time limit.', failureModelResponse: 'Why it failed: the model did not return a complete executable structure, so provisional text was not published.', failureServiceConfiguration: 'Why it failed: the recommendation model or a required capability is not currently configured.', failureActionBudget: 'Why it failed: the bounded steps ended before a result was safe to publish.', failurePublicationBoundary: 'Why it failed: the final result did not complete inside the safe publication boundary.', failureService: 'Why it failed: the recommendation service did not complete this turn.', failureTimeLimit: 'Why it failed: the total turn time limit expired before the model or retrieval produced a complete result.', failureModelNotConfigured: 'Why it failed: this account has no available recommendation-model configuration.', failureProviderCall: 'Why it failed: the recommendation-model request failed or disconnected; this does not mean no candidate matched.', failureProviderProtocol: 'Why it failed: the model returned a tool protocol that could not be parsed safely, so no uncertain action ran.', failureProviderTruncated: 'Why it failed: the model reached its output limit, leaving the answer or action arguments incomplete.', failureEmptyModel: 'Why it failed: the model returned neither a natural reply nor an action; the app did not invent text or force another call.', failureRepeatedParallel: 'Why it failed: after a step-by-step observation, the model repeated the same parallel action set.', failureRepeatedInvalid: 'Why it failed: after a parameter error, the model repeated the identical invalid action.', failureBudgetExhausted: 'Why it failed: the Agent used its safety budget without ending naturally or submitting a publishable result.', failurePublicationRejected: 'Why it failed: the candidates, evidence ownership, or complete reply failed publication checks, so no unsupported recommendation was shown.', failureUnclassified: 'Why it failed: the recommendation service hit an unclassified runtime fault and did not save an incomplete result.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Verifiable BGG details · Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     researchSources: 'Sources',
@@ -86,7 +86,6 @@ const copy = {
     loginRequired: 'Sign in to use recommendations. Your draft is saved in this browser session; review it and send after you return.',
     login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
     resetFailed: 'The server did not confirm deletion, so this conversation is still intact. Try again.',
-    restoredGames: 'Previously verified candidates: {games}. You can continue comparing them here.',
   },
 } as const
 
@@ -196,6 +195,22 @@ function playerSafeFailureBoundary(value: unknown): RecommendationFailureBoundar
     : null
 }
 
+function playerSafeFailureReason(value: unknown): RecommendationFailureReason | null {
+  return value === 'time_limit'
+    || value === 'model_not_configured'
+    || value === 'provider_call_failed'
+    || value === 'provider_protocol_invalid'
+    || value === 'provider_output_truncated'
+    || value === 'empty_model_response'
+    || value === 'repeated_incompatible_actions'
+    || value === 'repeated_invalid_action'
+    || value === 'action_budget_exhausted'
+    || value === 'publication_rejected'
+    || value === 'service_failure'
+    ? value
+    : null
+}
+
 function boundedPlayerFacingText(value: string, maximumCodePoints = 1_200) {
   return Array.from(value.trim()).slice(0, maximumCodePoints).join('')
 }
@@ -228,7 +243,7 @@ function rememberDraft(value: string) {
 const profile = ref<RecommendationProfile>(emptyProfile())
 const clarification = ref<RecommendationClarification | null>(initialClarification())
 const response = ref<RecommendationAgentResponse | null>(null)
-const messages = ref<RecommendationMessage[]>([{ id: 1, role: 'assistant', text: t('initial') }])
+const messages = ref<RecommendationMessage[]>([])
 const draft = ref(restoredDraft())
 const loading = ref(false)
 const loadingStage = ref<LoadingStage>('requesting')
@@ -239,7 +254,9 @@ const failed = ref(false)
 const unavailableFailure = ref(false)
 const turnIdentityConflict = ref(false)
 const failureBoundary = ref<RecommendationFailureBoundary | null>(null)
+const failureReason = ref<RecommendationFailureReason | null>(null)
 const failedAssistantMessage = ref('')
+const pendingAssistantPreview = ref('')
 const activeTurnLocale = ref<AppLocale | null>(null)
 const failedTurnLocale = ref<AppLocale | null>(null)
 const loginGateVisible = ref(false)
@@ -275,7 +292,6 @@ let csrf: { headerName: string; token: string } | null = null
 let loadingClock: ReturnType<typeof setInterval> | null = null
 let activeRequest: AbortController | null = null
 let restoredConversationOwner: string | null = null
-let restoredSummaryMessageId: number | null = null
 let restoringConversation = false
 let serverRestoreGeneration = 0
 let turnCancellationGeneration = 0
@@ -491,12 +507,27 @@ const failureBoundaryCopy: Record<RecommendationFailureBoundary, CopyKey> = {
   publication_boundary: 'failurePublicationBoundary',
   service_failure: 'failureService',
 }
+const failureReasonCopy: Record<RecommendationFailureReason, CopyKey> = {
+  time_limit: 'failureTimeLimit',
+  model_not_configured: 'failureModelNotConfigured',
+  provider_call_failed: 'failureProviderCall',
+  provider_protocol_invalid: 'failureProviderProtocol',
+  provider_output_truncated: 'failureProviderTruncated',
+  empty_model_response: 'failureEmptyModel',
+  repeated_incompatible_actions: 'failureRepeatedParallel',
+  repeated_invalid_action: 'failureRepeatedInvalid',
+  action_budget_exhausted: 'failureBudgetExhausted',
+  publication_rejected: 'failurePublicationRejected',
+  service_failure: 'failureUnclassified',
+}
 const failureMessage = computed(() => {
   const responseLocale = failedTurnLocale.value ?? locale.value
   const summary = translated(responseLocale, unavailableFailure.value ? 'unavailableError' : 'error')
-  const explanation = unavailableFailure.value && failureBoundary.value
-    ? translated(responseLocale, failureBoundaryCopy[failureBoundary.value])
-    : ''
+  const explanation = unavailableFailure.value && failureReason.value
+    ? translated(responseLocale, failureReasonCopy[failureReason.value])
+    : unavailableFailure.value && failureBoundary.value
+      ? translated(responseLocale, failureBoundaryCopy[failureBoundary.value])
+      : ''
   return [summary, explanation].filter(Boolean).join(' ')
 })
 const visibleFailedAssistantMessage = computed(() => failedAssistantMessage.value
@@ -567,7 +598,7 @@ const answerWorkspaceReady = computed(() => Boolean(
     && journeyStatus.value.importJob?.documentVersionId,
 ))
 const canResetRecommendation = computed(() => Boolean(
-  messages.value.length > 1
+  messages.value.length > 0
     || response.value
     || profileLabels.value.length
     || selectedGame.value
@@ -603,6 +634,7 @@ async function csrfToken() {
 
 function beginLoading() {
   if (loadingClock) clearInterval(loadingClock)
+  pendingAssistantPreview.value = ''
   loadingStage.value = 'requesting'
   reportedLoadingStages.value = []
   latestRecommendationProgress.value = null
@@ -616,6 +648,7 @@ function endLoading() {
   if (loadingClock) clearInterval(loadingClock)
   loadingClock = null
   activeRequest = null
+  pendingAssistantPreview.value = ''
   loading.value = false
 }
 
@@ -697,6 +730,7 @@ async function submitPendingTurn(
   unavailableFailure.value = false
   turnIdentityConflict.value = false
   failureBoundary.value = null
+  failureReason.value = null
   failedAssistantMessage.value = ''
   beginLoading()
   failed.value = false
@@ -732,6 +766,9 @@ async function submitPendingTurn(
         reportedLoadingStages.value = [...reportedLoadingStages.value, update].slice(-16)
       }
       loadingElapsedSeconds.value = Math.max(loadingElapsedSeconds.value, Math.floor(update.elapsedMs / 1000))
+    }, text => {
+      if (disposed || cancellationGeneration !== turnCancellationGeneration) return
+      pendingAssistantPreview.value = text
     })
     if (serverResponse.clientTurnId && serverResponse.clientTurnId !== pending.clientTurnId) {
       throw new Error('recommendation response belongs to another client turn')
@@ -761,6 +798,7 @@ async function submitPendingTurn(
       failedTurnLocale.value = parsed.responseLocale ?? pending.responseLocale
       unavailableFailure.value = true
       failureBoundary.value = playerSafeFailureBoundary(parsed.failureBoundary)
+      failureReason.value = playerSafeFailureReason(parsed.failureReason)
       failedAssistantMessage.value = boundedPlayerFacingText(parsed.assistantMessage)
       failed.value = true
       return
@@ -786,6 +824,7 @@ async function submitPendingTurn(
     lastRequest.value = null
   } catch (error) {
     if (disposed || cancellationGeneration !== turnCancellationGeneration) return
+    pendingAssistantPreview.value = ''
     failedTurnLocale.value = pending.responseLocale
     if (error instanceof RecommendationRequestError && error.status === 401) {
       if (optimisticUserMessageId !== null) {
@@ -1016,7 +1055,6 @@ function retry() {
 
 function playerConversationTranscript() {
   return messages.value
-    .filter(message => message.id !== restoredSummaryMessageId)
     .slice(-24)
     .map(({ id, role, text }) => ({ id, role, text }))
 }
@@ -1071,11 +1109,12 @@ function clearVisibleRecommendationConversation(preserveSelectedIdentity = false
   profile.value = emptyProfile()
   clarification.value = initialClarification()
   response.value = null
-  messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
+  messages.value = []
   failed.value = false
   unavailableFailure.value = false
   turnIdentityConflict.value = false
   failureBoundary.value = null
+  failureReason.value = null
   failedAssistantMessage.value = ''
   activeTurnLocale.value = null
   failedTurnLocale.value = null
@@ -1090,7 +1129,6 @@ function clearVisibleRecommendationConversation(preserveSelectedIdentity = false
   journeyStatus.value = null
   conversationRole.value = 'recommendation'
   openSurface.value = 'none'
-  restoredSummaryMessageId = null
 }
 
 function restoreRecommendationConversation(owner: string) {
@@ -1104,9 +1142,6 @@ function restoreRecommendationConversation(owner: string) {
   activeTurnLocale.value = snapshot.responseLocale
   clarification.value = null
   messages.value = snapshot.transcript.map(turn => ({ id: ++messageId, ...turn }))
-  if (!messages.value.length) {
-    messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
-  }
   rememberedKnownGames.value = snapshot.knownGames.map(game => ({ ...game }))
   seenBggIds.value = [...snapshot.shownBggIds]
   selectedBggIdToRestore = snapshot.selectedBggId
@@ -1130,16 +1165,6 @@ function restoreRecommendationConversation(owner: string) {
     }
   }
 
-  const names = [...new Set(snapshot.knownGames.map(game => game.name || game.originalName))].slice(0, 5)
-  if (names.length) {
-    const responseLocale = snapshot.responseLocale ?? locale.value
-    restoredSummaryMessageId = ++messageId
-    messages.value.push({
-      id: restoredSummaryMessageId,
-      role: 'assistant',
-      text: translated(responseLocale, 'restoredGames', { games: names.join(responseLocale === 'zh-CN' ? '、' : ', ') }),
-    })
-  }
 }
 
 function isRecommendationServerSession(value: unknown): value is RecommendationServerSession {
@@ -1170,9 +1195,6 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
   conversationRevision.value = session.revision
   profile.value = canonicalRecommendationProfile(session.profile)
   messages.value = session.transcript.map(turn => ({ id: ++messageId, ...turn }))
-  if (!messages.value.length) {
-    messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
-  }
   rememberedKnownGames.value = session.knownGames.map(game => ({ ...game }))
   seenBggIds.value = [...session.shownBggIds]
 
@@ -1220,6 +1242,9 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
     )
     failureBoundary.value = unavailableFailure.value
       ? playerSafeFailureBoundary(session.latestResponse?.failureBoundary)
+      : null
+    failureReason.value = unavailableFailure.value
+      ? playerSafeFailureReason(session.latestResponse?.failureReason)
       : null
     failedAssistantMessage.value = unavailableFailure.value
       ? boundedPlayerFacingText(session.latestResponse?.assistantMessage ?? '')
@@ -1357,11 +1382,12 @@ function reset(preserveJourney = false) {
   profile.value = emptyProfile()
   clarification.value = initialClarification()
   response.value = null
-  messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
+  messages.value = []
   failed.value = false
   unavailableFailure.value = false
   turnIdentityConflict.value = false
   failureBoundary.value = null
+  failureReason.value = null
   failedAssistantMessage.value = ''
   activeTurnLocale.value = null
   failedTurnLocale.value = null
@@ -1370,7 +1396,6 @@ function reset(preserveJourney = false) {
   knownGames.value = []
   rememberedKnownGames.value = []
   activeFocusedBggId.value = null
-  restoredSummaryMessageId = null
   if (restoredConversationOwner) {
     forgetRecommendationConversation(sessionStorage, restoredConversationOwner)
   }
@@ -1445,8 +1470,7 @@ function loginT(key: 'loginRequired' | 'login' | 'register') {
 }
 
 watch(locale, () => {
-  if (messages.value.length !== 1 || response.value || lastRequest.value || profileLabels.value.length) return
-  messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
+  if (messages.value.length || response.value || lastRequest.value || profileLabels.value.length) return
   clarification.value = initialClarification()
 })
 watch(draft, rememberDraft)
@@ -1493,7 +1517,7 @@ watch(
 )
 watch(journeyGames, () => { persistJourneyGames() }, { deep: true, flush: 'post' })
 watch(
-  () => [messages.value.length, loading.value, loadingStage.value],
+  () => [messages.value.length, pendingAssistantPreview.value, loading.value, loadingStage.value],
   () => { void scrollConversationToLatest() },
   { flush: 'post' },
 )
@@ -1544,6 +1568,9 @@ onBeforeUnmount(() => {
 
           <div v-show="conversationRole === 'recommendation'">
             <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[76vh] min-h-80 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[38rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[54rem]">
+              <div v-if="messages.length === 0 && !loading && !failed" data-testid="recommendation-empty-state" class="rounded-2xl border border-ink/8 bg-canvas px-4 py-4 text-sm leading-6 text-ink/65">
+                <p>{{ t('initial') }}</p>
+              </div>
               <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
                 <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
@@ -1574,6 +1601,11 @@ onBeforeUnmount(() => {
                       <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame" @details="openDetails" />
                     </TransitionGroup>
                   </div>
+                </article>
+              </div>
+              <div v-if="loading && pendingAssistantPreview" data-conversation-message data-has-recommendations="false" class="flex min-w-0 justify-start">
+                <article data-testid="pending-assistant-preview" class="min-w-0 w-full">
+                  <SafeMarkdown :source="pendingAssistantPreview" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
                 </article>
               </div>
               <div v-if="failed && visibleFailedAssistantMessage" data-testid="recommendation-failed-assistant-reply" class="flex min-w-0 justify-start">

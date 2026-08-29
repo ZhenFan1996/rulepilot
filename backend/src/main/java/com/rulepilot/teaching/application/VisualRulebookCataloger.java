@@ -558,36 +558,59 @@ class VisualRulebookCataloger {
         int parallelism = Math.min(teachingSemanticRequestParallelism, batches.size());
         for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
             int windowEnd = Math.min(windowStart + parallelism, batches.size());
-            // Keep compressed page bytes scoped to the active provider window. Initial inspection, typed repair, and
-            // transient replay enter this method separately and reread only their own pages from immutable storage.
             List<Integer> windowPages = batches.subList(windowStart, windowEnd).stream()
                     .flatMap(List::stream)
                     .distinct()
                     .toList();
-            Map<Integer, PageImageInput> sourceImagesByPage = readTeachingPageImages(documentVersionId, windowPages)
-                    .stream()
-                    .collect(Collectors.toMap(
-                            PageImageInput::pageNumber,
-                            image -> image,
-                            (first, ignored) -> first,
-                            LinkedHashMap::new));
+            Map<Integer, PageImageInput> windowImages;
+            boolean isolatePageReads;
+            try {
+                windowImages = readTeachingPageImages(documentVersionId, windowPages).stream()
+                        .collect(Collectors.toMap(
+                                PageImageInput::pageNumber,
+                                image -> image,
+                                (first, ignored) -> first,
+                                LinkedHashMap::new));
+                isolatePageReads = false;
+            } catch (RuntimeException windowReadFailure) {
+                // A corrupt or temporarily unreadable page must not erase independent page work. Retry the active
+                // window as page-owned reads so the ordinary batched storage path stays fast while the exact bad page
+                // becomes an unavailable ledger entry and its neighbours can still complete.
+                log.warn(
+                        "Teaching-start page-image window {} could not be read for document {}; isolating pages",
+                        windowPages,
+                        documentVersionId,
+                        windowReadFailure);
+                windowImages = Map.of();
+                isolatePageReads = true;
+            }
+            Map<Integer, PageImageInput> prefetchedImages = windowImages;
+            boolean readEachPage = isolatePageReads;
             ExecutorService executor = AsyncContextPropagation.executorService(
                     Executors.newFixedThreadPool(windowEnd - windowStart));
             try {
                 List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
                 for (int index = windowStart; index < windowEnd; index++) {
                     int batchIndex = index;
-                    futures.add(executor.submit(() -> observeStage(
-                            "semantic",
-                            retryKind,
-                            () -> catalogTeachingBatch(
-                                    batches.get(batchIndex),
-                                    owner,
-                                    rulebookTitle,
-                                    assistantRunId,
-                                    operationForIndex.apply(batchIndex),
-                                    requestedRepairs.get(batches.get(batchIndex).getFirst()),
-                                    sourceImagesByPage))));
+                    futures.add(executor.submit(() -> observeStage("semantic", retryKind, () -> {
+                        List<Integer> batch = batches.get(batchIndex);
+                        Map<Integer, PageImageInput> sourceImagesByPage = readEachPage
+                                ? readTeachingPageImages(documentVersionId, batch).stream()
+                                        .collect(Collectors.toMap(
+                                                PageImageInput::pageNumber,
+                                                image -> image,
+                                                (first, ignored) -> first,
+                                                LinkedHashMap::new))
+                                : prefetchedImages;
+                        return catalogTeachingBatch(
+                                batch,
+                                owner,
+                                rulebookTitle,
+                                assistantRunId,
+                                operationForIndex.apply(batchIndex),
+                                requestedRepairs.get(batch.getFirst()),
+                                sourceImagesByPage);
+                    })));
                 }
                 long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
                 for (int offset = 0; offset < futures.size(); offset++) {

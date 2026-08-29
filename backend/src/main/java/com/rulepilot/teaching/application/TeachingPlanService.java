@@ -42,6 +42,10 @@ public class TeachingPlanService {
     // run independently. Keeping one shard per page preserves relationships among rules visible on the same page and
     // prevents dense ledgers from expanding into one serial model stage per slot.
     private static final int MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE = 1;
+    // A legacy outline is one provider request. Once that request would omit any page text or aggregate a dense
+    // multi-page catalog, use the existing durable page ledger and hierarchical planner instead of silently sampling
+    // rules or hoping the provider finishes one oversized response.
+    static final int MAX_LEGACY_OUTLINE_CATALOG_CHARACTERS = 32_000;
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
     private final DocumentProcessing documents;
@@ -89,9 +93,9 @@ public class TeachingPlanService {
         Optional<String> catalogGameTitle = boundCatalogGameTitle(scope, catalog);
         String playerGameTitle = catalogGameTitle.orElse(scope.documentTitle());
         var documentPages = documents.pages(documentVersionId);
-        boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
-        boolean textRulebookVisualCatalogAvailable = !visualOnly && visualCataloger.available(createdBy);
-        var pages = visualOnly
+        boolean canonicalPagePlanning = requiresCanonicalPagePlanning(documentPages);
+        boolean textRulebookVisualCatalogAvailable = !canonicalPagePlanning && visualCataloger.available(createdBy);
+        var pages = canonicalPagePlanning
                 ? visualCataloger.catalogVisualPages(
                         documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId)
                 : documentPages.stream()
@@ -103,7 +107,7 @@ public class TeachingPlanService {
         var initialOutlineRequest = new OutlineRequest(
                 pages, List.of(), learningGoal, createdBy);
         var outline = organizeInitialOutline(
-                visualOnly,
+                canonicalPagePlanning,
                 playerGameTitle,
                 initialOutlineRequest,
                 pages,
@@ -119,7 +123,7 @@ public class TeachingPlanService {
                         pages, List.of(), learningGoal, createdBy);
             }
         }
-        if (requiresModelSourcePageCoverageRevision(visualOnly)) {
+        if (requiresModelSourcePageCoverageRevision(canonicalPagePlanning)) {
             outline = refineSourcePageCoverage(
                     outlineRequest, outline, pages, assistantRunId, documentPages, playerGameTitle);
         } else if (assistantRunId != null) {
@@ -133,7 +137,7 @@ public class TeachingPlanService {
         outline = refineChapterOwnership(
                 outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
         try {
-            if (visualOnly || hasStructuredSourceDependencies(pages)) {
+            if (canonicalPagePlanning || hasStructuredSourceDependencies(pages)) {
                 VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
             }
             TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
@@ -152,7 +156,7 @@ public class TeachingPlanService {
                     "source-bound teaching outline was incomplete; retry preparation",
                     invalidOutline);
         }
-        if (visualOnly || hasStructuredSourceDependencies(pages)) {
+        if (canonicalPagePlanning || hasStructuredSourceDependencies(pages)) {
             VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
         }
         if (textRulebookVisualCatalogAvailable && assistantRunId != null) {
@@ -216,20 +220,20 @@ public class TeachingPlanService {
         if (pages.isEmpty()) {
             throw new IllegalArgumentException("rule document has no pages to teach");
         }
-        boolean visualOnly = pages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
-        return preparationWorkload(visualOnly, pages.size());
+        boolean canonicalPagePlanning = requiresCanonicalPagePlanning(pages);
+        return preparationWorkload(canonicalPagePlanning, pages.size());
     }
 
-    static WorkloadDemand preparationWorkload(boolean visualOnly, int pageCount) {
+    static WorkloadDemand preparationWorkload(boolean canonicalPagePlanning, int pageCount) {
         if (pageCount < 1) throw new IllegalArgumentException("teaching preparation page count is invalid");
         long visualPageCalls = (long) MAX_VISUAL_PAGE_MODEL_ATTEMPTS
-                * (visualOnly
+                * (canonicalPagePlanning
                         ? pageCount
                         : Math.min(pageCount, VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES));
         // Every planner stage has at most one transport replay and one complete structured-output replacement, whose
         // own transport may replay once: four actual provider calls. Dense visual planning has at most one local
         // ownership shard per page, one global ordering stage, and at most one later global ownership refinement.
-        long plannerStages = visualOnly
+        long plannerStages = canonicalPagePlanning
                 ? (long) MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE * pageCount + 2
                 : 2;
         long requiredModelCalls = visualPageCalls + MAX_OUTLINE_STAGE_MODEL_ATTEMPTS * plannerStages;
@@ -258,9 +262,7 @@ public class TeachingPlanService {
             throw new IllegalArgumentException("rule document is not ready for teaching");
         }
         var documentPages = documents.pages(documentVersionId);
-        boolean visualOnly = !documentPages.isEmpty()
-                && documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
-        if (visualOnly) {
+        if (requiresCanonicalPagePlanning(documentPages)) {
             visualCataloger.catalogVisualPages(
                     documentVersionId,
                     documentPages,
@@ -275,7 +277,7 @@ public class TeachingPlanService {
     }
 
     private TeachingOutlineModel.OutlineDraft organizeInitialOutline(
-            boolean visualOnly,
+            boolean canonicalPagePlanning,
             String playerGameTitle,
             OutlineRequest request,
             List<PageInput> pages,
@@ -289,8 +291,8 @@ public class TeachingPlanService {
         } catch (OutlineGenerationException generationFailure) {
             log.warn(
                     "Teaching outline generation failed before a source-bound whole-game plan was available "
-                            + "(visualOnly={}, failureType={})",
-                    visualOnly,
+                            + "(canonicalPagePlanning={}, failureType={})",
+                    canonicalPagePlanning,
                     generationFailure.getCause() == null
                             ? generationFailure.getClass().getSimpleName()
                             : generationFailure.getCause().getClass().getSimpleName());
@@ -355,8 +357,21 @@ public class TeachingPlanService {
         return current;
     }
 
-    static boolean requiresModelSourcePageCoverageRevision(boolean visualOnly) {
+    static boolean requiresModelSourcePageCoverageRevision(boolean canonicalPagePlanning) {
         return false;
+    }
+
+    static boolean requiresCanonicalPagePlanning(List<DocumentProcessing.PageView> pages) {
+        if (pages == null || pages.isEmpty()) return false;
+        long catalogCharacters = 0;
+        for (DocumentProcessing.PageView page : pages) {
+            String text = page.text() == null ? "" : page.text().strip();
+            if (text.isBlank()) continue;
+            if (text.length() > TeachingPageCatalogText.MAX_CHARACTERS) return true;
+            catalogCharacters += text.length();
+            if (catalogCharacters > MAX_LEGACY_OUTLINE_CATALOG_CHARACTERS) return true;
+        }
+        return pages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
     }
 
     private TeachingOutlineModel.OutlineDraft refineSourcePageCoverage(
