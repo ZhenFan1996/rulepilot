@@ -163,7 +163,8 @@ public final class PlayerFacingAnswerPresenter {
                     new Recovery(
                             detail,
                             english ? "Add that detail" : "补充这项信息",
-                            english ? "I mean: " : "我指的是："));
+                            english ? "I mean: " : "我指的是：",
+                            false));
         }
         if (status == AnswerStatus.INSUFFICIENT_EVIDENCE) {
             String detail = english
@@ -174,21 +175,37 @@ public final class PlayerFacingAnswerPresenter {
                             ? "The available sources are not enough for a reliable answer yet."
                             : "现有依据还不足以可靠回答这个问题。",
                     null,
-                    new Recovery(detail, english ? "Add detail" : "补充细节", ""));
+                    new Recovery(detail, english ? "Add detail" : "补充细节", "", false));
         }
-        if (status == AnswerStatus.MODEL_TIMEOUT) {
+        if (status == AnswerStatus.MODEL_UNAVAILABLE) {
             String detail = english
-                    ? "Your question is still here. Review or edit it, then try again."
-                    : "你的问题仍保留在这里；可以先检查或修改，再重新尝试。";
+                    ? "The question and rule sources were not rejected. Once the answer model is available, it is appropriate to retry the same question unchanged."
+                    : "问题和规则依据本身没有被拒绝；答疑模型恢复后，适合原样重试同一个问题。";
             return new FailureCopy(
                     english
-                            ? "I couldn't finish checking the rule in time."
-                            : "这次没有在时限内完成规则核对。",
+                            ? "No configured answer model or provider was available for this request."
+                            : "这次请求没有可用的答疑模型或模型提供方。",
                     null,
                     new Recovery(
                             detail,
-                            english ? "Review and try again" : "检查后重试",
-                            safeQuestionDraft(question)));
+                            english ? "Reuse the same question" : "保留原问题",
+                            safeQuestionDraft(question),
+                            true));
+        }
+        if (status == AnswerStatus.MODEL_TIMEOUT) {
+            String detail = english
+                    ? "The timeout does not mean the question was invalid. It is appropriate to retry the same question unchanged."
+                    : "超时不代表问题无效；适合原样重试同一个问题。";
+            return new FailureCopy(
+                    english
+                            ? "This answer did not finish before the request's time limit."
+                            : "这次答疑没有在本次请求时限内完成。",
+                    null,
+                    new Recovery(
+                            detail,
+                            english ? "Reuse the same question" : "保留原问题",
+                            safeQuestionDraft(question),
+                            true));
         }
         if (status == AnswerStatus.VERSION_CONFLICT) {
             String detail = english
@@ -202,20 +219,22 @@ public final class PlayerFacingAnswerPresenter {
                     new Recovery(
                             detail,
                             english ? "Review and ask again" : "检查后重新提问",
-                            safeQuestionDraft(question)));
+                            safeQuestionDraft(question),
+                            false));
         }
         String detail = english
-                ? "Your question is still here. Review or edit it, then try again."
-                : "你的问题仍保留在这里；可以先检查或修改，再重新尝试。";
+                ? "Retrying unchanged immediately is unlikely to help; review or rephrase the question, or try later."
+                : "立即原样重试通常无益，请检查或改写问题，也可以稍后再试。";
         return new FailureCopy(
                 english
-                        ? "I couldn't verify a reliable answer from this attempt."
-                        : "这次结果没有通过可靠性核对。",
+                        ? "The generated answer failed its structure or citation-identifier contract."
+                        : "生成的回答未通过结构或引用标识契约。",
                 null,
                 new Recovery(
                         detail,
-                        english ? "Review and try again" : "检查后重试",
-                        safeQuestionDraft(question)));
+                        english ? "Review or rephrase" : "检查或改写问题",
+                        safeQuestionDraft(question),
+                        false));
     }
 
     private static String safeQuestionDraft(String question) {

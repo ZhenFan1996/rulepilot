@@ -2,7 +2,9 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerWarning;
 import java.util.List;
@@ -29,20 +31,36 @@ final class AnswerDraftComposer {
         ModelDraft draft;
         int modelRepairs = 0;
         try {
-            draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
+            try {
+                draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
+                if (draft == null) {
+                    throw new RuleAnswerModelInvalidOutputException("answer model returned no structured output");
+                }
+            } catch (RuleAnswerModelInvalidOutputException initialInvalidOutput) {
+                modelRepairs = 1;
+                draft = modelGateway.replaceInvalidOutput(
+                        assistantRunId,
+                        username,
+                        gameSessionId,
+                        modelRequest,
+                        boundedDiagnostic(initialInvalidOutput));
+                if (draft == null) {
+                    throw new RuleAnswerModelInvalidOutputException(
+                            "answer model replacement returned no structured output");
+                }
+            }
+        } catch (RuleAnswerModelUnavailableException exception) {
+            return Result.failure(
+                    AnswerStatus.MODEL_UNAVAILABLE,
+                    "答疑模型或其配置暂时不可用；问题和规则证据本身未被拒绝。");
         } catch (RuleAnswerModelTimeoutException exception) {
             return Result.failure(
                     AnswerStatus.MODEL_TIMEOUT,
                     "回答生成超时，可以稍后重试或直接查看规则引用。");
-        } catch (RuntimeException exception) {
+        } catch (RuleAnswerModelInvalidOutputException exception) {
             return Result.failure(
                     AnswerStatus.INVALID_MODEL_OUTPUT,
-                    "回答生成结果未通过结构或引用校验。");
-        }
-        if (draft == null) {
-            return Result.failure(
-                    AnswerStatus.INVALID_MODEL_OUTPUT,
-                    "回答生成结果未通过结构或引用校验。");
+                    "答疑模型已返回完整替代结果，但结构或引用标识仍未通过校验。");
         }
         draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
         if (!draft.answerable()) {
@@ -80,14 +98,18 @@ final class AnswerDraftComposer {
                             "Do not return a field patch and do not rely on the application to combine this response with the rejected answer."),
                     "repairPublicationValidation",
                     "Final citation validation returned as one complete replacement");
+        } catch (RuleAnswerModelUnavailableException exception) {
+            return Result.failure(
+                    AnswerStatus.MODEL_UNAVAILABLE,
+                    "答疑模型或其配置暂时不可用，未能完成回答修订。");
         } catch (RuleAnswerModelTimeoutException exception) {
             return Result.failure(
                     AnswerStatus.MODEL_TIMEOUT,
                     "回答修订超时，可以稍后重试或直接查看规则引用。");
-        } catch (RuntimeException exception) {
+        } catch (RuleAnswerModelInvalidOutputException exception) {
             return Result.failure(
                     AnswerStatus.INVALID_MODEL_OUTPUT,
-                    "回答修订结果未通过结构校验。");
+                    "答疑模型已返回修订结果，但完整结构或引用标识仍未通过校验。");
         }
         if (revised == null || !revised.answerable()) {
             return Result.failure(
@@ -130,9 +152,11 @@ final class AnswerDraftComposer {
                             "If no grounded arithmetic is needed, return an empty calculations list and remove unsupported computed totals."),
                     "repairRuleCalculation",
                     "Unsupported rule calculation repaired");
+        } catch (RuleAnswerModelUnavailableException exception) {
+            return Result.failure(AnswerStatus.MODEL_UNAVAILABLE, "答疑模型或其配置暂时不可用，未能完成规则计算修订。");
         } catch (RuleAnswerModelTimeoutException exception) {
             return Result.failure(AnswerStatus.MODEL_TIMEOUT, "规则计算修订超时，可以稍后重试或直接查看规则引用。");
-        } catch (RuntimeException exception) {
+        } catch (RuleAnswerModelInvalidOutputException exception) {
             return Result.failure(AnswerStatus.INVALID_MODEL_OUTPUT, "规则计算未通过输入来源或表达式校验。");
         }
         if (revised == null || !revised.answerable()) {

@@ -497,8 +497,8 @@ describe('PublicLessonView', () => {
           assistantRunId: internalId,
           schemaDiagnostic: 'internal response envelope',
           answer: {
-            status: 'MODEL_TIMEOUT',
-            shortVerdict: "I couldn't finish checking the rule in time.",
+            status: 'MODEL_UNAVAILABLE',
+            shortVerdict: 'No configured answer model or provider was available for this request.',
             explanation: '', citations: [], exceptions: [], confidence: 'LOW', answerBasis: null,
             clarification: null, warnings: [],
             documentVersionId: internalId,
@@ -518,17 +518,18 @@ describe('PublicLessonView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.text()).toContain("I couldn't finish checking the rule in time.")
-    expect(wrapper.text().match(/I couldn't finish checking the rule in time\./g)).toHaveLength(1)
-    expect(wrapper.text()).toContain('Your question is still here. Review or edit it, then try again.')
-    expect(wrapper.text()).toContain('Review and try again')
+    expect(wrapper.text()).toContain('No configured answer model or provider was available for this request.')
+    expect(wrapper.text().match(/No configured answer model or provider was available for this request\./g)).toHaveLength(1)
+    expect(wrapper.text()).toContain('The question and rule sources were not rejected.')
+    expect(wrapper.text()).toContain('retry the same question unchanged')
+    expect(wrapper.text()).toContain('Reuse the same question')
     expect(wrapper.text()).not.toContain('没有在时限内完成')
     expect(wrapper.find('[data-confidence="LOW"]').exists()).toBe(false)
     const storedAnswer = Array.from({ length: sessionStorage.length }, (_, index) =>
       sessionStorage.getItem(sessionStorage.key(index) ?? '') ?? '').join('\n')
     expect(storedAnswer).not.toMatch(/assistantRunId|schemaDiagnostic|documentVersionId|11111111/)
 
-    await wrapper.findAll('button').find(button => button.text() === 'Review and try again')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Reuse the same question')!.trigger('click')
     expect(answerRequests).toBe(1)
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
       .toBe('When does the cobalt spindle resolve?')

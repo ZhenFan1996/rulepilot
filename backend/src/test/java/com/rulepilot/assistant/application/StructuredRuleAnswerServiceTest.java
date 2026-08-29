@@ -36,7 +36,9 @@ import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.RuleAnswerModel.WalkthroughStepRequest;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.application.RuleAnswerRateLimiter.Permit;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -366,6 +368,32 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void localizesUnavailableOptionalQuestionInterpretationWithoutAnUntypedWorkflowFailure() {
+        AtomicInteger modelCalls = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                modelCalls.incrementAndGet();
+                throw new AssertionError("empty evidence must stop before answer composition");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                throw new RuleAnswerModelUnavailableException("personal model state unavailable");
+            }
+        };
+
+        StructuredRuleAnswer answer = service((version, query, options) -> List.of(), model).answer(
+                "When does this trigger?",
+                new QuestionContext(versionId, "What happens after movement?", null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(answer.shortVerdict()).isNotBlank();
+        assertThat(answer.citations()).isEmpty();
+        assertThat(modelCalls).hasValue(0);
+    }
+
+    @Test
     void reportsRetrievalUnavailableWhenEveryCoreSearchFails() {
         RuleAnswerModel model = request -> {
             throw new AssertionError("retrieval failure must stop before composition");
@@ -522,19 +550,27 @@ class StructuredRuleAnswerServiceTest {
         PlanningModel model = planningModel(
                 AnswerAid.WALKTHROUGH,
                 Set.of(EvidenceNeed.SEQUENCE),
-                request -> new ModelDraft(
-                        true,
-                        null,
-                        verdict,
-                        explanation,
-                        List.of(source.chunkId()),
-                        List.of(),
-                        "HIGH",
-                        "DIRECT_RULE",
-                        List.of(),
-                        List.of(),
-                        List.of(new WalkthroughStepRequest(
-                                "Pay.", "Resolve later.", "NOT_AN_ORDER", List.of(source.chunkId())))),
+                request -> {
+                    try {
+                        return new ModelDraft(
+                                true,
+                                null,
+                                verdict,
+                                explanation,
+                                List.of(source.chunkId()),
+                                List.of(),
+                                "HIGH",
+                                "DIRECT_RULE",
+                                List.of(),
+                                List.of(),
+                                List.of(new WalkthroughStepRequest(
+                                        "Pay.", "Resolve later.", "NOT_AN_ORDER", List.of(source.chunkId()))));
+                    } catch (IllegalArgumentException invalidProviderEnvelope) {
+                        throw new RuleAnswerModelInvalidOutputException(
+                                "answer model returned an invalid structured output contract",
+                                invalidProviderEnvelope);
+                    }
+                },
                 (request, previous, feedback) -> {
                     revisions.incrementAndGet();
                     return previous;
@@ -604,29 +640,37 @@ class StructuredRuleAnswerServiceTest {
         PlanningModel model = planningModel(
                 AnswerAid.NONE,
                 Set.of(EvidenceNeed.DIRECT_RULE),
-                request -> new ModelDraft(
-                        true,
-                        null,
-                        "You may move one space.",
-                        explanation,
-                        List.of(source.chunkId()),
-                        List.of(),
-                        "HIGH",
-                        "DIRECT_RULE",
-                        List.of(),
-                        List.of(),
-                        List.of(new WalkthroughStepRequest(
-                                "internal chunkId marker", "", "NOT_AN_ORDER", List.of(UUID.randomUUID()))),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of(),
-                        List.of()),
+                request -> {
+                    try {
+                        return new ModelDraft(
+                                true,
+                                null,
+                                "You may move one space.",
+                                explanation,
+                                List.of(source.chunkId()),
+                                List.of(),
+                                "HIGH",
+                                "DIRECT_RULE",
+                                List.of(),
+                                List.of(),
+                                List.of(new WalkthroughStepRequest(
+                                        "internal chunkId marker", "", "NOT_AN_ORDER", List.of(UUID.randomUUID()))),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of(),
+                                List.of());
+                    } catch (IllegalArgumentException invalidProviderEnvelope) {
+                        throw new RuleAnswerModelInvalidOutputException(
+                                "answer model returned an invalid structured output contract",
+                                invalidProviderEnvelope);
+                    }
+                },
                 (request, previous, feedback) -> {
                     revisions.incrementAndGet();
                     return previous;
@@ -640,6 +684,50 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.shortVerdict()).doesNotContain("You may move one space.");
         assertThat(answer.explanation()).contains("结构").doesNotContain(explanation);
         assertThat(answer.walkthroughSteps()).isEmpty();
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void neverRequestsAThirdModelCallAfterAnInvalidEnvelopeReplacementFailsPublication() {
+        RuleEvidenceHit source = source("The active player may move one space.");
+        AtomicInteger compositions = new AtomicInteger();
+        AtomicInteger replacements = new AtomicInteger();
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                compositions.incrementAndGet();
+                throw new RuleAnswerModelInvalidOutputException("invalid JSON envelope");
+            }
+
+            @Override
+            public ModelDraft replaceInvalidOutput(ModelRequest request, String rejectionDiagnostic) {
+                replacements.incrementAndGet();
+                return new ModelDraft(
+                        true,
+                        null,
+                        "Move one space.",
+                        "The replacement cites an identifier that was not supplied.",
+                        List.of(UUID.randomUUID()),
+                        List.of(),
+                        "HIGH",
+                        "DIRECT_RULE");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                throw new AssertionError("the single complete replacement already spent the repair budget");
+            }
+        };
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "How far may the active player move?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.shortVerdict()).contains("修订").doesNotContain("Move one space");
+        assertThat(compositions).hasValue(1);
+        assertThat(replacements).hasValue(1);
         assertThat(revisions).hasValue(0);
     }
 

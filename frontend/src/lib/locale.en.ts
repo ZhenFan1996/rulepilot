@@ -555,6 +555,7 @@ const englishMessages = {
     'lesson.answer.pageSingle': 'Page {page}',
     'lesson.answer.pageRange': 'Pages {from}–{to}',
     'lesson.answer.failure.insufficient': 'The current rule material is not enough to support an answer, so no guess was shown.',
+    'lesson.answer.failure.unavailable': 'The answer model or provider is unavailable; the question and rule sources were not rejected.',
     'lesson.answer.failure.invalid': 'This answer did not pass its content and citation checks, so unconfirmed material was not shown.',
     'lesson.answer.failure.version': 'The rule support found for this answer belongs to a different rulebook version. Return to the guide and confirm the version.',
     'lesson.answer.warning.title': 'This answer is usable, with a qualification',

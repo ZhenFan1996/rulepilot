@@ -17,6 +17,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerConfidence;
@@ -510,8 +511,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
         if (retrievalResult.state() == AnswerEvidenceRetriever.State.READY
                 && retrievalResult.evidence().isEmpty()
-                && modelGateway.supportsQuestionInterpretation(username)
-                && questionInterpretation.canRecoverEmptyEvidence(suppliedContext)) {
+                && questionInterpretation.canRecoverEmptyEvidence(suppliedContext)
+                && canUseQuestionInterpretation(username)) {
             try {
                 Optional<AnswerQuestionInterpretationPolicy.Interpretation> recovery = modelGateway
                         .interpretQuestion(
@@ -696,6 +697,17 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return answer.citations().stream().allMatch(citation -> java.util.stream.IntStream
                 .rangeClosed(citation.pageFrom(), citation.pageTo())
                 .allMatch(allowedPages::contains));
+    }
+
+    private boolean canUseQuestionInterpretation(String username) {
+        try {
+            return modelGateway.supportsQuestionInterpretation(username);
+        } catch (RuleAnswerModelUnavailableException unavailable) {
+            rejectedQuestionInterpretations.increment();
+            LOGGER.warn(
+                    "Empty-evidence question recovery is unavailable; preserving the current-question result");
+            return false;
+        }
     }
 
     /** Resolves the complete structured envelope once; unselected aids were already removed from the draft. */

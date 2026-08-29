@@ -717,6 +717,7 @@ describe('LessonAnswerPanel', () => {
         message: '请补充规则中的具体对象名称、发生时机或页码。',
         actionLabel: '回到问题补充信息',
         draft: '',
+        canRetryUnchanged: false,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {
@@ -744,7 +745,7 @@ describe('LessonAnswerPanel', () => {
     wrapper.unmount()
   })
 
-  it('uses the current-turn recovery language even when the surrounding UI is Chinese', async () => {
+  it('shows model failure reasons and whether the same question is safe to retry', async () => {
     setLocale('zh-CN')
     const failure = {
       ...answered,
@@ -756,9 +757,10 @@ describe('LessonAnswerPanel', () => {
       exceptions: [],
       confidence: 'LOW' as const,
       recovery: {
-        message: 'Your question is still here. Review or edit it, then try again.',
-        actionLabel: 'Review and try again',
+        message: 'The timeout does not mean the question was invalid.',
+        actionLabel: 'Reuse the same question',
         draft: 'When does the cobalt spindle resolve?',
+        canRetryUnchanged: true,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {
@@ -774,15 +776,60 @@ describe('LessonAnswerPanel', () => {
       global: { stubs: { VoiceQuestionCapture: true } },
     })
 
-    expect(wrapper.text()).toContain('Your question is still here')
-    expect(wrapper.text()).toContain('Review and try again')
+    expect(wrapper.text()).toContain('The timeout does not mean the question was invalid.')
+    expect(wrapper.text()).toContain('It is appropriate to retry the same question unchanged.')
+    expect(wrapper.text()).toContain('Reuse the same question')
     expect(wrapper.text()).not.toContain('这次没有在时限内')
     expect(wrapper.find('[data-confidence]').exists()).toBe(false)
+    expect(wrapper.get('[data-retry-unchanged]').attributes('data-retry-unchanged')).toBe('true')
 
-    await wrapper.findAll('button').find(button => button.text() === 'Review and try again')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Reuse the same question')!.trigger('click')
 
     expect(wrapper.emitted('update:question')).toEqual([['When does the cobalt spindle resolve?']])
     expect(wrapper.emitted('ask')).toBeUndefined()
+
+    const unavailable = {
+      ...failure,
+      status: 'MODEL_UNAVAILABLE' as const,
+      shortVerdict: 'No configured answer model or provider was available for this request.',
+      recovery: {
+        message: 'The question and rule sources were not rejected.',
+        actionLabel: 'Reuse the same question',
+        draft: 'When does the cobalt spindle resolve?',
+        canRetryUnchanged: true,
+      },
+    }
+    await wrapper.setProps({
+      answer: unavailable,
+      answerTurns: [{
+        question: 'When does the cobalt spindle resolve?', answer: unavailable, learningIntent: null,
+      }],
+    })
+
+    expect(wrapper.text()).toContain('No configured answer model or provider')
+    expect(wrapper.text()).toContain('It is appropriate to retry the same question unchanged.')
+
+    const invalid = {
+      ...failure,
+      status: 'INVALID_MODEL_OUTPUT' as const,
+      shortVerdict: 'The generated answer failed its structure or citation-identifier contract.',
+      recovery: {
+        message: 'Retrying unchanged immediately is unlikely to help.',
+        actionLabel: 'Review or rephrase',
+        draft: 'When does the cobalt spindle resolve?',
+        canRetryUnchanged: false,
+      },
+    }
+    await wrapper.setProps({
+      answer: invalid,
+      answerTurns: [{
+        question: 'When does the cobalt spindle resolve?', answer: invalid, learningIntent: null,
+      }],
+    })
+
+    expect(wrapper.text()).toContain('structure or citation-identifier contract')
+    expect(wrapper.text()).toContain('Do not retry unchanged immediately')
+    expect(wrapper.get('[data-retry-unchanged]').attributes('data-retry-unchanged')).toBe('false')
   })
 
   it('keeps a localized clarification actionable without publishing a conclusion', async () => {
@@ -799,6 +846,7 @@ describe('LessonAnswerPanel', () => {
         message: '你说的“这个”具体指什么？请写出规则书里的名称。',
         actionLabel: '补充这项信息',
         draft: '我指的是：',
+        canRetryUnchanged: false,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {
@@ -835,6 +883,7 @@ describe('LessonAnswerPanel', () => {
         message: '你说的“这个”具体指什么？',
         actionLabel: '补充这项信息',
         draft: '我指的是：',
+        canRetryUnchanged: false,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {

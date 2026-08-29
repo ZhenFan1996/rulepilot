@@ -2,6 +2,8 @@ package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel;
@@ -11,20 +13,27 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
+import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
+import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.AnswerConfidence;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
 
 class AnswerDraftComposerTest {
 
     @Test
-    void retainsAReadyCitedDraftAfterTheBoundedModelWorkflow() {
+    void retainsAReadyDraftAndPreservesTypedModelFailureClassification() {
         UUID chunkId = UUID.randomUUID();
         ModelDraft expected = answerableDraft(
                 "行动完成后获得1分。",
@@ -43,6 +52,24 @@ class AnswerDraftComposerTest {
         assertThat(result.draft()).isEqualTo(expected);
         assertThat(result.failureStatus()).isNull();
         assertThat(result.modelRepairs()).isZero();
+
+        AnswerDraftComposer.Result unavailable = composerFor(request -> {
+                    throw new RuleAnswerModelUnavailableException("provider unavailable");
+                })
+                .compose(UUID.randomUUID(), "player", null, request(chunkId));
+        AnswerDraftComposer.Result timeout = composerFor(request -> {
+                    throw new RuleAnswerModelTimeoutException("provider timed out", new java.util.concurrent.TimeoutException());
+                })
+                .compose(UUID.randomUUID(), "player", null, request(chunkId));
+        AnswerDraftComposer.Result invalid = composerFor(request -> {
+                    throw new RuleAnswerModelInvalidOutputException("invalid JSON envelope");
+                })
+                .compose(UUID.randomUUID(), "player", null, request(chunkId));
+
+        assertThat(unavailable.failureStatus()).isEqualTo(AnswerStatus.MODEL_UNAVAILABLE);
+        assertThat(unavailable.failureMessage()).contains("模型", "配置", "不可用");
+        assertThat(timeout.failureStatus()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
+        assertThat(invalid.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
     }
 
     @Test
@@ -79,6 +106,49 @@ class AnswerDraftComposerTest {
         assertThat(result.warnings()).isEmpty();
         assertThat(result.modelRepairs()).isZero();
         assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void auditsOneCompleteReplacementAndExposesTheRepairToTheWorkflowBudget() {
+        UUID chunkId = UUID.randomUUID();
+        ModelDraft replacement = answerableDraft(
+                "修正后的结论",
+                "修正后的完整解释直接由引用规则支持。",
+                List.of(chunkId),
+                List.of(),
+                "HIGH");
+        AtomicInteger compositions = new AtomicInteger();
+        AtomicInteger replacements = new AtomicInteger();
+        AtomicReference<String> diagnostic = new AtomicReference<>();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                compositions.incrementAndGet();
+                throw new RuleAnswerModelInvalidOutputException("invalid JSON envelope");
+            }
+
+            @Override
+            public ModelDraft replaceInvalidOutput(ModelRequest request, String rejectionDiagnostic) {
+                replacements.incrementAndGet();
+                diagnostic.set(rejectionDiagnostic);
+                return replacement;
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        AnswerDraftComposer composer = new AnswerDraftComposer(
+                new AnswerModelGateway(model, new PermissiveRateLimiter(), invocations));
+
+        AnswerDraftComposer.Result result = composer.compose(
+                UUID.randomUUID(), "player", null, request(chunkId));
+
+        assertThat(result.ready()).isTrue();
+        assertThat(result.draft()).isEqualTo(replacement);
+        assertThat(result.modelRepairs()).isEqualTo(1);
+        assertThat(compositions).hasValue(1);
+        assertThat(replacements).hasValue(1);
+        assertThat(diagnostic.get()).contains("RuleAnswerModelInvalidOutputException", "invalid JSON envelope");
+        assertThat(invocations.operations)
+                .containsExactly("composeRuleAnswer", "replaceInvalidRuleAnswerOutput");
     }
 
     @Test
@@ -199,6 +269,11 @@ class AnswerDraftComposerTest {
                         5)));
     }
 
+    private static AnswerDraftComposer composerFor(RuleAnswerModel model) {
+        return new AnswerDraftComposer(new AnswerModelGateway(
+                model, new PermissiveRateLimiter(), new ImmediateAuditedAgentInvocations()));
+    }
+
     private static ModelDraft answerableDraft(
             String shortVerdict,
             String explanation,
@@ -237,6 +312,23 @@ class AnswerDraftComposerTest {
         @Override
         public Permit acquireModel(String username, UUID gameSessionId, String providerId) {
             return () -> {};
+        }
+    }
+
+    private static final class RecordingInvocations implements AuditedAgentInvocations {
+        private final List<String> operations = new ArrayList<>();
+
+        @Override
+        public <T> T invoke(
+                UUID runId,
+                ActivityType type,
+                String operation,
+                int estimatedInputTokens,
+                String successSummary,
+                Supplier<T> invocation,
+                ToIntFunction<T> outputTokenEstimator) {
+            operations.add(operation);
+            return invocation.get();
         }
     }
 }

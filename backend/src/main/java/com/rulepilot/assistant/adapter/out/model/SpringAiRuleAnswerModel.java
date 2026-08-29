@@ -9,7 +9,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -112,7 +114,14 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public String providerId(String ownerUsername) {
-        return providerFor(ownerUsername);
+        try {
+            return providerFor(ownerUsername);
+        } catch (RuleAnswerModelUnavailableException unavailable) {
+            throw unavailable;
+        } catch (RuntimeException configurationFailure) {
+            throw new RuleAnswerModelUnavailableException(
+                    "answer model provider configuration is unavailable", configurationFailure);
+        }
     }
 
     @Override
@@ -123,23 +132,33 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     @Override
     public ModelDraft compose(ModelRequest request, String ownerUsername) {
         requireConfigured(ownerUsername);
-        RuntimeException firstFailure;
         try {
             return composeOnce(request, "", ownerUsername);
-        } catch (RuntimeException exception) {
-            if (isTimeout(exception)) {
-                throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
-            }
-            firstFailure = exception;
+        } catch (RuleAnswerModelInvalidOutputException invalidOutput) {
+            throw invalidOutput;
+        } catch (RuntimeException providerFailure) {
+            throw classifyInvocationFailure("answer model", providerFailure);
         }
+    }
+
+    @Override
+    public ModelDraft replaceInvalidOutput(ModelRequest request, String rejectionDiagnostic) {
+        return replaceInvalidOutput(request, rejectionDiagnostic, null);
+    }
+
+    @Override
+    public ModelDraft replaceInvalidOutput(
+            ModelRequest request, String rejectionDiagnostic, String ownerUsername) {
+        requireConfigured(ownerUsername);
         try {
-            return composeOnce(request, prompts.structuredOutputRepair(), ownerUsername);
+            return composeOnce(
+                    request,
+                    structuredOutputReplacementInstruction(rejectionDiagnostic),
+                    ownerUsername);
+        } catch (RuleAnswerModelInvalidOutputException invalidOutput) {
+            throw invalidOutput;
         } catch (RuntimeException exception) {
-            if (isTimeout(exception)) {
-                throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
-            }
-            exception.addSuppressed(firstFailure);
-            throw exception;
+            throw classifyInvocationFailure("answer model structured-output replacement", exception);
         }
     }
 
@@ -157,11 +176,10 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         requireConfigured(ownerUsername);
         try {
             return repairOnce(request, previousDraft, feedback, ownerUsername);
+        } catch (RuleAnswerModelInvalidOutputException invalidOutput) {
+            throw invalidOutput;
         } catch (RuntimeException exception) {
-            if (isTimeout(exception)) {
-                throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
-            }
-            throw exception;
+            throw classifyInvocationFailure("answer model revision", exception);
         }
     }
 
@@ -172,7 +190,14 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public boolean supportsQuestionInterpretation(String ownerUsername) {
-        return !usesFake(ownerUsername);
+        try {
+            return !usesFake(ownerUsername);
+        } catch (RuleAnswerModelUnavailableException unavailable) {
+            throw unavailable;
+        } catch (RuntimeException configurationFailure) {
+            throw new RuleAnswerModelUnavailableException(
+                    "answer model configuration is unavailable", configurationFailure);
+        }
     }
 
     @Override
@@ -204,14 +229,11 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             }
             return repaired;
         } catch (RuntimeException exception) {
-            if (isTimeout(exception)) {
-                throw new RuleAnswerModelTimeoutException("answer question interpretation timed out", exception);
-            }
             LOGGER.warn(
                     "Answer question interpretation failed: provider={}, failureType={}",
-                    providerId(ownerUsername),
+                    safeProviderId(ownerUsername),
                     exception.getClass().getSimpleName());
-            return Optional.empty();
+            throw classifyInvocationFailure("answer question interpretation", exception);
         }
     }
 
@@ -294,6 +316,18 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         return parseModelDraft(content, request.answerAid());
     }
 
+    private String structuredOutputReplacementInstruction(String rejectionDiagnostic) {
+        String repair = prompts.structuredOutputRepair();
+        String instruction = repair == null ? "" : repair.strip();
+        if (rejectionDiagnostic == null || rejectionDiagnostic.isBlank()) return instruction;
+        String diagnostic = rejectionDiagnostic.strip();
+        if (diagnostic.length() > 600) diagnostic = diagnostic.substring(0, 600);
+        return instruction
+                + "\n\nThe application rejected the prior complete response: "
+                + diagnostic
+                + "\nReturn one complete replacement object; do not return a field patch.";
+    }
+
     private ModelDraft repairOnce(
             ModelRequest request,
             ModelDraft previousDraft,
@@ -341,7 +375,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     static ModelDraft parseModelDraft(String content, AnswerAid expectedAid) {
         if (content == null || content.isBlank()) {
-            throw new IllegalStateException("answer model returned no structured output");
+            throw new RuleAnswerModelInvalidOutputException("answer model returned no structured output");
         }
         if (expectedAid == null) throw new IllegalArgumentException("expected answer aid is required");
         try {
@@ -364,7 +398,8 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 return core;
             }
         } catch (IOException invalidOutput) {
-            throw new IllegalStateException("answer model returned an invalid structured output contract", invalidOutput);
+            throw new RuleAnswerModelInvalidOutputException(
+                    "answer model returned an invalid structured output contract", invalidOutput);
         }
     }
 
@@ -444,7 +479,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     private static AnswerAid declaredAid(String content) {
         if (content == null || content.isBlank()) {
-            throw new IllegalStateException("answer model returned no structured output");
+            throw new RuleAnswerModelInvalidOutputException("answer model returned no structured output");
         }
         try {
             JsonNode root = JSON.readTree(content);
@@ -453,7 +488,8 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             }
             return readAidType(provider);
         } catch (IOException invalidOutput) {
-            throw new IllegalStateException("answer model returned an invalid structured output contract", invalidOutput);
+            throw new RuleAnswerModelInvalidOutputException(
+                    "answer model returned an invalid structured output contract", invalidOutput);
         }
     }
 
@@ -548,8 +584,35 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     }
 
     private void requireConfigured(String ownerUsername) {
-        if (usesFake(ownerUsername)) {
-            throw new IllegalStateException("a real answer model is required for rule Q&A");
+        try {
+            if (usesFake(ownerUsername)) {
+                throw new RuleAnswerModelUnavailableException("a real answer model is required for rule Q&A");
+            }
+        } catch (RuleAnswerModelUnavailableException unavailable) {
+            throw unavailable;
+        } catch (RuntimeException configurationFailure) {
+            throw new RuleAnswerModelUnavailableException(
+                    "answer model configuration is unavailable", configurationFailure);
+        }
+    }
+
+    private RuntimeException classifyInvocationFailure(String operation, RuntimeException failure) {
+        if (failure instanceof RuleAnswerModelTimeoutException
+                || failure instanceof RuleAnswerModelUnavailableException
+                || failure instanceof RuleAnswerModelInvalidOutputException) {
+            return failure;
+        }
+        if (isTimeout(failure)) {
+            return new RuleAnswerModelTimeoutException(operation + " timed out", failure);
+        }
+        return new RuleAnswerModelUnavailableException(operation + " provider is unavailable", failure);
+    }
+
+    private String safeProviderId(String ownerUsername) {
+        try {
+            return providerFor(ownerUsername);
+        } catch (RuntimeException unavailable) {
+            return "unavailable";
         }
     }
 

@@ -51,6 +51,29 @@ final class AnswerModelGateway {
         }
     }
 
+    ModelDraft replaceInvalidOutput(
+            UUID runId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest request,
+            String rejectionDiagnostic) {
+        RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
+        try {
+            return invocations.invoke(
+                    runId,
+                    ActivityType.MODEL,
+                    "replaceInvalidRuleAnswerOutput",
+                    estimateTokens(request.toString()) + estimateTokens(rejectionDiagnostic),
+                    "Invalid answer envelope replaced as one complete response",
+                    () -> deadline.invoke(
+                            runId,
+                            () -> model.replaceInvalidOutput(request, rejectionDiagnostic, username)),
+                    result -> estimateTokens(result.toString()));
+        } finally {
+            permit.close();
+        }
+    }
+
     ModelDraft revise(
             UUID runId,
             String username,

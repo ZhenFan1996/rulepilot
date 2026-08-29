@@ -31,10 +31,29 @@ public interface RuleAnswerModel {
         return providerId();
     }
 
+    /**
+     * Produces one complete answer envelope. Implementations distinguish provider/configuration unavailability,
+     * request timeout, and a provider response that fails the structured-output contract with the matching typed
+     * exception in this package.
+     */
     ModelDraft compose(ModelRequest request);
 
     default ModelDraft compose(ModelRequest request, String ownerUsername) {
         return compose(request);
+    }
+
+    /**
+     * Produces one complete replacement after the application rejected the initial structured envelope. This is a
+     * distinct model invocation so the application can audit it, charge it to the run budget, and enforce the
+     * single-replacement ceiling.
+     */
+    default ModelDraft replaceInvalidOutput(ModelRequest request, String rejectionDiagnostic) {
+        return compose(request);
+    }
+
+    default ModelDraft replaceInvalidOutput(
+            ModelRequest request, String rejectionDiagnostic, String ownerUsername) {
+        return replaceInvalidOutput(request, rejectionDiagnostic);
     }
 
     default ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {

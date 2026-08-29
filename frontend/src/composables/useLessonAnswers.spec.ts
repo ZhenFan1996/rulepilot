@@ -208,6 +208,7 @@ describe('useLessonAnswers', () => {
             exceptions: [], confidence: 'LOW', source: 'UPLOADED', clarification: null,
             recovery: {
               message: 'Add the exact object or timing.', actionLabel: 'Add detail', draft: '',
+              canRetryUnchanged: false,
             },
             warnings: [],
             documentVersionId: internalId,
@@ -435,6 +436,7 @@ function answerCreation(answer: ReturnType<typeof answerFixture> | Record<string
             message: 'Add the missing detail and try again.',
             actionLabel: 'Add detail',
             draft: playerAnswer.status === 'CLARIFICATION_REQUIRED' ? 'I mean: ' : '',
+            canRetryUnchanged: false,
           },
     },
     rulingReference: emptyRulingReference(),

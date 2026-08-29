@@ -561,6 +561,7 @@ const messages = {
     'lesson.answer.pageSingle': '第 {page} 页',
     'lesson.answer.pageRange': '第 {from}–{to} 页',
     'lesson.answer.failure.insufficient': '当前规则资料没有足够依据，系统没有生成推测性结论。',
+    'lesson.answer.failure.unavailable': '答疑模型或模型提供方当前不可用；问题和规则依据本身没有被拒绝。',
     'lesson.answer.failure.invalid': '这次回答没有通过内容与引用核对，因此没有显示未经确认的内容。',
     'lesson.answer.failure.version': '本次找到的规则依据与当前规则书版本不一致，请返回讲解并确认所选版本。',
     'lesson.answer.warning.title': '这条回答可以参考，但仍有需要留意的地方',

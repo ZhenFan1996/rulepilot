@@ -66,7 +66,9 @@ describe('playerAnswerContract', () => {
       answerBasis: null,
       source: 'UPLOADED',
       clarification: null,
-      recovery: { message: '请补充具体对象或时机。', actionLabel: '补充细节', draft: '' },
+      recovery: {
+        message: '请补充具体对象或时机。', actionLabel: '补充细节', draft: '', canRetryUnchanged: false,
+      },
       warnings: [],
     }
 
@@ -84,6 +86,12 @@ describe('playerAnswerContract', () => {
     expect(parsePlayerFacingRuleAnswer({
       ...insufficient,
       status: 'MODEL_TIMEOUT',
+      recovery: { ...insufficient.recovery!, canRetryUnchanged: true },
+    })).not.toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
+      ...insufficient,
+      status: 'MODEL_UNAVAILABLE',
+      recovery: { ...insufficient.recovery!, canRetryUnchanged: true },
     })).not.toBeNull()
   })
 

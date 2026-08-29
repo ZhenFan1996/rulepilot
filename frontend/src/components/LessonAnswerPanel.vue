@@ -262,10 +262,23 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
     ANSWERED_WITH_WARNING: '',
     CLARIFICATION_REQUIRED: '',
     INSUFFICIENT_EVIDENCE: t('lesson.answer.failure.insufficient'),
+    MODEL_UNAVAILABLE: t('lesson.answer.failure.unavailable'),
     MODEL_TIMEOUT: t('public.answer.timeout'),
     INVALID_MODEL_OUTPUT: t('lesson.answer.failure.invalid'),
     VERSION_CONFLICT: t('lesson.answer.failure.version'),
   }[status]
+}
+
+function retrySuitabilityMessage(answer: StructuredRuleAnswer) {
+  if (!answer.recovery) return ''
+  if (answer.language === 'en') {
+    return answer.recovery.canRetryUnchanged
+      ? 'It is appropriate to retry the same question unchanged.'
+      : 'Do not retry unchanged immediately; review or rephrase the question first.'
+  }
+  return answer.recovery.canRetryUnchanged
+    ? '可以原样重试同一个问题。'
+    : '不建议立即原样重试；请先检查或改写问题。'
 }
 
 function publishesConclusion(status: StructuredRuleAnswer['status']) {
@@ -581,6 +594,9 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
 
               <div v-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
                 <p>{{ answer.recovery?.message || answer.clarification || answerFailureMessage(answer.status) }}</p>
+                <p v-if="answer.recovery" class="mt-2 font-semibold" :data-retry-unchanged="answer.recovery.canRetryUnchanged">
+                  {{ retrySuitabilityMessage(answer) }}
+                </p>
                 <button v-if="answer.recovery" type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="prepareRecoveryReply">{{ answer.recovery.actionLabel }}</button>
               </div>
 

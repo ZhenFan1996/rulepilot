@@ -56,7 +56,7 @@ interface PublicLessonResponse {
 interface RuleCitation { heading: string; pageFrom: number; pageTo: number }
 interface PublicAnswer {
   answer: {
-    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT' | 'VERSION_CONFLICT'
+    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_UNAVAILABLE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT' | 'VERSION_CONFLICT'
     shortVerdict: string
     explanation: string | null
     citations: RuleCitation[]
@@ -462,7 +462,8 @@ function isSituationCheck(value: unknown) {
 function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status'] {
   return value === 'ANSWERED' || value === 'ANSWERED_WITH_WARNING'
     || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
-    || value === 'INVALID_MODEL_OUTPUT' || value === 'MODEL_TIMEOUT' || value === 'VERSION_CONFLICT'
+    || value === 'MODEL_UNAVAILABLE' || value === 'INVALID_MODEL_OUTPUT'
+    || value === 'MODEL_TIMEOUT' || value === 'VERSION_CONFLICT'
 }
 
 function isAnswerWarning(value: unknown): value is PublicAnswer['answer']['warnings'][number] {
@@ -642,6 +643,30 @@ function publicRecoveryCopy(turn: PublicAnswerTurn) {
         ? 'Add the exact rule object, trigger, or what happened immediately before it so the answer can be checked again.'
         : '请补充规则中的具体对象、触发时机或前一步发生了什么，再重新查证。',
       action: english ? 'Add detail and retry' : '补充条件后重试',
+    }
+  }
+  if (turn.answer.answer.status === 'MODEL_UNAVAILABLE') {
+    return {
+      message: english
+        ? 'The question and rule sources were not rejected. Once the answer model is available, it is appropriate to retry the same question unchanged.'
+        : '问题和规则依据本身没有被拒绝；答疑模型恢复后，适合原样重试同一个问题。',
+      action: english ? 'Reuse the same question' : '保留原问题',
+    }
+  }
+  if (turn.answer.answer.status === 'MODEL_TIMEOUT') {
+    return {
+      message: english
+        ? 'The timeout does not mean the question was invalid. It is appropriate to retry the same question unchanged.'
+        : '超时不代表问题无效；适合原样重试同一个问题。',
+      action: english ? 'Reuse the same question' : '保留原问题',
+    }
+  }
+  if (turn.answer.answer.status === 'INVALID_MODEL_OUTPUT') {
+    return {
+      message: english
+        ? 'The generated answer failed its structure or citation contract. Do not retry unchanged immediately; review or rephrase the question first.'
+        : '生成的回答未通过结构或引用契约；不建议立即原样重试，请先检查或改写问题。',
+      action: english ? 'Review or rephrase' : '检查或改写问题',
     }
   }
   return {

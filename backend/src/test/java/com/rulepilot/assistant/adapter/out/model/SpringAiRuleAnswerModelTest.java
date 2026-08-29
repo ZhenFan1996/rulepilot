@@ -3,6 +3,7 @@ package com.rulepilot.assistant.adapter.out.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -14,6 +15,8 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
@@ -278,7 +281,7 @@ class SpringAiRuleAnswerModelTest {
     }
 
     @Test
-    void appliesSeparateConfiguredTemperaturesToGenerationAndInterpretation() {
+    void exposesInvalidStructuredReplacementAsASeparateCallAndDoesNotReplayProviderFailures() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -296,32 +299,86 @@ class SpringAiRuleAnswerModelTest {
         when(chatModel.getOptions()).thenReturn(defaults);
         when(prompts.answerSystem("NONE")).thenReturn("Answer only from evidence.");
         when(prompts.answerUser()).thenReturn("{question}\n{evidence}\n{repair}");
-        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
-                new AssistantMessage("""
+        when(prompts.structuredOutputRepair()).thenReturn("Return one complete valid JSON object.");
+        ChatResponse valid = new ChatResponse(List.of(new Generation(new AssistantMessage("""
                         {"answerable":true,"insufficiencyReason":null,
                          "shortVerdict":"Yes.","explanation":"Direct rule.",
                          "citationIds":["%s"],"exceptions":[],"confidence":"HIGH",
                          "answerBasis":"DIRECT_RULE","aid":{"type":"NONE"}}
-                        """.formatted(citation))))));
+                        """.formatted(citation)))));
+        when(chatModel.call(any(Prompt.class)))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("not json")))))
+                .thenReturn(valid);
         SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.07);
-
-        model.compose(new ModelRequest(
+        ModelRequest request = new ModelRequest(
                 "Arbitrary question",
                 QuestionType.RULE_QUERY,
                 new AnswerContext(null, null, PlayerLocale.EN),
-                List.of(new EvidenceInput(citation, "RULE", "Rule", "Direct rule.", 2, 2))));
+                List.of(new EvidenceInput(citation, "RULE", "Rule", "Direct rule.", 2, 2)));
 
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).call(prompt.capture());
-        OpenAiChatOptions answerOptions = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThatThrownBy(() -> model.compose(request))
+                .isInstanceOf(RuleAnswerModelInvalidOutputException.class)
+                .hasMessageContaining("invalid structured output contract");
+        verify(chatModel).call(any(Prompt.class));
+
+        ModelDraft replacement = model.replaceInvalidOutput(
+                request,
+                "RuleAnswerModelInvalidOutputException: answer model returned an invalid structured output contract");
+        assertThat(replacement.shortVerdict()).isEqualTo("Yes.");
+
+        ArgumentCaptor<Prompt> promptsSent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(promptsSent.capture());
+        Prompt repairedPrompt = promptsSent.getAllValues().getLast();
+        OpenAiChatOptions answerOptions = (OpenAiChatOptions) repairedPrompt.getOptions();
         assertThat(answerOptions.getTemperature()).isEqualTo(0.42);
         assertThat(answerOptions.getResponseFormat().getJsonSchema())
                 .contains("\"aid\"", "\"NONE\"")
                 .doesNotContain("\"calculations\"", "\"walkthroughSteps\"");
-        assertThat(prompt.getValue().getInstructions())
+        assertThat(repairedPrompt.getInstructions())
                 .extracting(message -> message.getText())
                 .anySatisfy(text -> assertThat(text)
-                        .contains("final provider response contract", "no legacy top-level aid arrays"));
+                        .contains("final provider response contract", "no legacy top-level aid arrays"))
+                .anySatisfy(text -> assertThat(text).contains(
+                        "Return one complete valid JSON object.",
+                        "application rejected the prior complete response",
+                        "do not return a field patch"));
+
+        clearInvocations(chatModel);
+        when(chatModel.call(any(Prompt.class))).thenThrow(new IllegalStateException("provider unavailable"));
+
+        assertThatThrownBy(() -> model.compose(request))
+                .isInstanceOf(RuleAnswerModelUnavailableException.class)
+                .hasMessage("answer model provider is unavailable")
+                .hasCauseInstanceOf(IllegalStateException.class);
+        verify(chatModel).call(any(Prompt.class));
+
+        clearInvocations(chatModel);
+        when(chatModel.call(any(Prompt.class)))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("still not json")))))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("also not json")))));
+
+        assertThatThrownBy(() -> model.compose(request))
+                .isInstanceOf(RuleAnswerModelInvalidOutputException.class)
+                .hasMessageContaining("invalid structured output contract");
+        verify(chatModel).call(any(Prompt.class));
+
+        clearInvocations(chatModel);
+        assertThatThrownBy(() -> model.replaceInvalidOutput(request, "invalid envelope"))
+                .isInstanceOf(RuleAnswerModelInvalidOutputException.class)
+                .hasMessageContaining("invalid structured output contract");
+        verify(chatModel).call(any(Prompt.class));
+
+        when(configuration.usesFake(Role.ANSWER)).thenReturn(true);
+        assertThatThrownBy(() -> model.compose(request))
+                .isInstanceOf(RuleAnswerModelUnavailableException.class)
+                .hasMessage("a real answer model is required for rule Q&A");
+
+        when(configuration.usesFake(Role.ANSWER))
+                .thenThrow(new IllegalStateException("personal model state unavailable"));
+        assertThatThrownBy(model::supportsQuestionInterpretation)
+                .isInstanceOf(RuleAnswerModelUnavailableException.class)
+                .hasMessage("answer model configuration is unavailable")
+                .hasCauseInstanceOf(IllegalStateException.class);
     }
     @Test
     void rejectsInvalidConfiguredTemperatures() {

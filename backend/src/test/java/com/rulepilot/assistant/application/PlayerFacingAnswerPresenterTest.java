@@ -164,7 +164,7 @@ class PlayerFacingAnswerPresenterTest {
     }
 
     @Test
-    void usesTheRequestedLanguageForSafeFailureAndRecoveryInsteadOfInternalDiagnostics() {
+    void presentsDistinctModelFailuresAndRetrySuitabilityWithoutInternalDiagnostics() {
         UUID versionId = UUID.randomUUID();
         StructuredRuleAnswer failure = new StructuredRuleAnswer(
                 versionId,
@@ -181,14 +181,56 @@ class PlayerFacingAnswerPresenterTest {
 
         var presented = PlayerFacingAnswerPresenter.present(
                 failure, "Why does the silver lattice resolve first?", PlayerLocale.EN);
+        var unavailable = PlayerFacingAnswerPresenter.present(
+                new StructuredRuleAnswer(
+                        versionId,
+                        AnswerStatus.MODEL_UNAVAILABLE,
+                        "provider configuration failed",
+                        "secret provider diagnostic",
+                        List.of(),
+                        List.of(),
+                        AnswerConfidence.LOW,
+                        false,
+                        null,
+                        null,
+                        null),
+                "Why does the silver lattice resolve first?",
+                PlayerLocale.EN);
+        var timeout = PlayerFacingAnswerPresenter.present(
+                new StructuredRuleAnswer(
+                        versionId,
+                        AnswerStatus.MODEL_TIMEOUT,
+                        "provider timeout",
+                        "secret timeout diagnostic",
+                        List.of(),
+                        List.of(),
+                        AnswerConfidence.LOW,
+                        false,
+                        null,
+                        null,
+                        null),
+                "Why does the silver lattice resolve first?",
+                PlayerLocale.EN);
 
         assertThat(presented.language()).isEqualTo("en");
-        assertThat(presented.shortVerdict()).isEqualTo("I couldn't verify a reliable answer from this attempt.");
+        assertThat(presented.shortVerdict())
+                .isEqualTo("The generated answer failed its structure or citation-identifier contract.");
         assertThat(presented.explanation()).isEmpty();
         assertThat(presented.recovery()).isNotNull().satisfies(recovery -> {
-            assertThat(recovery.message()).contains("question is still here");
-            assertThat(recovery.actionLabel()).isEqualTo("Review and try again");
+            assertThat(recovery.message()).contains("unlikely to help", "review or rephrase");
+            assertThat(recovery.actionLabel()).isEqualTo("Review or rephrase");
             assertThat(recovery.draft()).isEqualTo("Why does the silver lattice resolve first?");
+            assertThat(recovery.canRetryUnchanged()).isFalse();
+        });
+        assertThat(unavailable.shortVerdict()).contains("No configured answer model or provider");
+        assertThat(unavailable.recovery()).satisfies(recovery -> {
+            assertThat(recovery.message()).contains("retry the same question unchanged");
+            assertThat(recovery.canRetryUnchanged()).isTrue();
+        });
+        assertThat(timeout.shortVerdict()).contains("answer did not finish", "time limit");
+        assertThat(timeout.recovery()).satisfies(recovery -> {
+            assertThat(recovery.message()).contains("retry the same question unchanged");
+            assertThat(recovery.canRetryUnchanged()).isTrue();
         });
         assertThat(presented.toString())
                 .doesNotContain("repairRuleTimingResolutions", "schema", "时序裁决")
