@@ -47,17 +47,21 @@ final class AnswerPostPublicationReviewer {
                     AnswerCritiquePolicy.request(assistantRunId, question, context, modelRequest, answer, evidence),
                     risk,
                     username);
-            if (review.accepted()) return answer;
+            if (!review.performed() || review.accepted()) return answer;
             log.info(
                     "Evaluation-only answer Critic reported {} issue(s) for run {}; preserving the complete validated answer",
                     review.issues().size(),
                     assistantRunId);
             return warned(answer, Type.REVIEW_UNRESOLVED);
         } catch (AgentExecutionStoppedException exception) {
-            throw exception;
+            log.info(
+                    "Optional answer Critic stopped for run {} at {}; preserving the complete validated answer",
+                    assistantRunId,
+                    exception.reason());
+            return warned(answer, Type.REVIEW_UNRESOLVED);
         } catch (RuntimeException exception) {
             log.warn(
-                    "Adaptive answer validation failed for run {}: {} ({})",
+                    "Optional answer Critic failed for run {}: {} ({})",
                     assistantRunId,
                     exception.getMessage(),
                     exception.getClass().getSimpleName());

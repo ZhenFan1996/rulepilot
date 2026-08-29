@@ -146,7 +146,7 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     wrapper.unmount()
   })
 
-  it('keeps the missing-result reason and bounded recovery visible after the launch dialog is closed', async () => {
+  it('does not expose a legacy automatic-recovery counter after the launch dialog is closed', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
@@ -172,26 +172,27 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     await openCenter(wrapper)
 
     expect(wrapper.text()).toContain('关闭弹窗后仍可追踪')
-    expect(wrapper.text()).toContain('上一次任务没有留下可读章节，正在进行第 1 / 1 次自动恢复')
+    expect(wrapper.text()).toContain('规则书已保存，读取完成后会自动开始讲解')
+    expect(wrapper.text()).not.toContain('1 / 1')
     wrapper.unmount()
   })
 
-  it('stops claiming progress when the single automatic recovery still produced no readable chapter', async () => {
+  it('routes a typed retryable handoff failure to the real lesson-center action without a fixed recovery promise', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
       if (path.endsWith('/api/v1/documents/official-imports')) return response([{
-        id: 'import-recovery-exhausted', title: '需要人工重试的讲解', sourceDomain: 'publisher.example',
+        id: 'import-retryable', title: '需要人工重试的讲解', sourceDomain: 'publisher.example',
         stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
-        documentVersionId: 'version-recovery-exhausted', errorCode: null,
+        documentVersionId: 'version-retryable', errorCode: null,
         teachingHandoffState: 'FAILED', teachingPreparationRunId: null,
-        teachingErrorCode: 'TEACHING_RECOVERY_EXHAUSTED', teachingAutomaticRecoveryCount: 1,
+        teachingErrorCode: 'TEACHING_PREPARATION_FAILED', teachingNextAction: 'RETRY_TEACHING',
         downloadCompletedAt: '2026-08-20T06:00:00Z', importCompletedAt: '2026-08-20T06:00:00Z',
         teachingHandoffUpdatedAt: '2026-08-20T06:00:10Z', updatedAt: '2026-08-20T06:00:10Z',
       }])
       if (path.endsWith('/api/v1/documents')) return response([{
-        document: { id: 'document-recovery-exhausted', title: 'rules.pdf', createdBy: 'player' },
-        latestVersion: { id: 'version-recovery-exhausted', status: 'READY' },
+        document: { id: 'document-retryable', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-retryable', status: 'READY' },
       }])
       if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
       return new Response(null, { status: 404 })
@@ -201,9 +202,9 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     await flushPromises()
     await openCenter(wrapper)
 
-    expect(wrapper.text()).toContain('自动恢复后仍没有生成可读章节')
-    expect(wrapper.text()).toContain('已完成第 1 / 1 次自动恢复；请打开讲解中心重试')
-    expect(wrapper.text()).not.toContain('正在自动恢复')
+    expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心手动重试')
+    expect(wrapper.text()).not.toContain('1 / 1')
+    expect(wrapper.find('a[href="/lessons"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -225,7 +226,7 @@ describe('BackgroundWorkCenter request lifecycle', () => {
             createdAt: '2026-08-20T06:00:00Z', updatedAt: '2026-08-20T06:00:03Z',
             completedAt: null, lastErrorCode: null,
           },
-          budget: { usedModelCalls: 3, maxModelCalls: 36 },
+          budget: { usedModelCalls: 3 },
           activities,
         })
       }
@@ -272,7 +273,7 @@ describe('BackgroundWorkCenter request lifecycle', () => {
           createdAt: '2026-08-20T06:00:01Z', updatedAt: '2026-08-20T06:00:04Z',
           completedAt: null, lastErrorCode: null,
         },
-        budget: { usedModelCalls: 3, maxModelCalls: 36 },
+        budget: { usedModelCalls: 3 },
         activities: [teachingActivity(
           5, 'inspectTeachingVisualPage|3|12', 'RUNNING', 'Inspecting visual page three',
         )],
@@ -612,7 +613,7 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     wrapper.unmount()
   })
 
-  it('reports a verified failed Teaching run as needing attention instead of complete', async () => {
+  it('reports insufficient Teaching evidence as a preserved stop rather than a retryable failure', async () => {
     const keys = backgroundWorkStorageKeys('player')
     sessionStorage.setItem(keys.activeTeaching, JSON.stringify([{
       runId: 'run-failed', planId: 'plan-failed', gameTitle: '失败的讲解',
@@ -627,7 +628,7 @@ describe('BackgroundWorkCenter request lifecycle', () => {
             createdAt: '2026-08-20T06:00:00Z', updatedAt: '2026-08-20T06:00:08Z',
             completedAt: '2026-08-20T06:00:08Z', lastErrorCode: null,
           },
-          budget: { usedModelCalls: 0, maxModelCalls: 36 },
+          budget: { usedModelCalls: 0 },
           activities: Array.from({ length: 8 }, (_, index) => teachingActivity(
             index + 1,
             `publishTeachingSection|${index + 1}`,
@@ -644,12 +645,58 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     await openCenter(wrapper)
 
     expect(wrapper.text()).toContain('失败的讲解')
-    expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).toContain('失败')
+    expect(wrapper.text()).not.toContain('需要处理')
     expect(wrapper.text()).toContain('已处理 8 章')
     expect(wrapper.text()).toContain('8 章未发布')
     expect(wrapper.text()).toContain('引用页没有形成可供这些章节发布的规则依据')
     expect(wrapper.text()).not.toContain('已完成')
     expect(sessionStorage.getItem(keys.completedTeaching)).toContain('"terminalState":"INSUFFICIENT_EVIDENCE"')
+    wrapper.unmount()
+  })
+
+  it('distinguishes degraded, cancelled, preserved, and retryable Teaching terminal states', async () => {
+    const keys = backgroundWorkStorageKeys('player')
+    sessionStorage.setItem(keys.completedTeaching, JSON.stringify([
+      {
+        runId: 'run-degraded', planId: 'plan-degraded', gameTitle: '局部降级讲解',
+        terminalState: 'DEGRADED', lastErrorCode: 'VISUAL_ENRICHMENT_FAILED', readableChapterCount: 2,
+      },
+      {
+        runId: 'run-cancelled', planId: 'plan-cancelled', gameTitle: '主动取消讲解',
+        terminalState: 'CANCELLED', lastErrorCode: 'AGENT_CANCELLED', readableChapterCount: 1,
+      },
+      {
+        runId: 'run-preserved', planId: 'plan-preserved', gameTitle: '依据不足讲解',
+        terminalState: 'INSUFFICIENT_EVIDENCE', lastErrorCode: null, readableChapterCount: 0,
+      },
+      {
+        runId: 'run-retryable', planId: 'plan-retryable', gameTitle: '超时讲解',
+        terminalState: 'FAILED', lastErrorCode: 'AGENT_TIMEOUT', readableChapterCount: 1,
+      },
+    ]))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (isBackgroundBaseList(path)) return response([])
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+    const items = wrapper.findAll('li')
+    const itemByTitle = (title: string) => items.find(item => item.text().includes(title))!
+
+    expect(itemByTitle('局部降级讲解').get('[data-testid="player-work-status"]').text())
+      .toBe('基础讲解可读')
+    expect(itemByTitle('主动取消讲解').get('[data-testid="player-work-status"]').text())
+      .toBe('已取消')
+    expect(itemByTitle('依据不足讲解').get('[data-testid="player-work-status"]').text())
+      .toBe('失败')
+    expect(itemByTitle('超时讲解').get('[data-testid="player-work-status"]').text())
+      .toBe('需要处理')
+    expect(wrapper.findAll('[data-player-work-outcome="needs-action"]')).toHaveLength(1)
     wrapper.unmount()
   })
 

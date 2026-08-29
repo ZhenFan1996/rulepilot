@@ -11,11 +11,8 @@ public interface AssistantRuns {
     RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername);
 
     /**
-     * Starts a run with the statically countable work of its immutable plan as the run's exact call budget.
-     *
-     * <p>This execution budget prevents hidden retries and unbounded loops; it is not an account quota or an
-     * administrator entitlement. Runtime output size, provider latency, cancellation, and account quota remain
-     * independent concerns. Non-production test implementations may keep the legacy behavior.</p>
+     * Starts a run with a workload estimate used only to size its token envelope and active-work deadline.
+     * Tool, model, and state-transition counts remain observable facts; the estimate never rejects useful recovery.
      */
     default RunSnapshot start(
             AssistantRunMode mode,
@@ -143,9 +140,9 @@ public interface AssistantRuns {
         }
     }
 
-    record WorkloadDemand(int requiredToolCalls, int requiredModelCalls) {
+    record WorkloadDemand(int estimatedModelCalls) {
         public WorkloadDemand {
-            if (requiredToolCalls < 0 || requiredModelCalls < 1) {
+            if (estimatedModelCalls < 1) {
                 throw new IllegalArgumentException("assistant run workload demand is invalid");
             }
         }

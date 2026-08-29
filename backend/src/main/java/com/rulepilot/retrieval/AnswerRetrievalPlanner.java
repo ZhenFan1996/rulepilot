@@ -4,11 +4,8 @@ import com.rulepilot.retrieval.AnswerRetrievalPlan.Subquestion;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Builds bounded retrieval queries from the accepted semantic question plan. */
+/** Builds retrieval queries from the complete accepted semantic question plan. */
 public final class AnswerRetrievalPlanner {
-
-    private static final int MAX_QUERY_LENGTH = 500;
-    private static final int MAX_INTENTS = 5;
 
     private AnswerRetrievalPlanner() {}
 
@@ -23,17 +20,14 @@ public final class AnswerRetrievalPlanner {
         addDistinct(intents, new RetrievalIntent(currentFocusQuery(question, acceptedPlan), true));
         for (Subquestion subquestion : acceptedPlan.subquestions()) {
             addDistinct(intents, new RetrievalIntent(subquestion.text(), true));
-            if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
             for (String retrievalQuery : subquestion.retrievalQueries()) {
                 addDistinct(intents, new RetrievalIntent(retrievalQuery, false));
-                if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
             }
         }
         for (String ruleObjectSpan : acceptedPlan.currentRuleObjectSpans()) {
             addDistinct(intents, new RetrievalIntent(ruleObjectSpan, true));
-            if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
         }
-        return intents.stream().limit(MAX_INTENTS).toList();
+        return List.copyOf(intents);
     }
 
     private static void addDistinct(List<RetrievalIntent> intents, RetrievalIntent candidate) {
@@ -43,20 +37,12 @@ public final class AnswerRetrievalPlanner {
     }
 
     private static String currentFocusQuery(AnswerRetrievalQuestion question, AnswerRetrievalPlan plan) {
-        if (question.currentQuestion().length() <= MAX_QUERY_LENGTH) {
-            return question.currentQuestion();
-        }
-        return plan.subquestions().stream()
-                .filter(subquestion -> subquestion.owner() == AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION)
-                .map(Subquestion::text)
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "a long question requires a structured current-question retrieval span"));
+        return question.currentQuestion();
     }
 
     record RetrievalIntent(String query, boolean directQuestion) {
         public RetrievalIntent {
-            if (query == null || query.isBlank() || query.length() > MAX_QUERY_LENGTH) {
+            if (query == null || query.isBlank()) {
                 throw new IllegalArgumentException("answer retrieval intent is invalid");
             }
             query = query.strip();

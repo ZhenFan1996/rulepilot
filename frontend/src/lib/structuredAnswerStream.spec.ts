@@ -66,6 +66,24 @@ describe('streamStructuredAnswer', () => {
     expect(statuses).toEqual(['running', 'succeeded'])
   })
 
+  it('keeps correction and no-progress activity stages instead of silently dropping them', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response([
+      'event: activity\ndata: {"sequence":8,"actor":"answer_validator","stage":"correcting_answer","message":"回答草稿未通过校验，正在修正","status":"running","nextAction":"下一步：继续核对","latencyMs":0}\n\n',
+      'event: activity\ndata: {"sequence":9,"actor":"answer_validator","stage":"evidence_search_stalled","message":"补充证据查找没有新增进展，已停止这一步","status":"rejected","nextAction":"下一步：使用已有证据继续","latencyMs":12}\n\n',
+      'event: result\ndata: {}\n\n',
+    ].join(''), { headers: { 'Content-Type': 'text/event-stream' } })))
+    const stages: string[] = []
+
+    await streamStructuredAnswer('/answers', { method: 'POST' }, () => undefined, {
+      onActivity: activity => stages.push(`${activity.stage}:${activity.status}`),
+    })
+
+    expect(stages).toEqual([
+      'correcting_answer:running',
+      'evidence_search_stalled:rejected',
+    ])
+  })
+
   it('publishes the validated answer without waiting for the proxy to close the SSE connection', async () => {
     const encoder = new TextEncoder()
     let transportCancelled = false
@@ -87,7 +105,31 @@ describe('streamStructuredAnswer', () => {
 
   it('does not turn a terminal stream error into a partial answer', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      'event: run\ndata: {"runId":"run-2"}\n\nevent: error\ndata: {"code":"answer_unavailable"}\n\n',
+      'event: run\ndata: {"runId":"run-2"}\n\nevent: error\ndata: {"code":"answer_timeout","recovery":{"message":"规则答疑超时。","actionLabel":"稍后重试","draft":"同一个问题","canRetryUnchanged":true}}\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )))
+
+    await expect(streamStructuredAnswer('/answers', { method: 'POST' }, () => undefined))
+      .rejects.toEqual(expect.objectContaining<Partial<StructuredAnswerStreamError>>({
+        name: 'StructuredAnswerStreamError',
+        code: 'answer_timeout',
+        recovery: {
+          message: '规则答疑超时。',
+          actionLabel: '稍后重试',
+          draft: '同一个问题',
+          canRetryUnchanged: true,
+        },
+      }))
+  })
+
+  it.each([
+    ['missing recovery', '{"code":"answer_timeout"}'],
+    ['invalid retry permission', '{"code":"answer_timeout","recovery":{"message":"Timed out.","actionLabel":"Retry","draft":"","canRetryUnchanged":"yes"}}'],
+    ['blank player message', '{"code":"answer_timeout","recovery":{"message":" ","actionLabel":"Retry","draft":"","canRetryUnchanged":true}}'],
+    ['invalid JSON', '{"code":'],
+  ])('turns %s into a conservative non-retryable stream failure', async (_caseName, payload) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: error\ndata: ${payload}\n\n`,
       { headers: { 'Content-Type': 'text/event-stream' } },
     )))
 
@@ -95,6 +137,12 @@ describe('streamStructuredAnswer', () => {
       .rejects.toEqual(expect.objectContaining<Partial<StructuredAnswerStreamError>>({
         name: 'StructuredAnswerStreamError',
         code: 'answer_unavailable',
+        recovery: {
+          message: '',
+          actionLabel: '',
+          draft: '',
+          canRetryUnchanged: false,
+        },
       }))
   })
 })

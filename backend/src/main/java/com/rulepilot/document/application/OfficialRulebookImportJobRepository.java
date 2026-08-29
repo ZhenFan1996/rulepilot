@@ -29,10 +29,6 @@ public interface OfficialRulebookImportJobRepository {
 
     boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now);
 
-    boolean retryTeachingAutomatically(UUID jobId, UUID expectedPreparationRunId, Instant now);
-
-    boolean failTeachingRecoveryExhausted(UUID jobId, UUID expectedPreparationRunId, Instant now);
-
     boolean failTeachingTerminal(
             UUID jobId, UUID expectedPreparationRunId, String errorCode, Instant now);
 

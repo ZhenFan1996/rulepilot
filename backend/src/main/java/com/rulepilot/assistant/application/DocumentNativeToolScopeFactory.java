@@ -3,7 +3,6 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -14,8 +13,6 @@ import org.springframework.stereotype.Component;
 @Component
 @Profile("!test")
 public class DocumentNativeToolScopeFactory implements NativeToolScopes {
-
-    private static final Duration ANSWER_REFINEMENT_TIMEOUT = Duration.ofSeconds(75);
 
     private final DocumentNativeToolAccess access;
     private final AgentExecutionControl execution;
@@ -35,9 +32,7 @@ public class DocumentNativeToolScopeFactory implements NativeToolScopes {
         } catch (RuntimeException unavailableBudget) {
             return Optional.empty();
         }
-        Instant refinementDeadline = now.plus(ANSWER_REFINEMENT_TIMEOUT);
-        Instant deadline = runDeadline.isBefore(refinementDeadline) ? runDeadline : refinementDeadline;
-        if (!deadline.isAfter(now)) return Optional.empty();
-        return Optional.of(new ToolScope(ownerUsername, documentVersionId, runId, deadline));
+        if (!runDeadline.isAfter(now)) return Optional.empty();
+        return Optional.of(new ToolScope(ownerUsername, documentVersionId, runId, runDeadline));
     }
 }

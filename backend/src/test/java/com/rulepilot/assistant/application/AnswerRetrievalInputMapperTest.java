@@ -85,13 +85,14 @@ class AnswerRetrievalInputMapperTest {
     }
 
     @Test
-    void mapsEveryEvidenceNeedAndCalculationCoverageWithoutExposingModelTypes() {
+    void mapsEveryCompleteQuestionObligationAndEvidenceNeedWithoutExposingModelTypes() {
         AnswerQuestionPlan source = new AnswerQuestionPlan(
                 List.of(
-                        subquestion("direct", EvidenceNeed.DIRECT_RULE, EvidenceNeed.CONDITION, EvidenceNeed.SEQUENCE),
-                        subquestion("exceptions", EvidenceNeed.EXCEPTION, EvidenceNeed.DEFINITION, EvidenceNeed.RELATIONSHIP),
+                        subquestion("direct", EvidenceNeed.DIRECT_RULE, EvidenceNeed.CONDITION, EvidenceNeed.SEQUENCE, EvidenceNeed.EXCEPTION),
+                        subquestion("definitions", EvidenceNeed.DEFINITION, EvidenceNeed.RELATIONSHIP),
                         subquestion("visual", EvidenceNeed.VISUAL_REFERENCE, EvidenceNeed.COMPLETE_LIST, EvidenceNeed.ADVICE),
-                        subquestion("prior", EvidenceNeed.PRIOR_TURN)),
+                        subquestion("prior", EvidenceNeed.PRIOR_TURN),
+                        subquestion("independent current obligation", EvidenceNeed.DIRECT_RULE)),
                 true,
                 AnswerAid.CALCULATION,
                 ReferenceBinding.CURRENT_QUESTION);
@@ -101,6 +102,7 @@ class AnswerRetrievalInputMapperTest {
         assertThat(mapped.evidenceNeeds())
                 .extracting(Enum::name)
                 .containsExactlyInAnyOrder(Arrays.stream(EvidenceNeed.values()).map(Enum::name).toArray(String[]::new));
+        assertThat(mapped.subquestions()).hasSize(5);
         assertThat(mapped.calculationCoverageRequired()).isTrue();
         assertThat(mapped.expandedCoverageRequired()).isTrue();
     }

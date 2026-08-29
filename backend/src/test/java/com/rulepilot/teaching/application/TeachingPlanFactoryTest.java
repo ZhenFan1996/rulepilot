@@ -52,7 +52,7 @@ class TeachingPlanFactoryTest {
         assertThatThrownBy(() -> new TopicDraft(
                         null, "开局", "完成开局设置。", true, true, List.of("Starting Set-up"), null))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("topic is invalid");
+                .hasMessageContaining("topic key must be non-blank lowercase kebab-case");
     }
 
     @Test

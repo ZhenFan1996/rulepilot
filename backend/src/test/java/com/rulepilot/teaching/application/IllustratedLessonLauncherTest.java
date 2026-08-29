@@ -640,7 +640,7 @@ class IllustratedLessonLauncherTest {
 
     private RunDetails details(RunSnapshot run) {
         var budget = new AgentExecutionControl.BudgetSnapshot(
-                40, 24, 16, 24_000, 0, 0, 0, run.createdAt().plusSeconds(120), null);
+                24_000, 0, 0, 0, run.createdAt().plusSeconds(120), null);
         return new RunDetails(run, List.of(), budget, List.of());
     }
 

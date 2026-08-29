@@ -14,27 +14,6 @@ import org.junit.jupiter.api.Test;
 class NativeToolEvidenceHandlesTest {
 
     @Test
-    void includesAnchorsAndSurroundingEvidenceFromContextExpansion() {
-        UUID anchor = UUID.randomUUID();
-        UUID surrounding = UUID.randomUUID();
-        var observation = new ObservationRecord(
-                1,
-                "expand_rule_evidence_context",
-                "schema-v1",
-                new com.rulepilot.assistant.NativeAgentTool.ToolObservation(
-                        com.rulepilot.assistant.NativeAgentTool.ObservationStatus.SUCCESS,
-                        "EVIDENCE_CONTEXT_EXPANDED",
-                        Map.of(
-                                "anchors", List.of(Map.of("evidenceId", anchor.toString())),
-                                "surroundingEvidence", List.of(Map.of("evidenceId", surrounding.toString()))),
-                        2));
-        RunResult result = new RunResult(
-                RunStatus.COMPLETED, "ready", "MODEL_COMPLETED", 2, 1, List.of(observation));
-
-        assertThat(NativeToolEvidenceHandles.prioritized(result, 4)).containsExactly(anchor, surrounding);
-    }
-
-    @Test
     void extractsExactPageBatchesNewestFirstWithoutTrustingPageFields() {
         UUID earlier = UUID.randomUUID();
         UUID newer = UUID.randomUUID();
@@ -49,7 +28,7 @@ class NativeToolEvidenceHandlesTest {
                         observation(2, "search_rule_evidence", UUID.randomUUID()),
                         observation(3, "read_rule_pages", newer)));
 
-        var groups = NativeToolEvidenceHandles.exactPageObservationGroups(result, 4, 8);
+        var groups = NativeToolEvidenceHandles.exactPageObservationGroups(result);
 
         assertThat(groups).containsExactly(java.util.Set.of(newer), java.util.Set.of(earlier));
     }
@@ -68,7 +47,7 @@ class NativeToolEvidenceHandlesTest {
                 1,
                 List.of(new ObservationRecord(1, "read_rule_pages", "schema", malformed)));
 
-        assertThat(NativeToolEvidenceHandles.exactPageObservationGroups(result, 4, 8)).isEmpty();
+        assertThat(NativeToolEvidenceHandles.exactPageObservationGroups(result)).isEmpty();
     }
 
     @Test
@@ -87,7 +66,31 @@ class NativeToolEvidenceHandlesTest {
                 1,
                 List.of(new ObservationRecord(1, "read_rule_pages", "schema", error)));
 
-        assertThat(NativeToolEvidenceHandles.exactPageObservationGroups(result, 4, 8)).isEmpty();
+        assertThat(NativeToolEvidenceHandles.exactPageObservationGroups(result)).isEmpty();
+    }
+
+    @Test
+    void retainsEveryValidatedIdentityFromALargeExactPageObservation() {
+        List<UUID> identities = java.util.stream.IntStream.range(0, 125)
+                .mapToObj(ignored -> UUID.randomUUID())
+                .toList();
+        ToolObservation observation = ToolObservation.success(
+                "PAGE_EVIDENCE_FOUND",
+                Map.of("evidence", identities.stream()
+                        .map(identity -> Map.of("evidenceId", identity.toString()))
+                        .toList()),
+                identities.size());
+        RunResult result = new RunResult(
+                RunStatus.COMPLETED,
+                "EVIDENCE_READY",
+                "MODEL_COMPLETED",
+                1,
+                1,
+                List.of(new ObservationRecord(1, "read_rule_pages", "schema", observation)));
+
+        assertThat(NativeToolEvidenceHandles.exactPageObservationGroups(result))
+                .singleElement()
+                .satisfies(group -> assertThat(group).containsExactlyElementsOf(identities));
     }
 
     private ObservationRecord observation(int iteration, String toolName, UUID evidenceId) {

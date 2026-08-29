@@ -82,19 +82,20 @@ class NativeVisualToolsTest {
     }
 
     @Test
-    void normalizesJointGeometryOverflowAndReturnsNoMediaForAnUnknownEvidenceHandle() {
+    void rejectsGeometryOverflowWithoutRewritingTheTypedActionAndReturnsNoMediaForUnknownEvidence() {
         var crop = new CropRulePageImageNativeTool(evidence, mapper);
-        var normalized = crop.execute(
+        var registry = new NativeAgentToolRegistry(List.of(crop), mapper, ignored -> true);
+        var overflow = registry.execute(
+                Role.VISUAL,
+                crop.name(),
                 "{\"evidenceId\":\"" + evidenceId
                         + "\",\"pageNumber\":4,\"x\":900,\"y\":0,\"width\":200,\"height\":20}",
                 scope());
-        assertThat(normalized.data().get("rectangle").toString()).contains("width=100", "x=900");
-        var bottomRight = crop.execute(
-                "{\"evidenceId\":\"" + evidenceId
-                        + "\",\"pageNumber\":4,\"x\":988,\"y\":988,\"width\":200,\"height\":200}",
-                scope());
-        assertThat(bottomRight.data().get("rectangle").toString())
-                .contains("x=980", "y=980", "width=20", "height=20");
+
+        assertThat(overflow.observation().code()).isEqualTo("INVALID_ARGUMENT");
+        assertThat(overflow.observation().data())
+                .containsEntry("validationError", "the crop rectangle must remain inside the normalized page")
+                .containsEntry("inputSchema", crop.inputSchema());
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> crop.execute(
                         "{\"evidenceId\":\"" + evidenceId

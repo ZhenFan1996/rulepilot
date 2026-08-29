@@ -9,6 +9,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -21,6 +22,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.MessageAggregator;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
@@ -91,12 +93,25 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         long startedAt = System.nanoTime();
         AtomicLong firstTextAt = new AtomicLong();
         AtomicReference<ChatResponse> aggregated = new AtomicReference<>();
+        AtomicBoolean toolCallObserved = new AtomicBoolean();
+        StringBuilder accumulatedText = new StringBuilder();
 
         var chunks = model.stream(prompt).doOnNext(response -> {
             if (response == null || response.getResult() == null || response.getResult().getOutput() == null) return;
             AssistantMessage output = response.getResult().getOutput();
+            if (!output.getToolCalls().isEmpty()) {
+                if (toolCallObserved.compareAndSet(false, true) && accumulatedText.length() > 0) {
+                    accumulatedText.setLength(0);
+                    accumulatedTextListener.accept("");
+                }
+                return;
+            }
+            if (toolCallObserved.get()) return;
             String chunk = output.getText();
-            if (chunk != null && !chunk.isEmpty()) firstTextAt.compareAndSet(0, System.nanoTime());
+            if (chunk == null || chunk.isEmpty()) return;
+            firstTextAt.compareAndSet(0, System.nanoTime());
+            accumulatedText.append(chunk);
+            accumulatedTextListener.accept(accumulatedText.toString());
         });
         new MessageAggregator().aggregate(chunks, aggregated::set).blockLast();
         ChatResponse response = aggregated.get();
@@ -104,8 +119,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             throw new IllegalStateException("recommendation model returned no streamed result");
         }
         AssistantMessage output = response.getResult().getOutput();
-        if (output.getToolCalls().isEmpty() && !output.getText().isBlank()) {
-            accumulatedTextListener.accept(output.getText());
+        if (!output.getToolCalls().isEmpty()
+                && toolCallObserved.compareAndSet(false, true)
+                && accumulatedText.length() > 0) {
+            accumulatedText.setLength(0);
+            accumulatedTextListener.accept("");
         }
         logUsage(
                 request,
@@ -183,6 +201,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
 
     private Turn turn(ChatResponse response) {
         AssistantMessage output = response.getResult().getOutput();
+        Usage usage = response.getMetadata() == null ? null : response.getMetadata().getUsage();
         return new Turn(
                 output.getText(),
                 output.getToolCalls().stream()
@@ -190,7 +209,13 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                         .toList(),
                 completionStatus(response.getResult().getMetadata() == null
                         ? null
-                        : response.getResult().getMetadata().getFinishReason()));
+                        : response.getResult().getMetadata().getFinishReason()),
+                tokenCount(usage == null ? null : usage.getPromptTokens()),
+                tokenCount(usage == null ? null : usage.getCompletionTokens()));
+    }
+
+    private int tokenCount(Number value) {
+        return value == null ? 0 : (int) Math.min(Integer.MAX_VALUE, Math.max(0L, value.longValue()));
     }
 
     private BoardGameRecommendationModel.CompletionStatus completionStatus(String finishReason) {
@@ -224,7 +249,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 ? null
                 : response.getMetadata().getUsage();
         LOGGER.info(
-                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, firstTextMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
+                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, firstTextMs={}, inputCharacters={}, promptTokens={}, completionTokens={}",
                 operation,
                 selected.provider(),
                 selected.modelName(),
@@ -232,7 +257,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 elapsedMs,
                 firstTextMs,
                 inputCharacters,
-                request.maxOutputTokens(),
                 usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),
                 usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
     }

@@ -12,6 +12,7 @@ import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
@@ -579,6 +580,27 @@ class PostgresRecommendationConversationStoreTest {
         assertThat(store.findOwned(originalId, "alice")).isPresent();
         assertThat(store.deleteOwned(originalId, "alice")).isTrue();
         assertThat(store.findOwned(originalId, "alice")).isEmpty();
+    }
+
+    @Test
+    void roundTripsLongConversationStateWithoutSerializerCompression() {
+        List<DialogueMessage> transcript = java.util.stream.IntStream.range(0, 30)
+                .mapToObj(index -> new DialogueMessage(index % 2 == 0 ? "user" : "assistant", "turn-" + index))
+                .toList();
+        List<KnownGame> knownGames = java.util.stream.IntStream.rangeClosed(1, 70)
+                .mapToObj(index -> new KnownGame(index, "候选-" + index, "Candidate-" + index))
+                .toList();
+        List<Integer> shownBggIds = java.util.stream.IntStream.rangeClosed(1, 70).boxed().toList();
+        ConversationState state = new ConversationState(
+                RecommendationProfile.empty(), transcript, knownGames, shownBggIds);
+        UUID conversationId = UUID.randomUUID();
+
+        store.createNew(conversationId, "alice", state, Instant.parse("2026-08-15T08:00:00Z"));
+
+        ConversationState restored = store.findOwned(conversationId, "alice").orElseThrow().state();
+        assertThat(restored.transcript()).containsExactlyElementsOf(transcript);
+        assertThat(restored.knownGames()).containsExactlyElementsOf(knownGames);
+        assertThat(restored.shownBggIds()).containsExactlyElementsOf(shownBggIds);
     }
 
     private static ConversationState state(List<DialogueMessage> transcript) {

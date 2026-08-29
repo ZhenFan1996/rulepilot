@@ -21,6 +21,13 @@ public class PostgresVectorRuleSearch implements VectorRuleSearchRepository {
     @Override
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> search(UUID documentVersionId, EmbeddingVector query, String provider, int limit) {
+        return search(documentVersionId, query, provider, 0, limit);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<RuleEvidenceHit> search(
+            UUID documentVersionId, EmbeddingVector query, String provider, int offset, int limit) {
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT id, document_version_id, section_type, heading, content,
                                page_from, page_to,
@@ -31,12 +38,13 @@ public class PostgresVectorRuleSearch implements VectorRuleSearchRepository {
                           AND embedding IS NOT NULL
                           AND embedding_provider = :provider
                         ORDER BY embedding <=> cast(:embedding AS vector), chunk_index
-                        LIMIT :limit
+                        LIMIT :limit OFFSET :offset
                         """)
                 .setParameter("embedding", vectorLiteral(query))
                 .setParameter("versionId", documentVersionId)
                 .setParameter("provider", provider)
                 .setParameter("limit", limit)
+                .setParameter("offset", offset)
                 .getResultList();
         return rows.stream().map(this::toHit).toList();
     }

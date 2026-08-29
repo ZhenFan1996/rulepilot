@@ -20,7 +20,6 @@ import java.util.Set;
 /** Strict admission for a model that may select application-owned candidates but can never author geometry. */
 final class VisualLocatorResponsePolicy {
 
-    private static final int ABSOLUTE_REVIEW_LIMIT = 12;
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
@@ -46,7 +45,7 @@ final class VisualLocatorResponsePolicy {
                 return Optional.empty();
             }
             JsonNode reviews = root.get("reviews");
-            if (!reviews.isArray() || reviews.isEmpty() || reviews.size() > ABSOLUTE_REVIEW_LIMIT) {
+            if (!reviews.isArray() || reviews.isEmpty()) {
                 return Optional.empty();
             }
             List<ModelReview> parsed = new ArrayList<>();
@@ -100,9 +99,6 @@ final class VisualLocatorResponsePolicy {
         String candidateId = review.get("candidateId").textValue().strip();
         String label = review.get("label").textValue().strip();
         String visibleDescription = review.get("visibleDescription").textValue().strip();
-        if (candidateId.length() > 64 || label.length() > 80 || visibleDescription.length() > 240) {
-            return Optional.empty();
-        }
         return Optional.of(new ModelReview(
                 stepPosition,
                 action,
@@ -160,14 +156,33 @@ final class VisualLocatorResponsePolicy {
         }
     }
 
-    static String completeReplacementFeedback(Rejection rejection) {
-        if (rejection == null || !rejection.retryable()) {
+    static String completeReplacementFeedback(
+            Rejection rejection,
+            String rejectedCandidate,
+            String validationError,
+            List<String> allowedCandidateIds,
+            List<Integer> allowedStepPositions,
+            List<String> allowedClaimRefs) {
+        if (rejection == null || !rejection.retryable()
+                || rejectedCandidate == null || validationError == null || validationError.isBlank()
+                || allowedCandidateIds == null || allowedStepPositions == null || allowedClaimRefs == null) {
             throw new IllegalArgumentException("visual selection rejection cannot be corrected");
         }
         Map<String, Object> feedback = new LinkedHashMap<>();
         feedback.put("status", "PREVIOUS_COMPLETE_SELECTION_REJECTED");
         feedback.put("reasonCode", rejection.name());
-        feedback.put("remainingCompleteReplacements", 1);
+        feedback.put("rejectedCandidate", rejectedCandidate);
+        feedback.put("validationError", validationError.strip());
+        feedback.put("originalJsonContract", Map.of(
+                "rootFields", List.of("batchAction", "reviews"),
+                "batchAction", List.of("STOP", "CONTINUE"),
+                "reviewFields", List.of(
+                        "stepPosition", "action", "candidateId", "label",
+                        "visibleDescription", "supportedClaimRefs"),
+                "actions", List.of("ACCEPT_CANDIDATE", "NO_VISUAL")));
+        feedback.put("allowedCandidateIds", List.copyOf(allowedCandidateIds));
+        feedback.put("allowedStepPositions", List.copyOf(allowedStepPositions));
+        feedback.put("allowedClaimRefs", List.copyOf(allowedClaimRefs));
         feedback.put("requiredAction", "RETURN_COMPLETE_REPLACEMENT");
         feedback.put("allowedDecisions", List.of("ACCEPT_CANDIDATE", "NO_VISUAL"));
         feedback.put("forbiddenActions", List.of(
@@ -176,6 +191,25 @@ final class VisualLocatorResponsePolicy {
                 "RETURN_GEOMETRY",
                 "RETURN_PROSE_OUTSIDE_JSON"));
         return promptJson(Collections.unmodifiableMap(feedback));
+    }
+
+    static String malformedValidationError(String content) {
+        if (content == null || content.isBlank()) return "The visual selection candidate is blank.";
+        try {
+            JsonNode root = JSON.readTree(content.strip());
+            if (root == null || !root.isObject()) {
+                return "The visual selection candidate must be one JSON object.";
+            }
+            return "The candidate does not match the exact batchAction plus non-empty reviews contract; every review "
+                    + "must contain exactly stepPosition, action, candidateId, label, visibleDescription, and "
+                    + "supportedClaimRefs with the action-dependent nullability described in the original contract.";
+        } catch (JsonProcessingException invalidJson) {
+            String location = invalidJson.getLocation() == null
+                    ? ""
+                    : " at line " + invalidJson.getLocation().getLineNr()
+                            + ", column " + invalidJson.getLocation().getColumnNr();
+            return "JSON parsing failed" + location + ": " + invalidJson.getOriginalMessage();
+        }
     }
 
     static Diagnostic diagnosticFor(Rejection rejection) {
@@ -220,8 +254,7 @@ final class VisualLocatorResponsePolicy {
         ModelGuide {
             if (batchAction == null
                     || reviews == null
-                    || reviews.isEmpty()
-                    || reviews.size() > ABSOLUTE_REVIEW_LIMIT) {
+                    || reviews.isEmpty()) {
                 throw new IllegalArgumentException("visual guide review plan is invalid");
             }
             reviews = List.copyOf(reviews);
@@ -241,7 +274,7 @@ final class VisualLocatorResponsePolicy {
         CANDIDATE_PREPARATION_FAILED;
 
         boolean retryable() {
-            return this == MALFORMED_JSON || this == UNSUPPORTED_SCOPE || this == PROVIDER_FAILURE;
+            return this == MALFORMED_JSON || this == UNSUPPORTED_SCOPE;
         }
     }
 }

@@ -43,9 +43,6 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class RecommendationConversationCoordinator {
 
-    static final int MAX_TRANSCRIPT_TURNS = 12;
-    static final int MAX_KNOWN_GAMES = 60;
-    static final int MAX_SHOWN_GAMES = 60;
     private static final Duration EXTRA_RECOVERY_WINDOW = Duration.ofSeconds(30);
     private static final Duration POLL_INTERVAL = Duration.ofMillis(50);
 
@@ -379,7 +376,7 @@ public class RecommendationConversationCoordinator {
                 state.profile(),
                 turn.message(),
                 turn.excludedBggIds(),
-                boundedTranscript(transcript),
+                completeTranscript(transcript),
                 turn.focusedBggId(),
                 state.knownGames(),
                 state.shownBggIds(),
@@ -390,8 +387,8 @@ public class RecommendationConversationCoordinator {
         return new ConversationState(
                 request.profile(),
                 importedPriorTranscript(request),
-                boundedKnownGames(request.knownGames()),
-                boundedIds(request.shownBggIds()),
+                uniqueKnownGames(request.knownGames()),
+                uniqueIds(request.shownBggIds()),
                 List.of());
     }
 
@@ -406,7 +403,7 @@ public class RecommendationConversationCoordinator {
                 transcript.removeLast();
             }
         }
-        return boundedTranscript(transcript);
+        return completeTranscript(transcript);
     }
 
     private static ConversationState nextState(
@@ -451,10 +448,10 @@ public class RecommendationConversationCoordinator {
         previous.verifiedGames().forEach(game -> verified.putIfAbsent(game.ranking().bggId(), game));
         return new ConversationState(
                 response.profile(),
-                boundedTranscript(transcript),
-                boundedKnownGames(new ArrayList<>(games.values())),
-                boundedIds(new ArrayList<>(shown)),
-                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList(),
+                completeTranscript(transcript),
+                uniqueKnownGames(new ArrayList<>(games.values())),
+                uniqueIds(new ArrayList<>(shown)),
+                List.copyOf(verified.values()),
                 new PublishedTurn(clientTurnId, responseLocale, response));
     }
 
@@ -473,9 +470,9 @@ public class RecommendationConversationCoordinator {
         return new ConversationState(
                 checkpoint.profile(),
                 previous.transcript(),
-                boundedKnownGames(new ArrayList<>(games.values())),
+                uniqueKnownGames(new ArrayList<>(games.values())),
                 previous.shownBggIds(),
-                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList(),
+                List.copyOf(verified.values()),
                 previous.latestPublishedTurn());
     }
 
@@ -513,26 +510,20 @@ public class RecommendationConversationCoordinator {
         transcript.add(message);
     }
 
-    private static List<DialogueMessage> boundedTranscript(List<DialogueMessage> values) {
-        List<DialogueMessage> copy = values == null ? List.of() : List.copyOf(values);
-        return copy.size() <= MAX_TRANSCRIPT_TURNS
-                ? copy
-                : List.copyOf(copy.subList(copy.size() - MAX_TRANSCRIPT_TURNS, copy.size()));
+    private static List<DialogueMessage> completeTranscript(List<DialogueMessage> values) {
+        return values == null ? List.of() : List.copyOf(values);
     }
 
-    private static List<KnownGame> boundedKnownGames(List<KnownGame> values) {
+    private static List<KnownGame> uniqueKnownGames(List<KnownGame> values) {
         Map<Integer, KnownGame> unique = new LinkedHashMap<>();
         if (values != null) values.forEach(game -> unique.putIfAbsent(game.bggId(), game));
-        return unique.values().stream().limit(MAX_KNOWN_GAMES).toList();
+        return List.copyOf(unique.values());
     }
 
-    private static List<Integer> boundedIds(List<Integer> values) {
+    private static List<Integer> uniqueIds(List<Integer> values) {
         LinkedHashSet<Integer> unique = new LinkedHashSet<>();
         if (values != null) unique.addAll(values);
-        List<Integer> ids = new ArrayList<>(unique);
-        return ids.size() <= MAX_SHOWN_GAMES
-                ? List.copyOf(ids)
-                : List.copyOf(ids.subList(ids.size() - MAX_SHOWN_GAMES, ids.size()));
+        return List.copyOf(unique);
     }
 
     private static String fingerprint(ConversationRequest request, String locale) {

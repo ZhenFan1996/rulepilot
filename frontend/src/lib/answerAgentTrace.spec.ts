@@ -46,9 +46,47 @@ describe('player-facing answer progress', () => {
     expect(JSON.stringify(trace)).not.toContain('private-schema-hash')
   })
 
-  it('maps rejected work to a stopped state instead of presenting success', () => {
+  it('keeps a rejected-but-recoverable correction running instead of presenting a terminal failure', () => {
     expect(answerAgentTrace([activity(1, 'VALIDATION', 'nativeCompletionRequirement', 'REJECTED')]))
-      .toEqual([{ sequence: 1, kind: 'verification', label: '还需要规则依据，继续查找', status: 'stopped' }])
+      .toEqual([{ sequence: 1, kind: 'verification', label: '还需要规则依据，继续查找', status: 'running' }])
+  })
+
+  it.each([
+    'nativeEmptyCompletion',
+    'nativeCompletionProtocol',
+    'nativeActionProtocol',
+    'nativeToolSchema',
+    'nativeObs|read_rule_pages|private-schema-hash|private-call',
+  ])('presents recoverable rejection %s as an in-progress correction', (operation) => {
+    const trace = answerAgentTrace([activity(1, 'VALIDATION', operation, 'REJECTED')], 'en')
+
+    expect(trace).toEqual([{
+      sequence: 1,
+      kind: 'verification',
+      label: 'The returned content needs correction; checking again',
+      status: 'running',
+    }])
+    expect(JSON.stringify(trace)).not.toContain('private-schema-hash')
+  })
+
+  it('distinguishes exhausted observation progress from a correction the agent can continue', () => {
+    expect(answerAgentTrace([
+      activity(1, 'VALIDATION', 'nativeObservationNoProgress|read_rule_pages', 'REJECTED'),
+    ])).toEqual([{
+      sequence: 1,
+      kind: 'verification',
+      label: '补充证据查找没有新增进展，已停止这一步；继续使用已有核验证据',
+      status: 'stopped',
+    }])
+
+    expect(answerAgentTrace([
+      activity(2, 'VALIDATION', 'nativeToolFallback|TIMEOUT', 'SUCCEEDED'),
+    ], 'en')).toEqual([{
+      sequence: 2,
+      kind: 'verification',
+      label: 'Supplementary evidence search timed out, so that step stopped; continuing with checked evidence',
+      status: 'stopped',
+    }])
   })
 
   it('shows structured exception validation as a player-readable tool choice', () => {
@@ -128,7 +166,7 @@ describe('player-facing answer progress', () => {
 
   it('explains bounded fallback and repair in player language', () => {
     const trace = answerAgentTrace([
-      activity(1, 'VALIDATION', 'nativeToolFallback', 'REJECTED'),
+      activity(1, 'VALIDATION', 'nativeToolFallback|TOKEN_BUDGET', 'REJECTED'),
       activity(2, 'VALIDATION', 'nativeCompletionRequirement', 'REJECTED'),
       activity(3, 'MODEL', 'repairPublicationValidation'),
       activity(4, 'MODEL', 'repairRuleCalculation'),
@@ -139,7 +177,7 @@ describe('player-facing answer progress', () => {
     ])
 
     expect(trace.map(item => item.label)).toEqual([
-      '没有找到新的规则依据，保留已核对结果',
+      '补充证据查找已达到本次容量边界，已停止这一步；继续使用已有核验证据',
       '还需要规则依据，继续查找',
       '修正引用后重新核对回答',
       '修正公式后重新核算结果',
@@ -148,6 +186,7 @@ describe('player-facing answer progress', () => {
       '修正条件分支后重新核对',
       '修正例外条款后重新核对',
     ])
+    expect(trace.slice(0, 2).map(item => item.status)).toEqual(['stopped', 'running'])
   })
 })
 

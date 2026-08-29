@@ -60,7 +60,7 @@ class UploadedRulebookTeachingLauncherTest {
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
         when(handoffs.claimReady(4)).thenReturn(List.of());
         when(handoffs.reconcileLaunched(4))
-                .thenReturn(new UploadedRulebookTeachingHandoffs.Reconciliation(0, 0, 0));
+                .thenReturn(new UploadedRulebookTeachingHandoffs.Reconciliation(0, 0));
         var launcher = new UploadedRulebookTeachingLauncher(handoffs, plans, 4);
 
         launcher.recoverAndLaunch();
@@ -192,7 +192,7 @@ class UploadedRulebookTeachingLauncherTest {
 
         @Override
         public Reconciliation reconcileLaunched(int limit) {
-            return new Reconciliation(0, 0, 0);
+            return new Reconciliation(0, 0);
         }
     }
 

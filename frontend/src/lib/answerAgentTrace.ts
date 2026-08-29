@@ -40,8 +40,8 @@ function streamActor(actor: import('@/lib/structuredAnswerStream').AnswerStreamA
 
 function streamStage(stage: import('@/lib/structuredAnswerStream').AnswerStreamActivity['stage'], locale: 'zh-CN' | 'en') {
   const labels = locale === 'en'
-    ? { searching_evidence: 'Searching the indexed rulebook for direct evidence', checking_exceptions: 'Checking exceptions and override clauses', expanding_context: 'Reading the surrounding context of the citation', reading_pages: 'Reading the exact rulebook pages', composing_answer: 'Composing only from verified evidence', reviewing_support: 'Reviewing whether each claim is supported', validating_citations: 'Validating citation ownership and page boundaries', checking_rule_details: 'Checking a rule-specific detail' }
-    : { searching_evidence: '正在索引规则书中查找直接依据', checking_exceptions: '正在核对例外与覆盖条款', expanding_context: '正在阅读引用前后的完整语境', reading_pages: '正在读取对应的规则书原页', composing_answer: '正在只根据已核实证据组织回答', reviewing_support: '正在复核每个结论是否有依据', validating_citations: '正在校验引用归属与页码边界', checking_rule_details: '正在核对具体规则细节' }
+    ? { searching_evidence: 'Searching the indexed rulebook for direct evidence', checking_exceptions: 'Checking exceptions and override clauses', expanding_context: 'Reading the surrounding context of the citation', reading_pages: 'Reading the exact rulebook pages', composing_answer: 'Composing only from verified evidence', reviewing_support: 'Reviewing whether each claim is supported', validating_citations: 'Validating citation ownership and page boundaries', correcting_answer: 'Correcting an answer that did not pass validation', evidence_search_stalled: 'Supplementary evidence search made no new progress; the answer continues with checked evidence', checking_rule_details: 'Checking a rule-specific detail' }
+    : { searching_evidence: '正在索引规则书中查找直接依据', checking_exceptions: '正在核对例外与覆盖条款', expanding_context: '正在阅读引用前后的完整语境', reading_pages: '正在读取对应的规则书原页', composing_answer: '正在只根据已核实证据组织回答', reviewing_support: '正在复核每个结论是否有依据', validating_citations: '正在校验引用归属与页码边界', correcting_answer: '回答未通过校验，正在修正', evidence_search_stalled: '补充证据查找没有新增进展，已停止这一步', checking_rule_details: '正在核对具体规则细节' }
   return labels[stage]
 }
 
@@ -59,12 +59,14 @@ export function answerAgentTrace(
 }
 
 function traceItem(activity: AnswerAgentActivity, locale: 'zh-CN' | 'en'): AnswerAgentTraceItem | null {
+  const operation = activity.operation
   const status = activity.outcome === 'RUNNING'
     ? 'running'
+    : activity.outcome === 'REJECTED' && isRecoverableCorrection(operation)
+      ? 'running'
     : activity.outcome === 'SUCCEEDED'
       ? 'done'
       : 'stopped'
-  const operation = activity.operation
   if (operation.startsWith('nativeTool|search_rule_evidence') || operation === 'hybridRuleSearch') {
     return item(activity.sequence, 'tool', text(locale, '查找规则依据', 'Searching rule evidence'), status)
   }
@@ -134,11 +136,17 @@ function traceItem(activity: AnswerAgentActivity, locale: 'zh-CN' | 'en'): Answe
   if (operation.startsWith('nativeModelTurn')) {
     return item(activity.sequence, 'decision', text(locale, '根据当前证据判断下一步', 'Decided the next step from current evidence'), status)
   }
-  if (operation === 'nativeToolFallback') {
-    return item(activity.sequence, 'verification', text(locale, '没有找到新的规则依据，保留已核对结果', 'No new rule evidence found; keeping the checked result'), status)
+  if (operation.startsWith('nativeToolFallback')) {
+    return item(activity.sequence, 'verification', nativeFallbackLabel(operation, locale), 'stopped')
+  }
+  if (operation.startsWith('nativeObservationNoProgress')) {
+    return item(activity.sequence, 'verification', text(locale, '补充证据查找没有新增进展，已停止这一步；继续使用已有核验证据', 'Supplementary evidence search made no new progress, so that step stopped; continuing with checked evidence'), 'stopped')
   }
   if (operation === 'nativeCompletionRequirement') {
     return item(activity.sequence, 'verification', text(locale, '还需要规则依据，继续查找', 'More rule evidence is needed; continuing the search'), status)
+  }
+  if (activity.outcome === 'REJECTED' && isRecoverableCorrection(operation)) {
+    return item(activity.sequence, 'verification', text(locale, '返回内容还需要修正，正在继续核对', 'The returned content needs correction; checking again'), status)
   }
   if (operation === 'repairPublicationValidation') {
     return item(activity.sequence, 'verification', text(locale, '修正引用后重新核对回答', 'Corrected citations and checked the answer again'), status)
@@ -192,6 +200,35 @@ function traceItem(activity: AnswerAgentActivity, locale: 'zh-CN' | 'en'): Answe
     return item(activity.sequence, 'decision', text(locale, '根据已验证证据组织回答', 'Composed from validated evidence'), status)
   }
   return null
+}
+
+function nativeFallbackLabel(operation: string, locale: 'zh-CN' | 'en') {
+  const reason = operation.split('|', 2)[1]
+  if (reason === 'TIMEOUT') {
+    return text(locale, '补充证据查找超时，已停止这一步；继续使用已有核验证据', 'Supplementary evidence search timed out, so that step stopped; continuing with checked evidence')
+  }
+  if (reason === 'MODEL_CAPABILITY_UNAVAILABLE' || reason === 'TOOL_ALLOWLIST_UNAVAILABLE') {
+    return text(locale, '补充证据能力当前不可用，已停止这一步；继续使用已有核验证据', 'Supplementary evidence lookup is unavailable, so that step stopped; continuing with checked evidence')
+  }
+  if (reason === 'CANCELLED') {
+    return text(locale, '补充证据查找已取消；继续使用已有核验证据', 'Supplementary evidence search was cancelled; continuing with checked evidence')
+  }
+  if (reason?.endsWith('_BUDGET') || reason?.startsWith('OBSERVATION_BUDGET_')) {
+    return text(locale, '补充证据查找已达到本次容量边界，已停止这一步；继续使用已有核验证据', 'Supplementary evidence search reached this run\'s capacity, so that step stopped; continuing with checked evidence')
+  }
+  if (reason?.endsWith('_NO_PROGRESS')) {
+    return text(locale, '补充证据查找没有新增进展，已停止这一步；继续使用已有核验证据', 'Supplementary evidence search made no new progress, so that step stopped; continuing with checked evidence')
+  }
+  return text(locale, '补充证据查找未能继续，已停止这一步；继续使用已有核验证据', 'Supplementary evidence search could not continue, so that step stopped; continuing with checked evidence')
+}
+
+function isRecoverableCorrection(operation: string) {
+  return operation === 'nativeCompletionRequirement'
+    || operation === 'nativeEmptyCompletion'
+    || operation === 'nativeCompletionProtocol'
+    || operation === 'nativeActionProtocol'
+    || operation === 'nativeToolSchema'
+    || operation.startsWith('nativeObs|')
 }
 
 function item(

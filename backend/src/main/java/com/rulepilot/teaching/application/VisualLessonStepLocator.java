@@ -28,8 +28,6 @@ import java.util.stream.Collectors;
 final class VisualLessonStepLocator {
 
     static final Duration DEFAULT_COMPATIBILITY_WORKFLOW_TIMEOUT = Duration.ofMinutes(10);
-    static final int MAX_CANDIDATE_BATCHES_PER_SECTION = 4;
-    static final int MAX_MODEL_CALLS_PER_CANDIDATE_BATCH = 2;
     private static final int CONSECUTIVE_PROPOSAL_RUNTIME_FAILURE_LIMIT = 2;
 
     private final DocumentPageImages pageImages;
@@ -193,7 +191,6 @@ final class VisualLessonStepLocator {
         for (int pageStart = 0;
                 !stopped && pageStart < citedPages.size();
                 pageStart += DocumentPageImages.MAX_PAGES_PER_READ) {
-            if (batchNumber > MAX_CANDIDATE_BATCHES_PER_SECTION) break;
             Boundary boundary = boundary(runId, workflowDeadline);
             if (boundary.stoppedOutcome() != null) {
                 if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
@@ -220,10 +217,6 @@ final class VisualLessonStepLocator {
             for (int offset = 0;
                     offset < selected.size();
                     offset += VisualRegionLocator.VisualLocationRequest.MAX_CANDIDATES_PER_BATCH) {
-                if (batchNumber > MAX_CANDIDATE_BATCHES_PER_SECTION) {
-                    stopped = true;
-                    break;
-                }
                 boundary = boundary(runId, workflowDeadline);
                 if (boundary.stoppedOutcome() != null) {
                     if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
@@ -322,14 +315,6 @@ final class VisualLessonStepLocator {
                 : firstRejection);
     }
 
-    static int maximumModelCallsPerSectionPass() {
-        // The production locator owns one initial typed selection and at most one complete replacement per batch.
-        // Counting the fixed batch ceiling is pure admission planning; it never reads pages or invokes the locator.
-        return Math.multiplyExact(
-                MAX_CANDIDATE_BATCHES_PER_SECTION,
-                MAX_MODEL_CALLS_PER_CANDIDATE_BATCH);
-    }
-
     private Boundary boundary(UUID runId, Instant compatibilityDeadline) {
         Instant now = clock.instant();
         Instant deadline = compatibilityDeadline;
@@ -338,10 +323,6 @@ final class VisualLessonStepLocator {
             if (budget.cancellationRequestedAt() != null) {
                 throw new AgentExecutionStoppedException(
                         AgentExecutionStoppedException.StopReason.CANCELLED);
-            }
-            if (budget.usedModelCalls() >= budget.maxModelCalls()) {
-                throw new AgentExecutionStoppedException(
-                        AgentExecutionStoppedException.StopReason.MODEL_BUDGET);
             }
             if (budget.usedTokens() >= budget.maxTokens()) {
                 throw new AgentExecutionStoppedException(

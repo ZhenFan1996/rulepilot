@@ -301,47 +301,6 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
     }
 
     @Test
-    void automaticallyRetriesAnUploadedPreparationOnlyOnceAndRetainsTheExhaustedRun() {
-        Instant now = Instant.parse("2026-08-10T12:00:00Z");
-        UUID versionId = insertDocument("READY");
-        UUID handoffId = UUID.randomUUID();
-        UUID firstRunId = UUID.randomUUID();
-        UUID secondRunId = UUID.randomUUID();
-        insertPreparationRun(firstRunId, versionId, "FAILED", now);
-        insertPreparationRun(secondRunId, versionId, "FAILED", now.plusSeconds(4));
-        inTransactionReturning(store -> store.request(
-                handoffId, versionId, "upload-handoff-player", null, now));
-        inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
-        inTransaction(store -> store.completeLaunch(handoffId, firstRunId, now.plusSeconds(2)));
-
-        var firstCandidate = inTransactionReturning(store -> store.findUnreconciledLaunched(4));
-        boolean restarted = inTransactionReturning(store -> store.retryAutomatically(
-                handoffId, firstRunId, now.plusSeconds(3)));
-        inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(4)));
-        inTransaction(store -> store.completeLaunch(handoffId, secondRunId, now.plusSeconds(5)));
-        boolean restartedAgain = inTransactionReturning(store -> store.retryAutomatically(
-                handoffId, secondRunId, now.plusSeconds(6)));
-        boolean exhausted = inTransactionReturning(store -> store.failRecoveryExhausted(
-                handoffId, secondRunId, now.plusSeconds(7)));
-
-        assertThat(firstCandidate).singleElement().satisfies(candidate -> {
-            assertThat(candidate.preparationRunId()).isEqualTo(firstRunId);
-            assertThat(candidate.automaticRecoveryCount()).isZero();
-        });
-        assertThat(restarted).isTrue();
-        assertThat(restartedAgain).isFalse();
-        assertThat(exhausted).isTrue();
-        assertThat(jdbc.queryForMap(
-                        "SELECT state, error_code, preparation_run_id, automatic_recovery_count "
-                                + "FROM uploaded_rulebook_teaching_handoff WHERE id = ?",
-                        handoffId))
-                .containsEntry("state", "FAILED")
-                .containsEntry("error_code", "TEACHING_RECOVERY_EXHAUSTED")
-                .containsEntry("preparation_run_id", secondRunId)
-                .containsEntry("automatic_recovery_count", 1);
-    }
-
-    @Test
     void cancellationDeletesTheExactUploadedIntentSoReconciliationCannotReviveIt() {
         Instant now = Instant.parse("2026-08-10T12:30:00Z");
         UUID versionId = insertDocument("READY");

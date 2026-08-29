@@ -8,7 +8,7 @@ import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.List;
 import java.util.Set;
 
-/** Bounded, non-factual retrieval obligations accepted from the Answer Agent. */
+/** Non-factual retrieval obligations accepted from the Answer Agent. */
 public record AnswerQuestionPlan(
         List<Subquestion> subquestions,
         boolean agentPlanned,
@@ -19,7 +19,7 @@ public record AnswerQuestionPlan(
         List<PageHint> pageHints) {
 
     public AnswerQuestionPlan {
-        if (subquestions == null || subquestions.isEmpty() || subquestions.size() > 4) {
+        if (subquestions == null || subquestions.isEmpty()) {
             throw new IllegalArgumentException("answer question plan is invalid");
         }
         subquestions = List.copyOf(subquestions);
@@ -32,10 +32,7 @@ public record AnswerQuestionPlan(
                 ? List.of()
                 : currentRuleObjectSpans.stream().map(String::strip).distinct().toList();
         pageHints = pageHints == null ? List.of() : pageHints.stream().distinct().toList();
-        if (currentRuleObjectSpans.size() > 4
-                || currentRuleObjectSpans.stream()
-                        .anyMatch(value -> value.isBlank() || value.length() > 120)
-                || pageHints.size() > 4) {
+        if (currentRuleObjectSpans.stream().anyMatch(String::isBlank)) {
             throw new IllegalArgumentException("answer question focus is invalid");
         }
     }
@@ -77,11 +74,10 @@ public record AnswerQuestionPlan(
             QuestionOwner owner,
             List<String> retrievalQueries) {
         public Subquestion {
-            if (text == null || text.isBlank() || text.length() > 300
-                    || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3
-                    || owner == null || retrievalQueries == null || retrievalQueries.size() > 3
-                    || retrievalQueries.stream()
-                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 200)) {
+            if (text == null || text.isBlank()
+                    || evidenceNeeds == null || evidenceNeeds.isEmpty()
+                    || owner == null || retrievalQueries == null
+                    || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank())) {
                 throw new IllegalArgumentException("answer subquestion is invalid");
             }
             text = text.strip();
@@ -106,8 +102,7 @@ public record AnswerQuestionPlan(
     /** Validated locator copied from the current question; it never asserts that the page answers the question. */
     public record PageHint(String questionSpan, int pageNumber) {
         public PageHint {
-            if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 120
-                    || pageNumber < 1 || pageNumber > 10_000) {
+            if (questionSpan == null || questionSpan.isBlank() || pageNumber < 1) {
                 throw new IllegalArgumentException("answer page hint is invalid");
             }
             questionSpan = questionSpan.strip();

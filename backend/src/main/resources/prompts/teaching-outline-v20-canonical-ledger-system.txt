@@ -27,7 +27,8 @@ Planning autonomy:
 - The optional player learning goal changes emphasis or order only; it is not rule evidence.
 
 Compact topic contract:
-- topics is the complete ordered chapter list, with at most sixteen items. Every topic has exactly key, objective,
+- topics is the complete ordered chapter list, with as many items as the document's independently teachable decisions
+  and procedures require. Every topic has exactly key, objective,
   required, visualEvidenceRecommended, and teachingUnits. key and teachingUnitId are short unique ASCII kebab-case
   IDs. objective is a natural, concise Simplified-Chinese chapter heading that also states what the learner will be
   able to decide, do, distinguish, or verify; the application uses it verbatim as both heading and learning contract.
@@ -37,7 +38,8 @@ Compact topic contract:
 - Use each supplied sourceSlotId exactly once across the entire topic list. Copy IDs exactly; never copy or recreate
   source identifiers in the output. Group closely coupled slots into one teaching unit only when one coherent lesson
   step sequence can teach them together. Let the actual rule relationship determine unit size; do not split a coherent
-  procedure merely to satisfy an arbitrary item count. A chapter contains source slots from at most five distinct pages.
+  procedure merely to satisfy an arbitrary item count. A chapter may use every directly supporting page when those
+  sources teach one coherent procedure; split only for genuine learning boundaries.
 - A MISSING_EXTERNAL_SOURCE slot remains a clearly named gap. Keep it separate from sourced rules within a teaching
   unit and use its supplied fixedRole. A chapter may still teach its sourced units while naming a local external gap.
 - required is true when omitting this chapter would prevent the lesson from meeting its own learning contract.
@@ -48,10 +50,10 @@ Whole-game understanding before chapter fan-out:
 - wholeGameUnderstanding has exactly summary, concepts, and topicDependencies. Form it from the complete ledger
   before finalizing chapter order. summary is a concise mental model of how this specific document's rules fit
   together, not a genre description or a restatement of chapter titles.
-- concepts is an ordered list of at most twelve document-specific global concepts. Every concept has exactly
+- concepts is the smallest complete ordered list of document-specific global concepts. Every concept has exactly
   conceptId, label, explanation, sourceSlotIds, relatedTopicKeys, and prerequisiteConceptIds. IDs are short ASCII
-  kebab-case. Use one concise Simplified-Chinese sentence for explanation and one to sixteen representative SOURCED
-  slot IDs when the concept genuinely spans that many named dimensions. relatedTopicKeys must include every chapter
+  kebab-case. Use a concise Simplified-Chinese explanation and the representative SOURCED slot IDs needed to ground
+  the concept. relatedTopicKeys must include every chapter
   that owns a selected slot and every chapter genuinely connected by
   that concept. prerequisiteConceptIds may point only to earlier returned concepts.
 - topicDependencies contains only genuine pedagogical prerequisites and has exactly prerequisiteTopicKey,
@@ -59,6 +61,6 @@ Whole-game understanding before chapter fan-out:
   cross-chapter prerequisite is useful.
 
 Before returning, silently verify: all supplied slots appear exactly once; no unknown slot appears; every unit stays
-inside one chapter; chapter page counts stay bounded; missing-source roles are unchanged; every concept uses existing
+inside one chapter; every chapter page binding is directly supported; missing-source roles are unchanged; every concept uses existing
 SOURCED slots owned by its related topics; and dependency order is valid. Serialize compact JSON only, with no
 Markdown, comments, duplicated source prose, or decorative whitespace.

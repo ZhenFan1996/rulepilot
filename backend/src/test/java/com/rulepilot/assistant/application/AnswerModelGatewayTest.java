@@ -11,9 +11,16 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
+import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException.RejectedOutput;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -32,9 +39,10 @@ class AnswerModelGatewayTest {
         RecordingInvocations invocations = new RecordingInvocations();
         AnswerModelGateway gateway = new AnswerModelGateway(model(expected, expected), limiter, invocations);
 
-        ModelDraft result = gateway.compose(runId, "alice", sessionId, request());
+        AnswerModelGateway.Composition result = gateway.compose(runId, "alice", sessionId, request());
 
-        assertThat(result).isEqualTo(expected);
+        assertThat(result.draft()).isEqualTo(expected);
+        assertThat(result.replacements()).isZero();
         assertThat(limiter.requests).containsExactly(new PermitRequest("alice", sessionId, "test-provider"));
         assertThat(limiter.releases).isEqualTo(1);
         assertThat(invocations.calls).containsExactly(new Invocation(
@@ -66,13 +74,13 @@ class AnswerModelGatewayTest {
         };
         AnswerModelGateway gateway = new AnswerModelGateway(failingModel, limiter, new RecordingInvocations());
 
-        assertThatThrownBy(() -> gateway.revise(
+        assertThatThrownBy(() -> gateway.continueAfterValidationRejection(
                         runId,
                         "alice",
                         sessionId,
                         request(),
                         draft("旧回答。"),
-                        List.of("修订。"),
+                        "CITATION_OWNERSHIP: citation belongs to another source",
                         "repairPlayerFacingRuleAnswer",
                         "Answer repaired"))
                 .isInstanceOf(IllegalStateException.class)
@@ -112,10 +120,66 @@ class AnswerModelGatewayTest {
         AnswerModelGateway gateway = new AnswerModelGateway(
                 ownerScoped, limiter, new RecordingInvocations());
 
-        assertThat(gateway.compose(runId, "alice", sessionId, request())).isEqualTo(expected);
+        assertThat(gateway.compose(runId, "alice", sessionId, request()).draft()).isEqualTo(expected);
         assertThat(providerOwner).hasValue("alice");
         assertThat(compositionOwner).hasValue("alice");
         assertThat(limiter.requests).containsExactly(new PermitRequest("alice", sessionId, "alice-provider"));
+    }
+
+    @Test
+    void returnsTheCompleteQuestionRejectionThroughOneAuditedAgentLoop() {
+        String candidate = "{\"questionType\":\"RULE_QUERY\",\"invented\":true}";
+        String schema = "{\"type\":\"object\",\"additionalProperties\":false}";
+        RejectedOutput rejected = new RejectedOutput(
+                candidate, "Unrecognized field 'invented'", schema, Set.of());
+        AtomicReference<RejectedOutput> feedback = new AtomicReference<>();
+        QuestionInterpretationDraft expected = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("行动"),
+                Set.of(),
+                List.of());
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return draft("unused");
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(
+                    QuestionInterpretationRequest request) {
+                throw new RuleAnswerModelInvalidOutputException(
+                        "invalid interpretation", null, rejected);
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> replaceInvalidQuestionInterpretation(
+                    QuestionInterpretationRequest request, RejectedOutput rejectedOutput) {
+                feedback.set(rejectedOutput);
+                return Optional.of(expected);
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        AnswerModelGateway gateway = new AnswerModelGateway(
+                model, new RecordingRateLimiter(), invocations);
+
+        Optional<QuestionInterpretationDraft> result = gateway.interpretQuestion(
+                runId,
+                "alice",
+                sessionId,
+                new QuestionInterpretationRequest(
+                        "行动如何执行？",
+                        "",
+                        "",
+                        "",
+                        QuestionType.RULE_QUERY,
+                        Set.of(),
+                        PlayerLocale.ZH_CN));
+
+        assertThat(result).contains(expected);
+        assertThat(feedback).hasValue(rejected);
+        assertThat(invocations.operations)
+                .containsExactly("interpretAnswerQuestion", "replaceInvalidQuestionInterpretation");
     }
 
     private RuleAnswerModel model(ModelDraft composition, ModelDraft revision) {
@@ -183,6 +247,7 @@ class AnswerModelGatewayTest {
 
     private static final class RecordingInvocations implements AuditedAgentInvocations {
         private final List<Invocation> calls = new ArrayList<>();
+        private final List<String> operations = new ArrayList<>();
 
         @Override
         public <T> T invoke(
@@ -193,6 +258,7 @@ class AnswerModelGatewayTest {
                 String successSummary,
                 Supplier<T> invocation,
                 ToIntFunction<T> outputTokenEstimator) {
+            operations.add(operation);
             T result = invocation.get();
             calls.add(new Invocation(runId, type, operation, successSummary, outputTokenEstimator.applyAsInt(result) > 0));
             return result;

@@ -4,11 +4,10 @@ import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 public interface TeachingLessonModel {
-
-    int ABSOLUTE_VISUAL_INPUT_BUDGET = 12;
 
     default String providerId() {
         return "unspecified";
@@ -42,21 +41,10 @@ public interface TeachingLessonModel {
         return approximateInputProfile(request, "", providerId());
     }
 
-    /** Estimates a separately budgeted malformed-output repair request. */
-    default InputTokenProfile compositionRepairInputProfile(SectionRequest request) {
-        return compositionInputProfile(request);
-    }
-
-    /** Estimates the complete provider input for one application-requested revision. */
-    default InputTokenProfile revisionInputProfile(
-            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-        return approximateInputProfile(request, previousDraft + " " + feedback, providerId());
-    }
-
-    /** Estimates a separately budgeted malformed revision-output repair request. */
-    default InputTokenProfile revisionRepairInputProfile(
-            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-        return revisionInputProfile(request, previousDraft, feedback);
+    /** Estimates the next turn after the same section Agent receives a rejected candidate observation. */
+    default InputTokenProfile continuationInputProfile(
+            SectionRequest request, CandidateRejection rejection) {
+        return approximateInputProfile(request, rejection.toString(), providerId());
     }
 
     /** Estimates the provider's structured response representation rather than internal UUID-bearing values. */
@@ -69,49 +57,107 @@ public interface TeachingLessonModel {
         return estimatedInvocation(request, draft);
     }
 
-    default ModelInvocation repairCompositionContractInvocation(SectionRequest request) {
-        SectionDraft draft = repairCompositionContract(request);
-        return estimatedInvocation(request, draft);
-    }
-
-    default ModelInvocation reviseInvocation(
-            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-        SectionDraft draft = revise(request, previousDraft, feedback);
-        return estimatedInvocation(request, draft);
-    }
-
-    default ModelInvocation repairRevisionContractInvocation(
-            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-        SectionDraft draft = repairRevisionContract(request, previousDraft, feedback);
+    default ModelInvocation continueAfterRejectionInvocation(
+            SectionRequest request, CandidateRejection rejection) {
+        SectionDraft draft = continueAfterRejection(request, rejection);
         return estimatedInvocation(request, draft);
     }
 
     SectionDraft compose(SectionRequest request);
 
     /**
-     * Performs one explicit provider attempt to repair a malformed composition response.
+     * Continues the same section Agent with one complete rejection observation.
      *
-     * <p>The application calls this separately so the repair consumes its own model budget and audit activity.</p>
+     * <p>The returned value is always a complete replacement candidate. The application never interprets a prose
+     * patch or combines fields from multiple candidates.</p>
      */
-    default SectionDraft repairCompositionContract(SectionRequest request) {
+    default SectionDraft continueAfterRejection(
+            SectionRequest request, CandidateRejection rejection) {
         return compose(request);
     }
 
-    default SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-        return compose(request);
+    /** Builds the complete observation for a candidate that reached deterministic application validation. */
+    default CandidateRejection rejectionObservation(
+            SectionRequest request, SectionDraft candidate, String validationError) {
+        return rejectionObservation(request, candidate == null ? "" : candidate.toString(), validationError);
     }
 
-    /** Performs one explicit provider attempt to repair a malformed revision response. */
-    default SectionDraft repairRevisionContract(
-            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-        return revise(request, previousDraft, feedback);
+    /** Enriches a raw provider candidate with the original contract and every allowed opaque identity. */
+    default CandidateRejection rejectionObservation(
+            SectionRequest request, String candidateJson, String validationError) {
+        return new CandidateRejection(
+                candidateJson,
+                validationError,
+                "TeachingLessonModel.SectionDraft JSON contract",
+                request.topicKey(),
+                request.evidence().stream().map(input -> input.chunkId().toString()).toList(),
+                request.teachingUnits().stream().map(TeachingUnitInput::unitId).toList());
     }
 
     /** Identifies an untrusted provider response that could not satisfy the section output contract. */
     final class InvalidOutputException extends RuntimeException {
 
+        private final String rejectedCandidate;
+        private final String validationError;
+
         public InvalidOutputException(String message, Throwable cause) {
+            this(message, "", cause);
+        }
+
+        public InvalidOutputException(String message, String rejectedCandidate, Throwable cause) {
             super(message, cause);
+            this.rejectedCandidate = rejectedCandidate == null ? "" : rejectedCandidate;
+            this.validationError = detailedError(message, cause);
+        }
+
+        public String rejectedCandidate() {
+            return rejectedCandidate;
+        }
+
+        public String validationError() {
+            return validationError;
+        }
+
+        private static String detailedError(String message, Throwable cause) {
+            StringBuilder diagnostic = new StringBuilder(message == null || message.isBlank()
+                    ? "teaching model output was rejected"
+                    : message.strip());
+            Throwable current = cause;
+            while (current != null) {
+                if (current.getMessage() != null && !current.getMessage().isBlank()) {
+                    diagnostic.append("; caused by ")
+                            .append(current.getClass().getSimpleName())
+                            .append(": ")
+                            .append(current.getMessage());
+                }
+                current = current.getCause();
+            }
+            return diagnostic.toString();
+        }
+    }
+
+    /** Complete, untruncated validation feedback passed back to the same section Agent. */
+    record CandidateRejection(
+            String candidateJson,
+            String validationError,
+            String outputContract,
+            String sectionIdentity,
+            List<String> allowedEvidenceIdentities,
+            List<String> allowedTeachingUnitIdentities) {
+
+        public CandidateRejection {
+            candidateJson = candidateJson == null ? "" : candidateJson;
+            if (validationError == null || validationError.isBlank()
+                    || outputContract == null || outputContract.isBlank()
+                    || sectionIdentity == null || sectionIdentity.isBlank()) {
+                throw new IllegalArgumentException("teaching candidate rejection is incomplete");
+            }
+            validationError = validationError.strip();
+            outputContract = outputContract.strip();
+            sectionIdentity = sectionIdentity.strip();
+            allowedEvidenceIdentities = List.copyOf(Objects.requireNonNull(allowedEvidenceIdentities));
+            allowedTeachingUnitIdentities =
+                    List.copyOf(Objects.requireNonNull(allowedTeachingUnitIdentities));
         }
     }
 
@@ -297,12 +343,12 @@ public interface TeachingLessonModel {
                     || title == null || title.isBlank()
                     || objective == null || objective.isBlank()
                     || coverageTags == null
-                    || priorSections == null || priorSections.size() > 2
+                    || priorSections == null
                     || evidence == null || evidence.isEmpty()
-                    || pageImages == null || pageImages.size() > ABSOLUTE_VISUAL_INPUT_BUDGET
+                    || pageImages == null
                     || requiredRuleIntents == null
                     || requiredRuleIntents.stream()
-                            .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)
+                            .anyMatch(intent -> intent == null || intent.isBlank())
                     || teachingUnits == null
                     || teachingUnits.stream().anyMatch(java.util.Objects::isNull)
                     || chapterScope == null

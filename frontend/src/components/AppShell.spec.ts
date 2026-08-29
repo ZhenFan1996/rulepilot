@@ -377,7 +377,7 @@ describe('AppShell', () => {
     await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('失败的官方讲解')
     expect(wrapper.text()).toContain('需要处理')
-    expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心重试')
+    expect(wrapper.text()).toContain('讲解准备已经停止，请在讲解中心查看失败原因')
 
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     await flushPromises()
@@ -455,7 +455,7 @@ describe('AppShell', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('仍在准备的讲解')
     expect(wrapper.text()).toContain('需要处理')
-    expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心重试')
+    expect(wrapper.text()).toContain('讲解准备已经停止，请在讲解中心查看失败原因')
     wrapper.unmount()
   })
 

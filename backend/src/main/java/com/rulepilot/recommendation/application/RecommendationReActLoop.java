@@ -11,7 +11,6 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL;
-import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_VERIFIED_GAMES;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonParser;
@@ -22,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
@@ -53,11 +53,10 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ResearchSource;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
-import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
-import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationDraft;
-import com.rulepilot.recommendation.application.RecommendationPublication.Permit;
-import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
 import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
+import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
+import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
+import com.rulepilot.recommendation.application.RecommendationPublication.PreparedPublication;
 import com.rulepilot.shared.AsyncContextPropagation;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
@@ -81,13 +80,11 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Owns the bounded observe-decide-act loop, budgets, and truthful degradation. */
+/** Owns the resource-bounded observe-decide-act loop and truthful degradation. */
 final class RecommendationReActLoop {
 
-    static final int MAX_MODEL_CALLS = 6;
-    private static final int MAX_ACTION_CALLS = 6;
-    private static final int ACTION_SELECTION_OUTPUT_TOKENS = 512;
-    private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 2_048;
+    private static final int MAX_CATALOG_OFFSET =
+            Integer.MAX_VALUE - BoardGameRecommendationCatalog.MAX_SEARCH_PAGE_SIZE;
     private static final Set<String> READ_ACTIONS = Set.of(
             RESOLVE_TOOL,
             BROWSE_TOOL,
@@ -150,7 +147,7 @@ final class RecommendationReActLoop {
         maximumRunMillis = properties.timeout().toMillis();
         evidenceReview = new RecommendationEvidenceReview(json, this);
         actionExecutor = new RecommendationActions(tools, selector, properties, json, evidenceReview, this);
-        publication = new RecommendationPublication(selector, evidenceReview, actionExecutor, this);
+        publication = new RecommendationPublication(selector, evidenceReview, actionExecutor, this, json);
         this.observations = observations == null ? ObservationRegistry.NOOP : observations;
     }
 
@@ -258,7 +255,7 @@ final class RecommendationReActLoop {
                 startedAt,
                 modelConfigurationOwner,
                 tools.webResearchConfigured(),
-                maximumRecommendationResults());
+                properties.maxTokens());
         ProgressTracker progress = new ProgressTracker(progressListener, state, startedAt);
         try {
             return converseWithProgress(
@@ -292,10 +289,7 @@ final class RecommendationReActLoop {
         List<String> currentTurnEvidenceIds = preferenceEvidenceIds.isEmpty()
                 ? List.of()
                 : List.of(preferenceEvidenceIds.getLast());
-        List<ToolSpec> actions = actions(
-                preferenceEvidenceIds,
-                currentTurnEvidenceIds,
-                properties.resultCount());
+        List<ToolSpec> actions = actions(preferenceEvidenceIds, currentTurnEvidenceIds);
 
         String input = agentInput(request, state, locale);
         List<Message> actionFoundation = List.of(
@@ -305,8 +299,7 @@ final class RecommendationReActLoop {
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
         Set<String> rejectedIncompatibleActionSets = new LinkedHashSet<>();
         int stateEpoch = 0;
-        while (state.modelCalls < MAX_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
-            state.modelCalls++;
+        while (true) {
             progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
             BoardGameRecommendationModel.Turn turn;
             List<ToolSpec> currentActions = availableActions(
@@ -317,12 +310,20 @@ final class RecommendationReActLoop {
             OperationObservation decisionObservation = startOperation(
                     "decision_model", "choose_next_action");
             long modelCallStartedAt = System.nanoTime();
+            int estimatedModelInputTokens = estimatedModelInputTokens(messages, currentActions);
+            RecommendationRunBudget.StopReason budgetStop = state.budget.beginModelStep(estimatedModelInputTokens);
+            if (budgetStop != null) {
+                decisionObservation.stop("resource_budget", false, null);
+                progress.fail();
+                return unavailableForBudget(state, locale, budgetStop);
+            }
+            state.modelCalls++;
             try {
                 List<Message> turnMessages = messages;
                 Request modelRequest = new Request(
                         turnMessages,
                         currentActions,
-                        outputTokenBudget(state),
+                        state.budget.remainingTokens(),
                         ToolChoice.AUTO);
                 turn = withinDeadline(state, () -> answerPartListener == null
                         ? model.next(modelRequest, state.modelConfigurationOwner)
@@ -357,6 +358,15 @@ final class RecommendationReActLoop {
                 return unavailable(state, locale, failureCode);
             }
             state.recordModelCallElapsed(modelCallStartedAt);
+            budgetStop = state.budget.completeModel(
+                    turn.promptTokens(),
+                    turn.completionTokens(),
+                    estimatedTurnOutputTokens(turn));
+            if (budgetStop != null) {
+                decisionObservation.stop("resource_budget", false, null);
+                progress.fail();
+                return unavailableForBudget(state, locale, budgetStop);
+            }
             if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
                 decisionObservation.stop("output_limit", false, null);
                 progress.fail();
@@ -394,7 +404,7 @@ final class RecommendationReActLoop {
                 }
                 state.actions.add("REJECTED_INCOMPATIBLE_ACTIONS");
                 progress.retry();
-                String observation = budgetedObservation(
+                String observation = contextualObservation(
                         error(
                                 "INCOMPATIBLE_ACTIONS",
                                 "Choose one action, observe its result, then decide whether another action is useful."),
@@ -426,8 +436,18 @@ final class RecommendationReActLoop {
                             locale,
                             "REPEATED_DETERMINISTIC_ACTION:" + rejectionCode);
                 }
+                if (settled.reusedObservation()) {
+                    actionObservation.stop("no_progress", false, null);
+                    state.actions.add("NO_PROGRESS:REPEATED_READ_OBSERVATION");
+                    progress.fail();
+                    return unavailable(
+                            state,
+                            locale,
+                            "NO_PROGRESS:REPEATED_READ_OBSERVATION");
+                }
                 reused = true;
                 outcome = settled.outcome();
+                settledActions.put(fingerprint, settled.afterObservationReuse());
                 actionObservation.stop("reused", false, null);
                 state.actions.add("REUSED_READ_OBSERVATION");
             } else if (currentActions.stream().noneMatch(action -> action.name().equals(call.name()))) {
@@ -440,6 +460,12 @@ final class RecommendationReActLoop {
                         "ACTION_NOT_AVAILABLE");
                 actionObservation.stop("rejected", false, null);
             } else {
+                budgetStop = state.budget.beginToolCall(RecommendationRunBudget.estimateTokens(call.argumentsJson()));
+                if (budgetStop != null) {
+                    actionObservation.stop("resource_budget", false, null);
+                    progress.fail();
+                    return unavailableForBudget(state, locale, budgetStop);
+                }
                 try {
                     outcome = actionExecutor.execute(
                             call,
@@ -447,10 +473,35 @@ final class RecommendationReActLoop {
                             request,
                             locale,
                             (stage, focus) -> progress.start(stage, progressAction(call.name()), focus));
-                    actionObservation.stop(
-                            outcome.rejected() ? "rejected" : "completed",
-                            false,
-                            null);
+                    if (outcome.publicationArgumentsJson() != null) {
+                        try {
+                            PreparedPublication prepared = publication.prepare(
+                                    state,
+                                    outcome.publicationArgumentsJson());
+                            actionObservation.stop("completed", false, null);
+                            progress.complete();
+                            return publishRecommendationWithinBoundary(
+                                    state,
+                                    locale,
+                                    prepared,
+                                    progress);
+                        } catch (RecommendationPublication.InvalidPublication failure) {
+                            state.actions.add("REJECTED_ACTION:" + failure.code().name());
+                            outcome = RecommendationActions.ActionOutcome.rejectedContract(
+                                    recommendationRepairObservation(
+                                            call,
+                                            currentActions,
+                                            state,
+                                            failure),
+                                    failure.code().name());
+                            actionObservation.stop("rejected", false, null);
+                        }
+                    } else {
+                        actionObservation.stop(
+                                outcome.rejected() ? "rejected" : "completed",
+                                false,
+                                null);
+                    }
                 } catch (RunInterrupted exception) {
                     actionObservation.stop("interrupted", false, exception);
                     progress.fail();
@@ -483,28 +534,23 @@ final class RecommendationReActLoop {
                         progress,
                         outcome.response());
             }
-            PublicationDraft publicationDraft = outcome.publicationDraft();
-            if (publicationDraft != null) {
-                progress.complete();
-                return publishRecommendationWithinBoundary(
-                        state,
-                        locale,
-                        publicationDraft,
-                        progress);
-            }
             if (outcome.rejected()) {
                 progress.retry();
             } else {
                 progress.complete();
             }
-            String observation = budgetedObservation(outcome.observation(), state);
+            String observation = contextualObservation(
+                    contractObservation(call, outcome, currentActions),
+                    state);
+            budgetStop = state.budget.completeToolCall(RecommendationRunBudget.estimateTokens(observation));
+            if (budgetStop != null) {
+                progress.fail();
+                return unavailableForBudget(state, locale, budgetStop);
+            }
             compactPriorToolState(messages);
             messages.add(Message.assistant(turn.text(), call));
             messages.add(Message.tool(call, observation));
         }
-        progress.fail();
-        state.actions.add("REACT_BUDGET_EXHAUSTED");
-        return unavailable(state, locale, "BUDGET_EXHAUSTED");
     }
 
     String actionFingerprint(ToolCall call) {
@@ -516,6 +562,84 @@ final class RecommendationReActLoop {
             // successful actions use their typed JSON value and are insensitive to object-key order or whitespace.
             return call.name() + "\n" + call.argumentsJson();
         }
+    }
+
+    private String contractObservation(
+            ToolCall call,
+            RecommendationActions.ActionOutcome outcome,
+            List<ToolSpec> currentActions) {
+        if (!outcome.deterministicContractRejection()) return outcome.observation();
+        ToolSpec contract = currentActions.stream()
+                .filter(action -> action.name().equals(call.name()))
+                .findFirst()
+                .orElse(null);
+        if (contract == null) return outcome.observation();
+        try {
+            JsonNode parsed = json.readTree(outcome.observation());
+            if (!(parsed instanceof ObjectNode object) || object.has("replacementContract")) {
+                return outcome.observation();
+            }
+            ObjectNode replacement = object.putObject("replacementContract");
+            replacement.put("action", contract.name());
+            replacement.set("toolSchema", json.readTree(contract.inputSchema()));
+            return json.writeValueAsString(object);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("recommendation action contract could not be serialized", exception);
+        }
+    }
+
+    private String recommendationRepairObservation(
+            ToolCall call,
+            List<ToolSpec> currentActions,
+            RecommendationAgentState state,
+            RecommendationPublication.InvalidPublication failure) {
+        ToolSpec contract = currentActions.stream()
+                .filter(action -> RECOMMEND_TOOL.equals(action.name()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("recommendation action contract is unavailable"));
+
+        Map<String, Object> submittedToolCall = new LinkedHashMap<>();
+        submittedToolCall.put("id", call.id());
+        submittedToolCall.put("name", call.name());
+        submittedToolCall.put("argumentsJson", call.argumentsJson());
+        try {
+            JsonNode arguments = actionFingerprintJson.readTree(call.argumentsJson());
+            if (arguments != null) submittedToolCall.put("arguments", arguments);
+        } catch (JsonProcessingException ignored) {
+            // The exact raw arguments remain available when JSON itself is the deepest failure.
+        }
+
+        Map<String, Object> deepestError = new LinkedHashMap<>();
+        deepestError.put("code", failure.code().name());
+        deepestError.put("path", failure.path());
+        deepestError.put("details", failure.details());
+
+        List<Integer> allowedCandidateIds = pendingPublicationIds(state);
+        Map<String, List<String>> allowedEvidenceIdsByBggId = new LinkedHashMap<>();
+        for (Integer bggId : allowedCandidateIds) {
+            Game game = state.verified.get(bggId);
+            if (game == null) continue;
+            allowedEvidenceIdsByBggId.put(
+                    String.valueOf(bggId),
+                    actionExecutor.narrativeObservations(game, state.research).keySet().stream().toList());
+        }
+
+        Map<String, Object> replacementContract = new LinkedHashMap<>();
+        try {
+            replacementContract.put("toolSchema", json.readTree(contract.inputSchema()));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("recommendation action schema is invalid", exception);
+        }
+        replacementContract.put("allowedCandidateBggIds", allowedCandidateIds);
+        replacementContract.put("allowedEvidenceIdsByBggId", allowedEvidenceIdsByBggId);
+
+        return error(
+                failure.code().name(),
+                "The recommendation was not published. Review deepestError and submit one complete replacement recommend_games JSON matching replacementContract, or choose another useful available action.",
+                Map.of(
+                        "submittedToolCall", submittedToolCall,
+                        "deepestError", deepestError,
+                        "replacementContract", replacementContract));
     }
 
     private JsonNode canonicalJson(JsonNode value) {
@@ -598,17 +722,17 @@ final class RecommendationReActLoop {
     private ConversationResponse publishRecommendationWithinBoundary(
             RecommendationAgentState state,
             String locale,
-            PublicationDraft draft,
+            PreparedPublication prepared,
             ProgressTracker progress) {
         try {
             return publishRecommendation(
                     state,
                     locale,
-                    draft,
+                    prepared,
                     progress);
         } catch (RuntimeException exception) {
             progress.fail();
-            String code = publicationFailureCode(exception);
+            String code = "PUBLICATION_PROJECTION_FAILED";
             state.actions.add("PUBLICATION_FAILED:" + code);
             LOGGER.warn("Recommendation publication failed ({})", code);
             return unavailable(state, locale, code);
@@ -618,33 +742,13 @@ final class RecommendationReActLoop {
     private ConversationResponse publishRecommendation(
             RecommendationAgentState state,
             String locale,
-            PublicationDraft draft,
+            PreparedPublication prepared,
             ProgressTracker progress) {
         progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.RECOMMEND_GAMES);
-        Permit permit = publication.permit(state, draft);
-        ConversationResponse response = publication.publish(state, permit, draft, locale);
+        ConversationResponse response = publication.publish(state, prepared, locale);
         progress.complete();
         logRun(response);
         return response;
-    }
-
-    private String publicationFailureCode(RuntimeException exception) {
-        Throwable current = exception;
-        while (current != null) {
-            if (current instanceof RecommendationPublication.InvalidPublication invalid) {
-                return invalid.code().name();
-            }
-            current = current.getCause();
-        }
-        return "PUBLICATION_PROJECTION_FAILED";
-    }
-
-    private int outputTokenBudget(RecommendationAgentState state) {
-        if (state.pendingPublicationSeed != null) return EVIDENCE_RESPONSE_OUTPUT_TOKENS;
-        if (state.discoveryPurpose == DiscoveryPurpose.IDENTITY_ONLY) return 512;
-        return state.catalogCalls == 0 && state.webResearchCalls == 0
-                ? ACTION_SELECTION_OUTPUT_TOKENS
-                : EVIDENCE_RESPONSE_OUTPUT_TOKENS;
     }
 
     private ProgressAction progressAction(String action) {
@@ -663,13 +767,51 @@ final class RecommendationReActLoop {
         };
     }
 
+    private int estimatedModelInputTokens(List<Message> messages, List<ToolSpec> tools) {
+        int tokens = 0;
+        for (Message message : messages) {
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(message.content()));
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(message.toolCallId()));
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(message.toolName()));
+            for (ToolCall call : message.toolCalls()) {
+                tokens = RecommendationRunBudget.saturatedAdd(
+                        tokens, RecommendationRunBudget.estimateTokens(call.name()));
+                tokens = RecommendationRunBudget.saturatedAdd(
+                        tokens, RecommendationRunBudget.estimateTokens(call.argumentsJson()));
+            }
+        }
+        for (ToolSpec tool : tools) {
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(tool.name()));
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(tool.description()));
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(tool.inputSchema()));
+        }
+        return Math.max(1, tokens);
+    }
+
+    private int estimatedTurnOutputTokens(BoardGameRecommendationModel.Turn turn) {
+        int tokens = RecommendationRunBudget.estimateTokens(turn.text());
+        for (ToolCall call : turn.toolCalls()) {
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(call.name()));
+            tokens = RecommendationRunBudget.saturatedAdd(
+                    tokens, RecommendationRunBudget.estimateTokens(call.argumentsJson()));
+        }
+        return tokens;
+    }
+
     ConversationResponse unavailable(RecommendationAgentState state, String locale, String code) {
         state.actions.add("UNAVAILABLE:" + code);
         FailureReason reason = failureReason(state, code);
         ConversationResponse response = new ConversationResponse(
                 Outcome.UNAVAILABLE,
                 DecisionMode.MODEL_ASSISTED,
-                playerFacingFailureMessage(reason, locale),
+                playerFacingFailureMessage(reason, locale, code),
                 state.profile,
                 null,
                 state.sourceCount,
@@ -694,8 +836,24 @@ final class RecommendationReActLoop {
         return response;
     }
 
+    private ConversationResponse unavailableForBudget(
+            RecommendationAgentState state,
+            String locale,
+            RecommendationRunBudget.StopReason stopReason) {
+        String code = switch (stopReason) {
+            case STEP_BUDGET -> "RUN_STEP_BUDGET_EXCEEDED";
+            case TOOL_BUDGET -> "RUN_TOOL_BUDGET_EXCEEDED";
+            case TOKEN_BUDGET -> "RUN_TOKEN_BUDGET_EXCEEDED";
+        };
+        state.actions.add(code);
+        return unavailable(state, locale, code);
+    }
+
     private FailureReason failureReason(RecommendationAgentState state, String code) {
         if ("RUN_DEADLINE_EXCEEDED".equals(code)) return FailureReason.TIME_LIMIT;
+        if (code.startsWith("RUN_") && code.endsWith("_BUDGET_EXCEEDED")) {
+            return FailureReason.RESOURCE_BUDGET_EXHAUSTED;
+        }
         if ("MODEL_NOT_CONFIGURED".equals(code)) return FailureReason.MODEL_NOT_CONFIGURED;
         if ("MODEL_CALL_FAILED".equals(code)) return FailureReason.PROVIDER_CALL_FAILED;
         if (code.startsWith("MODEL_PROTOCOL_FAILED:")) return FailureReason.PROVIDER_PROTOCOL_INVALID;
@@ -707,19 +865,26 @@ final class RecommendationReActLoop {
         if (code.startsWith("REPEATED_DETERMINISTIC_ACTION:")) {
             return FailureReason.REPEATED_INVALID_ACTION;
         }
-        if ("BUDGET_EXHAUSTED".equals(code)) return FailureReason.ACTION_BUDGET_EXHAUSTED;
         if (state.actions.stream().anyMatch(action -> action.startsWith("PUBLICATION_FAILED:"))) {
             return FailureReason.PUBLICATION_REJECTED;
         }
         return FailureReason.SERVICE_FAILURE;
     }
 
-    private String playerFacingFailureMessage(FailureReason reason, String locale) {
+    private String playerFacingFailureMessage(FailureReason reason, String locale, String code) {
         boolean zh = chinese(locale);
+        if ("NO_PROGRESS:REPEATED_READ_OBSERVATION".equals(code)) {
+            return zh
+                    ? "模型在同一状态下再次重复了已经复用过的读取结果。本轮已停止，避免继续做没有进展的重复读取。"
+                    : "The model repeated a read result that had already been reused in the same state. The turn stopped instead of continuing a no-progress read loop.";
+        }
         return switch (reason) {
             case TIME_LIMIT -> zh
                     ? "本轮总时限已用完，模型或检索尚未返回可发布的完整结果。已核对的会话信息仍然保留，可以直接重试。"
                     : "This turn reached its total time limit before the model or retrieval returned a complete publishable result. Verified conversation context is still saved, so you can retry.";
+            case RESOURCE_BUDGET_EXHAUSTED -> zh
+                    ? "本轮在得到可发布结果前用完了安全资源预算。请求与已核对的会话信息仍然保留；修改问题以缩小范围，或稍后在新的上下文中重试。"
+                    : "This turn exhausted its safety resource budget before producing a publishable result. The request and verified context remain saved; narrow the question or retry later in a fresh context.";
             case MODEL_NOT_CONFIGURED -> zh
                     ? "当前账号没有可用的推荐模型配置。本轮没有调用检索，也没有发布临时结果。"
                     : "This account has no available recommendation model configuration. No retrieval ran and no provisional result was published.";
@@ -741,9 +906,6 @@ final class RecommendationReActLoop {
             case REPEATED_INVALID_ACTION -> zh
                     ? "模型看到明确的参数校验错误后，仍重复完全相同的无效动作。本轮已停止，避免无意义循环。"
                     : "After receiving a precise parameter error, the model repeated the identical invalid action. The turn stopped to avoid a pointless loop.";
-            case ACTION_BUDGET_EXHAUSTED -> zh
-                    ? "Agent 已用完本轮安全预算，但仍没有选择自然结束或提交可发布结果。已核对内容保留，可以重试。"
-                    : "The Agent used this turn's safety budget without choosing a natural finish or a publishable result. Verified work is preserved for retry.";
             case PUBLICATION_REJECTED -> zh
                     ? "最终候选、证据归属或完整回复没有通过发布校验。为避免把未经支持的内容显示成推荐，本轮未发布；已核对事实仍保留。"
                     : "The final candidates, evidence ownership, or complete reply failed publication validation. Nothing unsupported was shown as a recommendation, and verified facts remain saved.";
@@ -856,7 +1018,6 @@ final class RecommendationReActLoop {
             }
             putIfNotEmpty(data, "shownBggIds", request.shownBggIds());
             putIfNotEmpty(data, "excludedBggIds", request.excludedBggIds());
-            data.put("defaultRecommendationCount", properties.resultCount());
             return json.writeValueAsString(data);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation Agent input could not be serialized", exception);
@@ -869,7 +1030,7 @@ final class RecommendationReActLoop {
 
                 Use a supplied typed action only when the turn needs its machine-owned state change, retrieval, or structured UI artifact. Otherwise answer the player directly in natural prose. After every action result, either choose the next useful action or finish with the complete answer; never call an action merely to wrap prose. Typed arguments and cited user evidence own routing and memory, while direct prose is player-facing output only. Retrieve game facts instead of guessing. Ask at most one question, and only when one missing player choice materially changes the answer.
 
-                Every candidate read must set requestedCount plus requestedCountBasis. When no count is stated, use defaultRecommendationCount and PRODUCT_DEFAULT. For an explicitly stated count, requestedCountBasis is that current user turn's U id; never reuse an older turn's count. limit is only retrieval size. preferenceUpdates is one evidence-scoped patch for player-stated preferences: playerCount, durationMinutes, and complexity are numeric; type is a BGG product class; interaction is COMPETITIVE, COOPERATIVE, or TEAM. Never save clarification options or inferred mood. Range patches preserve omitted bounds. Cited numbers are DIRECT; INFERRED_GROUP_MEMBER_COUNT means counting stated members.
+                Omit requestedCount when the player did not state a count; the host applies the product default. For an explicitly stated count, set requestedCount and cite that current user turn's U id in evidence; never reuse an older turn's count. limit is only retrieval size. preferenceUpdates is one evidence-scoped patch for player-stated preferences: playerCount, durationMinutes, and complexity are numeric; type is a BGG product class; interaction is COMPETITIVE, COOPERATIVE, or TEAM. Never save clarification options or inferred mood. Range patches preserve omitted bounds. Cited numbers are DIRECT; INFERRED_GROUP_MEMBER_COUNT means counting stated members.
 
                 Prefer browse_bgg_catalog for cards and BGG facts; use resolve_bgg_game for an exact player-written title. Use public discovery when an uncertain or current relationship involving a person, event, organization, game, or other entity needs attributed evidence. Its result returns atomic public context and optional title leads. After every observation, decide whether it is sufficient, another genuinely relevant capability can add the missing evidence, or the truthful answer is that the evidence is unavailable. Never repeat the same read or use an unrelated BGG read merely because public search failed. SELECTABLE_CARDS title leads still require BGG verification before cards. Use textQuery for concepts rather than inventing taxonomy.
 
@@ -899,10 +1060,7 @@ final class RecommendationReActLoop {
                 .filter(action -> comparableIds.size() >= 2 || !COMPARE_TOOL.equals(action.name()))
                 .filter(action -> !relaxableSubjects.isEmpty() || !NO_MATCH_TOOL.equals(action.name()))
                 .map(action -> BROWSE_TOOL.equals(action.name())
-                                ? catalogAction(
-                                        preferenceEvidenceIds,
-                                        currentTurnEvidenceIds,
-                                        properties.resultCount())
+                                ? catalogAction(preferenceEvidenceIds, currentTurnEvidenceIds)
                         : COMPARE_TOOL.equals(action.name())
                                 ? comparisonAction(
                                         comparableIds,
@@ -917,10 +1075,6 @@ final class RecommendationReActLoop {
             available.add(recommendationAction(state, pendingPublicationIds));
         }
         return List.copyOf(available);
-    }
-
-    int maximumRecommendationResults() {
-        return Math.min(MAX_VERIFIED_GAMES, properties.modelCandidateLimit());
     }
 
     private List<Integer> comparableIds(RecommendationAgentState state) {
@@ -971,7 +1125,7 @@ final class RecommendationReActLoop {
                     .map(CandidateClaim::subject)
                     .forEach(actionable::add);
         }
-        return actionable.stream().limit(3).toList();
+        return List.copyOf(actionable);
     }
 
     List<Integer> recommendableIds(RecommendationAgentState state) {
@@ -1000,18 +1154,17 @@ final class RecommendationReActLoop {
                 .toList();
     }
 
-    private static List<ToolSpec> actions(
+    private List<ToolSpec> actions(
             List<String> preferenceEvidenceIds,
-            List<String> currentTurnEvidenceIds,
-            int defaultRecommendationCount) {
+            List<String> currentTurnEvidenceIds) {
         String preferences = preferenceSchema(preferenceEvidenceIds);
         return List.of(
                 new ToolSpec(
                         UPDATE_PREFERENCES_TOOL,
-                        "Persist explicit player-stated preferences without retrieval. This action changes machine-owned memory only and returns an observation; after it returns, answer the player directly unless another useful action is needed.",
+                        "Persist explicit player-stated preferences without retrieval. Include the complete locale-matched playerReply when this update finishes the turn; omit it only when another useful action still needs the resulting observation.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"preferenceUpdates\":"
                                 + preferences
-                                + "},\"required\":[\"preferenceUpdates\"]}"),
+                                + ",\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched answer to publish unchanged when the preference update finishes this turn.\",\"minLength\":1}},\"required\":[\"preferenceUpdates\"]}"),
                 new ToolSpec(
                         ASK_TOOL,
                         "Ask one natural high-value question only when a missing player choice changes the slate. preferenceUpdates keep stated numeric facts, never proposed options. Do not ask after read failure or when discovery/immediate cards can answer.",
@@ -1021,53 +1174,42 @@ final class RecommendationReActLoop {
                 new ToolSpec(
                         RESOLVE_TOOL,
                         "Resolve one formal/localized/original title copied from cited user evidence; never a sentence, nickname, person, list, or guessed alias. TARGET_GAME verifies one selectable card, then recommend_games writes the reply after seeing its facts. Other purposes set a comparison reference, discussion subject, or identity.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160},\"alternateTitles\":{\"type\":\"array\",\"maxItems\":2,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1},\"alternateTitles\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
                                 + "}},\"required\":[\"title\",\"purpose\",\"evidence\"]}"),
                 new ToolSpec(
                         BROWSE_TOOL,
                         catalogActionDescription(),
-                        catalogActionSchema(
-                                preferenceEvidenceIds,
-                                currentTurnEvidenceIds,
-                                defaultRecommendationCount)),
+                        catalogActionSchema(preferenceEvidenceIds, currentTurnEvidenceIds)),
                 new ToolSpec(
                         DISCOVER_TOOL,
                         "Search public sources once for an uncertain/current relationship, alias, event, organization, award, list, or source-backed title lead. subject is the exact cited identity phrase, not a guessed answer. goal selects the shape of this search result only; it never triggers a hidden BGG lookup or recommendation. After the observation, answer naturally or choose a separate catalog action.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
-                                + "},\"subject\":{\"type\":\"string\",\"description\":\"Exact identity-bearing nickname, initials, award, event, organization, or relationship phrase; not the full question and not a guessed answer.\",\"minLength\":1,\"maxLength\":80},\"goal\":{\"type\":\"string\",\"description\":\"IDENTITY_ONLY for a public fact or relationship; SELECTABLE_CARDS when public title leads may be useful, while BGG verification remains a separate action.\",\"enum\":[\"IDENTITY_ONLY\",\"SELECTABLE_CARDS\"]},\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"goal\"]}"),
+                                + "},\"subject\":{\"type\":\"string\",\"description\":\"Exact identity-bearing nickname, initials, award, event, organization, or relationship phrase; not the full question and not a guessed answer.\",\"minLength\":1},\"goal\":{\"type\":\"string\",\"description\":\"IDENTITY_ONLY for a public fact or relationship; SELECTABLE_CARDS when public title leads may be useful, while BGG verification remains a separate action.\",\"enum\":[\"IDENTITY_ONLY\",\"SELECTABLE_CARDS\"]},\"types\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"goal\"]}"),
                 new ToolSpec(
                         LOOKUP_TOOL,
-                        "Load BGG facts only for observed conversation-context IDs that do not yet have verified details.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"items\":{\"type\":\"integer\",\"minimum\":1}}},\"required\":[\"bggIds\"]}"),
+                        "Load BGG facts only for observed conversation-context IDs that do not yet have verified details. The application pages the logical ID set across storage-sized batches under the shared run deadline.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647}}},\"required\":[\"bggIds\"]}"),
                 new ToolSpec(
                         RESEARCH_TOOL,
-                        "Research current reception or player-reported experience for already-verified games. For a comparison, include every compared bggId in this one bounded call and ask one combined question; after it returns, compare with the attributed R observations or leave unsupported qualities unknown.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"bggIds\",\"question\"]}"),
+                        "Research current reception or player-reported experience for already-verified games. Include every relevant verified bggId and ask one combined question; the application pages the logical set across configured model-candidate resource batches under the shared run deadline. After it returns, compare with attributed R observations or leave unsupported qualities unknown.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647}},\"question\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"bggIds\",\"question\"]}"),
                 new ToolSpec(
                         RECOMMEND_TOOL,
                         "Finish a verified card recommendation after a card-producing read.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"playerReply\":{\"type\":\"string\",\"minLength\":"
-                                + RecommendationAgentState.MIN_RECOMMENDATION_REPLY_CODE_POINTS
-                                + ",\"maxLength\":"
-                                + RecommendationAgentState.MAX_RECOMMENDATION_REPLY_CODE_POINTS
-                                + "},\"playerReplyEvidenceIds\":{\"type\":\"array\",\"minItems\":0},\"selections\":{\"type\":\"array\",\"minItems\":1}},\"required\":[\"playerReply\",\"playerReplyEvidenceIds\",\"selections\"]}"),
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"playerReply\":{\"type\":\"string\",\"minLength\":1},\"playerReplyEvidenceIds\":{\"type\":\"array\",\"minItems\":0},\"selections\":{\"type\":\"array\",\"minItems\":1}},\"required\":[\"playerReply\",\"playerReplyEvidenceIds\",\"selections\"]}"),
                 comparisonAction(List.of(), List.of(), List.of(), preferenceEvidenceIds),
                 noMatchAction(List.of()));
     }
 
-    private static ToolSpec catalogAction(
+    private ToolSpec catalogAction(
             List<String> preferenceEvidenceIds,
-            List<String> currentTurnEvidenceIds,
-            int defaultRecommendationCount) {
+            List<String> currentTurnEvidenceIds) {
         return new ToolSpec(
                 BROWSE_TOOL,
                 catalogActionDescription(),
-                catalogActionSchema(
-                        preferenceEvidenceIds,
-                        currentTurnEvidenceIds,
-                        defaultRecommendationCount));
+                catalogActionSchema(preferenceEvidenceIds, currentTurnEvidenceIds));
     }
 
     private static boolean isDiscoveryAction(String action) {
@@ -1075,21 +1217,24 @@ final class RecommendationReActLoop {
     }
 
     private static String catalogActionDescription() {
-        return "Search the local BGG catalog. SELECTABLE_CARDS returns a verified slate and its facts; recommend_games then writes and publishes the complete reply. IDENTITY_ONLY reads creator identity context. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. requestedCount/requestedCountBasis use defaultRecommendationCount+PRODUCT_DEFAULT when unstated, else explicit count+current-turn U id. Numeric/type constraints use preferenceUpdates.";
+        return "Search the local BGG catalog. SELECTABLE_CARDS returns a verified slate and its facts; recommend_games then writes and publishes the complete reply. IDENTITY_ONLY reads creator identity context. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. Omit requestedCount when unstated so the host applies its product default; an explicit requestedCount must cite the current-turn U id in evidence. Numeric/type constraints use preferenceUpdates.";
     }
 
-    private static String catalogActionSchema(
+    private String catalogActionSchema(
             List<String> preferenceEvidenceIds,
-            List<String> currentTurnEvidenceIds,
-            int defaultRecommendationCount) {
-        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"types\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
-                + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"titleConstraint\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"operator\":{\"type\":\"string\",\"enum\":[\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"required\":[\"operator\",\"value\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
+            List<String> currentTurnEvidenceIds) {
+        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"types\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"mechanics\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"designers\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}}"
+                + ",\"publishers\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"families\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1},\"titleConstraint\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"operator\":{\"type\":\"string\",\"enum\":[\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"operator\",\"value\"]},\"evidence\":{\"type\":\"string\",\"description\":\"Current user-turn evidence for an explicit requestedCount and/or titleConstraint.\",\"enum\":"
                 + jsonArray(currentTurnEvidenceIds)
-                + "},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
-                + requestedCountBasisSchema(currentTurnEvidenceIds)
-                + ",\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
+                + "},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":"
+                + properties.modelCandidateLimit()
+                + "},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":"
+                + properties.modelCandidateLimit()
+                + "},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":"
+                + MAX_CATALOG_OFFSET
+                + "},\"preferenceUpdates\":"
                 + preferenceSchema(preferenceEvidenceIds)
-                + "},\"required\":[\"requestedCount\",\"requestedCountBasis\"]}";
+                + "}}";
     }
 
     private ToolSpec recommendationAction(
@@ -1115,17 +1260,11 @@ final class RecommendationReActLoop {
                 : " Select up to " + selectionCount + " useful candidates in the order you want them shown; never invent or pad a weak card.";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Finish the current verified recommendation. playerReply is the complete natural answer shown above the cards; bind candidate-specific factual wording with playerReplyEvidenceIds, or use an empty list for a generic conversational lead. Each selection requires one evidence-bound why; add a tradeoff only when the same candidate's observations support a useful boundary. The application validates candidate/evidence ownership and publishes every accepted text string unchanged; a malformed optional tradeoff or candidate may be omitted without discarding valid siblings."
+                "Finish the current verified recommendation. playerReply is the complete natural answer, not a short card lead: directly answer the request, explain the overall selection logic and material tradeoffs, and offer a useful next choice when appropriate. Bind candidate-specific factual wording with playerReplyEvidenceIds, or use an empty list only for genuinely generic wording. Each selection requires one evidence-bound why; add a tradeoff only when the same candidate's observations support a useful boundary. The application validates the complete candidate/evidence payload once and publishes every accepted text string unchanged. If validation fails, the action observation contains the full submitted payload, exact failing path, and current replacement contract; submit a complete replacement only when useful."
                         + countGuidance,
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                        + "\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched recommendation lead. Do not expose internal ids, evidence ids, tools, or workflow.\",\"minLength\":"
-                        + RecommendationAgentState.MIN_RECOMMENDATION_REPLY_CODE_POINTS
-                        + ",\"maxLength\":"
-                        + RecommendationAgentState.MAX_RECOMMENDATION_REPLY_CODE_POINTS
-                        + "},"
-                        + "\"playerReplyEvidenceIds\":{\"type\":\"array\",\"description\":\"Internal observation ids supporting candidate-specific factual wording in playerReply; use [] for a generic lead and never show these ids to the player.\",\"minItems\":0,\"maxItems\":"
-                        + Math.min(16, playerReplyEvidenceIds.size())
-                        + ",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
+                        + "\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched answer that directly explains the selection and overall tradeoffs. Do not expose internal ids, evidence ids, tools, or workflow.\",\"minLength\":1},"
+                        + "\"playerReplyEvidenceIds\":{\"type\":\"array\",\"description\":\"Internal observation ids supporting candidate-specific factual wording in playerReply; use [] for a generic lead and never show these ids to the player.\",\"minItems\":0,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(playerReplyEvidenceIds)
                         + "}},"
                         + "\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
@@ -1143,16 +1282,9 @@ final class RecommendationReActLoop {
                 .keySet()
                 .stream()
                 .toList();
-        int evidenceLimit = Math.min(8, evidenceIds.size());
         String note = "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                + "\"text\":{\"type\":\"string\",\"minLength\":"
-                + RecommendationAgentState.MIN_CARD_REPLY_CODE_POINTS
-                + ",\"maxLength\":"
-                + RecommendationAgentState.MAX_CARD_REPLY_CODE_POINTS
-                + "},"
-                + "\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
-                + evidenceLimit
-                + ",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
+                + "\"text\":{\"type\":\"string\",\"minLength\":1},"
+                + "\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                 + jsonArray(evidenceIds)
                 + "}}},\"required\":[\"text\",\"internalEvidenceIds\"]}";
         return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
@@ -1177,7 +1309,7 @@ final class RecommendationReActLoop {
                 ? "\"pattern\":\"^[1-9][0-9]{0,9}$\""
                 : "\"enum\":" + jsonArray(comparableIds.stream().map(String::valueOf).toList());
         String evidenceConstraint = availableEvidenceIds.isEmpty()
-                ? "\"minLength\":3,\"maxLength\":80"
+                ? "\"minLength\":1"
                 : "\"enum\":" + jsonArray(availableEvidenceIds);
         return new ToolSpec(
                 COMPARE_TOOL,
@@ -1192,21 +1324,21 @@ final class RecommendationReActLoop {
                         + stringIdConstraint
                         + "},{\"type\":\"null\"}]},\"internalEvidenceIds\":{\"type\":\"array\",\"description\":\"The complete machine-only factual allowance for the final streamed comparison. Every ID must belong to a compared candidate and one of subjects.\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\","
                         + evidenceConstraint
-                        + "}},\"playerReply\":{\"type\":\"string\",\"description\":\"The complete locale-matched comparison answer shown to the player. Use only the selected observations for game-specific factual clauses.\",\"minLength\":1,\"maxLength\":1200},\"preferenceUpdates\":"
+                        + "}},\"playerReply\":{\"type\":\"string\",\"description\":\"The complete locale-matched comparison answer shown to the player. Use only the selected observations for game-specific factual clauses.\",\"minLength\":1},\"preferenceUpdates\":"
                         + preferenceSchema(preferenceEvidenceIds)
                         + "},\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\",\"internalEvidenceIds\",\"playerReply\"]}");
     }
 
     private static ToolSpec noMatchAction(List<String> relaxableSubjects) {
         String subjectConstraint = relaxableSubjects.isEmpty()
-                ? "\"minLength\":1,\"maxLength\":40"
+                ? "\"minLength\":1"
                 : "\"enum\":" + jsonArray(relaxableSubjects);
         return new ToolSpec(
                 NO_MATCH_TOOL,
                 "Finish with zero cards and select exactly one currently offered explicit constraint whose removal would make at least one verified candidate eligible while every other explicit constraint stays unchanged. playerReply is the complete natural explanation shown now: name the real tradeoff for this turn without a stock no-match template and without claiming that relaxation guarantees success.",
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"relaxSubject\":{\"type\":\"string\","
                         + subjectConstraint
-                        + "},\"playerReply\":{\"type\":\"string\",\"description\":\"The complete locale-matched no-match explanation and one actionable next choice.\",\"minLength\":1,\"maxLength\":1200}},\"required\":[\"relaxSubject\",\"playerReply\"]}");
+                        + "},\"playerReply\":{\"type\":\"string\",\"description\":\"The complete locale-matched no-match explanation and one actionable next choice.\",\"minLength\":1}},\"required\":[\"relaxSubject\",\"playerReply\"]}");
     }
 
     private static String jsonArray(List<String> values) {
@@ -1260,15 +1392,6 @@ final class RecommendationReActLoop {
                 + "},{\"type\":\"null\"}]}}}";
     }
 
-    private static String requestedCountBasisSchema(List<String> currentTurnEvidenceIds) {
-        List<String> allowed = new ArrayList<>();
-        allowed.add("PRODUCT_DEFAULT");
-        allowed.addAll(currentTurnEvidenceIds);
-        return "{\"type\":\"string\",\"description\":\"PRODUCT_DEFAULT only when the user stated no count; otherwise the current user turn U id that states it.\",\"enum\":"
-                + jsonArray(allowed)
-                + "}";
-    }
-
     private static String evidenceEnum(List<String> preferenceEvidenceIds) {
         List<String> allowedEvidenceIds = preferenceEvidenceIds.isEmpty()
                 ? List.of("NO_USER_EVIDENCE")
@@ -1281,7 +1404,7 @@ final class RecommendationReActLoop {
     private Map<String, Object> turnState(RecommendationAgentState state) {
         Map<String, Object> memory = new LinkedHashMap<>();
         memory.put("observationLegend", Map.of(
-                "M", "verified BGG structured metadata or bounded publisher description",
+                "M", "verified BGG structured metadata or complete publisher description",
                 "T", "BGG taxonomy label; use it only as a literal label, not as proof of another quality",
                 "A", "attributed public report, limited to its literal claim",
                 "R", "rulebook fact"));
@@ -1342,9 +1465,7 @@ final class RecommendationReActLoop {
                                 .toList()))
                 .toList());
         putIfNotEmpty(memory, "researchSources", actionExecutor.sourceObservations(state.research.sources()));
-        memory.put("actionsTaken", state.actions.stream()
-                .skip(Math.max(0, state.actions.size() - 12L))
-                .toList());
+        memory.put("actionsTaken", List.copyOf(state.actions));
         if (!state.webResearchAvailable && !state.webResearchFailureCode.isBlank()) {
             memory.put("webResearchFailureCode", state.webResearchFailureCode);
         }
@@ -1362,26 +1483,24 @@ final class RecommendationReActLoop {
     }
 
     String observation(Map<String, ?> value) {
-    try {
+        try {
             return json.writeValueAsString(value);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation observation could not be serialized", exception);
         }
     }
 
-    private String budgetedObservation(String observation, RecommendationAgentState state) {
+    private String contextualObservation(String observation, RecommendationAgentState state) {
         try {
             JsonNode parsed = json.readTree(observation);
             if (!(parsed instanceof ObjectNode object)) {
                 throw new IllegalStateException("recommendation observation must be a JSON object");
             }
-            object.put("remainingModelCalls", Math.max(0, MAX_MODEL_CALLS - state.modelCalls));
-            object.put("remainingActionCalls", Math.max(0, MAX_ACTION_CALLS - state.actionCalls));
             object.set("availableCapabilities", json.valueToTree(availableCapabilities(state)));
             object.set("turnState", json.valueToTree(turnState(state)));
             return json.writeValueAsString(object);
         } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("recommendation observation budget could not be serialized", exception);
+            throw new IllegalStateException("recommendation observation context could not be serialized", exception);
         }
     }
 
@@ -1393,8 +1512,6 @@ final class RecommendationReActLoop {
                 JsonNode parsed = json.readTree(message.content());
                 if (!(parsed instanceof ObjectNode object)) continue;
                 object.remove(List.of(
-                        "remainingModelCalls",
-                        "remainingActionCalls",
                         "availableCapabilities",
                         "turnState"));
                 messages.set(index, new Message(
@@ -1409,7 +1526,19 @@ final class RecommendationReActLoop {
         }
     }
 
-    private record SettledAction(RecommendationActions.ActionOutcome outcome, int stateEpoch) {}
+    private record SettledAction(
+            RecommendationActions.ActionOutcome outcome,
+            int stateEpoch,
+            boolean reusedObservation) {
+
+        private SettledAction(RecommendationActions.ActionOutcome outcome, int stateEpoch) {
+            this(outcome, stateEpoch, false);
+        }
+
+        private SettledAction afterObservationReuse() {
+            return new SettledAction(outcome, stateEpoch, true);
+        }
+    }
 
     String error(String code, String guidance) {
         return observation(Map.of("status", "ERROR", "code", code, "guidance", guidance));
@@ -1427,7 +1556,7 @@ final class RecommendationReActLoop {
     ConversationRequest validate(ConversationRequest input) {
         if (input == null) throw new IllegalArgumentException("recommendation conversation request is required");
         String message = RecommendationConversationText.currentTurn(input.message());
-        List<Integer> excluded = positiveIds(input.excludedBggIds(), 60, "excludedBggIds");
+        List<Integer> excluded = positiveIds(input.excludedBggIds(), "excludedBggIds");
         Integer focused = input.focusedBggId();
         if (focused != null && focused <= 0) throw new IllegalArgumentException("focusedBggId must be positive");
         List<KnownGame> knownGames = input.knownGames() == null
@@ -1442,8 +1571,7 @@ final class RecommendationReActLoop {
                         .values()
                         .stream()
                         .toList();
-        if (knownGames.size() > 60) throw new IllegalArgumentException("knownGames must contain at most sixty games");
-        List<Integer> shown = positiveIds(input.shownBggIds(), 60, "shownBggIds");
+        List<Integer> shown = positiveIds(input.shownBggIds(), "shownBggIds");
         List<DialogueMessage> transcript = input.transcript() == null
                 ? new ArrayList<>()
                 : input.transcript().stream()
@@ -1454,9 +1582,6 @@ final class RecommendationReActLoop {
                         || !"user".equals(transcript.getLast().role())
                         || !message.equals(transcript.getLast().text()))) {
             transcript.add(new DialogueMessage("user", message));
-        }
-        if (transcript.size() > 12) {
-            transcript = new ArrayList<>(transcript.subList(transcript.size() - 12, transcript.size()));
         }
         return new ConversationRequest(
                 input.profile() == null ? RecommendationProfile.empty() : validatedProfile(input.profile()),
@@ -1481,13 +1606,7 @@ final class RecommendationReActLoop {
                 profile.interaction() == null ? InteractionPreference.ANY : profile.interaction());
     }
 
-    private <T extends Comparable<? super T>> void validateRangeMetadata(ConstraintRange<T> range, String label) {
-        if (range == null) return;
-        if (range.confirmedTurn() > 10_000) throw new IllegalArgumentException(label + " turn is invalid");
-    }
-
     private void validateIntegerRange(ConstraintRange<Integer> range, int minimum, int maximum, String label) {
-        validateRangeMetadata(range, label);
         if (range == null) return;
         if (range.minimum() != null && (range.minimum() < minimum || range.minimum() > maximum)
                 || range.maximum() != null && (range.maximum() < minimum || range.maximum() > maximum)) {
@@ -1500,7 +1619,6 @@ final class RecommendationReActLoop {
             BigDecimal minimum,
             BigDecimal maximum,
             String label) {
-        validateRangeMetadata(range, label);
         if (range == null) return;
         if (range.minimum() != null
                         && (range.minimum().compareTo(minimum) < 0 || range.minimum().compareTo(maximum) > 0)
@@ -1528,14 +1646,12 @@ final class RecommendationReActLoop {
         return new DialogueMessage(message.role(), text);
     }
 
-    private List<Integer> positiveIds(List<Integer> values, int maximum, String label) {
-        List<Integer> result = values == null
-                ? List.of()
-                : values.stream().filter(Objects::nonNull).distinct().toList();
-        if (result.size() > maximum || result.stream().anyMatch(id -> id <= 0)) {
-            throw new IllegalArgumentException(label + " must contain at most " + maximum + " positive ids");
+    private List<Integer> positiveIds(List<Integer> values, String label) {
+        if (values == null) return List.of();
+        if (values.stream().anyMatch(id -> id == null || id <= 0)) {
+            throw new IllegalArgumentException(label + " must contain positive ids");
         }
-        return result;
+        return values.stream().distinct().toList();
     }
 
     private String normalized(String value, boolean allowBlank) {

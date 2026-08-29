@@ -154,7 +154,7 @@ class RecommendationNaturalFrontDoorTest {
     }
 
     @Test
-    void recordsAnExplicitPreferenceThenAnswersNaturallyWithoutRetrieval() {
+    void recordsAnExplicitPreferenceAndPublishesItsTypedReplyWithoutAnotherModelCall() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         BoardGameRecommendationSelector selector = mock(BoardGameRecommendationSelector.class);
@@ -164,16 +164,14 @@ class RecommendationNaturalFrontDoorTest {
         when(model.configured("player")).thenReturn(true);
         when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
             captured.add(invocation.getArgument(0));
-            if (captured.size() == 1) {
-                return new Turn(
-                        "",
-                        List.of(new ToolCall(
-                                "remember-player-count",
-                                BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL,
-                                "{\"preferenceUpdates\":{\"evidence\":\"U1\",\"playerCount\":4}}")),
-                        CompletionStatus.COMPLETE);
-            }
-            return new Turn("记住了：以后默认按四个人玩；这次先不推荐。", List.of(), CompletionStatus.COMPLETE);
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "remember-player-count",
+                            BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL,
+                            "{\"preferenceUpdates\":{\"evidence\":\"U1\",\"playerCount\":4},"
+                                    + "\"playerReply\":\"记住了：以后默认按四个人玩；这次先不推荐。\"}")),
+                    CompletionStatus.COMPLETE);
         });
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
@@ -192,14 +190,19 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.assistantMessage()).isEqualTo("记住了：以后默认按四个人玩；这次先不推荐。");
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.harness().modelCalls()).isOne();
         assertThat(response.profile().playerCount().minimum()).isEqualTo(4);
         assertThat(response.profile().playerCount().maximum()).isEqualTo(4);
+        assertThat(captured).hasSize(1);
         assertThat(captured.getFirst().toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.AUTO);
         assertThat(captured.getFirst().messages().getFirst().content())
                 .contains("machine-owned state change", "preferenceUpdates");
-        assertThat(captured.get(1).messages().getLast().content()).contains("PREFERENCES_UPDATED");
-        assertThat(captured.get(1).tools())
-                .anyMatch(tool -> BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL.equals(tool.name()));
+        assertThat(captured.getFirst().tools().stream()
+                        .filter(tool -> BoardGameRecommendationAgent.UPDATE_PREFERENCES_TOOL.equals(tool.name()))
+                        .findFirst()
+                        .orElseThrow()
+                        .inputSchema())
+                .contains("playerReply", "publish unchanged");
 
         loop.stopBoundedCalls();
     }
@@ -402,14 +405,14 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "browse-first-page",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"offset\":0}")),
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"evidence\":\"U1\",\"offset\":0}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
                                 "browse-second-page",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"offset\":2}")),
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"requestedCount\":2,\"evidence\":\"U1\",\"offset\":2}")),
                         CompletionStatus.COMPLETE)));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -534,7 +537,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-local-wrong-identity",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"designers\":[\"Wrong Architect\"],\"purpose\":\"IDENTITY_ONLY\",\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}")),
+                                "{\"designers\":[\"Wrong Architect\"],\"purpose\":\"IDENTITY_ONLY\",\"requestedCount\":2,\"evidence\":\"U1\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
@@ -548,7 +551,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-filter",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"designers\":[\"Studio Architect\"],\"limit\":2,\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}")),
+                                "{\"designers\":[\"Studio Architect\"],\"limit\":2,\"requestedCount\":2,\"evidence\":\"U1\"}")),
                         CompletionStatus.COMPLETE)));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -664,7 +667,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-verify-franchise-cards",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
-                                "{\"textQuery\":\"Orion Saga\",\"sort\":\"RELEVANCE\",\"requestedCount\":2,\"requestedCountBasis\":\"U1\"}")),
+                                "{\"textQuery\":\"Orion Saga\",\"sort\":\"RELEVANCE\",\"requestedCount\":2,\"evidence\":\"U1\"}")),
                         CompletionStatus.COMPLETE)));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -1060,7 +1063,7 @@ class RecommendationNaturalFrontDoorTest {
                             "call-browse",
                             BoardGameRecommendationAgent.BROWSE_TOOL,
                             """
-                            {"purpose":"SELECTABLE_CARDS","limit":8,"requestedCount":1,"requestedCountBasis":"U1","preferenceUpdates":[
+                            {"purpose":"SELECTABLE_CARDS","limit":8,"requestedCount":1,"evidence":"U1","preferenceUpdates":[
                               {"field":"playerCount","value":4,"evidence":"U1","evidenceClassification":"DIRECT"},
                               {"field":"durationMinutes","value":{"minimum":null,"maximum":75},"evidence":"U1","evidenceClassification":"DIRECT"}
                             ]}
@@ -1113,9 +1116,11 @@ class RecommendationNaturalFrontDoorTest {
                 .doesNotContain("\"players\"");
         assertThat(observedActionRequest.messages().getFirst().content())
                 .contains(
-                        "Every candidate read must set requestedCount plus requestedCountBasis",
-                        "defaultRecommendationCount",
+                        "Omit requestedCount when the player did not state a count",
+                        "host applies the product default",
                         "never reuse an older turn's count");
+        assertThat(observedActionRequest.messages().getLast().content())
+                .doesNotContain("defaultRecommendationCount");
 
         loop.stopBoundedCalls();
     }
@@ -1525,8 +1530,7 @@ class RecommendationNaturalFrontDoorTest {
                 new ConversationRequest(RecommendationProfile.empty(), "exercise an optional capability"),
                 System.nanoTime(),
                 "player",
-                false,
-                3);
+                false);
     }
 
     private void stubStreamingThroughNext(BoardGameRecommendationModel model) {

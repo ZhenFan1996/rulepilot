@@ -49,6 +49,9 @@ public class RulePilotMcpTools {
             @McpToolParam(description = "Owned game session UUID", required = true) UUID sessionId,
             @McpToolParam(description = "Natural-language rule question", required = true) String query,
             @McpToolParam(description = "Maximum evidence hits from 1 to 20", required = true) int limit) {
+        if (limit < 1 || limit > 20) {
+            throw new IllegalArgumentException("rule search limit must be between 1 and 20");
+        }
         SessionContext context = ownedSession(sessionId);
         var hits = search.search(
                 context.documentVersionId(), query, new RetrievalOptions(limit, null, context.phase()));

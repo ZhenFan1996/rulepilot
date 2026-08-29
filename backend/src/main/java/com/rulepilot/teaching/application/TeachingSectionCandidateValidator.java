@@ -85,18 +85,6 @@ final class TeachingSectionCandidateValidator {
                 steps);
     }
 
-    /** Returns field-specific repair data without changing any player-facing field. */
-    String repairDiagnostic(IllegalArgumentException rejection, SectionDraft draft) {
-        return repairDiagnostic(rejection, draft, List.of());
-    }
-
-    String repairDiagnostic(
-            IllegalArgumentException rejection,
-            SectionDraft draft,
-            List<RuleEvidence> availableEvidence) {
-        return rejection.getMessage();
-    }
-
     private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {
         return new EvidenceSource(
                 evidence.chunkId(), evidence.documentVersionId(), evidence.sectionType(), evidence.excerpt(),

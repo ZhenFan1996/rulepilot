@@ -16,7 +16,7 @@ describe('AgentAuditView', () => {
       if (path.includes(`/api/admin/assistant-runs/${runId}/audit`)) {
         return Response.json({
           run: { id: runId, mode: 'QUESTION_ANSWER', subjectId: runId, ownerUsername: 'player', state: 'COMPLETED', createdAt: '2026-08-03T00:00:00Z', updatedAt: '2026-08-03T00:00:01Z', lastErrorCode: null },
-          budget: { maxSteps: 40, maxToolCalls: 24, maxModelCalls: 16, maxTokens: 24000, usedToolCalls: 2, usedModelCalls: 2, usedTokens: 500, deadlineAt: '2026-08-03T00:02:00Z' },
+          budget: { maxTokens: 24000, usedToolCalls: 2, usedModelCalls: 2, usedTokens: 500, deadlineAt: '2026-08-03T00:02:00Z' },
           steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'COMPLETED', summary: 'Answer published', occurredAt: '2026-08-03T00:00:01Z' }],
           activities: [{ sequence: 1, type: 'TOOL', operation: 'nativeTool|read_rule_pages|safehash', outcome: 'SUCCEEDED', estimatedInputTokens: 10, estimatedOutputTokens: 20, latencyMs: 12, summary: 'code=PAGE_EVIDENCE_FOUND evidenceCount=2', occurredAt: '2026-08-03T00:00:00Z' }],
         })
@@ -31,7 +31,8 @@ describe('AgentAuditView', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('PAGE_EVIDENCE_FOUND'))
 
     expect(wrapper.text()).toContain('nativeTool|read_rule_pages|safehash')
-    expect(wrapper.text()).toContain('2 / 24')
+    expect(wrapper.text()).toContain('工具调用2')
+    expect(wrapper.text()).toContain('500 / 24000')
     expect(wrapper.text()).toContain('不会保存或展示隐藏思维链')
     expect(fetch).toHaveBeenCalledWith(`/api/admin/assistant-runs/${runId}/audit`, { credentials: 'include' })
   })

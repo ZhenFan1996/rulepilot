@@ -4,10 +4,9 @@ import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
-/** Executes one bounded observe-decide-act loop without publishing its output. */
+/** Executes one observe-decide-act loop without publishing its output. */
 public interface NativeToolAgent {
 
     RunResult run(RunRequest request);
@@ -33,7 +32,6 @@ public interface NativeToolAgent {
     record TerminalContract(Set<TerminalStatus> allowedStatuses) {
         public TerminalContract {
             if (allowedStatuses == null
-                    || allowedStatuses.size() > 8
                     || allowedStatuses.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("native tool Agent terminal contract is invalid");
             }
@@ -63,41 +61,23 @@ public interface NativeToolAgent {
             String systemPrompt,
             String playerRequest,
             String fallbackText,
-            int maxIterations,
-            int maxOutputTokens,
             Set<String> allowedTools,
             Set<String> requiredToolsBeforeCompletion,
-            int maxToolCalls,
-            TerminalContract terminalContract,
-            Map<String, Integer> finalResponseAfterToolSuccesses,
-            boolean completeAfterRequiredTools) {
+            TerminalContract terminalContract) {
         public RunRequest {
             if (role == null || scope == null || blank(systemPrompt) || blank(playerRequest) || blank(fallbackText)
-                    || maxIterations < 1 || maxIterations > 12 || maxOutputTokens < 1 || maxOutputTokens > 8192
                     || allowedTools == null
                     || allowedTools.isEmpty()
                     || requiredToolsBeforeCompletion == null
-                    || maxToolCalls < 1 || maxToolCalls > 24
                     || terminalContract == null
-                    || finalResponseAfterToolSuccesses == null
                     || allowedTools.stream().anyMatch(value -> value == null || value.isBlank())
-                    || requiredToolsBeforeCompletion.stream().anyMatch(value -> value == null || value.isBlank())
-                    || finalResponseAfterToolSuccesses.entrySet().stream().anyMatch(entry ->
-                            entry.getKey() == null
-                                    || entry.getKey().isBlank()
-                                    || entry.getValue() == null
-                                    || entry.getValue() < 1
-                                    || entry.getValue() > maxToolCalls)) {
+                    || requiredToolsBeforeCompletion.stream().anyMatch(value -> value == null || value.isBlank())) {
                 throw new IllegalArgumentException("native tool Agent request is invalid");
             }
             allowedTools = Set.copyOf(allowedTools);
             requiredToolsBeforeCompletion = Set.copyOf(requiredToolsBeforeCompletion);
-            finalResponseAfterToolSuccesses = Map.copyOf(finalResponseAfterToolSuccesses);
             if (!allowedTools.containsAll(requiredToolsBeforeCompletion)) {
                 throw new IllegalArgumentException("required native tools must be included in the allow-list");
-            }
-            if (!allowedTools.containsAll(finalResponseAfterToolSuccesses.keySet())) {
-                throw new IllegalArgumentException("final-response native tools must be included in the allow-list");
             }
         }
     }

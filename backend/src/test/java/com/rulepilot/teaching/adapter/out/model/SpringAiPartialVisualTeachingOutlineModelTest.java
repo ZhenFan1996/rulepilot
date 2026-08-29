@@ -14,7 +14,6 @@ import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
-import com.rulepilot.teaching.TeachingOutlineModel.OutlineCapacityExceededException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
@@ -28,9 +27,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
-import java.util.stream.IntStream;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -269,69 +268,45 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
     }
 
     @Test
-    void targetedMissingSlotRepairUsesTheSameTypedPartialEvidenceBoundary() {
+    void givesTheSameAgentItsCompleteRejectedObservationBeforeAChangedCandidate() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
         when(chatModel.call(any(Prompt.class))).thenReturn(
                 response(COMPACT_OUTLINE),
-                response("""
-                        {"assignments":[{"sourceSlotId":"page-2-rule-1","teachingUnitId":"choose-action"}]}
-                        """));
+                response(COMPACT_OUTLINE_WITH_PARTIAL_SLOT));
         SpringAiTeachingOutlineModel model = model(configuration);
+        RecordingModelCalls calls = new RecordingModelCalls();
 
         try {
-            var outline = model.organize(exactAndPartialRequest());
+            var outline = model.organize(exactAndPartialRequest(), calls);
 
             assertThat(outline.sourceCoverageSlots())
                     .extracting(slot -> slot.sourceIdentifier())
                     .containsExactly("R-1", "R-2");
             ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
             verify(chatModel, times(2)).call(prompts.capture());
-            List<String> repairInstructions = prompts.getAllValues().get(1).getInstructions().stream()
+            List<String> replacementInstructions = prompts.getAllValues().get(1).getInstructions().stream()
                     .map(message -> message.getText())
                     .toList();
-            assertThat(repairInstructions).anySatisfy(text -> assertThat(text).contains(
+            assertThat(replacementInstructions).anySatisfy(text -> assertThat(text).contains(
                     "PAGE_LEDGER_STATE: VISUAL_PARTIAL",
-                    "RULE_GROUP_FACT: Complete page-owned fact for R-2."));
+                    "RULE_GROUP_FACT: Complete page-owned fact for R-2.",
+                    "<untrusted_outline_rejection_observation>",
+                    "\"candidateJson\"",
+                    "\"validationError\":\"compact teaching outline omitted canonical source slots: [page-2-rule-1]",
+                    "\"outputContract\"",
+                    "\"allowedIdentities\":[\"page-1-rule-1\",\"page-2-rule-1\"]",
+                    "Generate one new",
+                    "complete JSON object"));
+            assertThat(replacementInstructions).allSatisfy(text -> assertThat(text).doesNotContain(
+                    "Frozen teaching units",
+                    "assignments",
+                    "replacements"));
+            assertThat(calls.rejections).singleElement().asString().contains(
+                    "Teaching outline candidate rejected: compact teaching outline omitted canonical source slots: [page-2-rule-1]");
             assertThat(prompts.getAllValues()).allSatisfy(prompt -> assertThat(prompt.getInstructions())
                     .allSatisfy(message -> assertThat(message.getText())
                             .doesNotContain("UNSAFE_PARTIAL_DISPLAY_TEXT")));
-        } finally {
-            model.close();
-        }
-    }
-
-    @Test
-    void keepsTargetedRepairAvailableAtTheGlobalTypedEvidenceBoundary() {
-        RuntimeModelConfiguration configuration = configuration();
-        ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                response(COMPACT_OUTLINE),
-                response("""
-                        {"assignments":[{"sourceSlotId":"page-1-rule-2","teachingUnitId":"choose-action"}]}
-                        """));
-        SpringAiTeachingOutlineModel model = model(configuration);
-        PageInput seed = twoFactPartialPage("x");
-        int seedEvidenceCharacters = SpringAiTeachingOutlineModel.canonicalPlanningEvidence(
-                        seed, SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS)
-                .length();
-        int fillerCharacters = SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS
-                - seedEvidenceCharacters
-                - 7;
-        PageInput nearBoundary = twoFactPartialPage("x".repeat(fillerCharacters));
-        int admittedEvidenceCharacters = SpringAiTeachingOutlineModel.canonicalPlanningEvidence(
-                        nearBoundary, SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS)
-                .length();
-
-        try {
-            var outline = model.organize(new OutlineRequest(List.of(nearBoundary), List.of(), "player"));
-
-            assertThat(admittedEvidenceCharacters)
-                    .isEqualTo(SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS - 8);
-            assertThat(outline.sourceCoverageSlots())
-                    .extracting(slot -> slot.sourceIdentifier())
-                    .containsExactly("R-1", "R-2");
-            verify(chatModel, times(2)).call(any(Prompt.class));
         } finally {
             model.close();
         }
@@ -379,18 +354,18 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
             if (prompt.contains("FIRST_LONG_FACT_MARKER")) {
                 awaitConcurrentLocalShards(localShardsStarted);
                 return response("""
-                        {"teachingUnits":[{"teachingUnitId":"first","role":"LEGAL_ACTION",\
+                        {"teachingUnits":[{"role":"LEGAL_ACTION",\
                         "sourceSlotIds":["page-1-rule-1"]}]}
                         """);
             }
             if (prompt.contains("SECOND_LONG_FACT_MARKER")) {
                 awaitConcurrentLocalShards(localShardsStarted);
                 return response("""
-                        {"teachingUnits":[{"teachingUnitId":"second","role":"LEGAL_ACTION",\
+                        {"teachingUnits":[{"role":"LEGAL_ACTION",\
                         "sourceSlotIds":["page-2-rule-1"]}]}
                         """);
             }
-            if (prompt.contains("shard-1-first") && prompt.contains("shard-2-second")) {
+            if (prompt.contains("unit-1-1") && prompt.contains("unit-2-1")) {
                 return response("""
                         {
                           "gameTitle":"长规则示例",
@@ -400,7 +375,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                             "objective":"理解两个已验证规则单元的先后关系。",
                             "required":true,
                             "visualEvidenceRecommended":false,
-                            "teachingUnitIds":["shard-1-first","shard-2-second"]
+                            "teachingUnitIds":["unit-1-1","unit-2-1"]
                           }],
                           "wholeGameUnderstanding":{
                             "summary":"两个已验证单元共同构成可讲解流程。",
@@ -458,13 +433,13 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                     .findFirst()
                     .orElseThrow();
             String globalPrompt = promptTexts.stream()
-                    .filter(prompt -> prompt.contains("shard-1-first") && prompt.contains("shard-2-second"))
+                    .filter(prompt -> prompt.contains("unit-1-1") && prompt.contains("unit-2-1"))
                     .findFirst()
                     .orElseThrow();
             assertThat(firstShardPrompt).contains("FIRST_LONG_FACT_MARKER").doesNotContain("SECOND_LONG_FACT_MARKER");
             assertThat(secondShardPrompt).contains("SECOND_LONG_FACT_MARKER").doesNotContain("FIRST_LONG_FACT_MARKER");
             assertThat(globalPrompt)
-                    .contains("shard-1-first", "shard-2-second", "unavailable-page-3")
+                    .contains("unit-1-1", "unit-2-1", "unavailable-page-3")
                     .doesNotContain(
                             "FIRST_LONG_FACT_MARKER",
                             "SECOND_LONG_FACT_MARKER",
@@ -483,17 +458,17 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
             String prompt = promptText(invocation.getArgument(0));
             if (prompt.contains("FIRST_DENSE_FACT") && prompt.contains("SECOND_DENSE_FACT")) {
                 return response("""
-                        {"teachingUnits":[{"teachingUnitId":"page-flow","role":"LEGAL_ACTION",\
+                        {"teachingUnits":[{"role":"LEGAL_ACTION",\
                         "sourceSlotIds":["page-1-rule-1","page-1-rule-2"]}]}
                         """);
             }
             if (prompt.contains("THIRD_DENSE_FACT")) {
                 return response("""
-                        {"teachingUnits":[{"teachingUnitId":"page-ending","role":"ENDING",\
+                        {"teachingUnits":[{"role":"ENDING",\
                         "sourceSlotIds":["page-2-rule-1"]}]}
                         """);
             }
-            if (prompt.contains("shard-1-page-flow") && prompt.contains("shard-2-page-ending")) {
+            if (prompt.contains("unit-1-1") && prompt.contains("unit-2-1")) {
                 return response("""
                         {
                           "gameTitle":"密集页面示例",
@@ -503,7 +478,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                             "objective":"理解各页规则之间的关系。",
                             "required":true,
                             "visualEvidenceRecommended":false,
-                            "teachingUnitIds":["shard-1-page-flow","shard-2-page-ending"]
+                            "teachingUnitIds":["unit-1-1","unit-2-1"]
                           }],
                           "wholeGameUnderstanding":{
                             "summary":"页面内规则保持共同上下文并连接为完整流程。",
@@ -550,11 +525,6 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
             assertThat(outline.sourceCoverageSlots())
                     .extracting(slot -> slot.slotId())
                     .containsExactly("page-1-rule-1", "page-1-rule-2", "page-2-rule-1");
-            List<String> operations = calls.calls.stream().map(ModelCall::operation).toList();
-            assertThat(operations.subList(0, 2)).containsExactlyInAnyOrder(
-                            "organizeTeachingOutline|canonical-shard-1",
-                            "organizeTeachingOutline|canonical-shard-2");
-            assertThat(operations.getLast()).isEqualTo("organizeTeachingOutline|canonical-global-ordering");
             ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
             verify(chatModel, times(3)).call(prompts.capture());
             List<String> promptTexts = prompts.getAllValues().stream().map(this::promptText).toList();
@@ -564,10 +534,10 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                             .orElseThrow())
                     .contains("FIRST_DENSE_FACT", "SECOND_DENSE_FACT");
             assertThat(promptTexts.stream()
-                            .filter(prompt -> prompt.contains("shard-1-page-flow"))
+                            .filter(prompt -> prompt.contains("unit-1-1"))
                             .findFirst()
                             .orElseThrow())
-                    .contains("shard-1-page-flow", "shard-2-page-ending")
+                    .contains("unit-1-1", "unit-2-1")
                     .doesNotContain(
                             "FIRST_DENSE_FACT", "SECOND_DENSE_FACT", "THIRD_DENSE_FACT", "RULE_GROUP_FACT:");
         } finally {
@@ -576,9 +546,23 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
     }
 
     @Test
-    void rejectsAnImpossibleHierarchicalContextBeforeAnyPaidShardCall() {
+    void sendsACompletePageShardPastTheFormerInputCapWithoutCroppingIt() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
+        String tailMarker = "COMPLETE_FACT_TAIL_AFTER_FORMER_CAP";
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            String prompt = promptText(invocation.getArgument(0));
+            if (prompt.contains("SOURCE_SLOT_ID: page-1-rule-1")) {
+                assertThat(prompt).contains(tailMarker);
+                return response("""
+                        {"teachingUnits":[{"role":"LEGAL_ACTION","sourceSlotIds":["page-1-rule-1"]}]}
+                        """);
+            }
+            if (prompt.contains("TEACHING_UNIT_ID: unit-1-1")) {
+                return response(globalOrderingJson(List.of("unit-1-1"), "page-1-rule-1"));
+            }
+            throw new AssertionError("unexpected oversized-page prompt");
+        });
         SpringAiTeachingOutlineModel model = model(configuration);
         var request = new OutlineRequest(
                 List.of(new PageInput(
@@ -590,7 +574,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                         List.of(new RuleGroupFact(
                                 "R-1",
                                 "Oversized",
-                                "x".repeat(SpringAiTeachingOutlineModel.MAX_HIERARCHICAL_INPUT_TOKENS * 4))),
+                                "x".repeat(70_000) + tailMarker)),
                         PageLedgerState.VISUAL_EXACT_COMPLETE)),
                 List.of(),
                 "player");
@@ -598,29 +582,29 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
 
         try {
             assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
-            assertThatThrownBy(() -> model.organize(request, calls))
-                    .isInstanceOf(OutlineGenerationException.class)
-                    .hasRootCauseInstanceOf(OutlineCapacityExceededException.class)
-                    .hasRootCauseMessage("canonical source page shard exceeds the bounded ownership context");
-            assertThat(calls.calls).isEmpty();
-            verify(chatModel, times(0)).call(any(Prompt.class));
+            var outline = model.organize(request, calls);
+
+            assertThat(outline.sourceCoverageSlots())
+                    .extracting(slot -> slot.sourceIdentifier())
+                    .containsExactly("R-1");
         } finally {
             model.close();
         }
     }
 
     @Test
-    void conservativelyCountsCjkCapacityInsteadOfTreatingFourCharactersAsOneToken() {
-        assertThat(SpringAiTeachingOutlineModel.estimateTextTokens("中".repeat(64_001)))
-                .isEqualTo(64_001);
-        assertThat(SpringAiTeachingOutlineModel.estimateTextTokens("rule".repeat(1_000)))
-                .isEqualTo(1_000);
-    }
-
-    @Test
-    void rejectsAnOversizedCjkShardBeforeAnyPaidCall() {
+    void countsLargeCjkInputForAuditWithoutTurningTheEstimateIntoARejection() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            String prompt = promptText(invocation.getArgument(0));
+            if (prompt.contains("SOURCE_SLOT_ID: page-1-rule-1")) {
+                return response("""
+                        {"teachingUnits":[{"role":"LEGAL_ACTION","sourceSlotIds":["page-1-rule-1"]}]}
+                        """);
+            }
+            return response(globalOrderingJson(List.of("unit-1-1"), "page-1-rule-1"));
+        });
         SpringAiTeachingOutlineModel model = model(configuration);
         var request = new OutlineRequest(
                 List.of(new PageInput(
@@ -632,7 +616,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                         List.of(new RuleGroupFact(
                                 "R-1",
                                 "超大规则",
-                                "中".repeat(SpringAiTeachingOutlineModel.MAX_HIERARCHICAL_INPUT_TOKENS + 1))),
+                                "中".repeat(70_000))),
                         PageLedgerState.VISUAL_EXACT_COMPLETE)),
                 List.of(),
                 "player");
@@ -640,21 +624,29 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
 
         try {
             assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
-            assertThatThrownBy(() -> model.organize(request, calls))
-                    .isInstanceOf(OutlineGenerationException.class)
-                    .hasRootCauseInstanceOf(OutlineCapacityExceededException.class)
-                    .hasRootCauseMessage("canonical source page shard exceeds the bounded ownership context");
-            assertThat(calls.calls).isEmpty();
-            verify(chatModel, times(0)).call(any(Prompt.class));
+            var outline = model.organize(request, calls);
+
+            assertThat(outline.sourceCoverageSlots()).hasSize(1);
+            assertThat(calls.calls.getFirst().estimatedInputTokens()).isGreaterThan(64_000);
         } finally {
             model.close();
         }
     }
 
     @Test
-    void rejectsTooManyIndividuallyBoundedPageShardsBeforeAnyPaidCall() {
+    void completesALongLedgerInsteadOfRejectingItsEstimatedGlobalResponseBeforeAnyCall() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            String prompt = promptText(invocation.getArgument(0));
+            if (prompt.contains("SOURCE_SLOT_ID:")) {
+                List<String> sourceSlotIds = sourceSlotIdsFromLocalPrompt(prompt);
+                return response(localGroupingJson(sourceSlotIds));
+            }
+            List<String> unitIds = teachingUnitIdsFromGlobalPrompt(prompt);
+            if (unitIds.isEmpty()) throw new AssertionError("global outline has no source-owned units");
+            return response(globalOrderingJson(unitIds, "page-1-rule-1"));
+        });
         SpringAiTeachingOutlineModel model = model(configuration);
         List<PageInput> pages = IntStream.rangeClosed(1, 500)
                 .mapToObj(page -> {
@@ -683,12 +675,11 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
 
         try {
             assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
-            assertThatThrownBy(() -> model.organize(request, calls))
-                    .isInstanceOf(OutlineGenerationException.class)
-                    .hasRootCauseInstanceOf(OutlineCapacityExceededException.class)
-                    .hasRootCauseMessage("canonical teaching units exceed the bounded global ordering context");
-            assertThat(calls.calls).isEmpty();
-            verify(chatModel, times(0)).call(any(Prompt.class));
+            var outline = model.organize(request, calls);
+
+            assertThat(outline.sourceCoverageSlots()).hasSize(6_000);
+            assertThat(outline.topics()).singleElement().satisfies(topic ->
+                    assertThat(topic.sourcePageNumbers()).hasSize(500));
         } finally {
             model.close();
         }
@@ -766,38 +757,179 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
     }
 
     @Test
-    void rejectsALargeShardThatStillOmitsItsExactSlotAfterOneCompleteReplacement() {
+    void failedShardFallsBackWithoutReplacingSuccessfulShardAndPreservesEverySafeSlotExactlyOnce() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                response("{\"teachingUnits\":[]}"),
-                response("{\"teachingUnits\":[]}"));
+        AtomicInteger failedShardAttempts = new AtomicInteger();
+        String firstRejectedCandidate = """
+                {"teachingUnits":[{"role":"LEGAL_ACTION",\
+                "sourceSlotIds":["unknown-source-slot"]}]}
+                """;
+        String changedRejectedCandidate = """
+                {"teachingUnits":[
+                  {"role":"LEGAL_ACTION","sourceSlotIds":["page-1-rule-1"]},
+                  {"role":"SUPPORTING_RULE","sourceSlotIds":["page-1-rule-1"]}
+                ]}
+                """;
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            String prompt = promptText(invocation.getArgument(0));
+            if (prompt.contains("FAILED_SHARD_MARKER")) {
+                int attempt = failedShardAttempts.incrementAndGet();
+                if (attempt == 1 || attempt == 3) {
+                    return response(firstRejectedCandidate);
+                }
+                if (attempt == 2) return response(changedRejectedCandidate);
+                throw new AssertionError("cyclical local rejection should have settled as no progress");
+            }
+            if (prompt.contains("HEALTHY_SHARD_MARKER")) {
+                return response("""
+                        {"teachingUnits":[{"role":"LEGAL_ACTION",\
+                        "sourceSlotIds":["page-2-rule-1","page-2-rule-2"]}]}
+                        """);
+            }
+            if (prompt.contains("TEACHING_UNIT_ID:")) {
+                List<String> unitIds = teachingUnitIdsFromGlobalPrompt(prompt);
+                if (unitIds.size() != 3) throw new AssertionError("unexpected safe unit count");
+                String unitIdsJson = unitIds.stream()
+                        .map(id -> "\"" + id + "\"")
+                        .collect(java.util.stream.Collectors.joining(","));
+                return response("""
+                        {
+                          "gameTitle":"局部分片降级示例",
+                          "premise":"按已验证来源继续组织讲解。",
+                          "topics":[{
+                            "key":"verified-rules",
+                            "objective":"理解仍然可验证的两个规则来源。",
+                            "required":true,
+                            "visualEvidenceRecommended":false,
+                            "teachingUnitIds":[%s]
+                          }],
+                          "wholeGameUnderstanding":{
+                            "summary":"四个来源槽位仍可形成有引用的讲解。",
+                            "concepts":[{
+                              "conceptId":"verified-rules",
+                              "label":"已验证规则",
+                              "explanation":"归组失败不改变来源事实。",
+                              "sourceSlotIds":["page-1-rule-1","page-1-rule-2",\
+                              "page-2-rule-1","page-2-rule-2"],
+                              "relatedTopicKeys":["verified-rules"],
+                              "prerequisiteConceptIds":[]
+                            }],
+                            "topicDependencies":[]
+                          }
+                        }
+                        """.formatted(unitIdsJson));
+            }
+            throw new AssertionError("unexpected local-failure outline prompt");
+        });
+        SpringAiTeachingOutlineModel model = model(configuration);
+        var request = new OutlineRequest(
+                List.of(
+                        new PageInput(
+                                1,
+                                "UNSAFE_FAILED_SHARD_DISPLAY_TEXT",
+                                List.of(),
+                                List.of("R-1", "R-2"),
+                                true,
+                                List.of(
+                                        new RuleGroupFact(
+                                                "R-1", "First", "FAILED_SHARD_MARKER " + "x".repeat(17_000)),
+                                        new RuleGroupFact("R-2", "Second", "y".repeat(17_000))),
+                                PageLedgerState.VISUAL_EXACT_COMPLETE),
+                        new PageInput(
+                                2,
+                                "UNSAFE_HEALTHY_SHARD_DISPLAY_TEXT",
+                                List.of(),
+                                List.of("R-3", "R-4"),
+                                true,
+                                List.of(
+                                        new RuleGroupFact(
+                                                "R-3", "Third", "HEALTHY_SHARD_MARKER " + "x".repeat(17_000)),
+                                        new RuleGroupFact("R-4", "Fourth", "y".repeat(17_000))),
+                                PageLedgerState.VISUAL_EXACT_COMPLETE)),
+                List.of(),
+                "player");
+        RecordingModelCalls calls = new RecordingModelCalls();
+        try {
+            var outline = model.organize(request, calls);
+
+            assertThat(outline.sourceCoverageSlots())
+                    .extracting(slot -> slot.slotId())
+                    .containsExactly(
+                            "page-1-rule-1",
+                            "page-1-rule-2",
+                            "page-2-rule-1",
+                            "page-2-rule-2");
+            assertThat(outline.sourceCoverageSlots().stream()
+                            .filter(slot -> slot.slotId().startsWith("page-1-"))
+                            .map(slot -> slot.teachingUnitId())
+                            .distinct())
+                    .hasSize(2);
+            assertThat(outline.sourceCoverageSlots().stream()
+                            .filter(slot -> slot.slotId().startsWith("page-2-"))
+                    .map(slot -> slot.teachingUnitId())
+                    .distinct())
+                    .hasSize(1);
+            assertThat(failedShardAttempts).hasValue(3);
+            assertThat(calls.rejections).anySatisfy(rejection -> assertThat(rejection)
+                    .contains(
+                            "organizeTeachingOutline|validation|local-1|no-progress",
+                            "previously rejected complete candidate and observation repeated"));
+            TeachingSourceCoverageContract.validateAgainstSources(request, outline);
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void stopsTheGlobalOutlineWhenACompleteRejectionObservationRecursAfterAnInterveningChange() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        AtomicInteger globalAttempts = new AtomicInteger();
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            String prompt = promptText(invocation.getArgument(0));
+            if (prompt.contains("SOURCE_SLOT_ID: page-1-rule-1")) {
+                return response(localGroupingJson(List.of("page-1-rule-1")));
+            }
+            if (prompt.contains("TEACHING_UNIT_ID: unit-1-1")) {
+                return switch (globalAttempts.incrementAndGet()) {
+                    case 1, 3 -> response("{}");
+                    case 2 -> response("{\"gameTitle\":\"changed global candidate\"}");
+                    default -> throw new AssertionError(
+                            "cyclical global rejection should have settled as no progress");
+                };
+            }
+            throw new AssertionError("unexpected cyclical global-outline prompt");
+        });
         SpringAiTeachingOutlineModel model = model(configuration);
         var request = new OutlineRequest(
                 List.of(new PageInput(
                         1,
-                        "UNSAFE_LARGE_DISPLAY_TEXT",
+                        "UNSAFE_GLOBAL_CYCLE_DISPLAY_TEXT",
                         List.of(),
-                        List.of("R-1", "R-2"),
+                        List.of("R-1"),
                         true,
-                        List.of(
-                                new RuleGroupFact("R-1", "First", "x".repeat(17_000)),
-                                new RuleGroupFact("R-2", "Second", "y".repeat(17_000))),
+                        List.of(new RuleGroupFact(
+                                "R-1",
+                                "Global cycle",
+                                "GLOBAL_CYCLE_MARKER " + "x".repeat(70_000))),
                         PageLedgerState.VISUAL_EXACT_COMPLETE)),
                 List.of(),
                 "player");
         RecordingModelCalls calls = new RecordingModelCalls();
 
         try {
+            assertThat(SpringAiTeachingOutlineModel.requiresHierarchicalPlanning(request)).isTrue();
             assertThatThrownBy(() -> model.organize(request, calls))
                     .isInstanceOf(OutlineGenerationException.class)
-                    .hasRootCauseMessage("canonical source shard returned no teaching units");
-            assertThat(calls.calls)
-                    .extracting(ModelCall::operation)
-                    .containsExactly(
-                            "organizeTeachingOutline|canonical-shard-1",
-                            "organizeTeachingOutline|complete-replacement|canonical-shard-1");
-            verify(chatModel, times(2)).call(any(Prompt.class));
+                    .hasRootCauseMessage(
+                            "OUTLINE_NO_PROGRESS: the global outline Agent repeated a previously rejected complete candidate, validation error, output contract, and allowed identities");
+            assertThat(globalAttempts).hasValue(3);
+            assertThat(calls.rejections).anySatisfy(rejection -> assertThat(rejection)
+                    .contains(
+                            "organizeTeachingOutline|validation|global|no-progress",
+                            "previously rejected complete candidate and observation repeated"));
+            verify(chatModel, times(4)).call(any(Prompt.class));
         } finally {
             model.close();
         }
@@ -887,6 +1019,58 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                 .collect(java.util.stream.Collectors.joining("\n"));
     }
 
+    private List<String> teachingUnitIdsFromGlobalPrompt(String prompt) {
+        return prompt.lines()
+                .filter(line -> line.startsWith("TEACHING_UNIT_ID: "))
+                .map(line -> line.substring("TEACHING_UNIT_ID: ".length(), line.indexOf(" | ROLE:")))
+                .toList();
+    }
+
+    private List<String> sourceSlotIdsFromLocalPrompt(String prompt) {
+        return prompt.lines()
+                .filter(line -> line.startsWith("SOURCE_SLOT_ID: "))
+                .map(line -> line.substring("SOURCE_SLOT_ID: ".length()))
+                .toList();
+    }
+
+    private String localGroupingJson(List<String> sourceSlotIds) {
+        String slots = sourceSlotIds.stream()
+                .map(id -> "\"" + id + "\"")
+                .collect(java.util.stream.Collectors.joining(","));
+        return "{\"teachingUnits\":[{\"role\":\"LEGAL_ACTION\",\"sourceSlotIds\":[" + slots + "]}]}";
+    }
+
+    private String globalOrderingJson(List<String> teachingUnitIds, String conceptSourceSlotId) {
+        String units = teachingUnitIds.stream()
+                .map(id -> "\"" + id + "\"")
+                .collect(java.util.stream.Collectors.joining(","));
+        return """
+                {
+                  "gameTitle":"长规则示例",
+                  "premise":"按完整来源账本组织讲解。",
+                  "topics":[{
+                    "key":"all-rules",
+                    "objective":"理解来源账本中的全部规则单元。",
+                    "required":true,
+                    "visualEvidenceRecommended":false,
+                    "teachingUnitIds":[%s]
+                  }],
+                  "wholeGameUnderstanding":{
+                    "summary":"完整来源账本已经形成整局认识。",
+                    "concepts":[{
+                      "conceptId":"source-ledger",
+                      "label":"来源账本",
+                      "explanation":"全部章节都由同一不可变来源账本约束。",
+                      "sourceSlotIds":["%s"],
+                      "relatedTopicKeys":["all-rules"],
+                      "prerequisiteConceptIds":[]
+                    }],
+                    "topicDependencies":[]
+                  }
+                }
+                """.formatted(units, conceptSourceSlotId);
+    }
+
     private void awaitConcurrentLocalShards(CountDownLatch localShardsStarted) {
         localShardsStarted.countDown();
         try {
@@ -929,6 +1113,7 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
 
     private static final class RecordingModelCalls implements ModelCallExecutor {
         private final List<ModelCall> calls = Collections.synchronizedList(new ArrayList<>());
+        private final List<String> rejections = Collections.synchronizedList(new ArrayList<>());
 
         @Override
         public <T> T invoke(
@@ -937,6 +1122,11 @@ class SpringAiPartialVisualTeachingOutlineModelTest {
                 ToIntFunction<T> outputTokens) {
             calls.add(call);
             return invocation.get();
+        }
+
+        @Override
+        public void recordRejection(String operation, String summary) {
+            rejections.add(operation + ": " + summary);
         }
     }
 }

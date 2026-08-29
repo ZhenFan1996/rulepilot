@@ -8,4 +8,10 @@ import java.util.UUID;
 public interface VectorRuleSearchRepository {
 
     List<RuleEvidenceHit> search(UUID documentVersionId, EmbeddingVector query, String provider, int limit);
+
+    default List<RuleEvidenceHit> search(
+            UUID documentVersionId, EmbeddingVector query, String provider, int offset, int limit) {
+        if (offset != 0) throw new UnsupportedOperationException("vector repository paging is unavailable");
+        return search(documentVersionId, query, provider, limit);
+    }
 }

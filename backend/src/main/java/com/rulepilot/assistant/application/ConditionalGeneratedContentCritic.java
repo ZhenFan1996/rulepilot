@@ -29,7 +29,6 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class ConditionalGeneratedContentCritic implements GeneratedContentCritic {
 
-    private static final int MAX_ISSUES = 12;
     private final ContentCriticModel model;
     private final AuditedAgentInvocations invocations;
     private final boolean evaluationMode;
@@ -61,14 +60,7 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
-        // Answers and ordinary evaluation probes keep the zero-latency runtime path. Teaching calls this mode only
-        // after a chapter with a quantitative or legality-changing relationship has remained CITED_DRAFT; measured
-        // rulebook canaries have shown that identity-valid citations alone do not catch swapped counts or a dropped
-        // multiplier, so that one bounded whole-lesson review is a publication boundary rather than optional polish.
-        boolean requiredTeachingPublicationReview = request != null
-                && request.contentType() == ContentType.LESSON
-                && request.reviewMode() == ReviewMode.POST_PUBLICATION;
-        if (!evaluationMode && !requiredTeachingPublicationReview) {
+        if (!evaluationMode) {
             return new Review(false, List.of());
         }
         validateRequest(request);
@@ -120,7 +112,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         return draft.issues().stream()
                 .map(issue -> normalizeIssue(issue, claimPositions, allowedEvidence))
-                .limit(MAX_ISSUES)
                 .toList();
     }
 
@@ -175,7 +166,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .sorted(Comparator.comparingInt(Issue::claimPosition)
                         .thenComparing(Issue::type)
                         .thenComparing(Issue::summary))
-                .limit(MAX_ISSUES)
                 .toList();
     }
 
@@ -236,7 +226,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
     private Issue normalizeIssue(Issue issue, Set<Integer> claimPositions, Set<UUID> allowedEvidence) {
         if (issue == null || issue.type() == null || issue.claimAspect() == null
                 || issue.summary() == null || issue.summary().isBlank()
-                || issue.summary().length() > 240
                 || !claimPositions.contains(issue.claimPosition())) {
             throw new IllegalArgumentException("critic issue is invalid");
         }

@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
@@ -20,13 +21,12 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Int
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
-import com.rulepilot.recommendation.application.RecommendationAgentState.CandidateReplyDraft;
-import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationDraft;
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
-import com.rulepilot.recommendation.application.RecommendationAgentState.RecommendationReplyDraft;
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class RecommendationPublicationTest {
@@ -34,21 +34,23 @@ class RecommendationPublicationTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
-    void publishesModelAuthoredLeadAndCandidateNotesUnchangedWithAnHonestShortfall() {
+    void validatesRawArgumentsOnceThenPublishesAllModelAuthoredTextUnchanged() {
         Fixture fixture = fixture(List.of(101, 102));
         fixture.state.pendingPublicationSeed = new PublicationSeed(List.of(101, 102), List.of(), 3);
         String lead = "  先说结论：这两款都满足已经确认的人数与时长边界，但走的是不同路线。目录事实只负责说明它们为什么进入候选，不会替你决定互动偏好。\n按你们今晚的节奏，我会先看卡片里分别写清的推荐理由和使用边界，再从两种方向中做选择。  ";
         String firstWhy = "Signal Grove 101 的人数和时长都落在你确认的范围里。";
         String secondWhy = "Signal Grove 102 同样满足三人、六十分钟内的硬条件。";
-        PublicationDraft draft = new PublicationDraft(
+        String secondTradeoff = "它的公开资料没有替你决定偏好的互动感。";
+        String arguments = recommendationJson(
                 lead,
                 List.of(evidenceId(fixture, 101), evidenceId(fixture, 102)),
                 List.of(
-                        candidateDraft(fixture, 101, firstWhy, null),
-                        candidateDraft(fixture, 102, secondWhy, "它的公开资料没有替你决定偏好的互动感。")));
+                        candidate(fixture, 101, firstWhy, null),
+                        candidate(fixture, 102, secondWhy, secondTradeoff)));
 
-        RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, draft);
-        var response = fixture.publication.publish(fixture.state, permit, draft, "zh-CN");
+        RecommendationPublication.PreparedPublication prepared =
+                fixture.publication.prepare(fixture.state, arguments);
+        var response = fixture.publication.publish(fixture.state, prepared, "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.assistantMessage()).isEqualTo(lead);
@@ -58,8 +60,7 @@ class RecommendationPublicationTest {
         assertThat(response.games().get(0).matches()).containsExactly(firstWhy);
         assertThat(response.games().get(0).tradeoffs()).isEmpty();
         assertThat(response.games().get(1).matches()).containsExactly(secondWhy);
-        assertThat(response.games().get(1).tradeoffs())
-                .containsExactly("它的公开资料没有替你决定偏好的互动感。");
+        assertThat(response.games().get(1).tradeoffs()).containsExactly(secondTradeoff);
         assertThat(response.games()).allSatisfy(game -> {
             assertThat(game.claims()).isNotEmpty().allSatisfy(claim ->
                     assertThat(claim.type()).isEqualTo(CandidateClaim.Type.CONSTRAINT_FIT));
@@ -78,74 +79,76 @@ class RecommendationPublicationTest {
         });
         assertThat(response.harness().fallbackUsed()).isFalse();
         assertThat(response.harness().actions())
-                .containsExactly("RECOMMENDATION_VERIFIED_SET_SHORTFALL", "RECOMMEND_GAMES");
+                .containsExactly(
+                        "MODEL_AUTHORED_RECOMMENDATION",
+                        "RECOMMENDATION_VERIFIED_SET_SHORTFALL",
+                        "RECOMMEND_GAMES");
     }
 
     @Test
-    void acceptsConciseModelProseButRejectsCandidateOrEvidenceOutsideTheVerifiedBoundary() {
+    void reportsTheExactDeepestCandidateAndEvidenceFailuresFromRawArguments() {
         Fixture fixture = fixture(List.of(101, 102));
         fixture.state.pendingPublicationSeed = new PublicationSeed(List.of(101), List.of(), 1);
 
-        PublicationDraft shortStatus = new PublicationDraft(
-                "已推荐。",
-                List.of(evidenceId(fixture, 101)),
-                List.of(candidateDraft(fixture, 101, "人数和时长都有当前候选的目录事实支持。", null)));
-        assertThat(fixture.publication.permit(fixture.state, shortStatus).selectedGames())
+        RecommendationPublication.PreparedPublication concise = fixture.publication.prepare(
+                fixture.state,
+                recommendationJson(
+                        "已推荐。",
+                        List.of(evidenceId(fixture, 101)),
+                        List.of(candidate(fixture, 101, "合适。", null))));
+        assertThat(concise.permit().selectedGames())
                 .extracting(game -> game.ranking().bggId())
                 .containsExactly(101);
 
-        PublicationDraft shortCardNote = new PublicationDraft(
-                "这是一段达到完整答复长度的模型回复，它只引用当前候选自己的已核验目录事实，也没有越过候选身份边界；不过卡片理由仍然过短，无法向玩家解释为什么值得考虑，所以整个正常发布动作必须被拒绝并由模型修复。",
-                List.of(evidenceId(fixture, 101)),
-                List.of(new CandidateReplyDraft(
-                        101,
-                        new RecommendationReplyDraft("合适。", List.of(evidenceId(fixture, 101))),
-                        null)));
-        assertThat(fixture.publication.permit(fixture.state, shortCardNote).selectedGames())
-                .extracting(game -> game.ranking().bggId())
-                .containsExactly(101);
-
-        PublicationDraft outsideCandidate = new PublicationDraft(
-                "这是一段长度完整的候选回复，但它故意选择了当前待发布集合以外的游戏。验证层必须先拒绝候选身份，不能因为自然语言听起来合理就放行，也不能由应用把它偷偷换成另一款已核验候选；模型只能按当前枚举重新提交。",
-                List.of(evidenceId(fixture, 102)),
-                List.of(candidateDraft(fixture, 102, "越权候选", null)));
         assertFailure(
-                () -> fixture.publication.permit(fixture.state, outsideCandidate),
-                RecommendationPublication.Code.PUBLICATION_SELECTION_OUTSIDE_PENDING);
+                () -> fixture.publication.prepare(
+                        fixture.state,
+                        recommendationJson(
+                                "候选漏掉了必需的适配理由。",
+                                List.of(evidenceId(fixture, 101)),
+                                List.of(new LinkedHashMap<>(Map.of("bggId", 101))))),
+                RecommendationPublication.Code.RECOMMENDATION_REQUIRED_FIELD_MISSING,
+                "$.selections[0].why");
+
+        assertFailure(
+                () -> fixture.publication.prepare(
+                        fixture.state,
+                        recommendationJson(
+                                "候选越过了当前待发布集合。",
+                                List.of(evidenceId(fixture, 102)),
+                                List.of(candidate(fixture, 102, "越权候选", null)))),
+                RecommendationPublication.Code.PUBLICATION_SELECTION_OUTSIDE_PENDING,
+                "$.selections[0].bggId");
 
         String foreignEvidence = evidenceId(fixture, 102);
-        PublicationDraft foreignLeadEvidenceDraft = new PublicationDraft(
-                "顶层事实也不能借用另一款游戏的证据。即使回复长度已经足够、措辞也很自然，只要它绑定的 observation 不属于最终选择的候选，发布边界就必须拒绝，而不能改写文字或把另一款游戏的资料冒充成当前候选事实。",
-                List.of(foreignEvidence),
-                List.of(candidateDraft(fixture, 101, "同候选理由", null)));
         assertFailure(
-                () -> fixture.publication.permit(fixture.state, foreignLeadEvidenceDraft),
-                RecommendationPublication.Code.RECOMMENDATION_EVIDENCE_NOT_GROUNDED);
+                () -> fixture.publication.prepare(
+                        fixture.state,
+                        recommendationJson(
+                                "顶层事实不能借用另一款游戏的证据。",
+                                List.of(foreignEvidence),
+                                List.of(candidate(fixture, 101, "同候选理由", null)))),
+                RecommendationPublication.Code.RECOMMENDATION_EVIDENCE_NOT_GROUNDED,
+                "$.playerReplyEvidenceIds[0]");
 
-        PublicationDraft foreignEvidenceDraft = new PublicationDraft(
-                "这段顶层回复只绑定当前候选自己的目录事实，长度也满足完整答复边界；但是下面卡片理由故意引用了另一款游戏的 observation，因此发布仍应失败。应用不能拼接修补，必须让模型重新提交同候选证据。",
-                List.of(evidenceId(fixture, 101)),
-                List.of(new CandidateReplyDraft(
-                        101,
-                        new RecommendationReplyDraft("看似合理但证据属于另一款游戏", List.of(foreignEvidence)),
-                        null)));
+        Map<String, Object> wrongEvidenceCandidate = candidate(fixture, 101, "证据属于另一款游戏。", null);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> why = (Map<String, Object>) wrongEvidenceCandidate.get("why");
+        why.put("internalEvidenceIds", List.of(foreignEvidence));
         assertFailure(
-                () -> fixture.publication.permit(fixture.state, foreignEvidenceDraft),
-                RecommendationPublication.Code.RECOMMENDATION_EVIDENCE_NOT_GROUNDED);
+                () -> fixture.publication.prepare(
+                        fixture.state,
+                        recommendationJson(
+                                "顶层事实只绑定当前候选。",
+                                List.of(evidenceId(fixture, 101)),
+                                List.of(wrongEvidenceCandidate))),
+                RecommendationPublication.Code.RECOMMENDATION_EVIDENCE_NOT_GROUNDED,
+                "$.selections[0].why.internalEvidenceIds[0]");
     }
 
     @Test
-    void rejectsAnUnverifiedOrHardIneligibleSeedBeforeFallbackPublication() {
-        Fixture fixture = fixture(List.of(101));
-        when(fixture.runtime.recommendableIds(fixture.state)).thenReturn(List.of(101, 999));
-
-        assertFailure(
-                () -> fixture.publication.permit(
-                        fixture.state,
-                        new PublicationSeed(List.of(999), List.of(), 1)),
-                RecommendationPublication.Code.FINAL_ID_NOT_VERIFIED);
-
-        Fixture ineligible = fixture(
+    void rejectsASelectionThatFailsCurrentHardGatesWithoutPublishingAnything() {
+        Fixture fixture = fixture(
                 List.of(101),
                 new RecommendationProfile(
                         ConstraintRange.hardExact(5),
@@ -154,28 +157,52 @@ class RecommendationPublicationTest {
                         BggGameType.ALL,
                         InteractionPreference.ANY),
                 "五个人，一小时内");
-        when(ineligible.runtime.recommendableIds(ineligible.state)).thenReturn(List.of(101));
+        fixture.state.pendingPublicationSeed = new PublicationSeed(List.of(101), List.of(), 1);
+        when(fixture.runtime.recommendableIds(fixture.state)).thenReturn(List.of(101));
+
         assertFailure(
-                () -> ineligible.publication.permit(
-                        ineligible.state,
-                        new PublicationSeed(List.of(101), List.of(), 1)),
-                RecommendationPublication.Code.FINAL_ID_FAILS_HARD_GATES);
-        assertThat(ineligible.state.finalResponseGameIds).isEmpty();
-        assertThat(ineligible.state.finalResponseEvidenceIds).isEmpty();
+                () -> fixture.publication.prepare(
+                        fixture.state,
+                        recommendationJson(
+                                "当前候选不满足硬条件。",
+                                List.of(evidenceId(fixture, 101)),
+                                List.of(candidate(fixture, 101, "不能发布", null)))),
+                RecommendationPublication.Code.FINAL_ID_FAILS_HARD_GATES,
+                "$.selections[0].bggId");
+        assertThat(fixture.state.finalResponseGameIds).isEmpty();
+        assertThat(fixture.state.finalResponseEvidenceIds).isEmpty();
     }
 
-    private CandidateReplyDraft candidateDraft(
+    private Map<String, Object> candidate(
             Fixture fixture,
             int bggId,
             String why,
             String tradeoff) {
-        RecommendationReplyDraft whyDraft = new RecommendationReplyDraft(
-                why,
-                List.of(evidenceId(fixture, bggId)));
-        RecommendationReplyDraft tradeoffDraft = tradeoff == null
-                ? null
-                : new RecommendationReplyDraft(tradeoff, List.of(evidenceId(fixture, bggId)));
-        return new CandidateReplyDraft(bggId, whyDraft, tradeoffDraft);
+        Map<String, Object> candidate = new LinkedHashMap<>();
+        candidate.put("bggId", bggId);
+        candidate.put("why", note(why, evidenceId(fixture, bggId)));
+        if (tradeoff != null) candidate.put("tradeoff", note(tradeoff, evidenceId(fixture, bggId)));
+        return candidate;
+    }
+
+    private Map<String, Object> note(String text, String evidenceId) {
+        return new LinkedHashMap<>(Map.of(
+                "text", text,
+                "internalEvidenceIds", List.of(evidenceId)));
+    }
+
+    private String recommendationJson(
+            String playerReply,
+            List<String> playerReplyEvidenceIds,
+            List<Map<String, Object>> candidates) {
+        try {
+            return json.writeValueAsString(Map.of(
+                    "playerReply", playerReply,
+                    "playerReplyEvidenceIds", playerReplyEvidenceIds,
+                    "selections", candidates));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private String evidenceId(Fixture fixture, int bggId) {
@@ -207,8 +234,7 @@ class RecommendationPublicationTest {
                 new ConversationRequest(profile, message),
                 System.nanoTime(),
                 null,
-                false,
-                3);
+                false);
         verifiedIds.stream().map(this::game).forEach(state::addVerified);
         BoardGameRecommendationSelector selector = new BoardGameRecommendationSelector(properties());
         RecommendationReActLoop runtime = mock(RecommendationReActLoop.class);
@@ -220,16 +246,20 @@ class RecommendationPublicationTest {
         RecommendationActions observations = new RecommendationActions(
                 null, selector, properties(), json, review, runtime);
         RecommendationPublication publication = new RecommendationPublication(
-                selector, review, observations, runtime);
+                selector, review, observations, runtime, json);
         return new Fixture(state, runtime, observations, publication);
     }
 
     private void assertFailure(
             org.assertj.core.api.ThrowableAssert.ThrowingCallable callable,
-            RecommendationPublication.Code expected) {
+            RecommendationPublication.Code expected,
+            String expectedPath) {
         assertThatThrownBy(callable).isInstanceOfSatisfying(
                 RecommendationPublication.InvalidPublication.class,
-                failure -> assertThat(failure.code()).isEqualTo(expected));
+                failure -> {
+                    assertThat(failure.code()).isEqualTo(expected);
+                    assertThat(failure.path()).isEqualTo(expectedPath);
+                });
     }
 
     private BoardGameRecommendationProperties properties() {

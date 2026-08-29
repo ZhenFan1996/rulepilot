@@ -23,6 +23,15 @@ class ConstraintRangeTest {
     }
 
     @Test
+    void preservesLongPlayerEvidenceInsteadOfTurningConversationLengthIntoAValidationFailure() {
+        String evidence = "这是一条包含完整背景、排除项与桌上需求的玩家条件。".repeat(40);
+
+        ConstraintRange<Integer> range = ConstraintRange.hard(3, 4, evidence, 12);
+
+        assertThat(range.sourceText()).isEqualTo(evidence);
+    }
+
+    @Test
     void rejectsReversedEmptyAndOutOfContractMetadata() {
         assertThatThrownBy(() -> ConstraintRange.hard(180, 120, "范围", 1))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -31,9 +40,6 @@ class ConstraintRangeTest {
                         null, null, ConstraintRange.Strength.HARD, "范围", 1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("bound");
-        assertThatThrownBy(() -> ConstraintRange.hard(1, 2, "x".repeat(161), 1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("source");
         assertThatThrownBy(() -> ConstraintRange.hard(1, 2, "范围", -1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("turn");

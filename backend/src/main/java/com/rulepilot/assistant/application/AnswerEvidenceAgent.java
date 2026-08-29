@@ -35,7 +35,6 @@ import org.springframework.stereotype.Service;
 public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AnswerEvidenceAgent.class);
-    private static final int MAX_OBSERVED_EVIDENCE = 24;
     private static final String SYSTEM_PROMPT = """
             You are the evidence-refinement stage of a board-game rules assistant. Never answer the player and never
             rely on rule knowledge outside the supplied evidence and tool observations. The application has already
@@ -70,7 +69,10 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             preamble or silently discard a multiplier. A result
             count does not prove coverage: if a broad search misses one obligation, search that obligation again with
             the player's distinctive wording before reading the best candidate page. Stop requesting tools after the
-            useful exact pages have been read. Any terminal prose is ignored by the application; only canonical page
+            useful exact pages have been read. A search observation whose sourceAvailability is PARTIAL preserves
+            useful candidates but cannot prove that no candidate exists or that a list or advice search is exhaustive.
+            Base COMPLETE_LIST and ADVICE terminal certification on the canonical exact-page content, never on partial
+            search coverage. Any terminal prose is ignored by the application; only canonical page
             observations can become answer evidence. Do not invent identifiers or scope.
             For an ADVICE-only request, after reading the exact candidate page return exactly
             {"status":"EVIDENCE_READY"} only when that page itself contains source-authored guidance in the requested
@@ -156,18 +158,11 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     SYSTEM_PROMPT,
                     playerRequest(question, context, questionPlan, deterministic.evidence()),
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
-                    refinementBudget(questionPlan, context),
-                    384,
                     toolPortfolio(question, context, questionPlan),
                     requiredEvidenceTools,
-                    refinementToolBudget(questionPlan, context),
                     requiresTerminalCertification(questionPlan)
                             ? TerminalContract.evidenceReview()
-                            : TerminalContract.none(),
-                    requiresSourceAuthoredAdvice(questionPlan)
-                            ? Map.of("read_rule_pages", 1)
-                            : Map.of(),
-                    !requiresCompleteListCertification(questionPlan)));
+                            : TerminalContract.none()));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",
@@ -176,8 +171,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         } finally {
             permit.close();
         }
-        List<Set<UUID>> exactPageGroups = NativeToolEvidenceHandles.exactPageObservationGroups(
-                result, 8, MAX_OBSERVED_EVIDENCE);
+        List<Set<UUID>> exactPageGroups = NativeToolEvidenceHandles.exactPageObservationGroups(result);
         LOGGER.debug(
                 "Answer evidence refinement result: status={}, reason={}, toolCalls={}, exactPageGroups={}, observedHandles={}",
                 result.status(),
@@ -189,6 +183,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             if (usesPriorPages(questionPlan, context) || requiresNumericalScopeAudit(questionPlan)) {
                 LOGGER.info(
                         "Answer evidence refinement did not complete the required prior-reference or calculation exact-page audit; withholding deterministic evidence");
+                if (deterministic.state() == AnswerEvidenceRetriever.State.PARTIAL) return deterministic;
                 return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
             }
             LOGGER.info(
@@ -209,15 +204,13 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     "Answer evidence refinement did not certify complete-list coverage; preserving deterministic evidence and the COMPLETE_LIST obligation");
             return deterministic;
         }
-        // An exact-page observation is canonical application evidence even if a non-certifying Agent spends its
-        // remaining turn on an unnecessary search and reaches its loop budget. Advice and complete-list plans have
-        // already been held to their explicit terminal certification above; ordinary rule questions must not lose a
-        // successfully read page merely because the optional acquisition loop failed to stop cleanly afterwards.
+        // An exact-page observation is canonical application evidence even if a non-certifying Agent later stops at
+        // the shared deadline or another execution boundary. Advice and complete-list plans have already been held to
+        // their explicit terminal certification above; ordinary rule questions must not lose a successfully read page.
         boolean acquiredCanonicalPages = result.toolCalls() > 0 && !exactPageGroups.isEmpty();
         if (!acquiredCanonicalPages) return deterministic;
         Set<UUID> observedIds = exactPageGroups.stream()
                 .flatMap(Set::stream)
-                .limit(MAX_OBSERVED_EVIDENCE)
                 .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
         if (observedIds.isEmpty()) return deterministic;
         return mergeCanonicalEvidence(
@@ -254,22 +247,6 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             return Set.of("read_rule_pages");
         }
         return Set.of();
-    }
-
-    private int refinementBudget(AnswerQuestionPlan questionPlan, QuestionContext context) {
-        if (usesPriorPages(questionPlan, context)) return 2;
-        if (questionPlan.subquestions().size() > 1) return 5;
-        if (requiresCompleteListCertification(questionPlan)) return 5;
-        if (!requiredEvidenceTools(questionPlan, context).isEmpty()) return 4;
-        return 3;
-    }
-
-    private int refinementToolBudget(AnswerQuestionPlan questionPlan, QuestionContext context) {
-        if (usesPriorPages(questionPlan, context)) return 1;
-        if (questionPlan.subquestions().size() > 1) return 5;
-        if (requiresSourceAuthoredAdvice(questionPlan)) return 4;
-        if (requiresCompleteListCertification(questionPlan)) return 4;
-        return 3;
     }
 
     private boolean requiresSourceAuthoredAdvice(AnswerQuestionPlan questionPlan) {
@@ -344,7 +321,13 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 Set.of(),
                 AnswerRetrievalInputMapper.plan(questionPlan),
                 confirmedPageGroups);
-        return new AnswerEvidenceRetriever.Result(selected, AnswerEvidenceRetriever.State.READY);
+        // Reading a canonical page validates the evidence on that page; it cannot restore a configured search
+        // source that was unavailable during the logical retrieval. Keep that source-coverage boundary visible so
+        // publication warns the player and does not cache an apparently exhaustive answer.
+        AnswerEvidenceRetriever.State mergedState = deterministic.state() == AnswerEvidenceRetriever.State.PARTIAL
+                ? AnswerEvidenceRetriever.State.PARTIAL
+                : AnswerEvidenceRetriever.State.READY;
+        return new AnswerEvidenceRetriever.Result(selected, mergedState);
     }
 
     private static boolean sameCanonicalIdentity(RuleEvidenceHit existing, RuleEvidenceHit canonical) {
@@ -411,7 +394,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         }
         request.append("\nCurrent verified retrieval:");
         if (evidence.isEmpty()) request.append(" none");
-        for (HybridEvidenceHit hit : evidence.stream().limit(5).toList()) {
+        for (HybridEvidenceHit hit : evidence) {
             request.append("\n- ")
                     .append(hit.evidence().chunkId())
                     .append(" | ")
@@ -463,9 +446,8 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         return context.priorTurnReference().citations().stream()
                 .flatMapToInt(citation -> java.util.stream.IntStream.rangeClosed(
                         citation.pageFrom(),
-                        (int) Math.min((long) citation.pageTo(), (long) citation.pageFrom() + 4)))
+                        citation.pageTo()))
                 .distinct()
-                .limit(5)
                 .boxed()
                 .toList();
     }

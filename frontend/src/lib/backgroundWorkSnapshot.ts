@@ -32,7 +32,7 @@ export interface RulebookImportJob {
   teachingHandoffState?: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   teachingPreparationRunId?: string | null
   teachingErrorCode?: string | null
-  teachingAutomaticRecoveryCount?: number
+  teachingNextAction?: 'WAIT' | 'OPEN_PROGRESS' | 'RETRY_TEACHING' | 'RETRY_DOCUMENT' | 'NONE'
   downloadCompletedAt?: string | null
   importCompletedAt?: string | null
   teachingHandoffUpdatedAt?: string | null
@@ -47,6 +47,7 @@ export interface UploadedTeachingHandoff {
   state: 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   preparationRunId: string | null
   errorCode: string | null
+  nextAction?: 'WAIT' | 'OPEN_PROGRESS' | 'RETRY_TEACHING' | 'RETRY_DOCUMENT' | 'NONE'
   updatedAt: string
 }
 
@@ -73,6 +74,7 @@ const assistantRunModes = new Set(['TEACHING_PREPARATION', 'TEACHING', 'VISUAL_E
 const importStages = new Set(['QUEUED', 'CONNECTING', 'DOWNLOADING', 'COMPRESSING', 'VERIFYING_FILE', 'SAVING', 'COMPLETED', 'FAILED'])
 const importHandoffStates = new Set(['NOT_REQUESTED', 'WAITING_FOR_DOCUMENT', 'LAUNCHING', 'LAUNCHED', 'FAILED'])
 const uploadHandoffStates = new Set(['WAITING_FOR_DOCUMENT', 'LAUNCHING', 'LAUNCHED', 'FAILED'])
+const teachingRecoveryActions = new Set(['WAIT', 'OPEN_PROGRESS', 'RETRY_TEACHING', 'RETRY_DOCUMENT', 'NONE'])
 const documentStatuses = new Set(['UPLOADED', 'VALIDATING', 'EXTRACTING', 'STRUCTURING', 'CHUNKING', 'EMBEDDING', 'INDEXING', 'READY', 'FAILED'])
 const documentProgressStages = new Set([...documentStatuses, 'RENDERING'])
 
@@ -168,7 +170,6 @@ export function parseTeachingRunProgress(
     || !nullableBoundedString(value.run.lastErrorCode, 160)
     || !isRecord(value.budget)
     || !nonNegativeInteger(value.budget.usedModelCalls)
-    || !nonNegativeInteger(value.budget.maxModelCalls)
     || !Array.isArray(value.activities)) {
     throw new Error('background teaching progress is invalid')
   }
@@ -197,7 +198,6 @@ export function parseTeachingRunProgress(
     },
     budget: {
       usedModelCalls: value.budget.usedModelCalls,
-      maxModelCalls: value.budget.maxModelCalls,
     },
     activities,
   }
@@ -247,9 +247,9 @@ export function parseRulebookImports(value: unknown): RulebookImportJob[] {
       || !importHandoffStates.has(entry.teachingHandoffState)
       || !nullableBoundedString(entry.teachingPreparationRunId, 128)
       || !nullableBoundedString(entry.teachingErrorCode, 160)
-      || entry.teachingAutomaticRecoveryCount !== undefined
-        && (!nonNegativeInteger(entry.teachingAutomaticRecoveryCount)
-          || entry.teachingAutomaticRecoveryCount > 1)
+      || entry.teachingNextAction !== undefined
+        && (typeof entry.teachingNextAction !== 'string'
+          || !teachingRecoveryActions.has(entry.teachingNextAction))
       || !nullableTimestamp(entry.downloadCompletedAt)
       || !nullableTimestamp(entry.importCompletedAt)
       || !nullableTimestamp(entry.teachingHandoffUpdatedAt)
@@ -281,6 +281,9 @@ export function parseUploadedHandoffs(value: unknown): UploadedTeachingHandoff[]
       || !uploadHandoffStates.has(entry.state)
       || !nullableBoundedString(entry.preparationRunId, 128)
       || !nullableBoundedString(entry.errorCode, 160)
+      || entry.nextAction !== undefined
+        && (typeof entry.nextAction !== 'string'
+          || !teachingRecoveryActions.has(entry.nextAction))
       || !validTimestamp(entry.updatedAt)) {
       throw new Error('background upload handoff is invalid')
     }

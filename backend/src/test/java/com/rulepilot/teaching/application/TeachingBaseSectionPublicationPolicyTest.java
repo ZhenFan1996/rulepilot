@@ -21,12 +21,12 @@ class TeachingBaseSectionPublicationPolicyTest {
             1, "flow", "流程", "学会执行流程。", true, false, List.of("flow source"), List.of());
 
     @Test
-    void keepsAQuantitativeSectionProvisionalUntilSemanticReview() {
+    void publishesAQuantitativeSectionAfterDeterministicValidation() {
         TeachingSectionDraftCandidate candidate = candidate("每位玩家拿取 3 枚标记。");
 
         LessonSection published = new TeachingBaseSectionPublicationPolicy().publish(candidate);
 
-        assertThat(published.evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(published.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
     }
 
     @Test

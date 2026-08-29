@@ -62,7 +62,7 @@ describe('LessonView progressive reading', () => {
             createdAt: '2026-07-21T00:00:00Z', updatedAt: '2026-07-21T00:01:00Z',
             completedAt: runReads >= 3 ? '2026-07-21T00:02:00Z' : null, lastErrorCode: null,
           },
-          budget: { usedModelCalls: runReads >= 3 ? 2 : 1, maxModelCalls: 144 },
+          budget: { usedModelCalls: runReads >= 3 ? 2 : 1 },
           activities: runReads >= 3
             ? [{
                 sequence: 2, type: 'VALIDATION', operation: 'publishTeachingSection|1', summary: 'published',
@@ -131,9 +131,11 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('先摆主板')
     expect(wrapper.text()).toContain('我的图文讲解')
     expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
-      .toContain('一次返回被拒或一次服务调用失败')
+      .toContain('格式校验没通过不等于整轮失败')
     expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
-      .toContain('总时限或调用预算')
+      .toContain('文字处理额度或有效工作时间用完')
+    expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
+      .toContain('再次给出一模一样、且已经被拒绝的结果')
     expect(wrapper.text()).toContain('目录桌游')
     expect(wrapper.text()).toContain('SETI')
     expect(wrapper.text()).toContain('1–5 人')
@@ -300,9 +302,9 @@ describe('LessonView progressive reading', () => {
             id: 'run-1', subjectId: 'plan-1', state: 'VERIFYING_EVIDENCE', createdAt: '2026-07-21T00:00:00Z',
             updatedAt: '2026-07-21T00:01:00Z', completedAt: null, lastErrorCode: null,
           },
-          budget: { usedModelCalls: 2, maxModelCalls: 48 },
+          budget: { usedModelCalls: 2 },
           activities: [{
-            sequence: 2, type: 'MODEL', operation: 'reviseTeachingSection|1', summary: 'Work started',
+            sequence: 2, type: 'MODEL', operation: 'continueTeachingSectionAfterRejection|1|1', summary: 'Work started',
             outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-21T00:01:00Z',
           }],
         })
@@ -409,7 +411,50 @@ describe('LessonView progressive reading', () => {
     expect(status.attributes('data-player-work-readiness')).toBe('unavailable')
     expect(status.attributes('data-player-work-outcome')).toBe('needs-action')
     expect(wrapper.text()).toContain('还没有可读章节')
+    expect(wrapper.text()).toContain('原样重试不会增加依据')
+    expect(wrapper.text()).not.toContain('请在“我的讲解”中重试')
+    expect(wrapper.text()).not.toContain('可以安全地为这一步启动')
     expect(wrapper.text()).not.toContain('基础讲解可读')
+    wrapper.unmount()
+  })
+
+  it('shows manual repair instead of retry guidance for an invalid persisted plan', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', 'Invalid guide'),
+          sections: [{ position: 1, title: '无法发布', visualEvidenceRecommended: false }],
+        })
+      }
+      if (path.includes('mode=TEACHING')) {
+        const snapshot = runFixture('plan-1', 'FAILED')
+        return Response.json({
+          ...snapshot,
+          run: { ...snapshot.run, lastErrorCode: 'TEACHING_PLAN_INVALID' },
+        })
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-invalid', teachingPlanId: 'plan-1', status: 'INCOMPLETE',
+          sections: [section(1, '无法发布', 'INSUFFICIENT_EVIDENCE')],
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    const terminal = wrapper.get('[data-failure-classification="external-repair"]')
+    expect(terminal.attributes('data-failure-recovery')).toBe('manual-repair')
+    expect(terminal.text()).toContain('这不是可以安全原样重试的失败')
+    expect(terminal.text()).toContain('需要先修复后再继续')
+    expect(terminal.text()).not.toContain('请在“我的讲解”中重试')
     wrapper.unmount()
   })
 
@@ -458,7 +503,10 @@ describe('LessonView progressive reading', () => {
 
   it('uses the same failed terminal presentation after an active run preserves a cited draft', async () => {
     let runReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    let launchAttempts = 0
+    let settleFirstLaunch: (response: Response) => void = () => undefined
+    const firstLaunch = new Promise<Response>((resolve) => { settleFirstLaunch = resolve })
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
@@ -480,8 +528,18 @@ describe('LessonView progressive reading', () => {
           sections: [section(1, '可读草稿', 'CITED_DRAFT')],
         })
       }
+      if (path === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons' && init?.method === 'POST') {
+        launchAttempts += 1
+        return launchAttempts === 1
+          ? firstLaunch
+          : Response.json({ assistantRunId: 'run-restarted', state: 'RECEIVED', reused: false }, { status: 202 })
+      }
       return new Response(null, { status: 404 })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const router = createMemoryRouter()
     await router.push('/lesson/plan-1')
     await router.isReady()
@@ -501,7 +559,40 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('本轮讲解生成失败')
     expect(wrapper.text()).toContain('已保留 1 章可读讲解草稿')
     expect(wrapper.text()).toContain('本轮在有限恢复后到达总时限')
+    expect(wrapper.text()).toContain('从这些持久化内容启动新一轮')
     expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
+
+    const restartAction = () => wrapper.findAll('button')
+      .find(button => button.text().includes('从已完成内容重新开始'))
+    expect(restartAction()).toBeDefined()
+    await restartAction()!.trigger('click')
+    await flushPromises()
+
+    const pendingRestart = wrapper.get('[data-testid="lesson-generation-restart"] button')
+    expect(pendingRestart.text()).toContain('正在启动')
+    expect(pendingRestart.attributes('disabled')).toBeDefined()
+    await pendingRestart.trigger('click')
+    await flushPromises()
+    expect(launchAttempts).toBe(1)
+
+    settleFirstLaunch(new Response(null, { status: 503 }))
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="lesson-generation-restart-error"]').text())
+      .toContain('讲解任务没有启动')
+    expect(restartAction()!.attributes('disabled')).toBeUndefined()
+
+    await restartAction()!.trigger('click')
+    await flushPromises()
+
+    expect(launchAttempts).toBe(2)
+    expect(wrapper.text()).toContain('正在补充图片或核对细节')
+    expect(restartAction()).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(0)
+    await flushPromises()
+    expect(fetchMock.mock.calls.map(([input]) => String(input)))
+      .toContain('/api/v1/assistant-runs/run-restarted')
     wrapper.unmount()
   })
 
@@ -779,7 +870,9 @@ describe('LessonView progressive reading', () => {
 
     expect(wrapper.text()).toContain('My illustrated guide')
     expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
-      .toContain('One rejected response or service call starts a bounded correction or retry')
+      .toContain('A format check is not a failed run')
+    expect(wrapper.get('[data-testid="lesson-generation-failure-boundary"]').text())
+      .toContain('repeats an identical result that was already rejected')
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('Rule Q&A')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.text()).toContain('Source: page 1')
@@ -882,7 +975,7 @@ function runFixture(subjectId: string, state: string, id = 'teaching-run') {
       completedAt: state === 'COMPLETED' ? '2026-07-21T00:01:00Z' : null,
       lastErrorCode: null,
     },
-    budget: { usedModelCalls: 1, maxModelCalls: 48 },
+    budget: { usedModelCalls: 1 },
     activities: [],
   }
 }

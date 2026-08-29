@@ -1,14 +1,17 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.CandidateRejection;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
@@ -98,10 +101,11 @@ class TeachingSectionDraftComposerTest {
                 return textDraft(chunkId);
             }
         };
+        RecordingInvocations invocations = new RecordingInvocations();
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
                 model,
                 new PolicyEvidenceVerifier(),
-                new ImmediateAuditedAgentInvocations(),
+                invocations,
                 VisualRulebookPageFacts.empty());
         TeachingPlan plan = plan(versionId);
 
@@ -164,21 +168,26 @@ class TeachingSectionDraftComposerTest {
     }
 
     @Test
-    void accountsForAContractRepairAsASeparateModelInvocation() {
+    void givesTheSameAgentTheCompleteRejectedCandidateAndBoundaryObservation() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = evidence(chunkId, versionId);
         List<String> attempts = new ArrayList<>();
+        List<CandidateRejection> observations = new ArrayList<>();
+        String rejectedJson = "{\"title\":\"incomplete\",\"steps\":oops}";
         TeachingLessonModel model = new TeachingLessonModel() {
             @Override
             public SectionDraft compose(SectionRequest request) {
                 attempts.add("compose");
-                throw new InvalidOutputException("malformed response", null);
+                throw new InvalidOutputException(
+                        "malformed response", rejectedJson, new IllegalArgumentException("steps must be an array"));
             }
 
             @Override
-            public SectionDraft repairCompositionContract(SectionRequest request) {
-                attempts.add("contract-repair");
+            public SectionDraft continueAfterRejection(
+                    SectionRequest request, CandidateRejection rejection) {
+                attempts.add("continuation");
+                observations.add(rejection);
                 return textDraft(chunkId);
             }
         };
@@ -197,58 +206,161 @@ class TeachingSectionDraftComposerTest {
                 false);
 
         assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
-        assertThat(attempts).containsExactly("compose", "contract-repair");
+        assertThat(attempts).containsExactly("compose", "continuation");
+        assertThat(observations).singleElement().satisfies(observation -> {
+            assertThat(observation.candidateJson()).isEqualTo(rejectedJson);
+            assertThat(observation.validationError())
+                    .contains("malformed response", "steps must be an array");
+            assertThat(observation.outputContract()).isEqualTo("TeachingLessonModel.SectionDraft JSON contract");
+            assertThat(observation.sectionIdentity()).isEqualTo("setup");
+            assertThat(observation.allowedEvidenceIdentities()).containsExactly(chunkId.toString());
+        });
         assertThat(invocations.modelOperations)
-                .containsExactly("composeTeachingSection|1", "repairTeachingSectionContract|1");
+                .containsExactly(
+                        "composeTeachingSection|1|0",
+                        "continueTeachingSectionAfterRejection|1|1");
     }
 
     @Test
-    void accountsForARevisionContractRepairWithoutHidingItInsideTheRevisionActivity() {
+    void stopsWhenACompleteRejectedCandidateAndObservationRecurAfterAnInterveningChange() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = evidence(chunkId, versionId);
-        List<String> attempts = new ArrayList<>();
+        UUID firstUnknownEvidenceId = UUID.randomUUID();
+        UUID changedUnknownEvidenceId = UUID.randomUUID();
+        java.util.concurrent.atomic.AtomicInteger attempts = new java.util.concurrent.atomic.AtomicInteger();
         TeachingLessonModel model = new TeachingLessonModel() {
             @Override
             public SectionDraft compose(SectionRequest request) {
-                return textDraft(chunkId);
+                int attempt = attempts.getAndIncrement();
+                return textDraft(List.of(
+                                firstUnknownEvidenceId,
+                                changedUnknownEvidenceId,
+                                firstUnknownEvidenceId)
+                        .get(attempt));
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model,
+                new PolicyEvidenceVerifier(),
+                invocations,
+                VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+
+        assertThatThrownBy(() -> composer.compose(
+                        plan,
+                        plan.sections().getFirst(),
+                        List.of(),
+                        List.of(evidence),
+                        UUID.randomUUID(),
+                        0,
+                        false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("made no progress")
+                .hasMessageContaining("previously rejected complete candidate")
+                .hasMessageContaining("exact validation error");
+        assertThat(attempts).hasValue(3);
+        assertThat(invocations.validationOperations)
+                .containsExactly(
+                        "validateTeachingSection|1|0",
+                        "validateTeachingSection|1|1",
+                        "settleTeachingSectionNoProgress|1|2");
+    }
+
+    @Test
+    void continuesPastDistinctRejectedCandidatesUntilANewCandidateIsValid() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        List<UUID> candidateEvidenceIds = List.of(UUID.randomUUID(), UUID.randomUUID(), chunkId);
+        java.util.concurrent.atomic.AtomicInteger attempts = new java.util.concurrent.atomic.AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return textDraft(candidateEvidenceIds.get(attempts.getAndIncrement()));
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model,
+                new PolicyEvidenceVerifier(),
+                invocations,
+                VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan,
+                plan.sections().getFirst(),
+                List.of(),
+                List.of(evidence),
+                UUID.randomUUID(),
+                0,
+                false);
+
+        assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(attempts).hasValue(3);
+        assertThat(invocations.validationOperations)
+                .containsExactly(
+                        "validateTeachingSection|1|0",
+                        "validateTeachingSection|1|1",
+                        "validateTeachingSection|1|2");
+    }
+
+    @Test
+    void treatsTheSameCandidateWithADifferentExactErrorAsNewProgress() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        String rejectedJson = "{\"title\":\"same candidate\"}";
+        List<CandidateRejection> observations = new ArrayList<>();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                throw new InvalidOutputException("first exact schema error", rejectedJson, null);
             }
 
             @Override
-            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-                attempts.add("revise");
-                throw new InvalidOutputException("malformed revision", null);
-            }
-
-            @Override
-            public SectionDraft repairRevisionContract(
-                    SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-                attempts.add("revision-contract-repair");
+            public SectionDraft continueAfterRejection(
+                    SectionRequest request, CandidateRejection rejection) {
+                observations.add(rejection);
+                if (observations.size() == 1) {
+                    throw new InvalidOutputException("second exact schema error", rejectedJson, null);
+                }
                 return textDraft(chunkId);
             }
         };
         RecordingInvocations invocations = new RecordingInvocations();
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
-                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+                model,
+                new PolicyEvidenceVerifier(),
+                invocations,
+                VisualRulebookPageFacts.empty());
         TeachingPlan plan = plan(versionId);
-        TeachingLessonModel.SectionRequest request = new TeachingSectionModelRequestFactory(
-                        VisualRulebookPageFacts.empty())
-                .create(plan, plan.sections().getFirst(), List.of(), List.of(evidence), false, false);
 
-        SectionDraft revised = composer.reviseModelDraft(
-                UUID.randomUUID(),
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan,
                 plan.sections().getFirst(),
-                request,
-                textDraft(chunkId),
-                List.of("Repair the output contract."),
-                "correctTeachingSection",
-                "repairTeachingSectionCorrectionContract",
-                "Teaching correction received");
+                List.of(),
+                List.of(evidence),
+                UUID.randomUUID(),
+                0,
+                false);
 
-        assertThat(revised).isEqualTo(textDraft(chunkId));
-        assertThat(attempts).containsExactly("revise", "revision-contract-repair");
-        assertThat(invocations.modelOperations)
-                .containsExactly("correctTeachingSection|1", "repairTeachingSectionCorrectionContract|1");
+        assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(observations)
+                .extracting(CandidateRejection::candidateJson)
+                .containsExactly(rejectedJson, rejectedJson);
+        assertThat(observations)
+                .extracting(CandidateRejection::validationError)
+                .satisfiesExactly(
+                        first -> assertThat(first).contains("first exact schema error"),
+                        second -> assertThat(second).contains("second exact schema error"));
+        assertThat(invocations.validationOperations)
+                .containsExactly(
+                        "validateTeachingSection|1|0",
+                        "validateTeachingSection|1|1",
+                        "validateTeachingSection|1|2");
     }
 
     @Test
@@ -441,6 +553,17 @@ class TeachingSectionDraftComposerTest {
         private final List<Integer> inputTokens = new ArrayList<>();
         private final List<String> summaries = new ArrayList<>();
         private final List<Integer> outputTokens = new ArrayList<>();
+        private final List<String> validationOperations = new ArrayList<>();
+
+        @Override
+        public void record(
+                UUID runId,
+                ActivityType type,
+                String operation,
+                ActivityOutcome outcome,
+                String summary) {
+            if (type == ActivityType.VALIDATION) validationOperations.add(operation);
+        }
 
         @Override
         public <T> T invoke(

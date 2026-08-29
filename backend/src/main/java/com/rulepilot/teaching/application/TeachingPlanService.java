@@ -2,7 +2,6 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
-import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.catalog.CatalogEditionLookup;
@@ -15,7 +14,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
-import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
 import java.util.Optional;
@@ -32,20 +30,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class TeachingPlanService {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingPlanService.class);
-    // The first focused rewrite receives every detected boundary conflict. Repeating whole-outline rewrites tends to
-    // oscillate on wording while delaying a fully cited lesson; section-level validation still protects every claim.
-    private static final int MAX_CHAPTER_OWNERSHIP_REFINEMENTS = 1;
-    private static final int MAX_SOURCE_COVERAGE_REFINEMENTS = 1;
-    private static final int MAX_VISUAL_PAGE_MODEL_ATTEMPTS = 2;
-    private static final int MAX_OUTLINE_STAGE_MODEL_ATTEMPTS = 4;
+    private static final int VISUAL_PAGE_BASELINE_MODEL_CALLS = 1;
+    private static final int OUTLINE_STAGE_BASELINE_MODEL_CALLS = 1;
     // Canonical ownership is page-local: all typed slots from one source page are classified together, and pages may
     // run independently. Keeping one shard per page preserves relationships among rules visible on the same page and
     // prevents dense ledgers from expanding into one serial model stage per slot.
-    private static final int MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE = 1;
-    // A legacy outline is one provider request. Once that request would omit any page text or aggregate a dense
-    // multi-page catalog, use the existing durable page ledger and hierarchical planner instead of silently sampling
-    // rules or hoping the provider finishes one oversized response.
-    static final int MAX_LEGACY_OUTLINE_CATALOG_CHARACTERS = 32_000;
+    private static final int CANONICAL_SHARDS_PER_VISUAL_PAGE = 1;
+    // Routing target only. Above this complete-text size, use the durable page ledger and hierarchical planner. No
+    // source text is cropped or rejected at this value.
+    static final int DIRECT_TEXT_PLANNING_TARGET_CHARACTERS = 32_000;
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
     private final DocumentProcessing documents;
@@ -94,7 +87,6 @@ public class TeachingPlanService {
         String playerGameTitle = catalogGameTitle.orElse(scope.documentTitle());
         var documentPages = documents.pages(documentVersionId);
         boolean canonicalPagePlanning = requiresCanonicalPagePlanning(documentPages);
-        boolean textRulebookVisualCatalogAvailable = !canonicalPagePlanning && visualCataloger.available(createdBy);
         var pages = canonicalPagePlanning
                 ? visualCataloger.catalogVisualPages(
                         documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId)
@@ -102,40 +94,17 @@ public class TeachingPlanService {
                         .map(page -> new PageInput(
                                 page.pageNumber(), page.text() == null || page.text().isBlank()
                                         ? VISUAL_PAGE_CATALOG
-                                        : TeachingPageCatalogText.bounded(page.text())))
+                                        : page.text().strip()))
                         .toList();
-        var initialOutlineRequest = new OutlineRequest(
+        var outlineRequest = new OutlineRequest(
                 pages, List.of(), learningGoal, createdBy);
         var outline = organizeInitialOutline(
                 canonicalPagePlanning,
                 playerGameTitle,
-                initialOutlineRequest,
+                outlineRequest,
                 pages,
                 documentPages,
                 assistantRunId);
-        OutlineRequest outlineRequest = initialOutlineRequest;
-        if (textRulebookVisualCatalogAvailable) {
-            List<PageFact> coverageFacts = visualCataloger.inspectUnownedSparseVisualPages(
-                    documentVersionId, outline, documentPages, scope.documentTitle(), createdBy, assistantRunId);
-            if (!coverageFacts.isEmpty()) {
-                pages = VisualRulebookCatalogPolicy.appendFactsToPageInputs(pages, coverageFacts);
-                outlineRequest = new OutlineRequest(
-                        pages, List.of(), learningGoal, createdBy);
-            }
-        }
-        if (requiresModelSourcePageCoverageRevision(canonicalPagePlanning)) {
-            outline = refineSourcePageCoverage(
-                    outlineRequest, outline, pages, assistantRunId, documentPages, playerGameTitle);
-        } else if (assistantRunId != null) {
-            invocations.record(
-                    assistantRunId,
-                    ActivityType.VALIDATION,
-                    "skipPageLengthOutlineCoverageRevision",
-                    ActivityOutcome.SUCCEEDED,
-                    "The source-bound concept and coverage contracts remain authoritative; page text length alone did not trigger a second outline model call");
-        }
-        outline = refineChapterOwnership(
-                outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
         try {
             if (canonicalPagePlanning || hasStructuredSourceDependencies(pages)) {
                 VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
@@ -158,14 +127,6 @@ public class TeachingPlanService {
         }
         if (canonicalPagePlanning || hasStructuredSourceDependencies(pages)) {
             VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
-        }
-        if (textRulebookVisualCatalogAvailable && assistantRunId != null) {
-            invocations.record(
-                    assistantRunId,
-                    ActivityType.VALIDATION,
-                    "deferSelectedVisualPageCatalog",
-                    ActivityOutcome.SUCCEEDED,
-                    "Optional selected-page visual interpretation was removed from preparation; later visual workflows interpret evidence on demand");
         }
         if (catalogGameTitle.isPresent()) {
             outline = withGameTitle(catalogGameTitle.orElseThrow(), outline);
@@ -226,29 +187,26 @@ public class TeachingPlanService {
 
     static WorkloadDemand preparationWorkload(boolean canonicalPagePlanning, int pageCount) {
         if (pageCount < 1) throw new IllegalArgumentException("teaching preparation page count is invalid");
-        long visualPageCalls = (long) MAX_VISUAL_PAGE_MODEL_ATTEMPTS
-                * (canonicalPagePlanning
-                        ? pageCount
-                        : Math.min(pageCount, VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES));
-        // Every planner stage has at most one transport replay and one complete structured-output replacement, whose
-        // own transport may replay once: four actual provider calls. Dense visual planning has at most one local
-        // ownership shard per page, one global ordering stage, and at most one later global ownership refinement.
+        long visualPageCalls = canonicalPagePlanning
+                ? (long) VISUAL_PAGE_BASELINE_MODEL_CALLS * pageCount
+                : 0;
+        // This is a scheduler capacity estimate, never a call-count budget. It counts the ordinary first candidate for
+        // every page-owned stage plus global ordering. Changed rejection observations may continue under the persisted
+        // token/deadline boundary, while an identical observation stops as no-progress.
         long plannerStages = canonicalPagePlanning
-                ? (long) MAX_CANONICAL_SHARDS_PER_VISUAL_PAGE * pageCount + 2
-                : 2;
-        long requiredModelCalls = visualPageCalls + MAX_OUTLINE_STAGE_MODEL_ATTEMPTS * plannerStages;
-        if (requiredModelCalls > Integer.MAX_VALUE) {
+                ? (long) CANONICAL_SHARDS_PER_VISUAL_PAGE * pageCount + 1
+                : 1;
+        long estimatedModelCalls = visualPageCalls + OUTLINE_STAGE_BASELINE_MODEL_CALLS * plannerStages;
+        if (estimatedModelCalls > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("teaching preparation workload is too large");
         }
-        return new WorkloadDemand(0, (int) requiredModelCalls);
+        return new WorkloadDemand((int) estimatedModelCalls);
     }
 
     static boolean requiresExtendedPreparationLane(WorkloadDemand workload) {
         if (workload == null) throw new IllegalArgumentException("teaching preparation workload is required");
-        int ordinaryCallCeiling = MAX_VISUAL_PAGE_MODEL_ATTEMPTS
-                        * VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES
-                + MAX_OUTLINE_STAGE_MODEL_ATTEMPTS * 2;
-        return workload.requiredModelCalls() > ordinaryCallCeiling;
+        int ordinaryCapacityBaseline = OUTLINE_STAGE_BASELINE_MODEL_CALLS;
+        return workload.estimatedModelCalls() > ordinaryCapacityBaseline;
     }
 
     void refreshVisualEvidence(
@@ -302,7 +260,7 @@ public class TeachingPlanService {
                         ActivityType.VALIDATION,
                         "rejectTeachingOutlineGenerationFailure",
                         ActivityOutcome.REJECTED,
-                        "Lesson preparation stopped because no source-bound whole-game outline survived the bounded model repair");
+                        "Lesson preparation stopped because no source-bound whole-game outline reached the publication boundary before durable execution stopped");
             }
             throw generationFailure;
         }
@@ -312,112 +270,16 @@ public class TeachingPlanService {
                 pages);
     }
 
-    private TeachingOutlineModel.OutlineDraft refineChapterOwnership(
-            OutlineRequest request,
-            TeachingOutlineModel.OutlineDraft outline,
-            UUID assistantRunId,
-            List<DocumentProcessing.PageView> documentPages,
-            String documentTitle) {
-        TeachingOutlineModel.OutlineDraft current = outline;
-        for (int attempt = 1; attempt <= MAX_CHAPTER_OWNERSHIP_REFINEMENTS; attempt++) {
-            Optional<String> feedback = TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(current);
-            if (feedback.isEmpty()) return current;
-            TeachingOutlineModel.OutlineDraft beforeRefinement = current;
-            try {
-                var refined = assistantRunId == null
-                        ? outlines.refineChapterOwnership(request, beforeRefinement, feedback.get())
-                        : outlines.refineChapterOwnership(
-                                request,
-                                beforeRefinement,
-                                feedback.get(),
-                                modelCalls(assistantRunId));
-                current = preferDocumentTitle(
-                        documentTitle,
-                        VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
-                        request.pages());
-                TeachingSourceCoverageContract.validateAgainstSources(request, current);
-                plans.validate(current);
-                TeachingWholeGameUnderstandingPolicy.validateComplete(current);
-                if (current.equals(beforeRefinement)) return current;
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException refinementFailure) {
-                log.warn("Teaching outline ownership refinement was skipped: {}", refinementFailure.getMessage());
-                if (assistantRunId != null) {
-                    invocations.record(
-                            assistantRunId,
-                            ActivityType.VALIDATION,
-                            "retainOutlineAfterOwnershipRefinementFailure",
-                            ActivityOutcome.REJECTED,
-                            "Outline refinement did not complete; the original chapter plan was retained");
-                }
-                return beforeRefinement;
-            }
-        }
-        return current;
-    }
-
-    static boolean requiresModelSourcePageCoverageRevision(boolean canonicalPagePlanning) {
-        return false;
-    }
-
     static boolean requiresCanonicalPagePlanning(List<DocumentProcessing.PageView> pages) {
         if (pages == null || pages.isEmpty()) return false;
         long catalogCharacters = 0;
         for (DocumentProcessing.PageView page : pages) {
             String text = page.text() == null ? "" : page.text().strip();
             if (text.isBlank()) continue;
-            if (text.length() > TeachingPageCatalogText.MAX_CHARACTERS) return true;
             catalogCharacters += text.length();
-            if (catalogCharacters > MAX_LEGACY_OUTLINE_CATALOG_CHARACTERS) return true;
+            if (catalogCharacters > DIRECT_TEXT_PLANNING_TARGET_CHARACTERS) return true;
         }
         return pages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
-    }
-
-    private TeachingOutlineModel.OutlineDraft refineSourcePageCoverage(
-            OutlineRequest request,
-            TeachingOutlineModel.OutlineDraft outline,
-            List<PageInput> pages,
-            UUID assistantRunId,
-            List<DocumentProcessing.PageView> documentPages,
-            String documentTitle) {
-        TeachingOutlineModel.OutlineDraft current = outline;
-        for (int attempt = 1; attempt <= MAX_SOURCE_COVERAGE_REFINEMENTS; attempt++) {
-            Optional<String> feedback = TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(current, pages);
-            if (feedback.isEmpty()) return current;
-            TeachingOutlineModel.OutlineDraft beforeRefinement = current;
-            try {
-                var refined = assistantRunId == null
-                        ? outlines.refineChapterOwnership(request, beforeRefinement, feedback.get())
-                        : outlines.refineChapterOwnership(
-                                request,
-                                beforeRefinement,
-                                feedback.get(),
-                                modelCalls(assistantRunId));
-                current = preferDocumentTitle(
-                        documentTitle,
-                        VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
-                        request.pages());
-                TeachingSourceCoverageContract.validateAgainstSources(request, current);
-                plans.validate(current);
-                TeachingWholeGameUnderstandingPolicy.validateComplete(current);
-                if (current.equals(beforeRefinement)) return current;
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException refinementFailure) {
-                log.warn("Teaching outline source-coverage refinement was skipped: {}", refinementFailure.getMessage());
-                if (assistantRunId != null) {
-                    invocations.record(
-                            assistantRunId,
-                            ActivityType.VALIDATION,
-                            "retainOutlineAfterCoverageRefinementFailure",
-                            ActivityOutcome.REJECTED,
-                            "Source-page coverage refinement did not complete; the current chapter plan was retained");
-                }
-                return beforeRefinement;
-            }
-        }
-        return current;
     }
 
     @Transactional(readOnly = true)
@@ -500,6 +362,16 @@ public class TeachingPlanService {
                         call.successSummary(),
                         invocation,
                         outputTokens);
+            }
+
+            @Override
+            public void recordRejection(String operation, String summary) {
+                invocations.record(
+                        assistantRunId,
+                        ActivityType.VALIDATION,
+                        operation,
+                        ActivityOutcome.REJECTED,
+                        summary);
             }
         };
     }

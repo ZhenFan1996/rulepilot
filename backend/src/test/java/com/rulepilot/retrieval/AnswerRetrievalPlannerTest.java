@@ -53,7 +53,7 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void usesOnlyBoundedRetrievalQueriesOwnedByTheirStructuredSubquestion() {
+    void usesOnlyRetrievalQueriesOwnedByTheirStructuredSubquestion() {
         AnswerRetrievalQuestion question = question("When does the phase end?", List.of());
         AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
                 List.of(new AnswerRetrievalPlan.Subquestion(
@@ -144,30 +144,24 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void enforcesIntentCountAndQueryLengthBudgets() {
+    void preservesEveryDistinctTypedRetrievalIntentWithoutSilentTruncation() {
+        String completeLongQuery = "specific rule relationship " + "x".repeat(700);
         AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
                 List.of(
-                        subquestion("one"),
+                        new AnswerRetrievalPlan.Subquestion(
+                                "one",
+                                Set.of(EvidenceNeed.DIRECT_RULE),
+                                AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION,
+                                List.of(completeLongQuery)),
                         subquestion("two"),
                         subquestion("three"),
-                        subquestion("four")),
+                        subquestion("four"),
+                        subquestion("five")),
                 false);
         var intents = AnswerRetrievalPlanner.plan(question("question", List.of()), plan);
 
-        assertThat(intents).hasSize(5);
-        assertThat(intents).allSatisfy(intent -> assertThat(intent.query().length()).isLessThanOrEqualTo(500));
-    }
-
-    @Test
-    void rejectsAnOversizedStructuredRetrievalQueryInsteadOfSilentlyTruncatingIt() {
-        String oversized = "x".repeat(700);
-
-        assertThatThrownBy(() -> new AnswerRetrievalPlan.Subquestion(
-                        "question",
-                        Set.of(EvidenceNeed.DIRECT_RULE),
-                        AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION,
-                        List.of(oversized)))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .containsExactly("question", "one", completeLongQuery, "two", "three", "four", "five");
     }
 
     @Test

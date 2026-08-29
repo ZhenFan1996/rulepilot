@@ -244,7 +244,7 @@ class VisualLessonStepLocatorBatchingTest {
     }
 
     @Test
-    void allContinueCannotExceedTheAdmissionVisibleSectionBatchCeiling() {
+    void allContinueTraversesEveryFiniteCandidateBatchUntilTheAgentOrDurableResourcesStopIt() {
         UUID evidence = UUID.randomUUID();
         List<Integer> citedPages = java.util.stream.IntStream.rangeClosed(1, 13).boxed().toList();
         List<Set<Integer>> pageReads = new ArrayList<>();
@@ -261,11 +261,12 @@ class VisualLessonStepLocatorBatchingTest {
                 List.of(step(evidence, citedPages)),
                 "owner");
 
-        assertThat(calls).hasValue(VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION);
-        assertThat(pageReads).hasSize(VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION)
-                .allSatisfy(read -> assertThat(read).allMatch(page -> page <= 10));
-        assertThat(result.regions())
-                .hasSize(VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION);
+        assertThat(calls).hasValueGreaterThan(4);
+        assertThat(pageReads).allSatisfy(read ->
+                assertThat(read).hasSizeLessThanOrEqualTo(DocumentPageImages.MAX_PAGES_PER_READ));
+        assertThat(pageReads.stream().flatMap(Set::stream).collect(java.util.stream.Collectors.toSet()))
+                .containsAll(citedPages);
+        assertThat(result.regions()).hasSize(calls.get());
     }
 
     @Test
@@ -479,7 +480,7 @@ class VisualLessonStepLocatorBatchingTest {
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         when(execution.budget(runId)).thenAnswer(ignored -> new AgentExecutionControl.BudgetSnapshot(
-                40, 24, 192, 600_000, 0, calls.get(), 0, now.plusSeconds(60),
+                600_000, 0, calls.get(), 0, now.plusSeconds(60),
                 cancelled.get() ? now : null));
         DocumentPageImages images = (ignored, pages) -> {
             reads.incrementAndGet();
@@ -522,7 +523,7 @@ class VisualLessonStepLocatorBatchingTest {
     }
 
     @Test
-    void exhaustedModelBudgetBetweenBatchesStopsTheWholeRunBeforeReadingOrCallingTheNextBatch() {
+    void observedModelCallsDoNotStopTheNextUsefulBatchWhileResourcesRemain() {
         UUID evidence = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         Instant now = Instant.parse("2026-08-26T00:00:00Z");
@@ -530,7 +531,7 @@ class VisualLessonStepLocatorBatchingTest {
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         when(execution.budget(runId)).thenAnswer(ignored -> new AgentExecutionControl.BudgetSnapshot(
-                40, 24, 1, 600_000, 0, calls.get(), 0, now.plusSeconds(60), null));
+                600_000, 0, calls.get(), 0, now.plusSeconds(60), null));
         DocumentPageImages images = (ignored, pages) -> {
             reads.incrementAndGet();
             return pages.stream().map(this::page).toList();
@@ -545,18 +546,17 @@ class VisualLessonStepLocatorBatchingTest {
                 Clock.fixed(now, ZoneId.of("UTC")),
                 Duration.ofMinutes(1));
 
-        assertThatThrownBy(() -> locator.locate(
-                        understanding(),
-                        UUID.randomUUID(),
-                        section(evidence, List.of(1, 2, 3, 4)),
-                        List.of(step(evidence, List.of(1, 2, 3, 4))),
-                        "owner",
-                        runId))
-                .isInstanceOf(AgentExecutionStoppedException.class)
-                .hasFieldOrPropertyWithValue("reason", StopReason.MODEL_BUDGET);
+        var result = locator.locate(
+                understanding(),
+                UUID.randomUUID(),
+                section(evidence, List.of(1, 2, 3, 4)),
+                List.of(step(evidence, List.of(1, 2, 3, 4))),
+                "owner",
+                runId);
 
-        assertThat(calls).hasValue(1);
-        assertThat(reads).hasValue(1);
+        assertThat(calls.get()).isGreaterThan(1);
+        assertThat(reads.get()).isGreaterThan(1);
+        assertThat(result.regions()).hasSize(calls.get());
     }
 
     @Test

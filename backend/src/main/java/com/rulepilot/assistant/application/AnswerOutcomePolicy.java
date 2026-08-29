@@ -161,7 +161,6 @@ final class AnswerOutcomePolicy {
                         source.pageFrom(),
                         source.pageTo()))
                 .distinct()
-                .limit(3)
                 .toList();
         return new StructuredRuleAnswer(
                 documentVersionId,

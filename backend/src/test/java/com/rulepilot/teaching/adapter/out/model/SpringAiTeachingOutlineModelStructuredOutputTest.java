@@ -47,6 +47,24 @@ class SpringAiTeachingOutlineModelStructuredOutputTest {
             """;
 
     @Test
+    void leavesLocalTeachingUnitIdentityToTheApplication() throws Exception {
+        String grouping = """
+                {"teachingUnits":[{"role":"LEGAL_ACTION","sourceSlotIds":["page-1-rule-1"]}]}
+                """;
+
+        var draft = SpringAiTeachingOutlineModel.parseLocalOwnershipDraft(grouping);
+
+        assertThat(draft.teachingUnits()).singleElement().satisfies(unit -> {
+            assertThat(unit.role()).isEqualTo(SourceCoverageRole.LEGAL_ACTION);
+            assertThat(unit.sourceSlotIds()).containsExactly("page-1-rule-1");
+        });
+        assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseLocalOwnershipDraft(grouping.replace(
+                        "\"role\":",
+                        "\"teachingUnitId\":\"model-owned-id\",\"role\":")))
+                .isInstanceOf(JsonProcessingException.class);
+    }
+
+    @Test
     void admitsTheCompleteCompactPlanningEnvelope() throws Exception {
         var draft = SpringAiTeachingOutlineModel.parseCompactOutlineDraft(COMPACT_OUTLINE);
 
@@ -99,7 +117,7 @@ class SpringAiTeachingOutlineModelStructuredOutputTest {
     }
 
     @Test
-    void appliesTheSameExactJsonBoundaryToLegacyOutlinesAndTargetedRepairs() throws Exception {
+    void appliesTheExactJsonBoundaryToLegacyOutlines() throws Exception {
         String legacyOutline = """
                 {
                   "gameTitle":"示例游戏",
@@ -116,36 +134,6 @@ class SpringAiTeachingOutlineModelStructuredOutputTest {
                 """;
         assertThat(SpringAiTeachingOutlineModel.parseOutlineDraft(legacyOutline).gameTitle())
                 .isEqualTo("示例游戏");
-
-        String ownershipPatch = """
-                {"assignments":[{"sourceSlotId":"page-1-rule-1","teachingUnitId":"choose-action"}]}
-                """;
-        assertThat(SpringAiTeachingOutlineModel.parseMissingSlotOwnershipPatch(ownershipPatch).assignments())
-                .singleElement()
-                .satisfies(assignment -> assertThat(assignment.teachingUnitId()).isEqualTo("choose-action"));
-
-        String contextPatch = """
-                {
-                  "concepts":[{
-                    "conceptId":"action-choice",
-                    "label":"行动选择",
-                    "explanation":"每回合选择一项行动。",
-                    "sourceSlotIds":["page-1-rule-1"],
-                    "relatedTopicKeys":["take-action"],
-                    "prerequisiteConceptIds":[]
-                  }],
-                  "topicDependencies":[]
-                }
-                """;
-        assertThat(SpringAiTeachingOutlineModel.parseWholeGameContextPatch(contextPatch).concepts())
-                .singleElement();
-
-        String sourcePatch = """
-                {"replacements":[{"slotId":"page-1-rule-1","sourceIdentifier":"Choose an action"}]}
-                """;
-        assertThat(SpringAiTeachingOutlineModel.parseSourceIdentifierPatches(sourcePatch).replacements())
-                .singleElement()
-                .satisfies(replacement -> assertThat(replacement.sourceIdentifier()).isEqualTo("Choose an action"));
     }
 
     @Test
@@ -175,17 +163,6 @@ class SpringAiTeachingOutlineModelStructuredOutputTest {
     }
 
     @Test
-    void targetedRepairsCannotOmitTheirTypedCollectionsOrInventFields() {
-        assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseMissingSlotOwnershipPatch("{}"))
-                .isInstanceOf(JsonProcessingException.class);
-        assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseWholeGameContextPatch("{\"concepts\":[]}"))
-                .isInstanceOf(JsonProcessingException.class);
-        assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseSourceIdentifierPatches(
-                        "{\"replacements\":[],\"explanation\":\"fixed\"}"))
-                .isInstanceOf(JsonProcessingException.class);
-    }
-
-    @Test
     void nullAndDuplicatePlanningArraysAreRejectedInsteadOfNormalized() {
         assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseCompactOutlineDraft(
                         COMPACT_OUTLINE.replace("\"sourceSlotIds\":[\"page-1-rule-1\"]",
@@ -193,10 +170,6 @@ class SpringAiTeachingOutlineModelStructuredOutputTest {
                 .isInstanceOf(JsonProcessingException.class);
         assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseCompactOutlineDraft(
                         COMPACT_OUTLINE.replace("\"topicDependencies\":[]", "\"topicDependencies\":null")))
-                .isInstanceOf(JsonProcessingException.class);
-        assertThatThrownBy(() -> SpringAiTeachingOutlineModel.parseMissingSlotOwnershipPatch(
-                        "{\"assignments\":[{\"sourceSlotId\":\"page-1-rule-1\",\"teachingUnitId\":\"choose-action\"},"
-                                + "{\"sourceSlotId\":\"page-1-rule-1\",\"teachingUnitId\":\"choose-action\"}]}"))
                 .isInstanceOf(JsonProcessingException.class);
     }
 }

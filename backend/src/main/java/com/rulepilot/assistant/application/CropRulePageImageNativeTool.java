@@ -48,14 +48,15 @@ public class CropRulePageImageNativeTool implements NativeAgentTool {
     }
 
     @Override public String inputSchema() { return INPUT_SCHEMA; }
-    @Override public String schemaVersion() { return "1"; }
+    @Override public String schemaVersion() { return "2"; }
     @Override public Set<Role> allowedRoles() { return Set.of(Role.VISUAL); }
 
     @Override
     public ToolObservation execute(String argumentsJson, ToolScope scope) {
         Arguments arguments = parse(argumentsJson);
         validate(arguments);
-        Rectangle rectangle = normalize(arguments);
+        Rectangle rectangle = new Rectangle(
+                arguments.x(), arguments.y(), arguments.width(), arguments.height());
         return visualEvidence.cropPage(
                         scope.documentVersionId(), arguments.evidenceId(), arguments.pageNumber(),
                         rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height())
@@ -86,23 +87,28 @@ public class CropRulePageImageNativeTool implements NativeAgentTool {
                     .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .readValue(json);
         } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException("visual crop arguments are invalid", exception);
+            throw new IllegalArgumentException("visual crop arguments JSON could not be decoded", exception);
         }
     }
 
     private void validate(Arguments value) {
-        if (value.evidenceId() == null || value.pageNumber() < 1
-                || value.width() < 20 || value.height() < 20) {
-            throw new IllegalArgumentException("visual crop arguments are invalid");
+        if (value.evidenceId() == null) {
+            throw new IllegalArgumentException("evidenceId must be an active-rulebook UUID");
         }
-    }
-
-    private Rectangle normalize(Arguments value) {
-        int x = Math.max(0, Math.min(980, value.x()));
-        int y = Math.max(0, Math.min(980, value.y()));
-        int width = Math.max(20, Math.min(value.width(), 1_000 - x));
-        int height = Math.max(20, Math.min(value.height(), 1_000 - y));
-        return new Rectangle(x, y, width, height);
+        if (value.pageNumber() < 1) {
+            throw new IllegalArgumentException("pageNumber must be a positive exact page");
+        }
+        if (value.x() < 0 || value.x() > 980 || value.y() < 0 || value.y() > 980) {
+            throw new IllegalArgumentException("x and y must use the advertised normalized page coordinates");
+        }
+        if (value.width() < 20 || value.width() > 1_000
+                || value.height() < 20 || value.height() > 1_000) {
+            throw new IllegalArgumentException("width and height must use the advertised normalized page size");
+        }
+        if ((long) value.x() + value.width() > 1_000
+                || (long) value.y() + value.height() > 1_000) {
+            throw new IllegalArgumentException("the crop rectangle must remain inside the normalized page");
+        }
     }
 
     private record Arguments(UUID evidenceId, int pageNumber, int x, int y, int width, int height) {}

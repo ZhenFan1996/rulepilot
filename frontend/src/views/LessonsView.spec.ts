@@ -147,7 +147,7 @@ describe('LessonsView', () => {
             id: 'run-1', subjectId: 'plan-1', state: 'LESSON_COMPOSITION', createdAt: '2026-08-10T10:01:00Z',
             updatedAt: '2026-08-10T10:01:02Z', completedAt: null, lastErrorCode: null,
           },
-          budget: { usedModelCalls: 1, maxModelCalls: 12 },
+          budget: { usedModelCalls: 1 },
           activities: [{
             sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1',
             summary: 'CITED_BASE_SECTION_PUBLISHED', outcome: 'SUCCEEDED', latencyMs: 12,
@@ -359,6 +359,49 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
+  it.each([
+    ['TEACHING_PREPARATION_INVALID_PLAN', '无效输入'],
+  ])('does not offer a blind retry for manual-repair code %s', async (errorCode, expectedDetail) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([])
+      if (path === '/api/v1/documents/official-imports') return Response.json([{
+        id: 'import-1', title: '花砖物语', rulebookTitle: 'azul.pdf', stage: 'COMPLETED',
+        downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
+        teachingHandoffState: 'FAILED', teachingPreparationRunId: null,
+        teachingErrorCode: errorCode, teachingNextAction: 'RETRY_TEACHING',
+        updatedAt: '2026-08-10T10:01:00Z',
+      }])
+      if (path === '/api/v1/documents/upload-teaching-handoffs') return Response.json([])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'azul.pdf' },
+        latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await flushPromises()
+
+    const pending = wrapper.get('[data-testid="pending-guide-journey"]')
+    expect(pending.attributes('data-failure-classification')).toBe('external-repair')
+    expect(pending.attributes('data-failure-recovery')).toBe('manual-repair')
+    expect(pending.text()).toContain('这不是可以安全原样重试的失败')
+    expect(pending.text()).toContain(expectedDetail)
+    expect(pending.findAll('button').some(button => button.text().includes('重试'))).toBe(false)
+    expect(pending.findAll('button').some(button => button.text().includes('重新准备'))).toBe(false)
+    wrapper.unmount()
+  })
+
   it('opens a complete cited draft immediately while its generation run continues', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T10:02:05Z'))
@@ -374,7 +417,7 @@ describe('LessonsView', () => {
       if (path.includes('/api/v1/assistant-runs/latest')) {
         return Response.json({
           run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
-          budget: { usedModelCalls: 2, maxModelCalls: 144 },
+          budget: { usedModelCalls: 2 },
           activities: [
             {
               sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1',
@@ -382,7 +425,7 @@ describe('LessonsView', () => {
               outcome: 'SUCCEEDED', latencyMs: 0, occurredAt: '2026-07-20T10:01:50Z',
             },
             {
-              sequence: 2, type: 'MODEL', operation: 'reviseTeachingSection|1', summary: 'Work started',
+              sequence: 2, type: 'MODEL', operation: 'continueTeachingSectionAfterRejection|1|1', summary: 'Work started',
               outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-20T10:02:00Z',
             },
           ],
@@ -423,7 +466,7 @@ describe('LessonsView', () => {
     const status = wrapper.get('[data-testid="player-work-status"]')
     expect(status.text()).toBe('正在补充图片或核对细节')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
-    expect(wrapper.text()).toContain('校验发现局部问题，正在修正第 1 章“完成开局设置”')
+    expect(wrapper.text()).toContain('同一章节 Agent 正在依据完整候选和准确校验原因，重新生成第 1 章“完成开局设置”')
     expect(wrapper.text()).toContain('已处理 1/1 节')
     expect(wrapper.text()).not.toMatch(/模型调用|model calls|次内容处理/)
     expect(wrapper.text()).toContain('完整基础讲解已经可读')
@@ -444,22 +487,23 @@ describe('LessonsView', () => {
   it('starts a fresh polling cycle when a failed run is launched again', async () => {
     vi.useFakeTimers()
     let runReads = 0
+    let launchAttempts = 0
     const snapshots = [
       {
         run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:00:00Z', completedAt: null, lastErrorCode: null },
-        budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        budget: { usedModelCalls: 1 }, activities: [],
       },
       {
-        run: { id: 'run-1', subjectId: 'plan-1', state: 'FAILED', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:01:00Z', completedAt: '2026-07-20T10:01:00Z', lastErrorCode: 'MODEL_FAILED' },
-        budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        run: { id: 'run-1', subjectId: 'plan-1', state: 'FAILED', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:01:00Z', completedAt: '2026-07-20T10:01:00Z', lastErrorCode: 'TEACHING_MODEL_PROVIDER_FAILED' },
+        budget: { usedModelCalls: 1 }, activities: [],
       },
       {
         run: { id: 'run-2', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
-        budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        budget: { usedModelCalls: 1 }, activities: [],
       },
       {
         run: { id: 'run-2', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:01Z', completedAt: null, lastErrorCode: null },
-        budget: { usedModelCalls: 2, maxModelCalls: 144 }, activities: [],
+        budget: { usedModelCalls: 2 }, activities: [],
       },
     ]
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -474,9 +518,16 @@ describe('LessonsView', () => {
         return Response.json(snapshots[Math.min(runReads++, snapshots.length - 1)]!)
       }
       if (path.endsWith('/illustrated-lessons') && init?.method === 'POST') {
+        launchAttempts += 1
+        if (launchAttempts === 1) return new Response(null, { status: 503 })
         return Response.json({ assistantRunId: 'run-2', state: 'RECEIVED', reused: false }, { status: 202 })
       }
-      if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [{ evidenceStatus: 'CITED_DRAFT' }],
+        })
+      }
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
       return new Response(null, { status: 404 })
@@ -489,21 +540,39 @@ describe('LessonsView', () => {
 
     await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
-    expect(wrapper.text()).toContain('重新生成')
+    expect(wrapper.text()).toContain('从已完成内容重新开始')
+    const readAction = wrapper.get('a[href="/lesson/plan-1"]')
+    const visibleRestartAction = wrapper.findAll('button')
+      .find((button) => button.text().includes('从已完成内容重新开始'))
+    expect(readAction.text()).toContain('阅读')
+    expect(visibleRestartAction?.element.parentElement).toBe(readAction.element.parentElement)
     await vi.advanceTimersByTimeAsync(5000)
     await flushPromises()
     expect(runReads).toBe(2)
 
-    const retry = wrapper.findAll('button').find((button) => button.text().includes('重新生成'))
+    const retry = wrapper.findAll('button').find((button) => button.text().includes('从已完成内容重新开始'))
     expect(retry).toBeDefined()
     await retry!.trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
+
+    expect(launchAttempts).toBe(1)
+    expect(wrapper.get('[data-testid="lesson-launch-error"]').text()).toContain('讲解任务没有启动')
+    expect(wrapper.find('a[href="/lesson/plan-1"]').exists()).toBe(true)
+    const retryAfterFailure = wrapper.findAll('button')
+      .find((button) => button.text().includes('从已完成内容重新开始'))
+    expect(retryAfterFailure?.attributes('disabled')).toBeUndefined()
+
+    await retryAfterFailure!.trigger('click')
+    await flushPromises()
+
+    expect(launchAttempts).toBe(2)
+    expect(wrapper.find('[data-testid="lesson-launch-error"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在补充图片或核对细节')
     expect(wrapper.text()).not.toContain('次内容处理')
 
     await vi.advanceTimersByTimeAsync(1000)
     await flushPromises()
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在补充图片或核对细节')
     expect(wrapper.text()).not.toContain('次内容处理')
     expect(runReads).toBeGreaterThanOrEqual(4)
     wrapper.unmount()
@@ -525,7 +594,7 @@ describe('LessonsView', () => {
         if (runReads === 2) throw new TypeError('temporary network failure')
         return Response.json({
           run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
-          budget: { usedModelCalls: runReads >= 3 ? 2 : 1, maxModelCalls: 144 }, activities: [],
+          budget: { usedModelCalls: runReads >= 3 ? 2 : 1 }, activities: [],
         })
       }
       if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
@@ -574,7 +643,7 @@ describe('LessonsView', () => {
       if (path.includes('/api/v1/assistant-runs/latest') && path.includes('readable-plan')) {
         return Response.json({
           run: { id: 'run-1', subjectId: 'readable-plan', state: 'COMPLETED', createdAt: '2026-07-23T10:00:00Z', updatedAt: '2026-07-23T10:01:00Z', completedAt: '2026-07-23T10:01:00Z', lastErrorCode: null },
-          budget: { usedModelCalls: 3, maxModelCalls: 144 }, activities: [],
+          budget: { usedModelCalls: 3 }, activities: [],
         })
       }
       if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
@@ -657,7 +726,7 @@ describe('LessonsView', () => {
         id: 'run-early', subjectId: 'plan-early', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
         updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
       },
-      budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+      budget: { usedModelCalls: 1 }, activities: [],
     }))
     await flushPromises()
     expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(true)
@@ -763,7 +832,7 @@ describe('LessonsView', () => {
           run: {
             id: 'run-current', subjectId: 'plan-current', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
             updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
-          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+          }, budget: { usedModelCalls: 1 }, activities: [],
         })
       }
       if (path.includes('/plan-current/illustrated-lessons/latest')) {
@@ -795,7 +864,7 @@ describe('LessonsView', () => {
       run: {
         id: 'run-old', subjectId: 'plan-old', state: 'FAILED', createdAt: '2026-08-13T00:00:00Z',
         updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: 'STALE',
-      }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+      }, budget: { usedModelCalls: 1 }, activities: [],
     }))
     releaseOldLesson(Response.json({
       id: 'lesson-old', teachingPlanId: 'plan-old', status: 'COMPLETE', sections: [],
@@ -824,7 +893,7 @@ describe('LessonsView', () => {
           run: {
             id: 'run-other', subjectId: 'plan-run-mismatch', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
             updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
-          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+          }, budget: { usedModelCalls: 1 }, activities: [],
         })
       }
       if (path.includes('/assistant-runs/latest') && path.includes('plan-lesson-mismatch')) {
@@ -832,7 +901,7 @@ describe('LessonsView', () => {
           run: {
             id: 'run-lesson', subjectId: 'plan-lesson-mismatch', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
             updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
-          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+          }, budget: { usedModelCalls: 1 }, activities: [],
         })
       }
       if (path.includes('/plan-run-mismatch/illustrated-lessons/latest')) {

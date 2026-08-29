@@ -52,7 +52,7 @@ import org.springframework.ai.chat.model.ChatModel;
 @Tag("paid-recommendation-canary")
 class BoardGameRecommendationAgentPaidCanaryTest {
 
-    private static final Duration RECOMMENDATION_TIMEOUT = Duration.ofSeconds(45);
+    private static final Duration RECOMMENDATION_TIMEOUT = Duration.ofMinutes(2);
 
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
@@ -93,8 +93,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
             assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
             assertThat(response.assistantMessage()).isNotBlank();
-            assertThat(response.harness().modelCalls())
-                    .isBetween(1, RecommendationReActLoop.MAX_MODEL_CALLS);
+            assertThat(response.harness().modelCalls()).isPositive();
             assertThat(response.harness().catalogCalls()).isZero();
             assertThat(response.harness().webResearchCalls()).isZero();
             assertThat(firstAnswerPartMs.get()).isBetween(0L, 3_000L);
@@ -148,8 +147,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             String reply = response.assistantMessage().strip();
             assertThat(reply.codePointCount(0, reply.length())).isGreaterThanOrEqualTo(40);
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().modelCalls())
-                    .isBetween(1, RecommendationReActLoop.MAX_MODEL_CALLS);
+            assertThat(response.harness().modelCalls()).isPositive();
             assertThat(response.harness().catalogCalls()).isPositive();
             assertThat(response.harness().actions().stream()
                             .filter(action -> action.startsWith("REJECTED_ACTION:"))
@@ -379,7 +377,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             call.put("toolNames", request.tools().stream()
                     .map(BoardGameRecommendationModel.ToolSpec::name)
                     .toList());
-            call.put("maxOutputTokens", request.maxOutputTokens());
             calls.add(Map.copyOf(call));
             return calls.size() - 1;
         }

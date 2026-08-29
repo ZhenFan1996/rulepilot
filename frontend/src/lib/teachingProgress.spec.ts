@@ -162,95 +162,152 @@ describe('teaching progress', () => {
 
   it('shows real chapter-planning work before the first teaching run exists', () => {
     const activities = [
-      activity(1, 'inspectTeachingVisualPage|3|16', 'SUCCEEDED'),
+      activity(1, 'settleTeachingVisualPageCandidate|3|16|candidate-1|accepted|NONE', 'SUCCEEDED'),
       activity(2, 'persistTeachingVisualPage|3|16', 'SUCCEEDED'),
       activity(3, 'organizeTeachingOutline', 'RUNNING'),
-      activity(4, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
+      activity(4, 'organizeTeachingOutline', 'SUCCEEDED'),
       activity(5, 'internalOutlineTelemetry', 'SUCCEEDED'),
     ]
 
     const steps = recentTeachingPreparationActivitySteps(activities)
 
     expect(steps.map(step => step.text)).toEqual([
-      '图像规则页第 3 / 16 页的规则整理已生成结果，正在保存',
+      '图像规则页第 3 / 16 页的第 1 个完整候选已通过校验，正在保存结构化规则组',
       '图像规则页第 3 / 16 页的规则组已经保存',
       '正在通读规则书，先形成整局认识再规划讲解章节',
-      '正在检查章节规划有没有漏掉规则内容',
+      '章节规划候选已返回，正在校验规则依据、章节归属和结构',
     ])
-    expect(JSON.stringify(steps)).not.toMatch(/organizeTeachingOutline|refineTeachingOutlineCoverage|internalOutlineTelemetry/)
+    expect(JSON.stringify(steps)).not.toMatch(/organizeTeachingOutline|internalOutlineTelemetry/)
+
+    const validationActivities = [
+      activity(
+        8,
+        'organizeTeachingOutline|validation|whole|candidate-1',
+        'REJECTED',
+        'private whole-plan validation error',
+        'VALIDATION',
+      ),
+      activity(
+        9,
+        'organizeTeachingOutline|validation|local-2|candidate-2',
+        'REJECTED',
+        'private local-shard validation error',
+        'VALIDATION',
+      ),
+      activity(
+        10,
+        'organizeTeachingOutline|validation|local-2|no-progress',
+        'REJECTED',
+        'private local no-progress error',
+        'VALIDATION',
+      ),
+      activity(
+        11,
+        'organizeTeachingOutline|validation|whole|no-progress',
+        'REJECTED',
+        'private whole-plan no-progress error',
+        'VALIDATION',
+      ),
+      activity(
+        12,
+        'organizeTeachingOutline|validation|global|no-progress',
+        'REJECTED',
+        'private global-plan no-progress error',
+        'VALIDATION',
+      ),
+    ]
+    const validationSteps = recentTeachingPreparationActivitySteps(validationActivities)
+    const englishValidationSteps = recentTeachingPreparationActivitySteps(validationActivities, 'en')
+
+    expect(validationSteps.map(step => step.text)).toEqual([
+      '章节规划候选没有通过校验；完整 JSON、准确错误、输出契约和允许身份已退回同一个 Agent，只要 observation 仍在变化就会继续修正',
+      '章节规划候选没有通过校验；完整 JSON、准确错误、输出契约和允许身份已退回同一个 Agent，只要 observation 仍在变化就会继续修正',
+      '局部规则分组 Agent 重复了完全相同的无效 observation；该分片已回退为逐条来源单元，兄弟分片和全局规划继续',
+      '整份章节规划 Agent 重复了完全相同的完整候选和校验 observation；准备因无进展停止，不会发布不合格规划',
+      '全局章节规划 Agent 重复了完全相同的完整候选和校验 observation；准备因无进展停止，不会发布不合格规划',
+    ])
+    expect(englishValidationSteps.map(step => step.text)).toEqual([
+      'The chapter-plan candidate did not pass validation; its complete JSON, exact error, output contract, and allowed identities were returned to the same Agent, which may continue while the observation changes',
+      'The chapter-plan candidate did not pass validation; its complete JSON, exact error, output contract, and allowed identities were returned to the same Agent, which may continue while the observation changes',
+      'The local rule-group Agent repeated the same rejected observation, so that shard fell back to independent source-owned units; sibling shards and global planning continue',
+      'The whole chapter plan Agent repeated the same complete candidate and validation observation, so preparation stopped for no progress; no invalid plan is published',
+      'The global chapter plan Agent repeated the same complete candidate and validation observation, so preparation stopped for no progress; no invalid plan is published',
+    ])
+    expect(JSON.stringify([...validationSteps, ...englishValidationSteps]))
+      .not.toMatch(/organizeTeachingOutline|private .* validation error/)
   })
 
-  it('keeps unsuccessful first page attempts neutral without declaring a task retry', () => {
+  it('keeps provider failure and no-progress local without inventing a task retry', () => {
     const activities = [
-      activity(1, 'inspectTeachingVisualPage|7|16', 'FAILED'),
-      activity(2, 'inspectTeachingVisualPage|8|16', 'REJECTED'),
+      activity(1, 'settleTeachingVisualPageCandidate|7|16|candidate-1|local-unavailable|PROVIDER_FAILURE', 'FAILED'),
+      activity(2, 'settleTeachingVisualPageCandidate|8|16|candidate-3|no-progress|SCHEMA_MISMATCH', 'REJECTED'),
     ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      '图像规则页第 7 / 16 页的规则整理本次未完成',
-      '图像规则页第 8 / 16 页的规则整理本次校验未通过',
+      '模型服务没有完成图像规则页第 7 / 16 页的第 1 个完整候选；这不是格式校验失败，仅本页暂不可用',
+      '图像规则页第 8 / 16 页的第 3 个完整候选与此前已经拒绝的一份完整结果完全相同；为避免重复消耗，本页因无进展停止，其他成功页面继续保留',
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
-      'Rule grouping for visual rulebook page 7 of 16 did not complete this time',
-      'Rule grouping for visual rulebook page 8 of 16 did not pass validation this time',
+      'The provider did not complete candidate 1 for visual rulebook page 7 of 16; this is a transport failure, not a JSON correction, and only this page is unavailable',
+      'candidate 3 for visual rulebook page 8 of 16 repeated an earlier complete rejected observation; this page stopped for no progress, while successful sibling pages remain available',
     ])
     expect(JSON.stringify(recentTeachingPreparationActivitySteps(activities))).not.toContain('需要重试')
   })
 
-  it('names reprocessing only when a retry activity was actually emitted', () => {
+  it('shows every explicit adaptive candidate settlement', () => {
     const activities = [
-      activity(1, 'inspectTeachingVisualRetry|7|16', 'RUNNING'),
-      activity(2, 'inspectTeachingVisualRetry|8|16', 'SUCCEEDED'),
+      activity(1, 'settleTeachingVisualPageCandidate|7|16|candidate-1|correction-follows|MALFORMED_JSON', 'REJECTED'),
+      activity(2, 'settleTeachingVisualPageCandidate|8|16|candidate-2|accepted|NONE', 'SUCCEEDED'),
       activity(3, 'persistTeachingVisualPage|8|16', 'SUCCEEDED'),
-      activity(4, 'inspectTeachingVisualRetry|9|16', 'FAILED'),
-      activity(5, 'inspectTeachingVisualRetry|10|16', 'REJECTED'),
+      activity(4, 'settleTeachingVisualPageCandidate|9|16|candidate-2|local-unavailable|PROVIDER_FAILURE', 'FAILED'),
+      activity(5, 'settleTeachingVisualPageCandidate|10|16|candidate-3|no-progress|PAGE_BINDING_MISMATCH', 'REJECTED'),
     ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      '临时服务异常，正在重试图像规则页第 7 / 16 页的规则整理',
-      '图像规则页第 8 / 16 页的规则整理在临时服务异常后已生成结果，正在保存',
+      '图像规则页第 7 / 16 页的第 1 个完整候选未通过JSON 语法校验；完整结果、具体错误、格式要求和可用页码已交回同一个模型，只要返回内容仍在变化且本轮还有文字预算和有效工作时间，就会继续修正',
+      '图像规则页第 8 / 16 页的第 2 个完整候选已通过校验，正在保存结构化规则组',
       '图像规则页第 8 / 16 页的规则组已经保存',
-      '图像规则页第 9 / 16 页的规则整理在临时服务异常后重试仍未完成',
-      '图像规则页第 10 / 16 页的规则整理在临时服务异常后重试仍未通过校验',
+      '模型服务没有完成图像规则页第 9 / 16 页的第 2 个完整候选；这不是格式校验失败，仅本页暂不可用',
+      '图像规则页第 10 / 16 页的第 3 个完整候选与此前已经拒绝的一份完整结果完全相同；为避免重复消耗，本页因无进展停止，其他成功页面继续保留',
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
-      'A temporary service error occurred; retrying rule grouping for visual rulebook page 7 of 16',
-      'Rule grouping retry generated a result after a temporary service error for visual rulebook page 8 of 16; saving it now',
+      'candidate 1 for visual rulebook page 7 of 16 did not pass JSON syntax validation; its complete JSON, exact error, original contract, and allowed page IDs returned to the same Agent, which may continue while the observation changes and run resources remain',
+      'candidate 2 for visual rulebook page 8 of 16 passed validation; saving its typed rule groups now',
       'Saved the typed rule groups for visual rulebook page 8 of 16',
-      'Rule grouping retry for visual rulebook page 9 of 16 still did not complete after a temporary service error',
-      'Rule grouping retry for visual rulebook page 10 of 16 did not pass validation after a temporary service error',
+      'The provider did not complete candidate 2 for visual rulebook page 9 of 16; this is a transport failure, not a JSON correction, and only this page is unavailable',
+      'candidate 3 for visual rulebook page 10 of 16 repeated an earlier complete rejected observation; this page stopped for no progress, while successful sibling pages remain available',
     ])
   })
 
-  it('explains validator-owned page repair without presenting it as a transport retry', () => {
+  it('explains validator-owned adaptive correction without presenting transport failure as JSON repair', () => {
     const activities = [
-      activity(1, 'inspectTeachingVisualRepair|7|16|MALFORMED_JSON', 'RUNNING'),
-      activity(2, 'inspectTeachingVisualRepair|8|16|DUPLICATE_RULE_GROUP', 'SUCCEEDED'),
+      activity(1, 'settleTeachingVisualPageCandidate|7|16|candidate-1|correction-follows|MALFORMED_JSON', 'REJECTED'),
+      activity(2, 'settleTeachingVisualPageCandidate|8|16|candidate-2|accepted|NONE', 'SUCCEEDED'),
       activity(3, 'persistTeachingVisualPage|8|16', 'SUCCEEDED'),
-      activity(4, 'inspectTeachingVisualRepair|9|16|PAGE_BINDING_MISMATCH', 'FAILED'),
-      activity(5, 'inspectTeachingVisualRepair|10|16|SCHEMA_MISMATCH', 'REJECTED'),
+      activity(4, 'settleTeachingVisualPageCandidate|9|16|candidate-2|local-unavailable|PROVIDER_FAILURE', 'FAILED'),
+      activity(5, 'settleTeachingVisualPageCandidate|10|16|candidate-3|no-progress|SCHEMA_MISMATCH', 'REJECTED'),
     ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      '返回格式没有通过校验，正在修正图像规则页第 7 / 16 页的规则整理',
-      '图像规则页第 8 / 16 页的规则整理修正结果已生成，正在保存',
+      expect.stringContaining('完整结果、具体错误、格式要求和可用页码已交回同一个模型'),
+      '图像规则页第 8 / 16 页的第 2 个完整候选已通过校验，正在保存结构化规则组',
       '图像规则页第 8 / 16 页的规则组已经保存',
-      '图像规则页第 9 / 16 页的规则整理经过一次修正后仍未完成；仅本页暂不可用，其他页面继续保留',
-      '图像规则页第 10 / 16 页的规则整理经过一次修正后仍未通过校验；仅本页暂不可用，其他页面继续保留',
+      expect.stringContaining('这不是格式校验失败'),
+      expect.stringContaining('与此前已经拒绝的一份完整结果完全相同'),
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
-      'The returned format did not pass validation; correcting the rule grouping for visual rulebook page 7 of 16',
-      'Rule grouping correction generated for visual rulebook page 8 of 16; saving it now',
+      expect.stringContaining('complete JSON, exact error, original contract, and allowed page IDs'),
+      'candidate 2 for visual rulebook page 8 of 16 passed validation; saving its typed rule groups now',
       'Saved the typed rule groups for visual rulebook page 8 of 16',
-      'Rule grouping for visual rulebook page 9 of 16 still did not complete after one correction; only this page stays unavailable',
-      'Rule grouping for visual rulebook page 10 of 16 still did not pass validation after one correction; only this page stays unavailable',
+      expect.stringContaining('transport failure, not a JSON correction'),
+      expect.stringContaining('repeated an earlier complete rejected observation'),
     ])
   })
 
   it('shows an unrecognized API activity outcome explicitly instead of treating it as progress or validation failure', () => {
     const activities = [{
       sequence: 1,
-      operation: 'inspectTeachingVisualPage|4|10',
+      operation: 'settleTeachingVisualPageCandidate|4|10|candidate-1|accepted|NONE',
       summary: 'provider added a new outcome',
       outcome: 'UNKNOWN' as const,
     }]
@@ -265,7 +322,7 @@ describe('teaching progress', () => {
       expect.objectContaining({
         pageNumber: 4,
         latestOutcome: 'UNKNOWN',
-        state: 'no-rule-groups',
+        state: 'local-unavailable',
       }),
     ])
   })
@@ -273,30 +330,28 @@ describe('teaching progress', () => {
   it('keeps the complete real preparation history instead of hiding early pages behind a display cap', () => {
     const activities = Array.from({ length: 16 }, (_, index) => index + 1)
       .flatMap(page => [
-        activity(page * 2 - 1, `inspectTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+        activity(page * 2 - 1, `settleTeachingVisualPageCandidate|${page}|16|candidate-1|accepted|NONE`, 'SUCCEEDED'),
         activity(page * 2, `persistTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
       ])
 
     const steps = recentTeachingPreparationActivitySteps(activities)
 
     expect(steps).toHaveLength(32)
-    expect(steps[0]?.text).toBe('图像规则页第 1 / 16 页的规则整理已生成结果，正在保存')
+    expect(steps[0]?.text).toBe('图像规则页第 1 / 16 页的第 1 个完整候选已通过校验，正在保存结构化规则组')
     expect(steps.at(-1)?.text).toBe('图像规则页第 16 / 16 页的规则组已经保存')
   })
 
   it('summarizes each page from its latest typed rule-group activity while preserving recovered attempts', () => {
     const activities = [
-      activity(1, 'inspectTeachingVisualPage|1|6', 'SUCCEEDED'),
-      activity(7, 'inspectTeachingVisualRepair|2|6|SCHEMA_MISMATCH', 'SUCCEEDED'),
-      activity(2, 'inspectTeachingVisualPage|2|6', 'REJECTED'),
-      activity(3, 'inspectTeachingVisualPage|3|6', 'FAILED'),
-      activity(8, 'inspectTeachingVisualRetry|3|6', 'SUCCEEDED'),
-      activity(4, 'inspectTeachingVisualPage|4|6', 'REJECTED'),
-      activity(9, 'inspectTeachingVisualRepair|4|6|MALFORMED_JSON', 'RUNNING'),
-      activity(5, 'inspectTeachingVisualPage|5|6', 'FAILED'),
+      activity(1, 'settleTeachingVisualPageCandidate|1|6|candidate-1|accepted|NONE', 'SUCCEEDED'),
+      activity(7, 'settleTeachingVisualPageCandidate|2|6|candidate-2|accepted|NONE', 'SUCCEEDED'),
+      activity(2, 'settleTeachingVisualPageCandidate|2|6|candidate-1|correction-follows|SCHEMA_MISMATCH', 'REJECTED'),
+      activity(3, 'settleTeachingVisualPageCandidate|3|6|candidate-1|correction-follows|MALFORMED_JSON', 'REJECTED'),
+      activity(8, 'settleTeachingVisualPageCandidate|3|6|candidate-2|accepted|NONE', 'SUCCEEDED'),
+      activity(9, 'settleTeachingVisualPageCandidate|4|6|candidate-1|correction-follows|MALFORMED_JSON', 'REJECTED'),
+      activity(5, 'settleTeachingVisualPageCandidate|5|6|candidate-1|local-unavailable|PROVIDER_FAILURE', 'FAILED'),
       activity(13, 'inspectTeachingVisualPage|5|6|unexpected', 'SUCCEEDED'),
-      activity(10, 'inspectTeachingVisualRepair|6|6', 'SUCCEEDED'),
-      activity(11, 'inspectTeachingVisualRepair|6|6|PAGE_BINDING_MISMATCH', 'REJECTED'),
+      activity(11, 'settleTeachingVisualPageCandidate|6|6|candidate-3|no-progress|PAGE_BINDING_MISMATCH', 'REJECTED'),
       activity(12, 'internalVisualPageNote|5|6', 'SUCCEEDED', 'inspectTeachingVisualRetry|5|6 succeeded'),
       activity(14, 'persistTeachingVisualPage|1|6', 'SUCCEEDED'),
       activity(15, 'persistTeachingVisualPage|2|6', 'SUCCEEDED'),
@@ -318,26 +373,26 @@ describe('teaching progress', () => {
         totalPages: 6,
         latestSequence: 15,
         latestStage: 'persistence',
-        latestAttempt: 'repair',
+        latestAttempt: 'correction',
         latestOutcome: 'SUCCEEDED',
-        state: 'completed-after-recovery',
+        state: 'completed-after-correction',
       },
       {
         pageNumber: 3,
         totalPages: 6,
         latestSequence: 16,
         latestStage: 'persistence',
-        latestAttempt: 'temporary-retry',
+        latestAttempt: 'correction',
         latestOutcome: 'SUCCEEDED',
-        state: 'completed-after-recovery',
+        state: 'completed-after-correction',
       },
       {
         pageNumber: 4,
         totalPages: 6,
         latestSequence: 9,
         latestStage: 'grouping',
-        latestAttempt: 'repair',
-        latestOutcome: 'RUNNING',
+        latestAttempt: 'direct',
+        latestOutcome: 'REJECTED',
         state: 'processing',
       },
       {
@@ -347,33 +402,33 @@ describe('teaching progress', () => {
         latestStage: 'grouping',
         latestAttempt: 'direct',
         latestOutcome: 'FAILED',
-        state: 'no-rule-groups',
+        state: 'local-unavailable',
       },
       {
         pageNumber: 6,
         totalPages: 6,
         latestSequence: 11,
         latestStage: 'grouping',
-        latestAttempt: 'repair',
+        latestAttempt: 'correction',
         latestOutcome: 'REJECTED',
-        state: 'no-rule-groups',
+        state: 'local-unavailable',
       },
     ])
   })
 
   it('does not call a generated page complete when durable storage failed', () => {
     const generatedOnly = [
-      activity(1, 'inspectTeachingVisualPage|4|12', 'SUCCEEDED'),
+      activity(1, 'settleTeachingVisualPageCandidate|4|12|candidate-1|accepted|NONE', 'SUCCEEDED'),
     ]
 
     expect(recentTeachingPreparationActivitySteps(generatedOnly).map(step => step.text)).toEqual([
-      '图像规则页第 4 / 12 页的规则整理已生成结果，正在保存',
+      '图像规则页第 4 / 12 页的第 1 个完整候选已通过校验，正在保存结构化规则组',
     ])
     expect(summarizeTeachingVisualPageRuleGroups(generatedOnly, 'FAILED')).toEqual([
       expect.objectContaining({
         pageNumber: 4,
         latestStage: 'grouping',
-        state: 'no-rule-groups',
+        state: 'local-unavailable',
       }),
     ])
 
@@ -394,38 +449,46 @@ describe('teaching progress', () => {
     const activities = [
       activity(1, 'composeTeachingSection|2', 'SUCCEEDED'),
       activity(2, 'validateTeachingSection|2|0', 'REJECTED'),
-      activity(3, 'reviseTeachingSection|2', 'RUNNING'),
+      activity(3, 'continueTeachingSectionAfterRejection|2|1', 'RUNNING'),
     ]
 
     expect(recentTeachingActivitySteps(plan, activities).map(step => step.text)).toEqual([
       '正在依据规则书编写第 2 章“走完第一轮”',
-      '第 2 章“走完第一轮”需要局部修正后再发布',
-      '校验发现局部问题，正在修正第 2 章“走完第一轮”',
+      '第 2 章“走完第一轮”的候选未通过校验；完整候选和准确原因会返回同一 Agent',
+      '同一章节 Agent 正在依据完整候选和准确校验原因，重新生成第 2 章“走完第一轮”',
     ])
+
+    const noProgress = activity(4, 'settleTeachingSectionNoProgress|2|2', 'REJECTED')
+    expect(teachingActivityText(plan, [...activities, noProgress], noProgress)).toBe(
+      '同一章节 Agent 连续返回完全相同的无效候选，第 2 章“走完第一轮”已局部停止；其他已发布章节仍然保留',
+    )
   })
 
-  it('distinguishes a rejected visual attempt, one complete replacement, and final local unavailability', () => {
+  it('distinguishes adaptive visual correction, no progress, and final local unavailability', () => {
     const activities = [
-      activity(1, 'settleVisualCandidateSelection|1|1|UNSUPPORTED_SCOPE', 'REJECTED'),
-      activity(2, 'settleVisualCandidateSelection|1|2|UNSUPPORTED_SCOPE', 'REJECTED'),
-      activity(3, 'enrichTeachingSectionVisual|1', 'REJECTED'),
+      activity(1, 'settleVisualCandidateSelection|1|1|UNSUPPORTED_SCOPE|correction-follows', 'REJECTED'),
+      activity(2, 'settleVisualCandidateSelection|1|2|MALFORMED_JSON|correction-follows', 'REJECTED'),
+      activity(3, 'settleVisualCandidateSelection|1|3|UNSUPPORTED_SCOPE|no-progress', 'REJECTED'),
+      activity(4, 'enrichTeachingSectionVisual|1', 'REJECTED'),
     ]
 
     expect(recentTeachingActivitySteps(plan, activities).map(step => step.text)).toEqual([
-      '所选候选或依据归属超出了本次提供范围；同一个视觉 Agent 正在进行一次有限的完整重选或重试，这还不是最终配图失败。',
-      '经过一次有限的完整重选或重试后，所选候选或依据归属超出了本次提供范围；仅省略这张可选配图，已校验正文仍可阅读。',
+      '所选候选或依据归属超出了本次提供范围；完整候选、准确错误、JSON 合同和允许身份已返回同一个视觉 Agent。只要 observation 仍在变化且资源尚未耗尽，它可以继续返回新的完整候选。',
+      '返回的候选选择结构没有通过校验；完整候选、准确错误、JSON 合同和允许身份已返回同一个视觉 Agent。只要 observation 仍在变化且资源尚未耗尽，它可以继续返回新的完整候选。',
+      '所选候选或依据归属超出了本次提供范围；视觉 Agent 重复了相同完整候选和准确错误，这个批次因无进展停止。仅省略这张可选配图，已校验正文仍可阅读。',
       '第 1 章“完成开局设置”经过有限选择后仍没有可用配图；仅省略图片，已校验正文仍可阅读',
     ])
     expect(recentTeachingActivitySteps(plan, activities, 'en').map(step => step.text)).toEqual([
-      'The selected candidate or evidence binding was outside the offered scope; the same visual Agent is making one bounded complete replacement or retry. This is not a final visual failure.',
-      'The selected candidate or evidence binding was outside the offered scope after the one bounded complete replacement or retry; only this optional visual is omitted and the cited text remains readable.',
+      'The selected candidate or evidence binding was outside the offered scope; the complete candidate, exact error, JSON contract, and allowed identities returned to the same visual Agent. It may produce another complete candidate while the observation changes and resources remain.',
+      'The returned selection structure did not pass validation; the complete candidate, exact error, JSON contract, and allowed identities returned to the same visual Agent. It may produce another complete candidate while the observation changes and resources remain.',
+      'The selected candidate or evidence binding was outside the offered scope; the visual Agent repeated the same complete candidate and exact error, so this batch stopped for no progress. Only this optional visual is omitted and the cited text remains readable.',
       'chapter 1 “完成开局设置”\'s bounded visual selection is unavailable; only the visual is omitted and its cited text remains readable',
     ])
   })
 
   it('treats typed NO_VISUAL as a valid result rather than a retry or failure', () => {
     const steps = recentTeachingActivitySteps(plan, [
-      activity(1, 'settleVisualCandidateSelection|1|1|EXPLICIT_NO_REGION', 'SUCCEEDED'),
+      activity(1, 'settleVisualCandidateSelection|1|1|EXPLICIT_NO_REGION|no-visual', 'SUCCEEDED'),
       activity(2, 'enrichTeachingSectionVisual|1', 'REJECTED'),
     ])
 
@@ -443,7 +506,7 @@ describe('teaching progress', () => {
 
   it.each([
     ['AGENT_TIMEOUT', '本轮在有限恢复后到达总时限'],
-    ['AGENT_MODEL_BUDGET', '本轮用完了预先限定的步骤、工具、模型调用或令牌预算'],
+    ['AGENT_MODEL_BUDGET', '这是一条历史任务：它曾被现已取消的调用次数上限停止'],
     ['TEACHING_COMPLETION_FAILED', '讲解在有限持久化恢复后仍无法标记完成'],
     ['APPLICATION_RESTARTED', '服务重启后无法安全续跑本轮任务'],
     ['TEACHING_QUEUE_FULL', '服务未能调度下一个有限工作单元'],
@@ -504,7 +567,7 @@ function run(id: string, activities: TeachingActivity[]): TeachingRunProgress {
       id, subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-21T00:00:00Z', updatedAt: '2026-07-21T00:01:00Z',
       completedAt: null, lastErrorCode: null,
     },
-    budget: { usedModelCalls: 1, maxModelCalls: 144 },
+    budget: { usedModelCalls: 1 },
     activities,
   }
 }
@@ -514,9 +577,10 @@ function activity(
   operation: string,
   outcome: TeachingActivity['outcome'],
   summary = 'internal summary',
+  type: TeachingActivity['type'] = 'MODEL',
 ): TeachingActivity {
   return {
-    sequence, type: 'MODEL', operation, summary, outcome, latencyMs: 0,
+    sequence, type, operation, summary, outcome, latencyMs: 0,
     occurredAt: '2026-07-21T00:01:00Z',
   }
 }

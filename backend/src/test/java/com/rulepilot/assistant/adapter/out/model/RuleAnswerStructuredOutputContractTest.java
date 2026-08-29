@@ -4,12 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationOperandRequest;
 import com.rulepilot.assistant.RuleAnswerModel.CalculationOperandSource;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class RuleAnswerStructuredOutputContractTest {
@@ -17,8 +21,23 @@ class RuleAnswerStructuredOutputContractTest {
     private final UUID citationId = UUID.randomUUID();
 
     @Test
-    void bindsNaturalPlayerProseAndTypedCalculationDataInOneJsonEnvelope() {
+    void bindsNaturalPlayerProseAndCompleteTypedCalculationDataWithoutTruncation() {
         ModelDraft draft = SpringAiRuleAnswerModel.parseModelDraft(validCalculationJson());
+        List<CalculationOperandRequest> completeOperands = IntStream.rangeClosed(1, 24)
+                .mapToObj(value -> new CalculationOperandRequest(
+                        "operand-%d-%s".formatted(value, "n".repeat(90)),
+                        BigDecimal.valueOf(value),
+                        CalculationOperandSource.QUESTION,
+                        "source-%d-%s".formatted(value, "s".repeat(260)),
+                        null))
+                .toList();
+        CalculationRequest completeCalculation = new CalculationRequest(
+                IntStream.rangeClosed(1, 24)
+                        .mapToObj(Integer::toString)
+                        .collect(java.util.stream.Collectors.joining("+")),
+                BigDecimal.valueOf(300),
+                "victory-point-unit-" + "u".repeat(90),
+                completeOperands);
 
         assertThat(draft.shortVerdict()).isEqualTo("你得到 10 分。\n现在可以继续结算。 ");
         assertThat(draft.confidence()).isEqualTo(AnswerConfidence.HIGH);
@@ -33,6 +52,14 @@ class RuleAnswerStructuredOutputContractTest {
                             CalculationOperandSource.EVIDENCE,
                             CalculationOperandSource.EVIDENCE);
         });
+        assertThat(completeCalculation.operands())
+                .hasSize(24)
+                .last()
+                .satisfies(operand -> {
+                    assertThat(operand.name()).startsWith("operand-24-").endsWith("n".repeat(90));
+                    assertThat(operand.sourceSpan()).startsWith("source-24-").endsWith("s".repeat(260));
+                });
+        assertThat(completeCalculation.resultUnit()).endsWith("u".repeat(90));
     }
 
     @Test

@@ -7,6 +7,9 @@ import java.util.Optional;
 /** Read-only catalog capability exposed to the independent recommendation module. */
 public interface BoardGameRecommendationCatalog {
 
+    /** Storage-query page size; application callers page larger logical reads. */
+    int MAX_SEARCH_PAGE_SIZE = 20;
+
     CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum);
 
     List<Game> findGamesByIds(List<Integer> bggIds);
@@ -113,11 +116,11 @@ public interface BoardGameRecommendationCatalog {
             textQuery = textQuery == null ? null : textQuery.strip().replaceAll("\\s+", " ");
             if (textQuery != null && textQuery.isBlank()) textQuery = null;
             sort = sort == null ? CatalogSort.RANK : sort;
-            if (maximum < 1 || maximum > 20) {
-                throw new IllegalArgumentException("BGG catalog filter maximum must be between 1 and 20");
+            if (maximum < 1 || maximum > MAX_SEARCH_PAGE_SIZE) {
+                throw new IllegalArgumentException("BGG catalog filter maximum exceeds the storage page size");
             }
-            if (offset < 0 || offset > 200) {
-                throw new IllegalArgumentException("BGG catalog filter offset must be between 0 and 200");
+            if (offset < 0) {
+                throw new IllegalArgumentException("BGG catalog filter offset must be non-negative");
             }
             if (minimumPublicationYear != null
                     && (minimumPublicationYear < 1 || minimumPublicationYear > 2100)
@@ -135,9 +138,6 @@ public interface BoardGameRecommendationCatalog {
             }
             if (minimumRatingsCount != null && (minimumRatingsCount < 0 || minimumRatingsCount > 100_000_000)) {
                 throw new IllegalArgumentException("BGG catalog ratings-count filter is invalid");
-            }
-            if (textQuery != null && textQuery.length() > 240) {
-                throw new IllegalArgumentException("BGG catalog text query is invalid");
             }
             if (sort == CatalogSort.RELEVANCE && textQuery == null) {
                 throw new IllegalArgumentException("BGG catalog relevance sort requires a text query");

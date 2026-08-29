@@ -13,7 +13,6 @@ import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
@@ -69,7 +68,6 @@ class GroundedTeachingAgentRetryTest {
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
-                cleanCritic(),
                 invocations,
                 visualFacts,
                 3,
@@ -129,7 +127,6 @@ class GroundedTeachingAgentRetryTest {
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
-                cleanCritic(),
                 invocations,
                 visualFacts,
                 3,
@@ -207,7 +204,6 @@ class GroundedTeachingAgentRetryTest {
                 tools,
                 request -> validDraft(evidenceId),
                 new PolicyEvidenceVerifier(),
-                cleanCritic(),
                 invocations,
                 visualFacts,
                 3,
@@ -250,7 +246,6 @@ class GroundedTeachingAgentRetryTest {
                 tools,
                 request -> validDraft(evidenceId),
                 new PolicyEvidenceVerifier(),
-                cleanCritic(),
                 invocations,
                 visualFacts,
                 3,
@@ -294,7 +289,6 @@ class GroundedTeachingAgentRetryTest {
                 tools,
                 request -> validDraft(evidenceId),
                 new PolicyEvidenceVerifier(),
-                cleanCritic(),
                 invocations,
                 visualFacts,
                 3,
@@ -338,7 +332,6 @@ class GroundedTeachingAgentRetryTest {
                 tools,
                 request -> validDraft(evidenceId),
                 new PolicyEvidenceVerifier(),
-                cleanCritic(),
                 invocations,
                 visualFacts,
                 3,
@@ -373,7 +366,6 @@ class GroundedTeachingAgentRetryTest {
                 tools,
                 request -> validDraft(evidenceId),
                 new PolicyEvidenceVerifier(),
-                cleanCritic(),
                 invocations,
                 visualFacts,
                 3,
@@ -446,10 +438,6 @@ class GroundedTeachingAgentRetryTest {
                         TeachingMove.DO,
                         "把主棋盘放在桌面中央。",
                         List.of(evidenceId))));
-    }
-
-    private static GeneratedContentCritic cleanCritic() {
-        return (request, risk) -> new GeneratedContentCritic.Review(true, List.of());
     }
 
     private static final class CountingInvocations implements AuditedAgentInvocations {

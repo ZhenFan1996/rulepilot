@@ -8,10 +8,7 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.ContentCriticModel.CritiqueDraft;
-import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.NativeToolScopes;
-import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
@@ -39,7 +36,7 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentWorkloadTest {
 
     @Test
-    void completesNineteenCheckpointedSectionsWithinTheAdmittedCallDemand() {
+    void sizesNineteenCheckpointedSectionsFromTheirOrdinarySourceWindows() {
         UUID versionId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         Map<Integer, UUID> searchEvidenceIds = IntStream.rangeClosed(1, 19)
@@ -49,10 +46,8 @@ class GroundedTeachingAgentWorkloadTest {
                 .boxed()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(position -> position, ignored -> UUID.randomUUID()));
         WorkflowTools tools = new WorkflowTools(versionId, searchEvidenceIds, canonicalEvidenceIds);
-        EnforcingInvocations invocations = new EnforcingInvocations();
+        ObservingInvocations invocations = new ObservingInvocations();
         WorkflowModel model = new WorkflowModel();
-        GeneratedContentCritic critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of()), invocations, false);
         NativeToolScopes scopes = (owner, documentVersionId, assistantRunId) -> Optional.of(
                 new com.rulepilot.assistant.NativeAgentTool.ToolScope(
                         owner, documentVersionId, assistantRunId, Instant.now().plusSeconds(30)));
@@ -63,7 +58,6 @@ class GroundedTeachingAgentWorkloadTest {
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
-                critic,
                 invocations,
                 visualFacts,
                 3,
@@ -71,8 +65,6 @@ class GroundedTeachingAgentWorkloadTest {
                 VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts));
         TeachingPlan plan = plan(versionId);
         WorkloadDemand demand = agent.workload(plan);
-        invocations.admit(demand);
-
         var lesson = agent.createBase(plan, runId, null, ignored -> {});
 
         assertThat(lesson.sections()).hasSize(19).allSatisfy(section ->
@@ -87,11 +79,11 @@ class GroundedTeachingAgentWorkloadTest {
         assertThat(tools.searches()).isEqualTo(57);
         assertThat(tools.visualPageReads()).isEqualTo(19);
         assertThat(tools.canonicalFallbackReads()).isOne();
-        assertThat(invocations.usedToolCalls()).isEqualTo(77).isLessThanOrEqualTo(demand.requiredToolCalls());
-        assertThat(invocations.usedModelCalls()).isEqualTo(21).isLessThanOrEqualTo(demand.requiredModelCalls());
-        // Admission reserves the initial image interpretation plus one contract repair or transient replay per page.
-        // Runtime availability and cached facts reduce work.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 441));
+        assertThat(invocations.usedToolCalls()).isEqualTo(77);
+        assertThat(invocations.usedModelCalls()).isEqualTo(20);
+        // One section draft, one catalog owner per unique source page, and one visual source window per section.
+        // Recovery attempts are deliberately absent because durable tokens and wall time, not this estimate, own them.
+        assertThat(demand).isEqualTo(new WorkloadDemand(57));
     }
 
     static TeachingPlan plan(UUID versionId) {
@@ -248,14 +240,9 @@ class GroundedTeachingAgentWorkloadTest {
         }
     }
 
-    private static final class EnforcingInvocations implements AuditedAgentInvocations {
+    private static final class ObservingInvocations implements AuditedAgentInvocations {
         private final AtomicInteger usedToolCalls = new AtomicInteger();
         private final AtomicInteger usedModelCalls = new AtomicInteger();
-        private volatile WorkloadDemand demand;
-
-        void admit(WorkloadDemand demand) {
-            this.demand = demand;
-        }
 
         @Override
         public <T> T invoke(
@@ -266,16 +253,8 @@ class GroundedTeachingAgentWorkloadTest {
                 String successSummary,
                 Supplier<T> invocation,
                 ToIntFunction<T> outputTokenEstimator) {
-            WorkloadDemand admitted = demand;
-            if (admitted == null) throw new IllegalStateException("workload was not admitted");
-            if (type == ActivityType.TOOL
-                    && usedToolCalls.incrementAndGet() > admitted.requiredToolCalls()) {
-                throw new AssertionError("tool workload exceeded its admitted demand");
-            }
-            if ((type == ActivityType.MODEL || type == ActivityType.CRITIC)
-                    && usedModelCalls.incrementAndGet() > admitted.requiredModelCalls()) {
-                throw new AssertionError("model workload exceeded its admitted demand");
-            }
+            if (type == ActivityType.TOOL) usedToolCalls.incrementAndGet();
+            if (type == ActivityType.MODEL || type == ActivityType.CRITIC) usedModelCalls.incrementAndGet();
             return invocation.get();
         }
 

@@ -5,6 +5,7 @@ import {
   acceptJourneyRun,
   derivePlayerJourney,
   playerJourneyPollDelay,
+  typedFailurePolicy,
   type PlayerJourneyImportJob,
   type PlayerJourneyRun,
 } from './playerJourney'
@@ -19,6 +20,32 @@ describe('playerJourneyPollDelay', () => {
 
   it('keeps transient failures on the slower retry cadence', () => {
     expect(playerJourneyPollDelay(true, true)).toBe(3_000)
+  })
+})
+
+describe('typedFailurePolicy', () => {
+  it.each([
+    ['TEACHING_PREPARATION_INVALID_PLAN', 'external-repair', 'manual-repair', null],
+    ['TEACHING_RECOVERY_EXHAUSTED', 'preserved-stop', 'retry-step', 'PREPARE_TEACHING'],
+    ['INSUFFICIENT_EVIDENCE', 'preserved-stop', null, null],
+    ['TEACHING_PREPARATION_QUEUE_TIMEOUT', 'preserved-stop', 'retry-step', 'PREPARE_TEACHING'],
+    ['TEACHING_MODEL_PROVIDER_FAILED', 'preserved-stop', 'restart-from-completed', 'GENERATE_LESSON'],
+  ] as const)('owns retry authorization for %s', (
+    errorCode,
+    failureClassification,
+    failureRecovery,
+    retryAction,
+  ) => {
+    const requestedRetryAction = errorCode === 'TEACHING_MODEL_PROVIDER_FAILED'
+      ? 'GENERATE_LESSON'
+      : 'PREPARE_TEACHING'
+
+    expect(typedFailurePolicy(errorCode, requestedRetryAction, true)).toEqual({
+      errorCode,
+      retryAction,
+      failureClassification,
+      failureRecovery,
+    })
   })
 })
 
@@ -82,8 +109,8 @@ describe('derivePlayerJourney', () => {
     })
   })
 
-  it('does not mark the rulebook milestone from a teaching handoff without a readable document snapshot', () => {
-    expect(derivePlayerJourney(input({
+  it('counts only cited chapters as readable and not evidence-insufficient placeholders', () => {
+    const journey = {
       gameBound: true,
       importJob: importJob({
         stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
@@ -92,9 +119,22 @@ describe('derivePlayerJourney', () => {
       plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
         { position: 1, title: 'Setup' },
       ] },
-      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+    }
+    expect(derivePlayerJourney(input({
+      ...journey,
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [
+        { position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' },
+      ] },
     }))).toMatchObject({
       canReadRulebook: false, canReadLesson: true, canAskQuestions: false,
+    })
+    expect(derivePlayerJourney(input({
+      ...journey,
+      lesson: { id: 'lesson-1', status: 'INCOMPLETE', sections: [
+        { position: 1, title: 'Setup', evidenceStatus: 'INSUFFICIENT_EVIDENCE' },
+      ] },
+    }))).toMatchObject({
+      canReadRulebook: false, canReadLesson: false, canAskQuestions: false, availableSections: 0,
     })
   })
 
@@ -250,7 +290,7 @@ describe('derivePlayerJourney', () => {
         { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
       ] },
       teachingRun: cancelled,
-      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' }] },
     }))).toMatchObject({
       phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
       errorCode: 'AGENT_CANCELLED', failureClassification: 'preserved-stop',
@@ -270,7 +310,7 @@ describe('derivePlayerJourney', () => {
         { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
       ] },
       teachingRun: timedOut,
-      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' }] },
     }))).toMatchObject({
       phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
       errorCode: 'TEACHING_CONTINUATION_QUEUE_TIMEOUT', failureClassification: 'preserved-stop',
@@ -299,7 +339,7 @@ describe('derivePlayerJourney', () => {
         { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
       ] },
       teachingRun: stopped,
-      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' }] },
     }))).toMatchObject({
       phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
       errorCode, canReadRulebook: true, canReadLesson: true, availableSections: 1,
@@ -404,7 +444,7 @@ describe('derivePlayerJourney', () => {
         { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
       ] },
       teachingRun: run('LESSON_COMPOSITION'),
-      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' }] },
     }))).toMatchObject({
       phase: 'LESSON_READABLE', state: 'ready', canReadLesson: true, canAskQuestions: true,
       availableSections: 1, totalSections: 2,
@@ -424,7 +464,7 @@ describe('derivePlayerJourney', () => {
       plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
         { position: 1, title: 'Setup' },
       ] },
-      lesson: { id: 'lesson-1', status: 'COMPLETE' as const, sections: [{ position: 1, title: 'Setup' }] },
+      lesson: { id: 'lesson-1', status: 'COMPLETE' as const, sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' as const }] },
     }
     expect(derivePlayerJourney(input({ ...common, teachingRun: run('CRITIQUING') })).phase)
       .toBe('LESSON_READABLE')
@@ -461,7 +501,7 @@ describe('derivePlayerJourney', () => {
         { position: 1, title: 'Setup' },
       ] },
       teachingRun: teaching,
-      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }] },
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' }] },
     }))).toMatchObject({
       phase: 'LESSON_COMPLETE', state: 'complete', retryAction: null, errorCode: null,
     })
@@ -482,7 +522,7 @@ describe('derivePlayerJourney', () => {
         { position: 1, title: 'Setup' },
       ] },
       teachingRun: teaching,
-      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup', evidenceStatus: 'SUPPORTED' }] },
     }))).toMatchObject({
       phase: 'LESSON_READABLE', state: 'ready', retryAction: null,
       errorCode: 'REVIEW_UNAVAILABLE', canReadLesson: true,

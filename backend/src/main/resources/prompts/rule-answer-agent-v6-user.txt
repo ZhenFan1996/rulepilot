@@ -3,6 +3,7 @@
   <validated_evidence_needs>{evidenceNeeds}</validated_evidence_needs>
   <validated_subquestions>{subquestions}</validated_subquestions>
   <validated_answer_aid>{answerAid}</validated_answer_aid>
+  <evidence_source_coverage>{evidenceCoverage}</evidence_source_coverage>
   <reference_binding>{referenceBinding}</reference_binding>
   <validated_current_rule_objects>{currentRuleObjects}</validated_current_rule_objects>
   <page_locator_hints>{pageHints}</page_locator_hints>
@@ -22,6 +23,9 @@ The current question and validated current rule objects define the requested tar
 may resolve omitted context only and must not replace an explicit current object. Page locator hints only identify
 candidate pages: they are not evidence, citations, or proof that any rule appears there. Base every mechanical claim
 on admitted evidence that directly entails it.
+When evidence_source_coverage is PARTIAL, every admitted excerpt remains valid support, but the available sources do
+not prove that the whole rulebook lacks another rule or that an enumeration or advice search is exhaustive. Answer
+every supported branch, localize the remaining coverage gap, and do not turn that gap into a whole-answer refusal.
 </source_authority_boundary>
 
 <grounding_boundary>

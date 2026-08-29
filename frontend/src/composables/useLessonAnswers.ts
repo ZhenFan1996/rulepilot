@@ -18,6 +18,7 @@ import {
   StructuredAnswerRequestError,
   StructuredAnswerStreamError,
   streamStructuredAnswer,
+  type AnswerStreamFailureRecovery,
 } from '@/lib/structuredAnswerStream'
 
 const ANSWER_SOFT_BUDGET_SECONDS = 8
@@ -62,6 +63,10 @@ export interface CsrfResponse {
   token: string
 }
 
+export interface AnswerFailureRecovery extends AnswerStreamFailureRecovery {
+  code: string
+}
+
 interface AnswerContext {
   planId: string
   documentVersionId: string
@@ -93,6 +98,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   const activeLearningIntent = ref<LearningIntent | null>(null)
   const answerLoading = ref(false)
   const answerError = ref('')
+  const answerFailureRecovery = ref<AnswerFailureRecovery | null>(null)
   const answerOutcome = ref<'none' | 'failed' | 'cancelled'>('none')
   const agentTrace = ref<AnswerAgentTraceItem[]>([])
   const streamedAnswerParts = ref<{ verdict: string; explanation: string }>({ verdict: '', explanation: '' })
@@ -129,6 +135,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     activeLearningIntent.value = null
     answerLoading.value = false
     answerError.value = ''
+    answerFailureRecovery.value = null
     answerOutcome.value = 'none'
     agentTrace.value = []
     streamedAnswerParts.value = { verdict: '', explanation: '' }
@@ -149,6 +156,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     cancelReadTransport()
     answer.value = null
     answerError.value = ''
+    answerFailureRecovery.value = null
     answerOutcome.value = 'none'
     answerRulingReference.value = null
   }
@@ -157,7 +165,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     const context = options.currentContext()
     if (!text || !context || answerLoading.value) return
     const responseLocale = context.locale
-    let failureKind: AnswerRequestFailure = 'request'
     const lessonRequest = options.currentLessonRequest()
     const answerRequest = ++latestAnswerRequest
     cancelReadTransport()
@@ -167,6 +174,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     startAnswerClock()
     activeLearningIntent.value = learningIntent
     answerError.value = ''
+    answerFailureRecovery.value = null
     answerOutcome.value = 'none'
     answer.value = null
     agentTrace.value = []
@@ -182,10 +190,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         await options.requestLogin()
         return
       }
-      if (!csrfResponse.ok) {
-        failureKind = 'session'
-        throw new Error('secure session unavailable')
-      }
+      if (!csrfResponse.ok) throw new StructuredAnswerRequestError(csrfResponse.status)
       const csrf = (await csrfResponse.json()) as CsrfResponse
       activeCancellationCsrf = csrf
       const previousTurn = answerTurns.value.at(-1)
@@ -222,10 +227,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       })
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       const creation = parseAnswerCreation(response)
-      if (!creation) {
-        failureKind = 'unavailable'
-        throw new Error('player answer response is invalid')
-      }
+      if (!creation) throw new InvalidAnswerResultError()
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       const received = creation.answer
       const rulingReference = safeRulingReference(creation.rulingReference, received.citations.length)
@@ -244,10 +246,15 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         await options.requestLogin()
         return
       }
-      if (error instanceof StructuredAnswerRequestError || error instanceof StructuredAnswerStreamError) {
-        failureKind = 'unavailable'
-      }
-      answerError.value = answerRequestFailureCopy(failureKind, responseLocale)
+      const recovery = error instanceof StructuredAnswerStreamError
+        ? streamFailureRecovery(error, responseLocale)
+        : error instanceof StructuredAnswerRequestError
+          ? answerFailureRecoveryForHttpStatus(error.status, responseLocale)
+          : error instanceof InvalidAnswerResultError
+            ? answerFailureRecoveryFor('invalid-result', responseLocale)
+            : answerFailureRecoveryFor('request', responseLocale)
+      answerFailureRecovery.value = recovery
+      answerError.value = recovery.message
       answerOutcome.value = 'failed'
     } finally {
       if (activeAnswerController === controller) activeAnswerController = null
@@ -277,7 +284,9 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     activeLearningIntent.value = null
     agentTrace.value = []
     const fallback = options.currentContext()?.locale ?? 'zh-CN'
-    answerError.value = answerRequestFailureCopy('cancelled', fallback)
+    const recovery = answerFailureRecoveryFor('cancelled', fallback)
+    answerFailureRecovery.value = recovery
+    answerError.value = recovery.message
     answerOutcome.value = 'cancelled'
   }
 
@@ -374,6 +383,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     activeLearningIntent,
     answerLoading,
     answerError,
+    answerFailureRecovery,
     answerOutcome,
     agentTrace,
     streamedAnswerParts,
@@ -388,25 +398,207 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   }
 }
 
-type AnswerRequestFailure = 'session' | 'unavailable' | 'request' | 'cancelled'
+export type AnswerRequestFailure =
+  | 'context'
+  | 'service'
+  | 'timeout'
+  | 'rate-limit'
+  | 'invalid-result'
+  | 'request'
+  | 'cancelled'
 
-function answerRequestFailureCopy(failure: AnswerRequestFailure, locale: AppLocale) {
+class InvalidAnswerResultError extends Error {}
+
+function streamFailureRecovery(
+  failure: StructuredAnswerStreamError,
+  locale: AppLocale,
+): AnswerFailureRecovery {
+  if (!failure.recovery.message.trim() || !failure.recovery.actionLabel.trim()) {
+    return answerFailureRecoveryFor('request', locale)
+  }
+  return {
+    code: failure.code,
+    message: failure.recovery.message,
+    actionLabel: failure.recovery.actionLabel,
+    draft: failure.recovery.draft,
+    canRetryUnchanged: failure.recovery.canRetryUnchanged,
+  }
+}
+
+export function answerFailureRecoveryForHttpStatus(
+  status: number,
+  locale: AppLocale,
+): AnswerFailureRecovery {
+  if (status === 408) return answerFailureRecoveryFor('timeout', locale)
+  if (status === 429) return answerFailureRecoveryFor('rate-limit', locale)
+  if (status >= 400 && status < 500) return answerFailureRecoveryFor('context', locale)
+  if (status >= 500 && status < 600) return answerFailureRecoveryFor('service', locale)
+  return answerFailureRecoveryFor('request', locale)
+}
+
+export function answerFailureRecoveryFor(
+  failure: AnswerRequestFailure,
+  locale: AppLocale,
+): AnswerFailureRecovery {
   if (locale === 'en') {
-    if (failure === 'session') {
-      return "I couldn't establish a secure session. Your question is still here; review it and try again."
+    if (failure === 'context') {
+      return {
+        code: 'answer_context_invalid',
+        message: 'This question no longer matches the current signed-in rulebook context. Refresh or reopen the rulebook or session before sending it again.',
+        actionLabel: 'Restore the answer context',
+        draft: '',
+        canRetryUnchanged: false,
+      }
     }
-    if (failure === 'unavailable') {
-      return 'The rules answer service is unavailable right now. Your question is still here; review it and try again.'
+    if (failure === 'service') {
+      return {
+        code: 'answer_service_unavailable',
+        message: 'The rules answer service is temporarily unavailable. Your question is still here; after the service recovers, the same question can be retried unchanged.',
+        actionLabel: 'Retry after recovery',
+        draft: '',
+        canRetryUnchanged: true,
+      }
+    }
+    if (failure === 'timeout') {
+      return {
+        code: 'answer_timeout',
+        message: 'This answer attempt timed out and stopped before publishing a result. You can retry the same question unchanged; if it times out again, narrow the question.',
+        actionLabel: 'Retry this question',
+        draft: '',
+        canRetryUnchanged: true,
+      }
+    }
+    if (failure === 'rate-limit') {
+      return {
+        code: 'answer_rate_limited',
+        message: 'Too many answer requests were sent in a short time. Wait for the limit to clear; then the same question can be retried unchanged.',
+        actionLabel: 'Wait, then retry',
+        draft: '',
+        canRetryUnchanged: true,
+      }
+    }
+    if (failure === 'invalid-result') {
+      return {
+        code: 'answer_result_invalid',
+        message: 'The returned answer did not pass the completeness check, so it was not shown. Keep the question, but review its context or wording before trying again.',
+        actionLabel: 'Review the question',
+        draft: '',
+        canRetryUnchanged: false,
+      }
     }
     if (failure === 'cancelled') {
-      return 'Stopped waiting. This unfinished result will not replace the current page. You can edit the question and send it again.'
+      return {
+        code: 'answer_cancelled',
+        message: 'Stopped waiting. This unfinished result will not replace the current page. Edit or review the question before sending a new request.',
+        actionLabel: 'Review the question',
+        draft: '',
+        canRetryUnchanged: false,
+      }
     }
-    return "I couldn't send this question. It is still here; review it and try again."
+    return {
+      code: 'answer_request_failed',
+      message: "I couldn't send this question. It is still here; check the connection, session, and rulebook context before sending it again.",
+      actionLabel: 'Check the answer context',
+      draft: '',
+      canRetryUnchanged: false,
+    }
   }
-  if (failure === 'session') return '无法建立安全会话。问题仍保留在这里；检查后可以直接重试。'
-  if (failure === 'unavailable') return '规则答疑暂时不可用。问题仍保留在这里；检查后可以直接重试。'
-  if (failure === 'cancelled') return '已停止等待；这次未完成的结果不会替换当前页面。你可以修改问题后重新发送。'
-  return '这次没有成功发送问题。问题仍保留在这里；检查后可以直接重试。'
+  if (failure === 'context') {
+    return {
+      code: 'answer_context_invalid',
+      message: '当前登录会话或规则书上下文已不匹配。请先刷新或重新打开规则书、恢复会话，再发送问题。',
+      actionLabel: '恢复答疑上下文',
+      draft: '',
+      canRetryUnchanged: false,
+    }
+  }
+  if (failure === 'service') {
+    return {
+      code: 'answer_service_unavailable',
+      message: '规则答疑服务暂时不可用。问题仍保留在这里；服务恢复后，可以原样重试同一个问题。',
+      actionLabel: '服务恢复后重试',
+      draft: '',
+      canRetryUnchanged: true,
+    }
+  }
+  if (failure === 'timeout') {
+    return {
+      code: 'answer_timeout',
+      message: '本轮答疑已超时停止，没有发布未完成结果。可以原样重试同一个问题；如果再次超时，请缩小问题范围。',
+      actionLabel: '重试这个问题',
+      draft: '',
+      canRetryUnchanged: true,
+    }
+  }
+  if (failure === 'rate-limit') {
+    return {
+      code: 'answer_rate_limited',
+      message: '短时间内的答疑请求过多。请等待限流解除；解除后，可以原样重试同一个问题。',
+      actionLabel: '等待后重试',
+      draft: '',
+      canRetryUnchanged: true,
+    }
+  }
+  if (failure === 'invalid-result') {
+    return {
+      code: 'answer_result_invalid',
+      message: '返回的答案没有通过完整性检查，因此未显示。问题仍保留；请先检查上下文或调整问法，再重新发送。',
+      actionLabel: '检查问题',
+      draft: '',
+      canRetryUnchanged: false,
+    }
+  }
+  if (failure === 'cancelled') {
+    return {
+      code: 'answer_cancelled',
+      message: '已停止等待；这次未完成的结果不会替换当前页面。请先检查或修改问题，再发起新的请求。',
+      actionLabel: '检查问题',
+      draft: '',
+      canRetryUnchanged: false,
+    }
+  }
+  return {
+    code: 'answer_request_failed',
+    message: '这次没有成功发送问题。问题仍保留；请先检查网络、会话和规则书上下文，再重新发送。',
+    actionLabel: '检查答疑上下文',
+    draft: '',
+    canRetryUnchanged: false,
+  }
+}
+
+export function answerFailureRetrySuitability(
+  recovery: AnswerFailureRecovery,
+  locale: AppLocale,
+) {
+  const english = locale === 'en'
+  if (recovery.code === 'answer_context_invalid') {
+    return english
+      ? 'Editing the question cannot repair this stale answer context. Refresh or reopen the rulebook or session before sending any question.'
+      : '修改问题不能修复已经失效的答疑上下文；请先刷新或重新打开规则书、恢复会话，再发送问题。'
+  }
+  if (!recovery.canRetryUnchanged) {
+    return english
+      ? 'Resolve the issue above or revise the question before sending it again; do not immediately retry it unchanged.'
+      : '请先按上面的提示排除问题或调整问法，不要立即原样重试。'
+  }
+  if (recovery.code === 'answer_service_unavailable') {
+    return english
+      ? 'After the service recovers, you can retry the same question unchanged.'
+      : '服务恢复后，可以原样重试同一个问题。'
+  }
+  if (recovery.code === 'answer_timeout') {
+    return english
+      ? 'This run has stopped. You can retry the same question unchanged; if it times out again, narrow its scope.'
+      : '本轮已经停止，可以原样重试同一个问题；如果再次超时，请缩小问题范围。'
+  }
+  if (recovery.code === 'answer_rate_limited') {
+    return english
+      ? 'Wait for the request limit to clear, then retry the same question unchanged.'
+      : '请等待限流解除，再原样重试同一个问题。'
+  }
+  return english
+    ? 'After the temporary boundary clears, you can retry the same question unchanged.'
+    : '暂时边界解除后，可以原样重试同一个问题。'
 }
 
 

@@ -144,20 +144,20 @@ public interface BoardGameRecommendationWebResearch {
             String statement,
             List<Integer> sourceIndexes) {
         public PublicContextEvidence {
-            id = bounded(id, 16, "public context evidence id");
-            subject = bounded(subject, 160, "public context subject");
-            relation = bounded(relation, 120, "public context relation");
-            object = bounded(object, 200, "public context object");
-            statement = bounded(statement, 600, "public context statement");
+            id = required(id, "public context evidence id");
+            subject = required(subject, "public context subject");
+            relation = required(relation, "public context relation");
+            object = required(object, "public context object");
+            statement = required(statement, "public context statement");
             sourceIndexes = sourceIndexes == null ? List.of() : List.copyOf(sourceIndexes);
-            if (subjectKind == null || sourceIndexes.isEmpty() || sourceIndexes.size() > 3) {
+            if (subjectKind == null || sourceIndexes.isEmpty()) {
                 throw new IllegalArgumentException("public context evidence is invalid");
             }
         }
 
-        private static String bounded(String value, int maximum, String field) {
+        private static String required(String value, String field) {
             String normalized = value == null ? "" : value.strip();
-            if (normalized.isBlank() || normalized.length() > maximum) {
+            if (normalized.isBlank()) {
                 throw new IllegalArgumentException(field + " is invalid");
             }
             return normalized;

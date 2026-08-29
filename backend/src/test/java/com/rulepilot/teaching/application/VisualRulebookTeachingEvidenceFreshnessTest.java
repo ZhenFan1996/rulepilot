@@ -323,7 +323,7 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 state.terminal() ? now : null,
                 errorCode);
         var budget = new AgentExecutionControl.BudgetSnapshot(
-                40, 72, 36, 160_000, 0, 0, 0, now.plusSeconds(600), null);
+                160_000, 0, 0, 0, now.plusSeconds(600), null);
         return new AssistantRuns.RunDetails(run, List.of(), budget, List.of());
     }
 }

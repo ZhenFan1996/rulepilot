@@ -127,6 +127,32 @@ class BggRankedCatalogServiceTest {
     }
 
     @Test
+    void composesEveryRequestedRecommendationLookupAcrossMetadataBatches() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+        List<Integer> ids = java.util.stream.IntStream.rangeClosed(1, 25).boxed().toList();
+
+        var result = service.findGamesByIds(ids);
+
+        assertThat(result).extracting(game -> game.ranking().bggId()).containsExactlyElementsOf(ids);
+        assertThat(repository.idLookupBatches)
+                .extracting(List::size)
+                .containsExactly(12, 12, 1);
+    }
+
+    @Test
+    void acceptsEveryDistinctTitleHypothesisBeyondTheFormerEightNameContract() {
+        MemoryRepository repository = new MemoryRepository();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, new FakeBgg());
+        List<String> names = java.util.stream.IntStream.rangeClosed(1, 9)
+                .mapToObj(id -> "Game " + id)
+                .toList();
+
+        assertThat(service.searchByNames(names)).isNotEmpty();
+    }
+
+    @Test
     void keepsOneBestTitleMatchPerAgentSuggestionInsteadOfFillingThePoolWithVariants() {
         MemoryRepository repository = new MemoryRepository();
         BggRankedCatalogService service = new BggRankedCatalogService(repository, new FakeBgg());
@@ -304,6 +330,7 @@ class BggRankedCatalogServiceTest {
         private List<String> designerQuery = List.of();
         private List<String> categoryQuery = List.of();
         private List<String> mechanicQuery = List.of();
+        private final java.util.ArrayList<List<Integer>> idLookupBatches = new java.util.ArrayList<>();
         private int exactBatchQueries;
 
         @Override
@@ -345,8 +372,8 @@ class BggRankedCatalogServiceTest {
 
         @Override
         public List<RankedGame> findByIds(List<Integer> bggIds) {
+            idLookupBatches.add(List.copyOf(bggIds));
             return bggIds.stream()
-                    .filter(id -> id == 10 || id == 20 || id == 30)
                     .map(id -> id == 30 ? game(30, 30, "碁") : game(id, id))
                     .toList();
         }

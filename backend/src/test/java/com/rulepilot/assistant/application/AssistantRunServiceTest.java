@@ -288,19 +288,13 @@ class AssistantRunServiceTest {
         AssistantRunService service = new AssistantRunService(
                 repository,
                 execution,
-                72,
-                24,
-                16,
                 24_000,
                 Duration.ofMinutes(2),
-                Duration.ofSeconds(30),
-                72,
                 40,
                 300_000,
                 Duration.ofMinutes(30),
                 Duration.ofHours(16),
                 16_000_000,
-                192,
                 600_000,
                 Duration.ofMinutes(30));
 
@@ -311,15 +305,15 @@ class AssistantRunServiceTest {
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution, times(3)).initialize(any(), limits.capture(), any());
         assertThat(limits.getAllValues())
-                .extracting(BudgetLimits::maxModelCalls, BudgetLimits::maxTokens, BudgetLimits::timeout)
+                .extracting(BudgetLimits::maxTokens, BudgetLimits::timeout)
                 .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple(40, 300_000, Duration.ofMinutes(30)),
-                        org.assertj.core.groups.Tuple.tuple(192, 600_000, Duration.ofMinutes(30)),
-                        org.assertj.core.groups.Tuple.tuple(16, 24_000, Duration.ofSeconds(30)));
+                        org.assertj.core.groups.Tuple.tuple(300_000, Duration.ofMinutes(30)),
+                        org.assertj.core.groups.Tuple.tuple(600_000, Duration.ofMinutes(30)),
+                        org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2)));
     }
 
     @Test
-    void initializesTheExactPlanSizedCallBudgetWithoutTreatingFallbacksAsAccountLimits() {
+    void sizesResourcesFromThePlanEstimateWithoutPersistingItAsACallLimit() {
         AssistantRunRepository repository = mock(AssistantRunRepository.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = service(repository, execution);
@@ -328,12 +322,10 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING,
                 UUID.randomUUID(),
                 "player",
-                new WorkloadDemand(95, 127));
+                new WorkloadDemand(127));
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution).initialize(any(), limits.capture(), any());
-        assertThat(limits.getValue().maxToolCalls()).isEqualTo(95);
-        assertThat(limits.getValue().maxModelCalls()).isEqualTo(127);
         assertThat(limits.getValue().maxTokens()).isEqualTo(529_167);
         assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofMinutes(52).plusSeconds(55));
     }
@@ -348,7 +340,7 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING,
                 UUID.randomUUID(),
                 "player",
-                new WorkloadDemand(12, 72));
+                new WorkloadDemand(72));
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution).initialize(any(), limits.capture(), any());
@@ -366,7 +358,7 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING,
                 UUID.randomUUID(),
                 "player",
-                new WorkloadDemand(12, 108));
+                new WorkloadDemand(108));
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution).initialize(any(), limits.capture(), any());
@@ -384,12 +376,10 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING_PREPARATION,
                 UUID.randomUUID(),
                 "player",
-                new WorkloadDemand(0, 128));
+                new WorkloadDemand(128));
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution).initialize(any(), limits.capture(), any());
-        assertThat(limits.getValue().maxToolCalls()).isOne();
-        assertThat(limits.getValue().maxModelCalls()).isEqualTo(128);
         assertThat(limits.getValue().maxTokens()).isEqualTo(533_334);
         assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofMinutes(53).plusSeconds(20));
     }
@@ -404,11 +394,10 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING_PREPARATION,
                 UUID.randomUUID(),
                 "player",
-                new WorkloadDemand(0, 3_008));
+                new WorkloadDemand(3_008));
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution).initialize(any(), limits.capture(), any());
-        assertThat(limits.getValue().maxModelCalls()).isEqualTo(3_008);
         assertThat(limits.getValue().maxTokens()).isEqualTo(12_533_334);
         assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofHours(16));
     }
@@ -423,7 +412,7 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING_PREPARATION,
                 UUID.randomUUID(),
                 "player",
-                new WorkloadDemand(0, 3_888));
+                new WorkloadDemand(3_888));
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution).initialize(any(), limits.capture(), any());
@@ -439,19 +428,13 @@ class AssistantRunServiceTest {
         assertThatThrownBy(() -> new AssistantRunService(
                         repository,
                         execution,
-                        72,
-                        24,
-                        16,
                         24_000,
                         Duration.ofMinutes(2),
-                        Duration.ofSeconds(30),
-                        72,
                         72,
                         300_000,
                         Duration.ofMinutes(30),
                         Duration.ofMinutes(29),
                         16_000_000,
-                        192,
                         600_000,
                         Duration.ofMinutes(30)))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -466,19 +449,13 @@ class AssistantRunServiceTest {
         assertThatThrownBy(() -> new AssistantRunService(
                         repository,
                         execution,
-                        72,
-                        24,
-                        16,
                         24_000,
                         Duration.ofMinutes(2),
-                        Duration.ofSeconds(30),
-                        72,
                         72,
                         300_000,
                         Duration.ofMinutes(30),
                         Duration.ofHours(16),
                         299_999,
-                        192,
                         600_000,
                         Duration.ofMinutes(30)))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -607,7 +584,7 @@ class AssistantRunServiceTest {
     }
 
     @Test
-    void doesNotOfferPostWorkFinalizationToQuestionRuns() {
+    void recordsAValidatedQuestionAnswerAfterOptionalWorkUsesTheRemainingBudget() {
         AssistantRunRepository repository = mock(AssistantRunRepository.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = service(repository, execution);
@@ -618,13 +595,14 @@ class AssistantRunServiceTest {
                 .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(2))
                 .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(3));
         when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+        when(repository.update(any(), any(), any())).thenReturn(true);
 
-        assertThatThrownBy(() -> service.advanceAfterWork(
+        var verified = service.advanceAfterWork(
                         retrieving.id(), retrieving.revision(), AssistantRunState.VERIFYING_EVIDENCE,
-                        "Answer source scope is policy checked"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("post-work finalization is only available to teaching runs");
+                        "Answer source scope is policy checked");
 
+        assertThat(verified.state()).isEqualTo(AssistantRunState.VERIFYING_EVIDENCE);
+        verify(execution).assertFinalizationAllowed(retrieving.id());
         verify(execution, never()).assertStepAllowed(any(), any(Long.class));
     }
 
@@ -635,19 +613,13 @@ class AssistantRunServiceTest {
         AssistantRunService service = new AssistantRunService(
                 repository,
                 execution,
-                72,
-                24,
-                16,
                 24_000,
                 Duration.ofMinutes(2),
-                Duration.ofSeconds(30),
-                72,
                 40,
                 300_000,
                 Duration.ofMinutes(30),
                 Duration.ofHours(16),
                 16_000_000,
-                192,
                 600_000,
                 Duration.ofMinutes(30));
         UUID planId = UUID.randomUUID();
@@ -754,19 +726,13 @@ class AssistantRunServiceTest {
         return new AssistantRunService(
                 repository,
                 execution,
-                72,
-                24,
-                16,
                 24_000,
                 Duration.ofMinutes(2),
-                Duration.ofSeconds(30),
-                72,
                 72,
                 300_000,
                 Duration.ofMinutes(30),
                 Duration.ofHours(16),
                 16_000_000,
-                192,
                 600_000,
                 Duration.ofMinutes(30));
     }

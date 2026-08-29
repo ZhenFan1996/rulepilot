@@ -2,7 +2,9 @@ package com.rulepilot.assistant.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -14,6 +16,9 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException;
+import com.rulepilot.assistant.RuleAnswerModelInvalidOutputException.RejectedOutput;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
@@ -172,14 +177,20 @@ class SpringAiRuleAnswerModelTest {
                  "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"],"owner":"CURRENT_QUESTION","retrievalQueries":["recommended winning strategy"]}]}
                 """);
 
-        var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
+        QuestionInterpretationRequest request = new QuestionInterpretationRequest(
                 "有没有赢的策略？",
                 "",
                 "",
                 "",
                 QuestionType.RULE_QUERY,
                 Set.of(),
-                PlayerLocale.ZH_CN));
+                PlayerLocale.ZH_CN);
+        RuleAnswerModelInvalidOutputException invalid = catchThrowableOfType(
+                () -> fixture.model.interpretQuestion(request),
+                RuleAnswerModelInvalidOutputException.class);
+        RejectedOutput rejected = invalid.rejectedOutput().orElseThrow();
+
+        var result = fixture.model.replaceInvalidQuestionInterpretation(request, rejected);
 
         assertThat(result).hasValueSatisfying(draft -> {
             assertThat(draft.learningIntent()).isNull();
@@ -190,7 +201,14 @@ class SpringAiRuleAnswerModelTest {
         assertThat(prompts.getAllValues().getLast().getInstructions())
                 .extracting(message -> message.getText())
                 .anySatisfy(text -> assertThat(text)
-                        .contains("previous response could not be decoded", "ADVICE belongs only inside"));
+                        .contains(
+                                "previous response could not be decoded",
+                                "ADVICE belongs only inside",
+                                rejected.candidateJson(),
+                                rejected.validationError(),
+                                rejected.schema(),
+                                "<allowed_evidence_ids>[]</allowed_evidence_ids>",
+                                "COMPLETE replacement JSON object"));
     }
 
     @Test
@@ -207,14 +225,20 @@ class SpringAiRuleAnswerModelTest {
                  "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["SEQUENCE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}]}
                 """);
 
-        var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
+        QuestionInterpretationRequest request = new QuestionInterpretationRequest(
                 "when does Daylight end",
                 "",
                 "",
                 "",
                 QuestionType.RULE_QUERY,
                 Set.of(),
-                PlayerLocale.EN));
+                PlayerLocale.EN);
+        RuleAnswerModelInvalidOutputException invalid = catchThrowableOfType(
+                () -> fixture.model.interpretQuestion(request),
+                RuleAnswerModelInvalidOutputException.class);
+
+        var result = fixture.model.replaceInvalidQuestionInterpretation(
+                request, invalid.rejectedOutput().orElseThrow());
 
         assertThat(result).hasValueSatisfying(draft -> {
             assertThat(draft.answerAid()).isEqualTo(AnswerAid.TIMING);
@@ -238,11 +262,20 @@ class SpringAiRuleAnswerModelTest {
     void rejectsQuestionInterpretationWithFieldsOutsideTheVersionedContract() {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":[],
-                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"answerAid":"NONE","subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}],
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"NONE","subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}],
                  "answer":"invented rule fact"}
                 """);
 
-        assertThat(fixture.model.interpretQuestion(request())).isEmpty();
+        RuleAnswerModelInvalidOutputException invalid = catchThrowableOfType(
+                () -> fixture.model.interpretQuestion(request()),
+                RuleAnswerModelInvalidOutputException.class);
+
+        assertThat(invalid.rejectedOutput()).hasValueSatisfying(rejected -> {
+            assertThat(rejected.candidateJson()).contains("invented rule fact");
+            assertThat(rejected.validationError()).contains("Unrecognized field");
+            assertThat(rejected.schema()).isEqualTo(SpringAiRuleAnswerModel.questionInterpretationSchema());
+            assertThat(rejected.allowedEvidenceIds()).isEmpty();
+        });
     }
 
     @Test
@@ -253,7 +286,8 @@ class SpringAiRuleAnswerModelTest {
                  "subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION"}]}
                 """);
 
-        assertThat(fixture.model.interpretQuestion(request())).isEmpty();
+        assertThatThrownBy(() -> fixture.model.interpretQuestion(request()))
+                .isInstanceOf(RuleAnswerModelInvalidOutputException.class);
     }
 
     @Test
@@ -270,7 +304,7 @@ class SpringAiRuleAnswerModelTest {
         verify(fixture.chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getModel()).isEqualTo("deepseek-v4-flash");
-        assertThat(options.getMaxTokens()).isEqualTo(384);
+        assertThat(options.getMaxTokens()).isNull();
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getExtraBody())
                 .containsEntry("thinking", java.util.Map.of("type", "disabled"));
@@ -278,7 +312,56 @@ class SpringAiRuleAnswerModelTest {
     }
 
     @Test
-    void appliesSeparateConfiguredTemperaturesToGenerationAndInterpretation() {
+    void acceptsACompleteInterpretationWithoutDiscardingLongOrNumerousTypedObligations() {
+        String terms = java.util.stream.IntStream.range(0, 13)
+                .mapToObj(index -> "\"term-%d-%s\"".formatted(index, "t".repeat(90)))
+                .collect(java.util.stream.Collectors.joining(","));
+        String ruleObjects = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(index -> "\"object-%d-%s\"".formatted(index, "o".repeat(130)))
+                .collect(java.util.stream.Collectors.joining(","));
+        String pageHints = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(index -> "{\"questionSpan\":\"page-%d-%s\",\"pageNumber\":%d}"
+                        .formatted(index, "p".repeat(130), 10_001 + index))
+                .collect(java.util.stream.Collectors.joining(","));
+        String query = "q".repeat(210);
+        String subquestions = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(index -> """
+                        {"questionSpan":"%d%s","evidenceNeeds":["DIRECT_RULE","CONDITION","SEQUENCE","EXCEPTION"],
+                         "owner":"CURRENT_QUESTION","retrievalQueries":["%da%s","%db%s","%dc%s","%dd%s"]}
+                        """.formatted(
+                                index,
+                                "s".repeat(310),
+                                index,
+                                query,
+                                index,
+                                query,
+                                index,
+                                query,
+                                index,
+                                query))
+                .collect(java.util.stream.Collectors.joining(","));
+        String candidate = """
+                {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION",
+                 "terms":[%s],"ruleObjectSpans":[%s],"pageHints":[%s],"missingContext":[],
+                 "learningIntent":null,"answerAid":"NONE","subquestions":[%s]}
+                """.formatted(terms, ruleObjects, pageHints, subquestions);
+        assertThat(candidate.length()).isGreaterThan(4_000);
+        Fixture fixture = fixture(candidate);
+
+        assertThat(fixture.model.interpretQuestion(request())).hasValueSatisfying(draft -> {
+            assertThat(draft.terms()).hasSize(13).allSatisfy(term -> assertThat(term).startsWith("term-"));
+            assertThat(draft.ruleObjectSpans()).hasSize(5);
+            assertThat(draft.pageHints()).hasSize(5);
+            assertThat(draft.subquestions()).hasSize(5).allSatisfy(subquestion -> {
+                assertThat(subquestion.evidenceNeeds()).hasSize(4);
+                assertThat(subquestion.retrievalQueries()).hasSize(4);
+            });
+        });
+        verify(fixture.chatModel).call(any(Prompt.class));
+    }
+
+    @Test
+    void exposesInvalidStructuredReplacementAsASeparateCallAndDoesNotReplayProviderFailures() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -296,33 +379,150 @@ class SpringAiRuleAnswerModelTest {
         when(chatModel.getOptions()).thenReturn(defaults);
         when(prompts.answerSystem("NONE")).thenReturn("Answer only from evidence.");
         when(prompts.answerUser()).thenReturn("{question}\n{evidence}\n{repair}");
-        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
-                new AssistantMessage("""
+        when(prompts.structuredOutputRepair()).thenReturn("Return one complete valid JSON object.");
+        ChatResponse valid = new ChatResponse(List.of(new Generation(new AssistantMessage("""
                         {"answerable":true,"insufficiencyReason":null,
                          "shortVerdict":"Yes.","explanation":"Direct rule.",
                          "citationIds":["%s"],"exceptions":[],"confidence":"HIGH",
                          "answerBasis":"DIRECT_RULE","aid":{"type":"NONE"}}
-                        """.formatted(citation))))));
+                        """.formatted(citation)))));
+        String completeInvalidCandidate = "not-json-" + "x".repeat(700) + "-tail-marker";
+        when(chatModel.call(any(Prompt.class)))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(completeInvalidCandidate)))))
+                .thenReturn(valid);
         SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.07);
-
-        model.compose(new ModelRequest(
+        ModelRequest request = new ModelRequest(
                 "Arbitrary question",
                 QuestionType.RULE_QUERY,
                 new AnswerContext(null, null, PlayerLocale.EN),
-                List.of(new EvidenceInput(citation, "RULE", "Rule", "Direct rule.", 2, 2))));
+                List.of(new EvidenceInput(citation, "RULE", "Rule", "Direct rule.", 2, 2)));
 
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).call(prompt.capture());
-        OpenAiChatOptions answerOptions = (OpenAiChatOptions) prompt.getValue().getOptions();
+        RuleAnswerModelInvalidOutputException invalid = catchThrowableOfType(
+                () -> model.compose(request), RuleAnswerModelInvalidOutputException.class);
+        assertThat(invalid).hasMessageContaining("invalid structured output contract");
+        RejectedOutput rejected = invalid.rejectedOutput().orElseThrow();
+        assertThat(rejected.candidateJson()).isEqualTo(completeInvalidCandidate);
+        assertThat(rejected.validationError()).contains("Unrecognized token 'not'");
+        assertThat(rejected.schema()).isEqualTo(SpringAiRuleAnswerModel.modelDraftSchema(AnswerAid.NONE));
+        assertThat(rejected.allowedEvidenceIds()).containsExactly(citation);
+        verify(chatModel).call(any(Prompt.class));
+
+        ModelDraft replacement = model.replaceInvalidOutput(request, rejected);
+        assertThat(replacement.shortVerdict()).isEqualTo("Yes.");
+
+        ArgumentCaptor<Prompt> promptsSent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(promptsSent.capture());
+        Prompt repairedPrompt = promptsSent.getAllValues().getLast();
+        OpenAiChatOptions answerOptions = (OpenAiChatOptions) repairedPrompt.getOptions();
         assertThat(answerOptions.getTemperature()).isEqualTo(0.42);
         assertThat(answerOptions.getResponseFormat().getJsonSchema())
                 .contains("\"aid\"", "\"NONE\"")
                 .doesNotContain("\"calculations\"", "\"walkthroughSteps\"");
-        assertThat(prompt.getValue().getInstructions())
+        assertThat(repairedPrompt.getInstructions())
                 .extracting(message -> message.getText())
                 .anySatisfy(text -> assertThat(text)
-                        .contains("final provider response contract", "no legacy top-level aid arrays"));
+                        .contains("final provider response contract", "no legacy top-level aid arrays"))
+                .anySatisfy(text -> assertThat(text).contains(
+                        "Return one complete valid JSON object.",
+                        "rejected the prior complete structured response",
+                        "field patch",
+                        "-tail-marker",
+                        rejected.validationError(),
+                        rejected.schema(),
+                        citation.toString()));
+
+        clearInvocations(chatModel);
+        when(chatModel.call(any(Prompt.class))).thenThrow(new IllegalStateException("provider unavailable"));
+
+        assertThatThrownBy(() -> model.compose(request))
+                .isInstanceOf(RuleAnswerModelUnavailableException.class)
+                .hasMessage("answer model provider is unavailable")
+                .hasCauseInstanceOf(IllegalStateException.class);
+        verify(chatModel).call(any(Prompt.class));
+
+        clearInvocations(chatModel);
+        when(chatModel.call(any(Prompt.class)))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("still not json")))))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("also not json")))));
+
+        RuleAnswerModelInvalidOutputException stillInvalid = catchThrowableOfType(
+                () -> model.compose(request), RuleAnswerModelInvalidOutputException.class);
+        assertThat(stillInvalid).hasMessageContaining("invalid structured output contract");
+        verify(chatModel).call(any(Prompt.class));
+
+        clearInvocations(chatModel);
+        assertThatThrownBy(() -> model.replaceInvalidOutput(
+                        request, stillInvalid.rejectedOutput().orElseThrow()))
+                .isInstanceOf(RuleAnswerModelInvalidOutputException.class)
+                .hasMessageContaining("invalid structured output contract");
+        verify(chatModel).call(any(Prompt.class));
+
+        when(configuration.usesFake(Role.ANSWER)).thenReturn(true);
+        assertThatThrownBy(() -> model.compose(request))
+                .isInstanceOf(RuleAnswerModelUnavailableException.class)
+                .hasMessage("a real answer model is required for rule Q&A");
+
+        when(configuration.usesFake(Role.ANSWER))
+                .thenThrow(new IllegalStateException("personal model state unavailable"));
+        assertThatThrownBy(model::supportsQuestionInterpretation)
+                .isInstanceOf(RuleAnswerModelUnavailableException.class)
+                .hasMessage("answer model configuration is unavailable")
+                .hasCauseInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    void validationReplacementReturnsTheCompleteCandidateErrorSchemaAndAllowedIdsToTheSameAgent() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        UUID citation = UUID.randomUUID();
+        when(configuration.usesFake(Role.ANSWER)).thenReturn(false);
+        when(configuration.modelFor(Role.ANSWER)).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(prompts.answerSystem("NONE")).thenReturn("Answer only from evidence.");
+        when(prompts.answerUser()).thenReturn("{question}\n{evidence}\n{repair}");
+        String response = """
+                {"answerable":true,"insufficiencyReason":null,
+                 "shortVerdict":"Yes.","explanation":"Direct rule.",
+                 "citationIds":["%s"],"exceptions":[],"confidence":"HIGH",
+                 "answerBasis":"DIRECT_RULE","aid":{"type":"NONE"}}
+                """.formatted(citation);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                new ChatResponse(List.of(new Generation(new AssistantMessage(response)))),
+                new ChatResponse(List.of(new Generation(new AssistantMessage(response)))));
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts);
+        ModelRequest request = new ModelRequest(
+                "Arbitrary question",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new EvidenceInput(citation, "RULE", "Rule", "Direct rule.", 2, 2)));
+
+        ModelDraft draft = model.compose(request);
+        assertThat(model.replaceValidationRejectedOutput(
+                        request, draft, "citation validation rejected the candidate"))
+                .isNotNull();
+
+        ArgumentCaptor<Prompt> sent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(sent.capture());
+        String repairPrompt = sent.getAllValues().getLast().getInstructions().stream()
+                .map(message -> message.getText())
+                .collect(java.util.stream.Collectors.joining("\n"))
+                .replaceAll("\\s+", " ");
+        assertThat(repairPrompt)
+                .contains(
+                        "responding to the latest validation observation",
+                        "same composer",
+                        "do not assume this is the only correction or a fixed call-count workflow",
+                        "same complete rejected candidate is no progress",
+                        "never return a field patch",
+                        "\"shortVerdict\":\"Yes.\"",
+                        "Exact application validation error: citation validation rejected the candidate",
+                        "Allowed evidence IDs for every citation field: [" + citation + "]",
+                        "\"additionalProperties\":false")
+                .doesNotContain("operating in one bounded self-repair turn");
+    }
+
     @Test
     void rejectsInvalidConfiguredTemperatures() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);

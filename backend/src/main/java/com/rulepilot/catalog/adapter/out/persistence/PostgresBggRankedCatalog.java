@@ -103,9 +103,6 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     public List<RankedGame> findExactName(String name) {
         String checked = name == null ? "" : name.strip().replaceAll("\\s+", " ");
         if (checked.isBlank()) return List.of();
-        if (checked.length() > 120) {
-            throw new IllegalArgumentException("BGG exact name must contain at most 120 characters");
-        }
         LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
         findExactNames(List.of(checked)).forEach(match ->
                 matches.putIfAbsent(match.game().bggId(), match.game()));
@@ -119,14 +116,8 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 .filter(java.util.Objects::nonNull)
                 .map(name -> name.strip().replaceAll("\\s+", " "))
                 .filter(name -> !name.isBlank())
-                .peek(name -> {
-                    if (name.length() > 120) {
-                        throw new IllegalArgumentException("BGG exact name must contain at most 120 characters");
-                    }
-                })
                 .map(name -> name.toLowerCase(java.util.Locale.ROOT))
                 .distinct()
-                .limit(60)
                 .toList();
         if (checked.isEmpty()) return List.of();
         String sql = """
@@ -287,7 +278,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
         if (values == null) return;
         int index = 0;
         for (String value : values) {
-            if (value == null || value.isBlank() || value.length() > 120 || index == 5) {
+            if (value == null || value.isBlank()) {
                 throw new IllegalArgumentException("BGG metadata filters are invalid");
             }
             String parameter = parameterPrefix + index++;

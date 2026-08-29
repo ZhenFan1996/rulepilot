@@ -68,15 +68,49 @@ public class NativeAgentToolRegistry {
             return new ToolExecution(registered.spec(), ToolObservation.error("SCOPE_REJECTED"));
         }
         if (argumentsJson == null || argumentsJson.isBlank() || scope == null) {
-            return new ToolExecution(registered.spec(), ToolObservation.error("INVALID_ARGUMENT"));
+            return invalidArguments(registered, "argumentsJson must contain one JSON object");
         }
         try {
             return new ToolExecution(registered.spec(), registered.tool().execute(argumentsJson, scope));
         } catch (IllegalArgumentException exception) {
-            return new ToolExecution(registered.spec(), ToolObservation.error("INVALID_ARGUMENT"));
+            return invalidArguments(registered, validationError(exception));
         } catch (RuntimeException exception) {
             return new ToolExecution(registered.spec(), ToolObservation.error("TOOL_EXECUTION_FAILED"));
         }
+    }
+
+    private ToolExecution invalidArguments(RegisteredTool registered, String validationError) {
+        return new ToolExecution(
+                registered.spec(),
+                new ToolObservation(
+                        NativeAgentTool.ObservationStatus.ERROR,
+                        "INVALID_ARGUMENT",
+                        Map.of(
+                                "validationError", validationError,
+                                "inputSchema", registered.spec().inputSchema(),
+                                "schemaHash", registered.spec().schemaHash(),
+                                "allowedToolName", registered.spec().name()),
+                        0));
+    }
+
+    private String validationError(IllegalArgumentException exception) {
+        String summary = exception.getMessage() == null || exception.getMessage().isBlank()
+                ? "Arguments did not satisfy the advertised tool contract"
+                : exception.getMessage();
+        Throwable cause = exception;
+        while (cause != null) {
+            if (cause instanceof com.fasterxml.jackson.core.JsonProcessingException jsonFailure) {
+                String location = jsonFailure.getLocation() == null
+                        ? ""
+                        : " at line " + jsonFailure.getLocation().getLineNr()
+                                + ", column " + jsonFailure.getLocation().getColumnNr();
+                // Parser messages may echo an invalid token from the arguments. The tool-level reason and location
+                // are enough for the same Agent to repair its typed action without reflecting sensitive input.
+                return summary + location;
+            }
+            cause = cause.getCause();
+        }
+        return summary;
     }
 
     public ToolSpec specification(Role role, String name) {
@@ -88,8 +122,8 @@ public class NativeAgentToolRegistry {
 
     private void validate(NativeAgentTool tool, ObjectMapper objectMapper) {
         if (tool == null || !tool.readOnly() || !NAME.matcher(tool.name()).matches()
-                || tool.description() == null || tool.description().isBlank() || tool.description().length() > 500
-                || tool.schemaVersion() == null || tool.schemaVersion().isBlank() || tool.schemaVersion().length() > 40
+                || tool.description() == null || tool.description().isBlank()
+                || tool.schemaVersion() == null || tool.schemaVersion().isBlank()
                 || tool.allowedRoles() == null || tool.allowedRoles().isEmpty()) {
             throw new IllegalArgumentException("native tool definition is invalid");
         }

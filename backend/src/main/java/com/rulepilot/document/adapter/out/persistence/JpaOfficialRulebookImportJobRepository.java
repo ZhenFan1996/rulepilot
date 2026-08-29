@@ -208,57 +208,6 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean retryTeachingAutomatically(UUID jobId, UUID expectedPreparationRunId, Instant now) {
-        return entityManager
-                .createQuery(
-                        """
-                        update OfficialRulebookImportJobEntity job
-                        set job.teachingHandoffState = 'WAITING_FOR_DOCUMENT',
-                            job.teachingPreparationRunId = null,
-                            job.teachingErrorCode = null,
-                            job.teachingHandoffReconciledAt = null,
-                            job.teachingAutomaticRecoveryCount = job.teachingAutomaticRecoveryCount + 1,
-                            job.teachingHandoffUpdatedAt = :now,
-                            job.updatedAt = :now
-                        where job.id = :jobId
-                          and job.stage = 'COMPLETED'
-                          and job.documentVersionId is not null
-                          and job.teachingHandoffState = 'LAUNCHED'
-                          and job.teachingPreparationRunId = :expectedRunId
-                          and job.teachingAutomaticRecoveryCount = 0
-                        """)
-                .setParameter("now", now)
-                .setParameter("jobId", jobId)
-                .setParameter("expectedRunId", expectedPreparationRunId)
-                .executeUpdate() == 1;
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean failTeachingRecoveryExhausted(UUID jobId, UUID expectedPreparationRunId, Instant now) {
-        return entityManager
-                .createQuery(
-                        """
-                        update OfficialRulebookImportJobEntity job
-                        set job.teachingHandoffState = 'FAILED',
-                            job.teachingErrorCode = 'TEACHING_RECOVERY_EXHAUSTED',
-                            job.teachingHandoffReconciledAt = :now,
-                            job.teachingHandoffUpdatedAt = :now,
-                            job.updatedAt = :now
-                        where job.id = :jobId
-                          and job.teachingHandoffState = 'LAUNCHED'
-                          and job.teachingPreparationRunId = :expectedRunId
-                          and job.teachingHandoffReconciledAt is null
-                          and job.teachingAutomaticRecoveryCount = 1
-                        """)
-                .setParameter("now", now)
-                .setParameter("jobId", jobId)
-                .setParameter("expectedRunId", expectedPreparationRunId)
-                .executeUpdate() == 1;
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean failTeachingTerminal(
             UUID jobId, UUID expectedPreparationRunId, String errorCode, Instant now) {
         if (errorCode == null || errorCode.isBlank() || errorCode.length() > 64) {

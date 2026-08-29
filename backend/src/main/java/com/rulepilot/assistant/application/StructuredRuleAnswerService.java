@@ -13,10 +13,12 @@ import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceCoverage;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.RuleAnswerModelUnavailableException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerConfidence;
@@ -44,6 +46,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -61,7 +64,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     // Retrieval-first context recovery changes the semantic identity, so earlier answer-cache entries are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v116-retrieval-first-recovery";
+    private static final String ANSWER_POLICY_VERSION = "answer-v117-partial-source-coverage";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerQuestionInterpretationPolicy questionInterpretation;
@@ -510,8 +513,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
         if (retrievalResult.state() == AnswerEvidenceRetriever.State.READY
                 && retrievalResult.evidence().isEmpty()
-                && modelGateway.supportsQuestionInterpretation(username)
-                && questionInterpretation.canRecoverEmptyEvidence(suppliedContext)) {
+                && questionInterpretation.canRecoverEmptyEvidence(suppliedContext)
+                && canUseQuestionInterpretation(username)) {
             try {
                 Optional<AnswerQuestionInterpretationPolicy.Interpretation> recovery = modelGateway
                         .interpretQuestion(
@@ -582,7 +585,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         List<HybridEvidenceHit> evidence = admission.evidence();
         ModelRequest modelRequest;
         try {
-            modelRequest = modelRequestFactory.create(interpretedQuestion, context, evidence, questionPlan);
+            modelRequest = modelRequestFactory.create(
+                    interpretedQuestion,
+                    context,
+                    evidence,
+                    questionPlan,
+                    admission.evidenceCoverage());
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
@@ -602,81 +610,61 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     draftResult.failureMessage());
         }
         ModelDraft draft = draftResult.draft();
-        boolean modelRepairUsed = draftResult.modelRepairs() > 0;
-        StructuredDetails details;
-        try {
-            details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedDetails) {
-            if (modelRepairUsed) {
-                return invalidCalculation(context.documentVersionId());
-            }
-            draftResult = repairSelectedStructuredDetails(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            modelRepairUsed = true;
-            draft = draftResult.draft();
-            try {
-                details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedDetailsFailure) {
-                return invalidCalculation(context.documentVersionId());
-            }
-        }
         StructuredRuleAnswer answer;
-        try {
-            answer = publishValidated(
-                    assistantRunId, context.documentVersionId(), modelRequest, draft, evidence, details);
-        } catch (RuntimeException rejectedPublication) {
-            if (modelRepairUsed) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "回答在一次有针对性的修订后仍未通过结构或引用校验。");
-            }
-            draftResult = draftComposer.repairAfterPublicationFailure(
-                    assistantRunId,
-                    username,
-                    gameSessionId,
-                    modelRequest,
-                    draft,
-                    rejectedPublication);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            modelRepairUsed = true;
-            draft = draftResult.draft();
+        Set<ValidationRejection> seenRejections = new HashSet<>();
+        while (true) {
             try {
-                details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
+                StructuredDetails details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
                 answer = publishValidated(
                         assistantRunId, context.documentVersionId(), modelRequest, draft, evidence, details);
-            } catch (RuntimeException repeatedPublicationFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "回答生成结果未通过结构或引用校验。");
+                break;
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException rejectedCandidate) {
+                String validationError = AnswerDraftComposer.diagnostic(rejectedCandidate);
+                if (!seenRejections.add(new ValidationRejection(draft, validationError))) {
+                    return safe(
+                            context.documentVersionId(),
+                            AnswerStatus.INVALID_MODEL_OUTPUT,
+                            "答疑模型重复返回同一份未通过校验的完整回答，且没有提供新的可修正信息。");
+                }
+                draftResult = draftComposer.continueAfterValidationRejection(
+                        assistantRunId,
+                        username,
+                        gameSessionId,
+                        modelRequest,
+                        draft,
+                        rejectedCandidate);
+                if (!draftResult.ready()) {
+                    if (draftResult.failureStatus() == AnswerStatus.INSUFFICIENT_EVIDENCE) {
+                        return AnswerOutcomePolicy.insufficientWithSources(
+                                context.documentVersionId(), draftResult.failureMessage(), evidence);
+                    }
+                    return safe(
+                            context.documentVersionId(),
+                            draftResult.failureStatus(),
+                            draftResult.failureMessage());
+                }
+                draft = draftResult.draft();
             }
         }
         List<AnswerWarning> publicationWarnings = new java.util.ArrayList<>(draftResult.warnings());
+        if (admission.evidenceCoverage() == EvidenceCoverage.PARTIAL) {
+            publicationWarnings.add(new AnswerWarning(Type.SOURCE_COVERAGE_PARTIAL));
+        }
         if (answer.confidence() == AnswerConfidence.LOW) {
             publicationWarnings.add(new AnswerWarning(Type.LOW_CONFIDENCE));
         }
         answer = AnswerOutcomePolicy.withWarnings(answer, publicationWarnings);
-        try {
-            progress.reached(AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING);
-            answer = postPublicationReviewer.review(
-                    assistantRunId,
-                    interpretedQuestion,
-                    context,
-                    username,
-                    modelRequest,
-                    answer,
-                    evidence);
-        } catch (RuleAnswerModelTimeoutException exception) {
-            return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "局部重讲超时，可以稍后重试或直接查看规则引用。");
-        } catch (AgentExecutionStoppedException exception) {
-            throw exception;
-        }
+        progress.reached(AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING);
+        answer = postPublicationReviewer.review(
+                assistantRunId,
+                interpretedQuestion,
+                context,
+                username,
+                modelRequest,
+                answer,
+                evidence);
         if (!withinAllowedEvidencePages(answer, context.allowedEvidencePages())) {
             return safe(
                     context.documentVersionId(),
@@ -685,7 +673,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                             ? "The published lesson does not expose the rulebook pages needed for this answer."
                             : "当前公开讲解未开放回答所需的规则书页，无法安全发布这条答疑。");
         }
-        if (cacheKey.isPresent()) {
+        if (cacheKey.isPresent() && admission.evidenceCoverage() == EvidenceCoverage.COMPLETE) {
             saveCached(cacheKey.get(), answer);
         }
         return answer;
@@ -696,6 +684,17 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return answer.citations().stream().allMatch(citation -> java.util.stream.IntStream
                 .rangeClosed(citation.pageFrom(), citation.pageTo())
                 .allMatch(allowedPages::contains));
+    }
+
+    private boolean canUseQuestionInterpretation(String username) {
+        try {
+            return modelGateway.supportsQuestionInterpretation(username);
+        } catch (RuleAnswerModelUnavailableException unavailable) {
+            rejectedQuestionInterpretations.increment();
+            LOGGER.warn(
+                    "Empty-evidence question recovery is unavailable; preserving the current-question result");
+            return false;
+        }
     }
 
     /** Resolves the complete structured envelope once; unselected aids were already removed from the draft. */
@@ -716,6 +715,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     resolveScope(assistantRunId, modelRequest, draft),
                     resolveConceptComparisons(assistantRunId, modelRequest, draft),
                     resolveRuleOptions(assistantRunId, modelRequest, draft));
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
         } catch (RuntimeException rejectedAid) {
             if (modelRequest.answerAid() == AnswerAid.CALCULATION) throw rejectedAid;
             LOGGER.warn(
@@ -723,21 +724,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     modelRequest.answerAid());
             return StructuredDetails.empty();
         }
-    }
-
-    private AnswerDraftComposer.Result repairSelectedStructuredDetails(
-            UUID assistantRunId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft rejectedDraft) {
-        if (modelRequest.answerAid() != AnswerAid.CALCULATION) {
-            return AnswerDraftComposer.Result.failure(
-                    AnswerStatus.INVALID_MODEL_OUTPUT,
-                    "回答附加结构与已确认的问题计划不一致。");
-        }
-        return draftComposer.repairAfterCalculationFailure(
-                assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
     }
 
     private StructuredRuleAnswer publishValidated(
@@ -768,9 +754,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 details.ruleOptions());
     }
 
-    private StructuredRuleAnswer invalidCalculation(UUID documentVersionId) {
-        return safe(documentVersionId, AnswerStatus.INVALID_MODEL_OUTPUT, "规则计算在一次修订后仍未通过输入或引用校验。");
-    }
+    private record ValidationRejection(ModelDraft draft, String validationError) {}
 
     private record StructuredDetails(
             List<RuleCalculation> calculations,

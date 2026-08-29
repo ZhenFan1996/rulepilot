@@ -17,7 +17,9 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import java.net.SocketTimeoutException;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -67,46 +69,136 @@ class SpringAiTeachingOutlineModelRetryTest {
             """;
 
     @Test
-    void retriesOneTransientProviderTimeoutAndReturnsTheValidatedOutline() {
+    void reportsOneTransportTimeoutFromTheOwningInvocationThreadWithoutHiddenReplay() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class)))
-                .thenThrow(new RuntimeException("provider stalled", new SocketTimeoutException("read timed out")))
-                .thenReturn(response(VALID_OUTLINE));
+        AtomicReference<Thread> providerThread = new AtomicReference<>();
+        when(chatModel.call(any(Prompt.class))).thenAnswer(ignored -> {
+            providerThread.set(Thread.currentThread());
+            throw new RuntimeException("provider stalled", new SocketTimeoutException("read timed out"));
+        });
         SpringAiTeachingOutlineModel model = model(configuration);
+        Thread invocationOwner = Thread.currentThread();
 
         try {
-            var outline = model.organize(request());
-
-            assertThat(outline.gameTitle()).isEqualTo("示例游戏");
-            assertThat(outline.sourceCoverageSlots())
-                    .extracting(slot -> slot.sourceIdentifier())
-                    .containsExactly("SETUP", "TAKE TURN");
-            verify(chatModel, times(2)).call(any(Prompt.class));
+            assertThatThrownBy(() -> model.organize(request()))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasRootCauseMessage("read timed out");
+            assertThat(providerThread.get()).isSameAs(invocationOwner);
+            verify(chatModel, times(1)).call(any(Prompt.class));
         } finally {
             model.close();
         }
     }
 
     @Test
-    void stopsAfterTheSingleBoundedTransportRetry() {
+    void doesNotReplayProviderFailuresAsSchemaRepair() {
         RuntimeModelConfiguration configuration = configuration();
         ChatModel chatModel = chatModel(configuration);
         when(chatModel.call(any(Prompt.class)))
-                .thenThrow(new RuntimeException("first timeout", new SocketTimeoutException("read timed out")))
-                .thenThrow(new RuntimeException("second timeout", new SocketTimeoutException("read timed out")));
+                .thenThrow(new RuntimeException("provider timeout", new SocketTimeoutException("read timed out")));
         SpringAiTeachingOutlineModel model = model(configuration);
 
         try {
             assertThatThrownBy(() -> model.organize(request()))
                     .isInstanceOf(OutlineGenerationException.class)
                     .hasMessageContaining("no valid outline");
-            verify(chatModel, times(2)).call(any(Prompt.class));
+            verify(chatModel, times(1)).call(any(Prompt.class));
             verify(configuration).resolvedModelFor(Role.TEACHING, "player");
             verify(configuration, never()).modelFor(Role.TEACHING, "player");
             verify(configuration, never()).providerFor(Role.TEACHING, "player");
             verify(configuration, never()).modelNameFor(Role.TEACHING, "player");
             verify(configuration, never()).usesDeepSeekNonThinkingGeneration(Role.TEACHING, "player");
+        } finally {
+            model.close();
+        }
+
+        RuntimeModelConfiguration unavailableConfiguration = configuration();
+        ChatModel unavailableChatModel = chatModel(unavailableConfiguration);
+        IllegalStateException applicationFailure = new IllegalStateException("prompt configuration is invalid");
+        when(unavailableChatModel.call(any(Prompt.class))).thenThrow(applicationFailure);
+        SpringAiTeachingOutlineModel unavailableModel = model(unavailableConfiguration);
+
+        try {
+            assertThatThrownBy(() -> unavailableModel.organize(request()))
+                    .isSameAs(applicationFailure);
+            verify(unavailableChatModel, times(1)).call(any(Prompt.class));
+        } finally {
+            unavailableModel.close();
+        }
+    }
+
+    @Test
+    void continuesTheSameAgentPastTwoChangedRejectionsUntilTheCandidateIsValid() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                response("{}"),
+                response("{\"gameTitle\":\"first changed candidate\"}"),
+                response("{\"gameTitle\":\"second changed candidate\"}"),
+                response(VALID_OUTLINE));
+        SpringAiTeachingOutlineModel model = model(configuration);
+
+        try {
+            assertThat(model.organize(request()).gameTitle()).isEqualTo("示例游戏");
+
+            ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+            verify(chatModel, times(4)).call(prompts.capture());
+            String finalConversation = prompts.getAllValues().getLast().getInstructions().stream()
+                    .map(message -> message.getText())
+                    .reduce("", (left, right) -> left + "\n" + right);
+            assertThat(finalConversation)
+                    .contains("<untrusted_outline_rejection_observation>")
+                    .contains("\"candidateJson\":\"{}\"")
+                    .contains("first changed candidate", "second changed candidate")
+                    .contains("\"outputContract\"", "\"allowedIdentities\":[\"page-1\"]");
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void returnsTheExactTopicKeyContractAndRejectedIdentityToTheSameAgent() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        String invalidKey = VALID_OUTLINE.replace("start-playing", "start_playing");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(invalidKey), response(VALID_OUTLINE));
+        SpringAiTeachingOutlineModel model = model(configuration);
+
+        try {
+            assertThat(model.organize(request()).gameTitle()).isEqualTo("示例游戏");
+
+            ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+            verify(chatModel, times(2)).call(prompts.capture());
+            String correctionConversation = prompts.getAllValues().getLast().getInstructions().stream()
+                    .map(message -> message.getText())
+                    .reduce("", (left, right) -> left + "\n" + right);
+            assertThat(correctionConversation)
+                    .contains("topic key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$")
+                    .contains("rejected key=start_playing")
+                    .contains("\"candidateJson\"")
+                    .contains("\"outputContract\"");
+        } finally {
+            model.close();
+        }
+    }
+
+    @Test
+    void stopsAWholeOutlineWhenACompleteRejectionObservationRecursAfterAnInterveningChange() {
+        RuntimeModelConfiguration configuration = configuration();
+        ChatModel chatModel = chatModel(configuration);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                response("{}"),
+                response("{\"gameTitle\":\"changed candidate\"}"),
+                response("{}"));
+        SpringAiTeachingOutlineModel model = model(configuration);
+
+        try {
+            assertThatThrownBy(() -> model.organize(request()))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasRootCauseMessage(
+                            "OUTLINE_NO_PROGRESS: the whole outline Agent repeated a previously rejected complete candidate, validation error, output contract, and allowed identities");
+            verify(chatModel, times(3)).call(any(Prompt.class));
         } finally {
             model.close();
         }

@@ -585,6 +585,118 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   })
 
+  it('keeps a stale answer context blocked after edits and exposes a real page refresh', async () => {
+    const wrapper = mount(LessonAnswerPanel, {
+      attachTo: document.body,
+      props: {
+        ...baseProps,
+        question: '这个效果什么时候解析？',
+        answerError: '当前规则书版本已变化，请重新打开后再提问。',
+        answerOutcome: 'failed',
+        answerFailureRecovery: {
+          code: 'answer_context_invalid',
+          message: '当前规则书版本已变化，请重新打开后再提问。',
+          actionLabel: '重新打开规则书',
+          draft: '',
+          canRetryUnchanged: false,
+        },
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    const guidance = wrapper.get('[data-testid="answer-failure-retry-guidance"]')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('false')
+    expect(guidance.text()).toContain('重新打开规则书')
+    expect(guidance.text()).toContain('修改问题不能修复已经失效的答疑上下文')
+
+    const submit = wrapper.get('button[type="submit"]')
+    expect(submit.attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('ask')).toBeUndefined()
+
+    const restoreContext = wrapper.get('[data-testid="answer-failure-restore-context"]')
+    expect(restoreContext.attributes('href')).toBe(window.location.href)
+    expect(restoreContext.text()).toBe('重新打开规则书')
+    expect(wrapper.find('[data-testid="answer-failure-edit-question"]').exists()).toBe(false)
+
+    await wrapper.setProps({ question: '这个效果在行动结束时解析吗？' })
+    expect(submit.attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('ask')).toBeUndefined()
+
+    await wrapper.setProps({
+      answerFailureRecovery: {
+        code: 'answer_result_invalid',
+        message: '返回的答案没有通过完整性检查。',
+        actionLabel: '检查问题',
+        draft: '',
+        canRetryUnchanged: false,
+      },
+    })
+    expect(wrapper.find('[data-testid="answer-failure-restore-context"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="answer-failure-edit-question"]').exists()).toBe(true)
+    await wrapper.setProps({ question: '这个效果在最终计分时解析吗？' })
+    expect(submit.attributes('disabled')).toBeUndefined()
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('ask')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('offers a real unchanged retry after a temporary service failure has recovered', async () => {
+    setLocale('en')
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        question: 'When does this effect resolve?',
+        answerError: 'The rules answer service is temporarily unavailable.',
+        answerOutcome: 'failed',
+        answerFailureRecovery: {
+          code: 'answer_service_unavailable',
+          message: 'The rules answer service is temporarily unavailable.',
+          actionLabel: 'Retry after recovery',
+          draft: '',
+          canRetryUnchanged: true,
+        },
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    const guidance = wrapper.get('[data-testid="answer-failure-retry-guidance"]')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('true')
+    expect(guidance.text()).toContain('Retry after recovery')
+    expect(guidance.text()).toContain('After the service recovers')
+    expect(guidance.text()).toContain('unchanged')
+
+    await wrapper.get('[data-testid="answer-failure-retry-unchanged"]').trigger('click')
+    expect(wrapper.emitted('ask')).toHaveLength(1)
+  })
+
+  it('explains that a timed-out run stopped and should be narrowed if the same retry also times out', () => {
+    setLocale('en')
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answerError: 'This answer attempt timed out.',
+        answerOutcome: 'failed',
+        answerFailureRecovery: {
+          code: 'answer_timeout',
+          message: 'This answer attempt timed out.',
+          actionLabel: 'Retry this question',
+          draft: '',
+          canRetryUnchanged: true,
+        },
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    const guidance = wrapper.get('[data-testid="answer-failure-retry-guidance"]')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('true')
+    expect(guidance.text()).toContain('This run has stopped')
+    expect(guidance.text()).toContain('retry the same question unchanged')
+    expect(guidance.text()).toContain('narrow its scope')
+    expect(guidance.text()).not.toContain('service recovers')
+  })
+
   it('marks the soft budget without presenting the unfinished answer as a result', async () => {
     const prior = {
       ...answered,
@@ -717,6 +829,7 @@ describe('LessonAnswerPanel', () => {
         message: '请补充规则中的具体对象名称、发生时机或页码。',
         actionLabel: '回到问题补充信息',
         draft: '',
+        canRetryUnchanged: false,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {
@@ -744,7 +857,7 @@ describe('LessonAnswerPanel', () => {
     wrapper.unmount()
   })
 
-  it('uses the current-turn recovery language even when the surrounding UI is Chinese', async () => {
+  it('shows model failure reasons and whether the same question is safe to retry', async () => {
     setLocale('zh-CN')
     const failure = {
       ...answered,
@@ -756,9 +869,10 @@ describe('LessonAnswerPanel', () => {
       exceptions: [],
       confidence: 'LOW' as const,
       recovery: {
-        message: 'Your question is still here. Review or edit it, then try again.',
-        actionLabel: 'Review and try again',
+        message: 'The timeout does not mean the question was invalid.',
+        actionLabel: 'Reuse the same question',
         draft: 'When does the cobalt spindle resolve?',
+        canRetryUnchanged: true,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {
@@ -774,15 +888,60 @@ describe('LessonAnswerPanel', () => {
       global: { stubs: { VoiceQuestionCapture: true } },
     })
 
-    expect(wrapper.text()).toContain('Your question is still here')
-    expect(wrapper.text()).toContain('Review and try again')
+    expect(wrapper.text()).toContain('The timeout does not mean the question was invalid.')
+    expect(wrapper.text()).toContain('It is appropriate to retry the same question unchanged.')
+    expect(wrapper.text()).toContain('Reuse the same question')
     expect(wrapper.text()).not.toContain('这次没有在时限内')
     expect(wrapper.find('[data-confidence]').exists()).toBe(false)
+    expect(wrapper.get('[data-retry-unchanged]').attributes('data-retry-unchanged')).toBe('true')
 
-    await wrapper.findAll('button').find(button => button.text() === 'Review and try again')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Reuse the same question')!.trigger('click')
 
     expect(wrapper.emitted('update:question')).toEqual([['When does the cobalt spindle resolve?']])
     expect(wrapper.emitted('ask')).toBeUndefined()
+
+    const unavailable = {
+      ...failure,
+      status: 'MODEL_UNAVAILABLE' as const,
+      shortVerdict: 'No configured answer model or provider was available for this request.',
+      recovery: {
+        message: 'The question and rule sources were not rejected.',
+        actionLabel: 'Reuse the same question',
+        draft: 'When does the cobalt spindle resolve?',
+        canRetryUnchanged: true,
+      },
+    }
+    await wrapper.setProps({
+      answer: unavailable,
+      answerTurns: [{
+        question: 'When does the cobalt spindle resolve?', answer: unavailable, learningIntent: null,
+      }],
+    })
+
+    expect(wrapper.text()).toContain('No configured answer model or provider')
+    expect(wrapper.text()).toContain('It is appropriate to retry the same question unchanged.')
+
+    const invalid = {
+      ...failure,
+      status: 'INVALID_MODEL_OUTPUT' as const,
+      shortVerdict: 'The generated answer failed its structure or citation-identifier contract.',
+      recovery: {
+        message: 'Retrying unchanged immediately is unlikely to help.',
+        actionLabel: 'Review or rephrase',
+        draft: 'When does the cobalt spindle resolve?',
+        canRetryUnchanged: false,
+      },
+    }
+    await wrapper.setProps({
+      answer: invalid,
+      answerTurns: [{
+        question: 'When does the cobalt spindle resolve?', answer: invalid, learningIntent: null,
+      }],
+    })
+
+    expect(wrapper.text()).toContain('structure or citation-identifier contract')
+    expect(wrapper.text()).toContain('Do not retry unchanged immediately')
+    expect(wrapper.get('[data-retry-unchanged]').attributes('data-retry-unchanged')).toBe('false')
   })
 
   it('keeps a localized clarification actionable without publishing a conclusion', async () => {
@@ -799,6 +958,7 @@ describe('LessonAnswerPanel', () => {
         message: '你说的“这个”具体指什么？请写出规则书里的名称。',
         actionLabel: '补充这项信息',
         draft: '我指的是：',
+        canRetryUnchanged: false,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {
@@ -835,6 +995,7 @@ describe('LessonAnswerPanel', () => {
         message: '你说的“这个”具体指什么？',
         actionLabel: '补充这项信息',
         draft: '我指的是：',
+        canRetryUnchanged: false,
       },
     }
     const wrapper = mount(LessonAnswerPanel, {

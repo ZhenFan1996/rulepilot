@@ -3,7 +3,9 @@ type StreamEvent = { event: string; data: string }
 export interface AnswerStreamActivity {
   sequence: number
   actor: 'answer_agent' | 'rulebook_search' | 'rulebook_reader' | 'answer_reviewer' | 'answer_validator' | 'rulebook_tool'
-  stage: 'searching_evidence' | 'checking_exceptions' | 'expanding_context' | 'reading_pages' | 'composing_answer' | 'reviewing_support' | 'validating_citations' | 'checking_rule_details'
+  stage: 'searching_evidence' | 'checking_exceptions' | 'expanding_context' | 'reading_pages'
+    | 'composing_answer' | 'reviewing_support' | 'validating_citations' | 'correcting_answer'
+    | 'evidence_search_stalled' | 'checking_rule_details'
   message: string
   status: 'running' | 'succeeded' | 'failed' | 'rejected'
   nextAction: string
@@ -22,12 +24,32 @@ export class StructuredAnswerRequestError extends Error {
   }
 }
 
+export interface AnswerStreamFailureRecovery {
+  message: string
+  actionLabel: string
+  draft: string
+  canRetryUnchanged: boolean
+}
+
 export class StructuredAnswerStreamError extends Error {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly recovery: AnswerStreamFailureRecovery,
+  ) {
     super('structured answer stream did not complete')
     this.name = 'StructuredAnswerStreamError'
   }
 }
+
+const CONSERVATIVE_STREAM_FAILURE = {
+  code: 'answer_unavailable',
+  recovery: {
+    message: '',
+    actionLabel: '',
+    draft: '',
+    canRetryUnchanged: false,
+  },
+} as const
 
 export async function streamStructuredAnswer(
   url: string,
@@ -68,10 +90,8 @@ export async function streamStructuredAnswer(
       result = JSON.parse(event.data) as unknown
       completed = true
     } else if (event.event === 'error') {
-      const payload = JSON.parse(event.data) as { code?: unknown }
-      throw new StructuredAnswerStreamError(
-        typeof payload.code === 'string' ? payload.code : 'answer_unavailable',
-      )
+      const failure = parseStreamFailure(event.data)
+      throw new StructuredAnswerStreamError(failure.code, failure.recovery)
     }
   }
 
@@ -104,7 +124,18 @@ function parseActivity(value: unknown): AnswerStreamActivity | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const item = value as Record<string, unknown>
   const actors = new Set(['answer_agent', 'rulebook_search', 'rulebook_reader', 'answer_reviewer', 'answer_validator', 'rulebook_tool'])
-  const stages = new Set(['searching_evidence', 'checking_exceptions', 'expanding_context', 'reading_pages', 'composing_answer', 'reviewing_support', 'validating_citations', 'checking_rule_details'])
+  const stages = new Set([
+    'searching_evidence',
+    'checking_exceptions',
+    'expanding_context',
+    'reading_pages',
+    'composing_answer',
+    'reviewing_support',
+    'validating_citations',
+    'correcting_answer',
+    'evidence_search_stalled',
+    'checking_rule_details',
+  ])
   const statuses = new Set(['running', 'succeeded', 'failed', 'rejected'])
   if (!Number.isSafeInteger(item.sequence) || (item.sequence as number) <= 0
     || typeof item.actor !== 'string' || !actors.has(item.actor)
@@ -122,6 +153,48 @@ function parseAnswerPart(value: unknown): { field: 'verdict' | 'explanation'; te
   if ((part.field !== 'verdict' && part.field !== 'explanation')
     || typeof part.text !== 'string' || !part.text.trim()) return null
   return { field: part.field, text: part.text }
+}
+
+function parseStreamFailure(data: string): {
+  code: string
+  recovery: AnswerStreamFailureRecovery
+} {
+  let value: unknown
+  try {
+    value = JSON.parse(data) as unknown
+  } catch {
+    return conservativeStreamFailure()
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return conservativeStreamFailure()
+  const payload = value as Record<string, unknown>
+  const recovery = payload.recovery
+  if (typeof payload.code !== 'string' || !payload.code.trim()
+    || !recovery || typeof recovery !== 'object' || Array.isArray(recovery)) {
+    return conservativeStreamFailure()
+  }
+  const fields = recovery as Record<string, unknown>
+  if (typeof fields.message !== 'string' || !fields.message.trim()
+    || typeof fields.actionLabel !== 'string' || !fields.actionLabel.trim()
+    || typeof fields.draft !== 'string'
+    || typeof fields.canRetryUnchanged !== 'boolean') {
+    return conservativeStreamFailure()
+  }
+  return {
+    code: payload.code,
+    recovery: {
+      message: fields.message,
+      actionLabel: fields.actionLabel,
+      draft: fields.draft,
+      canRetryUnchanged: fields.canRetryUnchanged,
+    },
+  }
+}
+
+function conservativeStreamFailure() {
+  return {
+    code: CONSERVATIVE_STREAM_FAILURE.code,
+    recovery: { ...CONSERVATIVE_STREAM_FAILURE.recovery },
+  }
 }
 
 function parseEvent(raw: string): StreamEvent | null {

@@ -74,7 +74,6 @@ public class SpringAiNativeToolModel implements NativeToolModel {
                         "runId", request.scope().runId(),
                         "toolExecution", "application-controlled"))
                 .temperature(0.0)
-                .maxTokens(request.maxOutputTokens())
                 .build();
         Prompt prompt = new Prompt(request.conversation().stream().map(this::message).toList(), options);
         ChatResponse response = chatModel.call(prompt);

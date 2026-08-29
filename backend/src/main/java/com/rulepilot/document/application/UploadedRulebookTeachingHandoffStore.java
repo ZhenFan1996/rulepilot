@@ -37,10 +37,6 @@ public interface UploadedRulebookTeachingHandoffStore {
 
     List<RecoveryCandidate> findUnreconciledLaunched(int limit);
 
-    boolean retryAutomatically(UUID handoffId, UUID expectedPreparationRunId, Instant now);
-
-    boolean failRecoveryExhausted(UUID handoffId, UUID expectedPreparationRunId, Instant now);
-
     boolean failTerminal(UUID handoffId, UUID expectedPreparationRunId, String errorCode, Instant now);
 
     boolean markReconciled(UUID handoffId, UUID expectedPreparationRunId, Instant now);

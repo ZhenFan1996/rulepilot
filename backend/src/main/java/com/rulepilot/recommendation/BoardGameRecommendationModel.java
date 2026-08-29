@@ -20,8 +20,9 @@ public interface BoardGameRecommendationModel {
     }
 
     /**
-     * Delivers player-facing text as soon as the provider has completed a natural-text turn. Implementations must
-     * buffer text until they know that the same turn contains no action calls, and must never emit tool arguments.
+     * Delivers cumulative player-facing text as provider text chunks arrive. Implementations must never emit text,
+     * names, or arguments from an action-call chunk, and must revoke provisional text if the same turn later chooses
+     * an action.
      */
     default Turn stream(
             Request request,
@@ -101,13 +102,16 @@ public interface BoardGameRecommendationModel {
             List<ToolSpec> tools,
             int maxOutputTokens,
             ToolChoice toolChoice) {
+        public Request(List<Message> messages, List<ToolSpec> tools, ToolChoice toolChoice) {
+            this(messages, tools, Integer.MAX_VALUE, toolChoice);
+        }
+
         public Request {
             if (messages == null
                     || messages.isEmpty()
                     || tools == null
                     || tools.isEmpty()
-                    || maxOutputTokens < 128
-                    || maxOutputTokens > 2_048
+                    || maxOutputTokens < 1
                     || toolChoice != ToolChoice.AUTO) {
                 throw new IllegalArgumentException("recommendation model request is invalid");
             }
@@ -116,15 +120,27 @@ public interface BoardGameRecommendationModel {
         }
     }
 
-    record Turn(String text, List<ToolCall> toolCalls, CompletionStatus completionStatus) {
+    record Turn(
+            String text,
+            List<ToolCall> toolCalls,
+            CompletionStatus completionStatus,
+            int promptTokens,
+            int completionTokens) {
         public Turn(String text, List<ToolCall> toolCalls) {
-            this(text, toolCalls, CompletionStatus.COMPLETE);
+            this(text, toolCalls, CompletionStatus.COMPLETE, 0, 0);
+        }
+
+        public Turn(String text, List<ToolCall> toolCalls, CompletionStatus completionStatus) {
+            this(text, toolCalls, completionStatus, 0, 0);
         }
 
         public Turn {
             text = text == null ? "" : text;
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
             completionStatus = completionStatus == null ? CompletionStatus.UNKNOWN : completionStatus;
+            if (promptTokens < 0 || completionTokens < 0) {
+                throw new IllegalArgumentException("recommendation model token usage must be non-negative");
+            }
         }
     }
 

@@ -7,6 +7,7 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.CandidateRejection;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
@@ -16,16 +17,19 @@ import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Produces one source-cited lesson section from selected evidence.
+ * Owns the single section-Agent conversation and its deterministic publication boundary.
  *
- * <p>The caller owns section ordering, retrieval, and publication. This boundary owns only untrusted model output:
- * model calls, visual/text recovery, normalization, evidence validation, and the matching audit activities.</p>
+ * <p>A valid first candidate is published after one model call. A rejected candidate becomes one complete observation
+ * for the same Agent, which must return a complete replacement. The persisted run deadline, cancellation, and global
+ * resource budget stop useful progress; this class has no separate call-count or retry choreography.</p>
  */
 final class TeachingSectionDraftComposer {
 
@@ -35,8 +39,6 @@ final class TeachingSectionDraftComposer {
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionModelRequestFactory requestFactory;
     private final TeachingSectionCandidateValidator candidateValidator;
-    private final LessonDraftPresentationNormalizer presentationNormalizer = new LessonDraftPresentationNormalizer();
-    private final TeachingDraftRecoveryPolicy draftRecoveryPolicy = new TeachingDraftRecoveryPolicy();
 
     TeachingSectionDraftComposer(
             TeachingLessonModel model,
@@ -57,214 +59,156 @@ final class TeachingSectionDraftComposer {
             UUID assistantRunId,
             int sectionIndex,
             boolean includeVisualEvidence) {
-        return compose(
-                plan,
-                planned,
-                priorSections,
-                evidence,
-                assistantRunId,
-                sectionIndex,
-                includeVisualEvidence,
-                true,
-                TeachingModelCallBudget.section());
-    }
-
-    TeachingSectionDraftCandidate compose(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<PriorSectionContext> priorSections,
-            List<RuleEvidence> evidence,
-            UUID assistantRunId,
-            int sectionIndex,
-            boolean includeVisualEvidence,
-            boolean allowValidationRevision) {
-        return compose(
-                plan,
-                planned,
-                priorSections,
-                evidence,
-                assistantRunId,
-                sectionIndex,
-                includeVisualEvidence,
-                allowValidationRevision,
-                TeachingModelCallBudget.section());
-    }
-
-    TeachingSectionDraftCandidate compose(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<PriorSectionContext> priorSections,
-            List<RuleEvidence> evidence,
-            UUID assistantRunId,
-            int sectionIndex,
-            boolean includeVisualEvidence,
-            boolean allowValidationRevision,
-            TeachingModelCallBudget modelCallBudget) {
-        TeachingLessonModel.SectionRequest modelRequest = requestFactory.create(
+        TeachingLessonModel.SectionRequest request = requestFactory.create(
                 plan,
                 planned,
                 priorSections,
                 evidence,
                 includeVisualEvidence,
                 model.supportsVisualEvidence(plan.createdBy()));
-        if (!modelRequest.pageImages().isEmpty()) {
+        if (!request.pageImages().isEmpty()) {
             log.info(
                     "Teaching topic {} selected visual evidence pages {}",
                     planned.topicKey(),
-                    modelRequest.pageImages().stream()
+                    request.pageImages().stream()
                             .map(TeachingLessonModel.PageImageInput::pageNumber)
                             .toList());
         }
-        SectionDraft draft;
         try {
-            draft = composeModelDraft(assistantRunId, planned, modelRequest, modelCallBudget);
+            return composeUntilAccepted(
+                    plan, planned, evidence, request, assistantRunId, sectionIndex, "CITED_DRAFT_ACCEPTED");
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
-        } catch (RuntimeException visualCompositionFailure) {
-            if (canFallbackToCitedText(modelRequest, evidence)) {
-                log.warn(
-                        "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
-                        planned.topicKey(),
-                        visualCompositionFailure.getMessage());
-                recordVisualTextFallback(assistantRunId, planned);
-                return fallbackToTextDraft(
-                        plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, 0, modelCallBudget);
-            }
-            throw visualCompositionFailure;
+        } catch (RuntimeException visualFailure) {
+            if (!canFallbackToCitedText(request, evidence)) throw visualFailure;
+            log.warn(
+                    "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
+                    planned.topicKey(),
+                    visualFailure.getMessage());
+            recordVisualTextFallback(assistantRunId, planned);
+            return composeUntilAccepted(
+                    plan,
+                    planned,
+                    evidence,
+                    withoutPageImages(request),
+                    assistantRunId,
+                    sectionIndex,
+                    "TEXT_FALLBACK_ACCEPTED");
         }
-        draft = normalizeDraft(draft, modelRequest, evidence);
-        int maxRepairAttempts = allowValidationRevision
-                ? draftRecoveryPolicy.maxRepairAttempts()
-                : 0;
-        for (int repair = 0; ; repair++) {
+    }
+
+    private TeachingSectionDraftCandidate composeUntilAccepted(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            TeachingLessonModel.SectionRequest request,
+            UUID runId,
+            int sectionIndex,
+            String acceptedCategory) {
+        CandidateRejection latestRejection = null;
+        Set<CandidateRejection> seenRejections = new LinkedHashSet<>();
+        int observationIndex = 0;
+        while (true) {
+            SectionDraft candidate;
             try {
-                LessonSection accepted = validatedSection(
-                        plan, planned, evidence, modelRequest, draft, EvidenceStatus.CITED_DRAFT);
-                recordValidation(
-                        assistantRunId,
+                candidate = invokeAgentTurn(runId, planned, request, latestRejection, observationIndex);
+            } catch (InvalidOutputException invalidOutput) {
+                CandidateRejection rejection = model.rejectionObservation(
+                        request, invalidOutput.rejectedCandidate(), invalidOutput.validationError());
+                latestRejection = acceptProgressOrFail(
+                        runId,
                         planned,
-                        repair,
+                        observationIndex++,
+                        seenRejections,
+                        rejection,
+                        "MODEL_OUTPUT_CONTRACT_REJECTED");
+                continue;
+            }
+            try {
+                LessonSection accepted = candidateValidator.validate(
+                        plan, planned, evidence, request, candidate, EvidenceStatus.CITED_DRAFT);
+                recordValidation(
+                        runId,
+                        planned,
+                        observationIndex,
                         ActivityOutcome.SUCCEEDED,
-                        "CITED_DRAFT_ACCEPTED");
+                        acceptedCategory);
                 return new TeachingSectionDraftCandidate(
-                        sectionIndex, planned, evidence, modelRequest, draft, accepted);
-            } catch (IllegalArgumentException rejectedDraft) {
-                recordValidation(
-                        assistantRunId,
+                        sectionIndex, planned, evidence, request, candidate, accepted);
+            } catch (IllegalArgumentException validationFailure) {
+                String exactError = validationFailure.getMessage() == null
+                        ? validationFailure.getClass().getName()
+                        : validationFailure.getMessage();
+                CandidateRejection rejection =
+                        model.rejectionObservation(request, candidate, exactError);
+                latestRejection = acceptProgressOrFail(
+                        runId,
                         planned,
-                        repair,
-                        ActivityOutcome.REJECTED,
+                        observationIndex++,
+                        seenRejections,
+                        rejection,
                         "DRAFT_VALIDATION_REJECTED");
-                if (repair == maxRepairAttempts) {
-                    throw rejectedDraft;
-                }
-                String diagnostic = rejectedDraft.getMessage() == null
-                        ? "The previous draft failed lesson validation."
-                        : candidateValidator.repairDiagnostic(rejectedDraft, draft, evidence);
-                List<String> feedback = draftRecoveryPolicy.repairFeedback(diagnostic);
-                log.info(
-                        "Teaching topic {} structural repair {}/{}: {}",
-                        planned.topicKey(),
-                        repair + 1,
-                        maxRepairAttempts,
-                        feedback.getFirst());
-                SectionDraft draftToRevise = draft;
-                try {
-                    draft = reviseModelDraft(
-                            assistantRunId,
-                            planned,
-                            modelRequest,
-                            draftToRevise,
-                            feedback,
-                            "reviseTeachingSection",
-                            "repairTeachingSectionRevisionContract",
-                            "Teaching section revised from validation feedback",
-                            modelCallBudget);
-                } catch (AgentExecutionStoppedException stopped) {
-                    throw stopped;
-                } catch (RuntimeException visualRepairFailure) {
-                    if (canFallbackToCitedText(modelRequest, evidence)) {
-                        log.warn(
-                                "Visual teaching repair for topic {} is unavailable; continuing with cited text: {}",
-                                planned.topicKey(),
-                                visualRepairFailure.getMessage());
-                        recordVisualTextFallback(assistantRunId, planned);
-                        return fallbackToTextDraft(
-                                plan,
-                                planned,
-                                evidence,
-                                modelRequest,
-                                assistantRunId,
-                                sectionIndex,
-                                repair + 1,
-                                modelCallBudget);
-                    }
-                    throw visualRepairFailure;
-                }
-                // A repaired chapter is one complete Agent-authored replacement. Combining prose fields from two
-                // independent model responses can produce a chapter that neither response actually asserted.
-                draft = normalizeDraft(draft, modelRequest, evidence);
             }
         }
     }
 
-    private TeachingSectionDraftCandidate fallbackToTextDraft(
-            TeachingPlan plan,
+    private CandidateRejection acceptProgressOrFail(
+            UUID runId,
             TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence,
-            TeachingLessonModel.SectionRequest visualRequest,
-            UUID assistantRunId,
-            int sectionIndex,
-            int validationAttempt,
-            TeachingModelCallBudget modelCallBudget) {
-        TeachingLessonModel.SectionRequest textOnlyRequest = withoutPageImages(visualRequest);
-        SectionDraft textOnlyDraft = composeModelDraft(
-                assistantRunId,
-                planned,
-                textOnlyRequest,
-                "fallbackToTextTeachingSection",
-                "repairTextTeachingSectionContract",
-                "Visual teaching section recomposed as complete grounded text",
-                modelCallBudget);
-        textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
-        for (int repair = 0; ; repair++) {
-            try {
-                LessonSection accepted = validatedSection(
-                        plan, planned, evidence, textOnlyRequest, textOnlyDraft, EvidenceStatus.CITED_DRAFT);
-                recordValidation(
-                        assistantRunId,
-                        planned,
-                        validationAttempt + repair,
-                        ActivityOutcome.SUCCEEDED,
-                        "TEXT_FALLBACK_ACCEPTED");
-                return new TeachingSectionDraftCandidate(
-                        sectionIndex, planned, evidence, textOnlyRequest, textOnlyDraft, accepted);
-            } catch (IllegalArgumentException rejectedFallback) {
-                recordValidation(
-                        assistantRunId,
-                        planned,
-                        validationAttempt + repair,
-                        ActivityOutcome.REJECTED,
-                        "TEXT_FALLBACK_REJECTED");
-                if (repair == draftRecoveryPolicy.maxRepairAttempts()) {
-                    throw rejectedFallback;
-                }
-                String diagnostic = rejectedFallback.getMessage() == null
-                        ? "The previous text fallback failed lesson validation."
-                        : candidateValidator.repairDiagnostic(rejectedFallback, textOnlyDraft, evidence);
-                textOnlyDraft = reviseModelDraft(
-                        assistantRunId,
-                        planned,
-                        textOnlyRequest,
-                        textOnlyDraft,
-                        List.of(diagnostic),
-                        "reviseTextTeachingSection",
-                        "repairTextTeachingSectionRevisionContract",
-                        "Text fallback revised from validation feedback",
-                        modelCallBudget);
-                textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
-            }
+            int observationIndex,
+            Set<CandidateRejection> seenRejections,
+            CandidateRejection current,
+            String rejectedCategory) {
+        if (!seenRejections.add(current)) {
+            invocations.record(
+                    runId,
+                    ActivityType.VALIDATION,
+                    "settleTeachingSectionNoProgress|" + planned.position() + "|" + observationIndex,
+                    ActivityOutcome.REJECTED,
+                    "Teaching section stopped: a previously rejected complete candidate and observation repeated");
+            throw new IllegalArgumentException(
+                    "teaching section Agent made no progress: it repeated a previously rejected complete candidate, exact validation error, output contract, and allowed identities");
         }
+        recordValidation(
+                runId,
+                planned,
+                observationIndex,
+                ActivityOutcome.REJECTED,
+                rejectedCategory);
+        log.info(
+                "Teaching topic {} returned a rejected candidate; continuing the same Agent with the complete validation observation",
+                planned.topicKey());
+        return current;
+    }
+
+    private SectionDraft invokeAgentTurn(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request,
+            CandidateRejection rejection,
+            int observationIndex) {
+        boolean continuation = rejection != null;
+        InputTokenProfile profile = continuation
+                ? model.continuationInputProfile(request, rejection)
+                : model.compositionInputProfile(request);
+        String summary = continuation
+                ? "Teaching section replacement candidate received after validation feedback"
+                : "Teaching section candidate received";
+        ModelInvocation invocation = invocations.invoke(
+                runId,
+                ActivityType.MODEL,
+                operationName(
+                        continuation ? "continueTeachingSectionAfterRejection" : "composeTeachingSection",
+                        planned.position(),
+                        observationIndex),
+                profile.totalTokens(),
+                profiledSummary(summary, profile),
+                () -> continuation
+                        ? model.continueAfterRejectionInvocation(request, rejection)
+                        : model.composeInvocation(request),
+                result -> outputTokens(request, result),
+                result -> profiledSummary(summary, profile, result));
+        return invocation.draft();
     }
 
     private boolean canFallbackToCitedText(
@@ -290,159 +234,16 @@ final class TeachingSectionDraftComposer {
                 request.wholeGameContext());
     }
 
-    private SectionDraft composeModelDraft(
-            UUID runId,
-            TeachingPlan.PlannedSection planned,
-            TeachingLessonModel.SectionRequest request,
-            TeachingModelCallBudget modelCallBudget) {
-        return composeModelDraft(
-                runId,
-                planned,
-                request,
-                "composeTeachingSection",
-                "repairTeachingSectionContract",
-                "Teaching section model output received",
-                modelCallBudget);
-    }
-
-    private SectionDraft composeModelDraft(
-            UUID runId,
-            TeachingPlan.PlannedSection planned,
-            TeachingLessonModel.SectionRequest request,
-            String primaryOperation,
-            String repairOperation,
-            String successSummary,
-            TeachingModelCallBudget modelCallBudget) {
-        InputTokenProfile primaryProfile = model.compositionInputProfile(request);
-        try {
-            modelCallBudget.acquire();
-            return invocations.invoke(
-                    runId,
-                    ActivityType.MODEL,
-                    operationName(primaryOperation, planned.position()),
-                    primaryProfile.totalTokens(),
-                    profiledSummary(successSummary, primaryProfile),
-                    () -> model.composeInvocation(request),
-                    result -> outputTokens(request, result),
-                    result -> profiledSummary(successSummary, primaryProfile, result))
-                    .draft();
-        } catch (InvalidOutputException firstFailure) {
-            InputTokenProfile repairProfile = model.compositionRepairInputProfile(request);
-            try {
-                modelCallBudget.acquire();
-                return invocations.invoke(
-                        runId,
-                        ActivityType.MODEL,
-                        operationName(repairOperation, planned.position()),
-                        repairProfile.totalTokens(),
-                        profiledSummary("Teaching section structured output repaired", repairProfile),
-                        () -> model.repairCompositionContractInvocation(request),
-                        result -> outputTokens(request, result),
-                        result -> profiledSummary(
-                                "Teaching section structured output repaired", repairProfile, result))
-                        .draft();
-            } catch (RuntimeException repairFailure) {
-                repairFailure.addSuppressed(firstFailure);
-                throw repairFailure;
-            }
-        }
-    }
-
-    SectionDraft reviseModelDraft(
-            UUID runId,
-            TeachingPlan.PlannedSection planned,
-            TeachingLessonModel.SectionRequest request,
-            SectionDraft previousDraft,
-            List<String> feedback,
-            String primaryOperation,
-            String repairOperation,
-            String successSummary) {
-        return reviseModelDraft(
-                runId,
-                planned,
-                request,
-                previousDraft,
-                feedback,
-                primaryOperation,
-                repairOperation,
-                successSummary,
-                TeachingModelCallBudget.structuredOperation());
-    }
-
-    SectionDraft reviseModelDraft(
-            UUID runId,
-            TeachingPlan.PlannedSection planned,
-            TeachingLessonModel.SectionRequest request,
-            SectionDraft previousDraft,
-            List<String> feedback,
-            String primaryOperation,
-            String repairOperation,
-            String successSummary,
-            TeachingModelCallBudget modelCallBudget) {
-        InputTokenProfile primaryProfile = model.revisionInputProfile(request, previousDraft, feedback);
-        try {
-            modelCallBudget.acquire();
-            return invocations.invoke(
-                    runId,
-                    ActivityType.MODEL,
-                    operationName(primaryOperation, planned.position()),
-                    primaryProfile.totalTokens(),
-                    profiledSummary(successSummary, primaryProfile),
-                    () -> model.reviseInvocation(request, previousDraft, feedback),
-                    result -> outputTokens(request, result),
-                    result -> profiledSummary(successSummary, primaryProfile, result))
-                    .draft();
-        } catch (InvalidOutputException firstFailure) {
-            InputTokenProfile repairProfile = model.revisionRepairInputProfile(request, previousDraft, feedback);
-            try {
-                modelCallBudget.acquire();
-                return invocations.invoke(
-                        runId,
-                        ActivityType.MODEL,
-                        operationName(repairOperation, planned.position()),
-                        repairProfile.totalTokens(),
-                        profiledSummary("Teaching section revision structured output repaired", repairProfile),
-                        () -> model.repairRevisionContractInvocation(request, previousDraft, feedback),
-                        result -> outputTokens(request, result),
-                        result -> profiledSummary(
-                                "Teaching section revision structured output repaired", repairProfile, result))
-                        .draft();
-            } catch (RuntimeException repairFailure) {
-                repairFailure.addSuppressed(firstFailure);
-                throw repairFailure;
-            }
-        }
-    }
-
-    SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
-        return normalizeDraft(draft, request, List.of());
-    }
-
-    SectionDraft normalizeDraft(
-            SectionDraft draft, TeachingLessonModel.SectionRequest request, List<RuleEvidence> evidence) {
-        return presentationNormalizer.normalize(draft, request);
-    }
-
-    LessonSection validatedSection(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence,
-            TeachingLessonModel.SectionRequest modelRequest,
-            SectionDraft draft,
-            EvidenceStatus evidenceStatus) {
-        return candidateValidator.validate(plan, planned, evidence, modelRequest, draft, evidenceStatus);
-    }
-
-    void recordValidation(
+    private void recordValidation(
             UUID runId,
             TeachingPlan.PlannedSection section,
-            int revision,
+            int observationIndex,
             ActivityOutcome outcome,
             String category) {
         invocations.record(
                 runId,
                 ActivityType.VALIDATION,
-                "validateTeachingSection|" + section.position() + "|" + revision,
+                "validateTeachingSection|" + section.position() + "|" + observationIndex,
                 outcome,
                 "Teaching draft " + (outcome == ActivityOutcome.SUCCEEDED ? "accepted: " : "rejected: ") + category);
     }
@@ -484,7 +285,7 @@ final class TeachingSectionDraftComposer {
                 invocation.cacheReadInputTokens());
     }
 
-    private String operationName(String operation, int sectionPosition) {
-        return operation + "|" + sectionPosition;
+    private String operationName(String operation, int sectionPosition, int observationIndex) {
+        return operation + "|" + sectionPosition + "|" + observationIndex;
     }
 }

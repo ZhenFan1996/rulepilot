@@ -10,7 +10,7 @@ export interface PlayerRuleCitation {
 
 /** Player-visible answer content; operational identities live in AnswerRulingReference instead. */
 export interface PlayerFacingRuleAnswer {
-  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
+  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_UNAVAILABLE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
   shortVerdict: string
   explanation: string
   citations: PlayerRuleCitation[]
@@ -24,9 +24,10 @@ export interface PlayerFacingRuleAnswer {
     message: string
     actionLabel: string
     draft: string
+    canRetryUnchanged: boolean
   } | null
   warnings: Array<{
-    type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE'
+    type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'SOURCE_COVERAGE_PARTIAL' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE'
   }>
   calculations?: Array<{
     expression: string
@@ -194,6 +195,7 @@ export function parsePlayerFacingRuleAnswer(value: unknown): PlayerFacingRuleAns
           message: answer.recovery.message,
           actionLabel: answer.recovery.actionLabel,
           draft: answer.recovery.draft,
+          canRetryUnchanged: answer.recovery.canRetryUnchanged,
         }
       : answer.recovery,
     warnings: answer.warnings.map(warning => ({ type: warning.type })),
@@ -431,11 +433,13 @@ function isRecovery(value: unknown) {
     && hasText(value.message)
     && hasText(value.actionLabel)
     && isString(value.draft)
+    && typeof value.canRetryUnchanged === 'boolean'
 }
 
 function isWarning(value: unknown) {
   return isRecord(value) && (value.type === 'INDIRECT_CITATION'
     || value.type === 'LOW_CONFIDENCE'
+    || value.type === 'SOURCE_COVERAGE_PARTIAL'
     || value.type === 'REVIEW_UNRESOLVED'
     || value.type === 'REVIEW_UNAVAILABLE')
 }
@@ -443,7 +447,8 @@ function isWarning(value: unknown) {
 function isAnswerStatus(value: unknown) {
   return value === 'ANSWERED' || value === 'ANSWERED_WITH_WARNING'
     || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
-    || value === 'MODEL_TIMEOUT' || value === 'INVALID_MODEL_OUTPUT' || value === 'VERSION_CONFLICT'
+    || value === 'MODEL_UNAVAILABLE' || value === 'MODEL_TIMEOUT'
+    || value === 'INVALID_MODEL_OUTPUT' || value === 'VERSION_CONFLICT'
 }
 
 function isConfidence(value: unknown) {

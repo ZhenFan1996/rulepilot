@@ -8,47 +8,33 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Maintains bounded native call/result continuity without treating prior model prose as evidence. */
+/** Maintains complete native call/result continuity without treating prior model prose as evidence. */
 final class NativeAgentConversation {
-
-    private static final String TRUNCATION_NOTICE =
-            "Earlier completed tool exchanges were truncated by the application context budget.";
 
     private final ConversationMessage system;
     private final ConversationMessage player;
-    private final int maximumCharacters;
     private final List<Exchange> exchanges = new ArrayList<>();
     private Exchange current;
 
-    NativeAgentConversation(String systemPrompt, String playerRequest, int maximumCharacters) {
-        if (systemPrompt == null || systemPrompt.isBlank() || playerRequest == null || playerRequest.isBlank()
-                || maximumCharacters < 4_096) {
+    NativeAgentConversation(String systemPrompt, String playerRequest) {
+        if (systemPrompt == null || systemPrompt.isBlank() || playerRequest == null || playerRequest.isBlank()) {
             throw new IllegalArgumentException("native Agent conversation context is invalid");
         }
         this.system = ConversationMessage.system(systemPrompt.strip());
         this.player = ConversationMessage.user(playerRequest.strip());
-        this.maximumCharacters = maximumCharacters;
     }
 
     List<ConversationMessage> messages() {
         if (current != null && !current.complete()) {
             throw new IllegalStateException("native tool call/result continuity is incomplete");
         }
-        List<Exchange> retained = new ArrayList<>(exchanges);
-        boolean truncated = false;
-        while (retained.size() > 1 && cost(retained, truncated) > maximumCharacters) {
-            retained.removeFirst();
-            truncated = true;
-        }
-        if (cost(retained, truncated) > maximumCharacters) {
-            throw new ContextLimitException();
-        }
         List<ConversationMessage> messages = new ArrayList<>();
         messages.add(system);
         messages.add(player);
-        if (truncated) messages.add(ConversationMessage.user(TRUNCATION_NOTICE));
-        retained.forEach(exchange -> messages.addAll(exchange.messages));
-        return List.copyOf(messages);
+        exchanges.forEach(exchange -> messages.addAll(exchange.messages));
+        List<ConversationMessage> nextTurn = List.copyOf(messages);
+        exchanges.forEach(Exchange::consumeMedia);
+        return nextTurn;
     }
 
     void appendAssistant(String text, List<ModelToolCall> calls, List<ToolSpec> advertisedTools) {
@@ -92,25 +78,6 @@ final class NativeAgentConversation {
         exchanges.add(current);
     }
 
-    private int cost(List<Exchange> retained, boolean truncated) {
-        int total = messageCost(system) + messageCost(player) + (truncated ? TRUNCATION_NOTICE.length() : 0);
-        for (Exchange exchange : retained) {
-            for (ConversationMessage message : exchange.messages) total += messageCost(message);
-        }
-        return total;
-    }
-
-    private int messageCost(ConversationMessage message) {
-        int total = message.content().length();
-        for (ModelToolCall call : message.toolCalls()) {
-            total += call.id().length() + call.name().length() + call.argumentsJson().length();
-        }
-        for (var media : message.media()) total += media.label().length() + 256;
-        return total;
-    }
-
-    static final class ContextLimitException extends RuntimeException {}
-
     static final class StaleSchemaException extends RuntimeException {}
 
     private static final class Exchange {
@@ -136,6 +103,16 @@ final class NativeAgentConversation {
 
         private boolean complete() {
             return resolvedCalls == calls.size();
+        }
+
+        /** Media is a one-turn observation; its textual provenance remains in the durable conversation. */
+        private void consumeMedia() {
+            for (int index = 0; index < messages.size(); index++) {
+                ConversationMessage message = messages.get(index);
+                if (!message.media().isEmpty()) {
+                    messages.set(index, ConversationMessage.user(message.content()));
+                }
+            }
         }
     }
 }

@@ -4,6 +4,8 @@ import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContext;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContextPage;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidencePage;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
@@ -17,6 +19,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -25,10 +29,10 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class ValidatedAssistantReadTools implements AssistantReadTools {
 
-    private static final int MAX_QUERY_LENGTH = 500;
-    private static final int MAX_RESULT_LIMIT = 10;
-    private static final int MAX_SECTION_FILTERS = 6;
-    private static final Pattern SECTION_TYPE = Pattern.compile("[A-Z][A-Z0-9_]{1,49}");
+    private static final Logger LOGGER = LoggerFactory.getLogger(ValidatedAssistantReadTools.class);
+    // rule_chunk.section_type is VARCHAR(40). This validates the stored identity shape rather than
+    // inventing an application candidate-count limit.
+    private static final Pattern SECTION_TYPE = Pattern.compile("[A-Z][A-Z0-9_]{0,39}");
 
     private final HybridRuleSearch retrieval;
     private final RuleEvidenceLookup evidenceLookup;
@@ -55,6 +59,35 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
     @Override
     public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
         validate(request);
+        int corpusSize = evidenceLookup.canonicalChunkCount(request.documentVersionId());
+        if (corpusSize == 0) return List.of();
+        int effectiveLimit = corpusSize < 0 ? request.limit() : Math.min(request.limit(), corpusSize);
+        SearchRuleEvidence effective = new SearchRuleEvidence(
+                request.documentVersionId(), request.query(), effectiveLimit, request.sectionTypes(),
+                request.currentSectionType(), request.includeAdjacentContext(), request.includePageImages());
+        long expandedPageSize = (long) effectiveLimit * 3;
+        int pageSize = request.includeAdjacentContext() && expandedPageSize <= Integer.MAX_VALUE
+                ? (int) expandedPageSize
+                : effectiveLimit;
+        return searchRuleEvidencePage(effective, 0, pageSize).evidence();
+    }
+
+    @Override
+    public RuleEvidencePage searchRuleEvidencePage(SearchRuleEvidence request, int offset, int pageSize) {
+        return searchRuleEvidencePage(request, offset, pageSize, Set.of());
+    }
+
+    @Override
+    public RuleEvidencePage searchRuleEvidencePage(
+            SearchRuleEvidence request, int offset, int pageSize, Set<UUID> excludedEvidenceIds) {
+        validate(request);
+        if (offset < 0 || pageSize < 1 || offset >= request.limit()) {
+            throw new IllegalArgumentException("rule search page window is invalid");
+        }
+        int remainingRequested = request.limit() - offset;
+        int anchorLimit = request.includeAdjacentContext()
+                ? Math.min(remainingRequested, Math.max(1, pageSize / 3))
+                : Math.min(remainingRequested, pageSize);
         Set<String> sectionTypes = request.sectionTypes().stream()
                 .map(String::strip)
                 .map(value -> value.toUpperCase(Locale.ROOT))
@@ -62,19 +95,35 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         String currentSection = request.currentSectionType() == null
                 ? null
                 : request.currentSectionType().strip().toUpperCase(Locale.ROOT);
-        var hits = retrieval.search(
+        if (excludedEvidenceIds == null || excludedEvidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("excluded rule evidence identities are invalid");
+        }
+        int retrievalOffset = excludedEvidenceIds.isEmpty() ? offset : 0;
+        var retrievalPage = retrieval.searchPage(
                 request.documentVersionId(),
                 request.query().strip(),
-                new RetrievalOptions(request.limit(), sectionTypes, currentSection));
-        if (hits.size() > request.limit()) {
+                new RetrievalOptions(
+                        anchorLimit,
+                        sectionTypes,
+                        currentSection,
+                        null,
+                        retrievalOffset,
+                        Set.copyOf(excludedEvidenceIds)));
+        var hits = retrievalPage.hits();
+        if (hits.size() > anchorLimit) {
             throw new IllegalStateException("retrieval tool returned more evidence than requested");
         }
-        List<RuleEvidenceHit> evidence = hits.stream().map(hit -> hit.evidence()).toList();
+        List<RuleEvidenceHit> evidence = hits.stream().map(hit -> hit.evidence())
+                .filter(hit -> !excludedEvidenceIds.contains(hit.chunkId()))
+                .toList();
         if (request.includeAdjacentContext()) {
-            evidence = expandAdjacent(request, sectionTypes, evidence);
+            evidence = expandAdjacent(request, sectionTypes, evidence, pageSize);
         }
+        evidence = evidence.stream()
+                .filter(hit -> !excludedEvidenceIds.contains(hit.chunkId()))
+                .toList();
         Map<Integer, RulePageImage> visuals = pageVisuals(request, evidence);
-        return evidence.stream().map(source -> {
+        List<RuleEvidence> result = evidence.stream().map(source -> {
             if (!request.documentVersionId().equals(source.documentVersionId())) {
                 throw new IllegalStateException("retrieval tool returned evidence outside document scope");
             }
@@ -92,22 +141,33 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                             .toList(),
                     contentKind(source));
         }).toList();
+        boolean hasMore = retrievalPage.hasMore() && offset + hits.size() < request.limit();
+        AssistantReadTools.SourceAvailability sourceAvailability = switch (retrievalPage.sourceAvailability()) {
+            case COMPLETE -> AssistantReadTools.SourceAvailability.COMPLETE;
+            case PARTIAL -> AssistantReadTools.SourceAvailability.PARTIAL;
+        };
+        return new RuleEvidencePage(result, hasMore, hits.size(), sourceAvailability);
     }
 
     @Override
     public List<RuleEvidence> readRuleEvidencePages(
             UUID documentVersionId, Set<Integer> pageNumbers, boolean includePageImages) {
-        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 5
+        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty()
                 || pageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
-            throw new IllegalArgumentException("bounded rule evidence page read is invalid");
+            throw new IllegalArgumentException("rule evidence page read is invalid");
         }
-        List<RuleEvidenceHit> evidence = evidenceLookup.findByPageNumbers(documentVersionId, Set.copyOf(pageNumbers));
+        Set<Integer> requestedPages = pageNumbers.stream()
+                .sorted()
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        List<RuleEvidenceHit> evidence = new java.util.ArrayList<>();
+        List<Integer> orderedPages = List.copyOf(requestedPages);
+        for (int start = 0; start < orderedPages.size(); start += RuleEvidenceLookup.MAX_IDENTITIES_PER_QUERY) {
+            Set<Integer> batch = new LinkedHashSet<>(orderedPages.subList(
+                    start, Math.min(start + RuleEvidenceLookup.MAX_IDENTITIES_PER_QUERY, orderedPages.size())));
+            evidence.addAll(evidenceLookup.findByPageNumbers(documentVersionId, batch));
+        }
         Map<Integer, RulePageImage> visuals = includePageImages
-                ? pageImages.read(documentVersionId, new LinkedHashSet<>(pageNumbers)).stream()
-                        .collect(java.util.stream.Collectors.toUnmodifiableMap(
-                                DocumentPageImages.PageImage::pageNumber,
-                                image -> new RulePageImage(
-                                        image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height())))
+                ? exactPageVisuals(documentVersionId, requestedPages)
                 : Map.of();
         return evidence.stream()
                 .peek(source -> {
@@ -116,7 +176,7 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                     }
                     boolean intersectsRequestedPage = java.util.stream.IntStream
                             .rangeClosed(source.pageFrom(), source.pageTo())
-                            .anyMatch(pageNumbers::contains);
+                            .anyMatch(requestedPages::contains);
                     if (!intersectsRequestedPage) {
                         throw new IllegalStateException("page evidence escaped the requested page scope");
                     }
@@ -138,13 +198,92 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
     }
 
     @Override
-    public List<RuleEvidence> readRuleEvidenceIds(UUID documentVersionId, Set<UUID> evidenceIds) {
-        if (documentVersionId == null || evidenceIds == null || evidenceIds.isEmpty() || evidenceIds.size() > 24
-                || evidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
-            throw new IllegalArgumentException("bounded rule evidence id read is invalid");
+    public RuleEvidencePage readRuleEvidencePagesPage(
+            UUID documentVersionId,
+            Set<Integer> pageNumbers,
+            boolean includePageImages,
+            int offset,
+            int pageSize) {
+        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty()
+                || pageNumbers.size() > RuleEvidenceLookup.MAX_IDENTITIES_PER_QUERY
+                || pageNumbers.stream().anyMatch(page -> page == null || page < 1)
+                || offset < 0 || pageSize < 1) {
+            throw new IllegalArgumentException("rule evidence page window is invalid");
         }
-        return evidenceLookup.findByChunkIds(documentVersionId, Set.copyOf(evidenceIds)).stream()
-                .filter(source -> documentVersionId.equals(source.documentVersionId()))
+        Set<Integer> requestedPages = pageNumbers.stream().sorted()
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        List<RuleEvidenceHit> sources = evidenceLookup.findByPageNumbers(
+                documentVersionId, requestedPages, offset, pageSize);
+        Map<Integer, RulePageImage> visuals = includePageImages
+                ? exactPageVisuals(documentVersionId, requestedPages)
+                : Map.of();
+        List<RuleEvidence> result = sources.stream()
+                .peek(source -> validatePageEvidence(documentVersionId, requestedPages, source))
+                .map(source -> new RuleEvidence(
+                        source.chunkId(), source.documentVersionId(), source.sectionType(), source.heading(),
+                        source.excerpt(), source.pageFrom(), source.pageTo(),
+                        visuals.values().stream().filter(image -> image.pageNumber() >= source.pageFrom()
+                                && image.pageNumber() <= source.pageTo()).toList(),
+                        contentKind(source)))
+                .toList();
+        return new RuleEvidencePage(result, result.size() == pageSize, result.size());
+    }
+
+    private Map<Integer, RulePageImage> exactPageVisuals(
+            UUID documentVersionId, Set<Integer> requestedPages) {
+        List<Integer> ordered = List.copyOf(requestedPages);
+        Map<Integer, RulePageImage> visuals = new LinkedHashMap<>();
+        for (int start = 0; start < ordered.size(); start += DocumentPageImages.MAX_PAGES_PER_READ) {
+            Set<Integer> batch = new LinkedHashSet<>(ordered.subList(
+                    start,
+                    Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, ordered.size())));
+            List<DocumentPageImages.PageImage> batchImages;
+            try {
+                batchImages = pageImages.read(documentVersionId, batch);
+            } catch (RuntimeException unavailableBatch) {
+                LOGGER.warn(
+                        "Optional rule page image batch is unavailable; preserving text evidence: "
+                                + "documentVersionId={}, pages={}, failureType={}",
+                        documentVersionId,
+                        batch,
+                        unavailableBatch.getClass().getSimpleName());
+                continue;
+            }
+            for (DocumentPageImages.PageImage image : batchImages) {
+                if (!batch.contains(image.pageNumber())) {
+                    throw new IllegalStateException("page image escaped the requested page scope");
+                }
+                RulePageImage previous = visuals.putIfAbsent(
+                        image.pageNumber(),
+                        new RulePageImage(
+                                image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height()));
+                if (previous != null) throw new IllegalStateException("page image read returned a duplicate page");
+            }
+        }
+        return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(visuals));
+    }
+
+    @Override
+    public List<RuleEvidence> readRuleEvidenceIds(UUID documentVersionId, Set<UUID> evidenceIds) {
+        if (documentVersionId == null || evidenceIds == null || evidenceIds.isEmpty()
+                || evidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("rule evidence id read is invalid");
+        }
+        Set<UUID> requestedIds = Set.copyOf(evidenceIds);
+        List<RuleEvidenceHit> sources = new java.util.ArrayList<>();
+        List<UUID> ordered = requestedIds.stream().sorted().toList();
+        for (int start = 0; start < ordered.size(); start += RuleEvidenceLookup.MAX_IDENTITIES_PER_QUERY) {
+            Set<UUID> batch = new LinkedHashSet<>(ordered.subList(
+                    start, Math.min(start + RuleEvidenceLookup.MAX_IDENTITIES_PER_QUERY, ordered.size())));
+            sources.addAll(evidenceLookup.findByChunkIds(documentVersionId, batch));
+        }
+        return sources.stream()
+                .peek(source -> {
+                    if (!documentVersionId.equals(source.documentVersionId())
+                            || !requestedIds.contains(source.chunkId())) {
+                        throw new IllegalStateException("evidence id read escaped the requested scope");
+                    }
+                })
                 .map(source -> new RuleEvidence(
                         source.chunkId(),
                         source.documentVersionId(),
@@ -159,17 +298,38 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
     }
 
     @Override
+    public RuleEvidencePage readRuleEvidenceIdsPage(
+            UUID documentVersionId, Set<UUID> evidenceIds, int offset, int pageSize) {
+        if (documentVersionId == null || evidenceIds == null || evidenceIds.isEmpty()
+                || evidenceIds.size() > RuleEvidenceLookup.MAX_IDENTITIES_PER_QUERY
+                || evidenceIds.stream().anyMatch(java.util.Objects::isNull)
+                || offset < 0 || pageSize < 1) {
+            throw new IllegalArgumentException("rule evidence id window is invalid");
+        }
+        Set<UUID> requestedIds = Set.copyOf(evidenceIds);
+        List<RuleEvidence> result = evidenceLookup.findByChunkIds(
+                        documentVersionId, requestedIds, offset, pageSize).stream()
+                .peek(source -> validateIdEvidence(documentVersionId, requestedIds, source))
+                .map(this::ruleEvidence)
+                .toList();
+        return new RuleEvidencePage(result, result.size() == pageSize, result.size());
+    }
+
+    @Override
     public RuleEvidenceContext readRuleEvidenceContext(
             UUID documentVersionId, Set<UUID> anchorEvidenceIds, int radius) {
         if (documentVersionId == null || anchorEvidenceIds == null || anchorEvidenceIds.isEmpty()
-                || anchorEvidenceIds.size() > 3 || anchorEvidenceIds.stream().anyMatch(java.util.Objects::isNull)
-                || radius < 1 || radius > 2) {
-            throw new IllegalArgumentException("bounded rule evidence context read is invalid");
+                || anchorEvidenceIds.stream().anyMatch(java.util.Objects::isNull) || radius < 1) {
+            throw new IllegalArgumentException("rule evidence context read is invalid");
         }
         Set<UUID> anchors = Set.copyOf(anchorEvidenceIds);
         List<RuleEvidence> canonicalAnchors = evidenceLookup.findByChunkIds(documentVersionId, anchors).stream()
-                .peek(source -> validateContextEvidence(documentVersionId, source))
-                .filter(source -> anchors.contains(source.chunkId()))
+                .peek(source -> {
+                    validateContextEvidence(documentVersionId, source);
+                    if (!anchors.contains(source.chunkId())) {
+                        throw new IllegalStateException("context anchor escaped the requested scope");
+                    }
+                })
                 .map(this::ruleEvidence)
                 .toList();
         Set<UUID> resolvedAnchorIds = canonicalAnchors.stream()
@@ -178,14 +338,63 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         if (resolvedAnchorIds.isEmpty()) {
             return new RuleEvidenceContext(List.of(), List.of());
         }
+        int canonicalChunkCount = evidenceLookup.canonicalChunkCount(documentVersionId);
+        int effectiveRadius = canonicalChunkCount < 0
+                ? radius
+                : Math.min(radius, Math.max(1, canonicalChunkCount - 1));
         List<RuleEvidence> surrounding = evidenceLookup.findAdjacent(
-                        documentVersionId, resolvedAnchorIds, radius, Set.of()).stream()
+                        documentVersionId, resolvedAnchorIds, effectiveRadius, Set.of()).stream()
                 .peek(source -> validateContextEvidence(documentVersionId, source))
                 .filter(source -> !resolvedAnchorIds.contains(source.chunkId()))
-                .limit(8)
                 .map(this::ruleEvidence)
                 .toList();
         return new RuleEvidenceContext(canonicalAnchors, surrounding);
+    }
+
+    @Override
+    public RuleEvidenceContextPage readRuleEvidenceContextPage(
+            UUID documentVersionId,
+            Set<UUID> anchorEvidenceIds,
+            int radius,
+            int offset,
+            int pageSize) {
+        if (documentVersionId == null || anchorEvidenceIds == null || anchorEvidenceIds.isEmpty()
+                || anchorEvidenceIds.size() > RuleEvidenceLookup.MAX_IDENTITIES_PER_QUERY
+                || anchorEvidenceIds.stream().anyMatch(java.util.Objects::isNull)
+                || radius < 1 || offset < 0 || pageSize < 1) {
+            throw new IllegalArgumentException("rule evidence context window is invalid");
+        }
+        Set<UUID> requested = Set.copyOf(anchorEvidenceIds);
+        List<RuleEvidence> anchors = evidenceLookup.findByChunkIds(documentVersionId, requested).stream()
+                .peek(source -> {
+                    validateContextEvidence(documentVersionId, source);
+                    if (!requested.contains(source.chunkId())) {
+                        throw new IllegalStateException("context anchor escaped the requested scope");
+                    }
+                })
+                .map(this::ruleEvidence)
+                .toList();
+        Set<UUID> resolved = anchors.stream().map(RuleEvidence::chunkId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        List<RuleEvidence> returnedAnchors = List.of();
+        int remaining = pageSize;
+        int adjacentOffset = Math.max(0, offset - anchors.size());
+        if (offset < anchors.size()) {
+            returnedAnchors = anchors.subList(offset, Math.min(anchors.size(), offset + pageSize));
+            remaining -= returnedAnchors.size();
+        }
+        List<RuleEvidence> surrounding = remaining > 0 && !resolved.isEmpty()
+                ? evidenceLookup.findAdjacent(
+                                documentVersionId, resolved, radius, Set.of(), adjacentOffset, remaining).stream()
+                        .peek(source -> validateContextEvidence(documentVersionId, source))
+                        .filter(source -> !resolved.contains(source.chunkId()))
+                        .map(this::ruleEvidence)
+                        .toList()
+                : List.of();
+        int returned = returnedAnchors.size() + surrounding.size();
+        boolean moreAnchors = offset + returnedAnchors.size() < anchors.size();
+        boolean hasMore = moreAnchors || returned == pageSize;
+        return new RuleEvidenceContextPage(returnedAnchors, surrounding, hasMore);
     }
 
     private void validateContextEvidence(UUID documentVersionId, RuleEvidenceHit source) {
@@ -222,31 +431,33 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
             return Map.of();
         }
         Set<Integer> requestedPages = evidence.stream()
-                .map(RuleEvidenceHit::pageFrom)
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        requestedPages = requestedPages.stream().limit(2)
+                .flatMapToInt(source -> java.util.stream.IntStream.rangeClosed(
+                        source.pageFrom(), source.pageTo()))
+                .boxed()
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         if (requestedPages.isEmpty()) {
             return Map.of();
         }
-        return pageImages.read(request.documentVersionId(), requestedPages).stream()
-                .collect(java.util.stream.Collectors.toUnmodifiableMap(
-                        DocumentPageImages.PageImage::pageNumber,
-                        image -> new RulePageImage(
-                                image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height())));
+        return exactPageVisuals(request.documentVersionId(), requestedPages);
     }
 
     private List<RuleEvidenceHit> expandAdjacent(
-            SearchRuleEvidence request, Set<String> sectionTypes, List<RuleEvidenceHit> ranked) {
-        List<RuleEvidenceHit> anchors = ranked.stream().limit(Math.min(2, request.limit())).toList();
+            SearchRuleEvidence request,
+            Set<String> sectionTypes,
+            List<RuleEvidenceHit> ranked,
+            int pageSize) {
+        List<RuleEvidenceHit> anchors = ranked;
         if (anchors.isEmpty()) {
             return ranked;
         }
         Set<UUID> anchorIds = anchors.stream()
                 .map(RuleEvidenceHit::chunkId)
                 .collect(java.util.stream.Collectors.toSet());
-        List<RuleEvidenceHit> adjacent = evidenceLookup.findAdjacent(
-                request.documentVersionId(), anchorIds, 1, sectionTypes);
+        int remaining = Math.max(0, pageSize - anchors.size());
+        List<RuleEvidenceHit> adjacent = remaining == 0
+                ? List.of()
+                : evidenceLookup.findAdjacent(
+                        request.documentVersionId(), anchorIds, 1, sectionTypes, 0, remaining);
         Map<UUID, RuleEvidenceHit> merged = new LinkedHashMap<>();
         anchors.forEach(source -> {
             validateExpandedEvidence(request, sectionTypes, source);
@@ -257,7 +468,25 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
             merged.putIfAbsent(source.chunkId(), source);
         }
         ranked.forEach(source -> merged.putIfAbsent(source.chunkId(), source));
-        return merged.values().stream().limit(request.limit()).toList();
+        return List.copyOf(merged.values());
+    }
+
+    private void validatePageEvidence(
+            UUID documentVersionId, Set<Integer> requestedPages, RuleEvidenceHit source) {
+        if (!documentVersionId.equals(source.documentVersionId())) {
+            throw new IllegalStateException("page evidence escaped document scope");
+        }
+        boolean intersectsRequestedPage = java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                .anyMatch(requestedPages::contains);
+        if (!intersectsRequestedPage) {
+            throw new IllegalStateException("page evidence escaped the requested page scope");
+        }
+    }
+
+    private void validateIdEvidence(UUID documentVersionId, Set<UUID> requestedIds, RuleEvidenceHit source) {
+        if (!documentVersionId.equals(source.documentVersionId()) || !requestedIds.contains(source.chunkId())) {
+            throw new IllegalStateException("evidence id read escaped the requested scope");
+        }
     }
 
     private void validateExpandedEvidence(
@@ -273,17 +502,23 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         if (request == null || request.documentVersionId() == null) {
             throw new IllegalArgumentException("document version is required for rule search");
         }
-        if (request.query() == null || request.query().isBlank() || request.query().length() > MAX_QUERY_LENGTH
-                || request.query().chars().anyMatch(Character::isISOControl)) {
-            throw new IllegalArgumentException("rule search query is invalid");
+        if (request.query() == null || request.query().isBlank()) {
+            throw new IllegalArgumentException("rule search query must be non-blank");
         }
-        if (request.limit() < 1 || request.limit() > MAX_RESULT_LIMIT) {
-            throw new IllegalArgumentException("rule search result limit is invalid");
+        if (request.query().chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException("rule search query must not contain control characters");
         }
-        if (request.sectionTypes() == null || request.sectionTypes().size() > MAX_SECTION_FILTERS
-                || request.sectionTypes().stream().anyMatch(this::invalidSectionType)
-                || (request.currentSectionType() != null && invalidSectionType(request.currentSectionType()))) {
-            throw new IllegalArgumentException("rule search section filter is invalid");
+        if (request.limit() < 1) {
+            throw new IllegalArgumentException("rule search result limit must be positive");
+        }
+        if (request.sectionTypes() == null) {
+            throw new IllegalArgumentException("rule search sectionTypes must be present; use an empty set for no filter");
+        }
+        if (request.sectionTypes().stream().anyMatch(this::invalidSectionType)) {
+            throw new IllegalArgumentException("each rule search sectionTypes value must match a stored section identity");
+        }
+        if (request.currentSectionType() != null && invalidSectionType(request.currentSectionType())) {
+            throw new IllegalArgumentException("currentSectionType must match a stored section identity");
         }
     }
 

@@ -44,7 +44,7 @@ import org.springframework.scheduling.TaskScheduler;
 
 class TeachingPlanLauncherTest {
 
-    private static final WorkloadDemand PREPARATION_WORKLOAD = new WorkloadDemand(0, 128);
+    private static final WorkloadDemand PREPARATION_WORKLOAD = new WorkloadDemand(128);
     private final TeachingPlanService plans = mock(TeachingPlanService.class);
     private final IllustratedLessonLauncher lessons = mock(IllustratedLessonLauncher.class);
     private final AssistantRuns runs = mock(AssistantRuns.class);
@@ -744,7 +744,7 @@ class TeachingPlanLauncherTest {
 
     private RunDetails details(RunSnapshot run) {
         var budget = new AgentExecutionControl.BudgetSnapshot(
-                40, 72, 36, 160_000, 0, 0, 0, run.createdAt().plusSeconds(600), null);
+                160_000, 0, 0, 0, run.createdAt().plusSeconds(600), null);
         return new RunDetails(run, List.of(), budget, List.of());
     }
 }

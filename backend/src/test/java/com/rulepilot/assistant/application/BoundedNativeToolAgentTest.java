@@ -3,11 +3,9 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AgentExecutionControl;
-import com.rulepilot.assistant.AgentExecutionControl.BudgetSnapshot;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
@@ -15,17 +13,19 @@ import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool;
 import com.rulepilot.assistant.NativeAgentTool.Role;
-import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeAgentTool.ToolMedia;
+import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolAgent;
 import com.rulepilot.assistant.NativeToolAgent.RunRequest;
 import com.rulepilot.assistant.NativeToolAgent.RunStatus;
 import com.rulepilot.assistant.NativeToolAgent.TerminalContract;
 import com.rulepilot.assistant.NativeToolModel;
+import com.rulepilot.assistant.NativeToolModel.ConversationMessage;
+import com.rulepilot.assistant.NativeToolModel.MessageRole;
+import com.rulepilot.assistant.NativeToolModel.ModelRequest;
 import com.rulepilot.assistant.NativeToolModel.ModelToolCall;
 import com.rulepilot.assistant.NativeToolModel.ModelTurn;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -34,9 +34,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
@@ -45,617 +42,280 @@ import org.junit.jupiter.api.Test;
 class BoundedNativeToolAgentTest {
 
     @Test
-    void completesAfterOneRequiredReadToolObservation() {
+    void returnsEachObservationBeforeTheAgentChoosesItsNextAction() {
         QueueModel model = new QueueModel(
                 turn(call("call-1", "search_rule_evidence", "{\"query\":\"setup\"}")),
                 finalTurn("Cited player guidance"));
         RecordingInvocations audited = new RecordingInvocations();
-        BoundedNativeToolAgent agent = agent(model, List.of(successTool("search_rule_evidence")), audited);
+        BoundedNativeToolAgent agent = agent(model, List.of(tool("search_rule_evidence")), audited);
 
-        var result = agent.run(request(scope(), 4));
+        var result = agent.run(request(scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.text()).isEqualTo("Cited player guidance");
         assertThat(result.iterations()).isEqualTo(2);
         assertThat(result.toolCalls()).isEqualTo(1);
-        assertThat(result.observations()).singleElement().satisfies(observation -> {
-            assertThat(observation.toolName()).isEqualTo("search_rule_evidence");
-            assertThat(observation.schemaHash()).matches("[a-f0-9]{64}");
-            assertThat(observation.observation().evidenceCount()).isEqualTo(1);
-        });
+        assertThat(model.conversations.get(1)).extracting(ConversationMessage::role)
+                .containsExactly(MessageRole.SYSTEM, MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL);
+        assertThat(model.conversations.get(1).get(3).toolCallId()).isEqualTo("call-1");
         assertThat(audited.invokedTypes).containsExactly(ActivityType.MODEL, ActivityType.TOOL, ActivityType.MODEL);
         assertThat(audited.invokedOperations).anyMatch(operation ->
-                operation.matches("nativeTool\\|search_rule_evidence\\|[a-f0-9]{12}"));
-        assertThat(audited.recordedOperations).anyMatch(operation ->
-                operation.matches("nativeObs\\|search_rule_evidence\\|[a-f0-9]{12}\\|[a-f0-9]{8}"));
+                operation.matches("nativeTool\\|search_rule_evidence\\|[a-f0-9]{64}"));
     }
 
     @Test
-    void permitsARelevantSecondObservationBeforeCompletion() {
+    void continuesPastTheFormerFixedCallCeilingUntilTheAgentFinishes() {
         QueueModel model = new QueueModel(
-                turn(call("call-1", "search_rule_evidence", "{\"query\":\"end trigger\"}")),
-                turn(call("call-2", "read_rule_pages", "{\"pageNumbers\":[4]}")),
-                finalTurn("The player can now verify the exception."));
+                turn(call("call-1", "search_rule_evidence", "{\"query\":\"one\"}")),
+                turn(call("call-2", "search_rule_evidence", "{\"query\":\"two\"}")),
+                turn(call("call-3", "search_rule_evidence", "{\"query\":\"three\"}")),
+                turn(call("call-4", "search_rule_evidence", "{\"query\":\"four\"}")),
+                turn(call("call-5", "search_rule_evidence", "{\"query\":\"five\"}")),
+                turn(call("call-6", "search_rule_evidence", "{\"query\":\"six\"}")),
+                turn(call("call-7", "search_rule_evidence", "{\"query\":\"seven\"}")),
+                finalTurn("Evidence collection is complete."));
         BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
+                model, List.of(tool("search_rule_evidence")), new RecordingInvocations());
 
-        var result = agent.run(request(
-                scope(), 4, Set.of("search_rule_evidence", "read_rule_pages")));
+        var result = agent.run(request(scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.iterations()).isEqualTo(3);
-        assertThat(result.observations()).extracting(observation -> observation.toolName())
-                .containsExactly("search_rule_evidence", "read_rule_pages");
+        assertThat(result.toolCalls()).isEqualTo(7);
+        assertThat(result.iterations()).isEqualTo(8);
     }
 
     @Test
-    void advertisesOnlyTheRequestToolPortfolio() {
-        java.util.concurrent.atomic.AtomicReference<List<String>> advertised = new java.util.concurrent.atomic.AtomicReference<>();
-        NativeToolModel model = request -> {
-            advertised.set(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
-            return finalTurn("READY");
-        };
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Use the smallest useful tool portfolio.",
-                "Find one missing rule.",
-                "Insufficient verified evidence.",
-                3,
-                256,
-                Set.of("search_rule_evidence"),
-                Set.of(),
-                2,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(advertised.get()).containsExactly("search_rule_evidence");
-    }
-
-    @Test
-    void stopsTheLoopAtTheRequestToolCallCap() {
+    void rejectsParallelActionsAndReturnsTheCompleteProtocolErrorBeforeReplacement() {
         QueueModel model = new QueueModel(
-                turn(call("call-1", "search_rule_evidence", "{\"query\":\"ending\"}")),
-                turn(call("call-2", "read_rule_pages", "{\"pageNumbers\":[9]}")));
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Use bounded read tools.",
-                "Find one missing rule.",
-                "Insufficient verified evidence.",
-                4,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                1,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("TOOL_CALL_LIMIT");
-        assertThat(result.toolCalls()).isEqualTo(1);
-        assertThat(result.observations()).extracting(observation -> observation.toolName())
-                .containsExactly("search_rule_evidence");
-    }
-
-    @Test
-    void completesAtTheToolCapWhenEveryRequiredObservationWasCollected() {
-        QueueModel model = new QueueModel(
-                turn(call("call-1", "search_rule_evidence", "{\"query\":\"ending\"}")),
-                turn(call("call-2", "read_rule_pages", "{\"pageNumbers\":[9]}")));
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Use bounded read tools.",
-                "Find and confirm one missing rule.",
-                "Insufficient verified evidence.",
-                4,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                2,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.reason()).isEqualTo("REQUIRED_EVIDENCE_COLLECTED");
-        assertThat(result.iterations()).isEqualTo(2);
-        assertThat(result.toolCalls()).isEqualTo(2);
-        assertThat(result.observations()).extracting(observation -> observation.toolName())
-                .containsExactly("search_rule_evidence", "read_rule_pages");
-    }
-
-    @Test
-    void reservesTheLastToolCallForARequiredConfirmationInsteadOfAdvertisingMoreSearches() {
-        AtomicInteger turn = new AtomicInteger();
-        List<List<String>> advertised = new ArrayList<>();
-        NativeToolModel model = request -> {
-            advertised.add(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
-            return switch (turn.incrementAndGet()) {
-                case 1 -> new ModelTurn("", List.of(
-                        call("call-search-1", "search_rule_evidence", "{\"query\":\"victory\"}"),
-                        call("call-search-2", "search_rule_evidence", "{\"query\":\"winning\"}")), 10, 5);
-                default -> turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[2]}"));
-            };
-        };
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Search, then confirm the canonical page.",
-                "Find the complete source-backed answer.",
-                "Insufficient verified evidence.",
-                4,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("read_rule_pages"),
-                3,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.toolCalls()).isEqualTo(3);
-        assertThat(advertised).hasSize(2);
-        assertThat(advertised.get(0)).containsExactlyInAnyOrder("search_rule_evidence", "read_rule_pages");
-        assertThat(advertised.get(1)).containsExactly("read_rule_pages");
-    }
-
-    @Test
-    void preservesARequiredReadWhenOneParallelSearchTurnWouldOtherwiseConsumeTheBudget() {
-        AtomicInteger turn = new AtomicInteger();
-        NativeToolModel model = request -> switch (turn.incrementAndGet()) {
-            case 1 -> new ModelTurn("", List.of(
-                    call("call-search-1", "search_rule_evidence", "{\"query\":\"advice\"}"),
-                    call("call-search-2", "search_rule_evidence", "{\"query\":\"warning\"}")), 10, 5);
-            case 2 -> new ModelTurn("", List.of(
-                    call("call-search-3", "search_rule_evidence", "{\"query\":\"strategy\"}"),
-                    call("call-search-4", "search_rule_evidence", "{\"query\":\"tip\"}")), 10, 5);
-            case 3 -> turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[22]}"));
-            default -> finalTurn(terminal("EVIDENCE_READY"));
-        };
+                new ModelTurn("", List.of(
+                        call("call-1", "search_rule_evidence", "{\"query\":\"victory\"}"),
+                        call("call-2", "read_rule_pages", "{\"pageNumbers\":[2]}")), 10, 5),
+                turn(call("call-3", "read_rule_pages", "{\"pageNumbers\":[2]}")),
+                finalTurn("Verified."));
         RecordingInvocations audited = new RecordingInvocations();
         BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                audited);
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Search, read, then assess source-authored advice.",
-                "Find source-authored advice.",
-                "EVIDENCE_NOT_FOUND",
-                4,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("read_rule_pages"),
-                4,
-                TerminalContract.evidenceReview(),
-                Map.of("read_rule_pages", 1),
-                true);
+                model, List.of(tool("search_rule_evidence"), tool("read_rule_pages")), audited);
 
-        var result = agent.run(request);
+        var result = agent.run(request(
+                scope(), Set.of("search_rule_evidence", "read_rule_pages"), Set.of(), TerminalContract.none()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.toolCalls()).isEqualTo(1);
+        assertThat(model.conversations.get(1)).extracting(ConversationMessage::role)
+                .containsExactly(
+                        MessageRole.SYSTEM, MessageRole.USER, MessageRole.ASSISTANT,
+                        MessageRole.TOOL, MessageRole.TOOL, MessageRole.USER);
+        assertThat(model.conversations.get(1).stream()
+                        .map(ConversationMessage::content)
+                        .collect(java.util.stream.Collectors.joining("\n")))
+                .contains("ONE_ACTION_PER_TURN", "victory", "pageNumbers", "read_rule_pages");
+        assertThat(audited.recordedOperations).contains("nativeActionProtocol");
+    }
+
+    @Test
+    void rejectsCompletionUntilARequiredObservationExistsThenLetsTheAgentDecide() {
+        QueueModel model = new QueueModel(
+                finalTurn("I can answer from memory."),
+                turn(call("call-1", "read_rule_pages", "{\"pageNumbers\":[4]}")),
+                finalTurn("Verified from the page."));
+        BoundedNativeToolAgent agent = agent(
+                model, List.of(tool("read_rule_pages")), new RecordingInvocations());
+
+        var result = agent.run(request(
+                scope(), Set.of("read_rule_pages"), Set.of("read_rule_pages"), TerminalContract.none()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("Verified from the page.");
+        assertThat(model.conversations.get(1)).extracting(ConversationMessage::content)
+                .anySatisfy(content -> assertThat(content)
+                        .contains("I can answer from memory.", "read_rule_pages", "Validation error"));
+    }
+
+    @Test
+    void letsAPositivePartialRequiredReadProceedToTheTerminalContract() {
+        NativeAgentTool partial = new TestTool("read_rule_pages") {
+            @Override
+            public ToolObservation execute(String argumentsJson, ToolScope scope) {
+                return ToolObservation.partial(
+                        "PAGE_EVIDENCE_PAGE_FOUND", Map.of("hasMore", true, "nextCursor", "opaque"), 1);
+            }
+        };
+        QueueModel model = new QueueModel(
+                turn(call("call-read", partial.name(), "{}")),
+                finalTurn(terminal("EVIDENCE_READY")));
+        BoundedNativeToolAgent agent = agent(model, List.of(partial), new RecordingInvocations());
+
+        var result = agent.run(request(
+                scope(), Set.of(partial.name()), Set.of(partial.name()), TerminalContract.evidenceReview()));
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.terminalStatus()).isEqualTo(NativeToolAgent.TerminalStatus.EVIDENCE_READY);
-        assertThat(result.toolCalls()).isEqualTo(4);
-        assertThat(result.observations()).extracting(observation -> observation.toolName())
-                .containsExactly(
-                        "search_rule_evidence",
-                        "search_rule_evidence",
-                        "search_rule_evidence",
-                        "read_rule_pages");
-        assertThat(audited.recordedOperations).contains("nativeRequiredToolBudgetReservation");
+        assertThat(result.observations()).singleElement().satisfies(observation -> {
+            assertThat(observation.observation().status())
+                    .isEqualTo(NativeAgentTool.ObservationStatus.PARTIAL);
+            assertThat(observation.observation().evidenceCount()).isPositive();
+        });
     }
 
     @Test
-    void givesOneBoundedCorrectionWhenRequiredOnlyModeReceivesAnotherSearchRequest() {
-        AtomicInteger turn = new AtomicInteger();
-        NativeToolModel model = request -> switch (turn.incrementAndGet()) {
-            case 1 -> new ModelTurn("", List.of(
-                    call("call-search-1", "search_rule_evidence", "{\"query\":\"victory\"}"),
-                    call("call-search-2", "search_rule_evidence", "{\"query\":\"winning\"}")), 10, 5);
-            case 2 -> turn(call("call-search-rejected", "search_rule_evidence", "{\"query\":\"score\"}"));
-            default -> turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[2]}"));
-        };
-        RecordingInvocations audited = new RecordingInvocations();
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                audited);
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Search, then confirm the canonical page.",
-                "Find the complete source-backed answer.",
-                "Insufficient verified evidence.",
-                4,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("read_rule_pages"),
-                3,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.toolCalls()).isEqualTo(3);
-        assertThat(result.observations()).extracting(observation -> observation.toolName())
-                .containsExactly("search_rule_evidence", "search_rule_evidence", "read_rule_pages");
-        assertThat(audited.recordedOperations).contains("nativeRequiredToolContractRepair");
-    }
-
-    @Test
-    void partialObservationDoesNotSatisfyARequiredConfirmation() {
-        QueueModel model = new QueueModel(
-                turn(call("call-read", "read_rule_pages", "{}")),
-                finalTurn("EVIDENCE_READY"));
-        NativeAgentTool partial = new TestTool("read_rule_pages", false, false) {
+    void stopsWhenAnUnchangedCompletionAddsNoInformation() {
+        NativeAgentTool partial = new TestTool("read_rule_pages") {
             @Override
             public ToolObservation execute(String argumentsJson, ToolScope scope) {
                 return ToolObservation.partial("PAGE_NOT_FOUND", Map.of(), 0);
             }
         };
-        BoundedNativeToolAgent agent = agent(model, List.of(partial), new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Confirm one canonical page.",
-                "Read the exact source page.",
-                "Insufficient verified evidence.",
-                2,
-                256,
-                Set.of("read_rule_pages"),
-                Set.of("read_rule_pages"),
-                2,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("COMPLETION_REQUIREMENT_UNMET");
-    }
-
-    @Test
-    void canRequireAConfirmationReadAndThenASeparateBoundedAssessment() {
         QueueModel model = new QueueModel(
                 turn(call("call-read", "read_rule_pages", "{}")),
-                finalTurn(terminal("EVIDENCE_NOT_FOUND")));
-        BoundedNativeToolAgent agent = agent(
-                model, List.of(successTool("read_rule_pages")), new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Inspect evidence and return one terminal assessment.",
-                "Determine whether the required source kind exists.",
-                "EVIDENCE_NOT_FOUND",
-                2,
-                256,
-                Set.of("read_rule_pages"),
-                Set.of("read_rule_pages"),
-                1,
-                TerminalContract.evidenceReview(),
-                Map.of("read_rule_pages", 1),
-                true);
+                finalTurn("EVIDENCE_READY"),
+                finalTurn("EVIDENCE_READY"));
+        BoundedNativeToolAgent agent = agent(model, List.of(partial), new RecordingInvocations());
 
-        var result = agent.run(request);
+        var result = agent.run(request(
+                scope(), Set.of("read_rule_pages"), Set.of("read_rule_pages"), TerminalContract.none()));
 
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.terminalStatus()).isEqualTo(NativeToolAgent.TerminalStatus.EVIDENCE_NOT_FOUND);
-        assertThat(result.iterations()).isEqualTo(2);
+        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
+        assertThat(result.reason()).isEqualTo("COMPLETION_NO_PROGRESS");
         assertThat(result.toolCalls()).isEqualTo(1);
     }
 
     @Test
-    void allowsOneToolFreeAssessmentWhenTheRequiredReadOccursOnTheLastAcquisitionTurn() {
-        QueueModel model = new QueueModel(
-                turn(call("call-search-1", "search_rule_evidence", "{\"query\":\"advice\"}")),
-                turn(call("call-search-2", "search_rule_evidence", "{\"query\":\"caution\"}")),
-                turn(call("call-search-3", "search_rule_evidence", "{\"query\":\"tip\"}")),
-                turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[22]}")),
-                finalTurn(terminal("EVIDENCE_READY")));
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Read and then assess source-authored advice.",
-                "Find source-authored guidance.",
-                "EVIDENCE_NOT_FOUND",
-                4,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("read_rule_pages"),
-                4,
-                TerminalContract.evidenceReview(),
-                Map.of("read_rule_pages", 1),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.terminalStatus()).isEqualTo(NativeToolAgent.TerminalStatus.EVIDENCE_READY);
-        assertThat(result.iterations()).isEqualTo(5);
-        assertThat(result.toolCalls()).isEqualTo(4);
-    }
-
-    @Test
-    void canContinueSearchingAfterARequiredReadWhenCoverageNeedsExplicitCertification() {
-        QueueModel model = new QueueModel(
-                turn(call("call-search-1", "search_rule_evidence", "{\"query\":\"alternative victory\"}")),
-                turn(call("call-read-1", "read_rule_pages", "{\"pageNumbers\":[21]}")),
-                turn(call("call-search-2", "search_rule_evidence", "{\"query\":\"standard victory\"}")),
-                turn(call("call-read-2", "read_rule_pages", "{\"pageNumbers\":[2]}")),
-                finalTurn(terminal("EVIDENCE_READY")));
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Certify a complete source list.",
-                "Find every source-defined route.",
-                "EVIDENCE_NOT_FOUND",
-                5,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("read_rule_pages"),
-                4,
-                TerminalContract.evidenceReview(),
-                Map.of(),
-                false);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.terminalStatus()).isEqualTo(NativeToolAgent.TerminalStatus.EVIDENCE_READY);
-        assertThat(result.iterations()).isEqualTo(5);
-        assertThat(result.toolCalls()).isEqualTo(4);
-        assertThat(result.observations()).extracting(observation -> observation.toolName())
-                .containsExactly(
-                        "search_rule_evidence",
-                        "read_rule_pages",
-                        "search_rule_evidence",
-                        "read_rule_pages");
-    }
-
-    @Test
-    void rejectsPrematureCompletionUntilTheRequiredConfirmationToolIsObserved() {
-        QueueModel model = new QueueModel(
-                turn(call("call-1", "search_rule_evidence", "{\"query\":\"end condition\"}")),
-                finalTurn("EVIDENCE_READY"),
-                turn(call("call-2", "read_rule_pages", "{\"pageNumbers\":[4]}")),
-                finalTurn("EVIDENCE_READY"));
-        RecordingInvocations audited = new RecordingInvocations();
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                audited);
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Confirm evidence before completion.",
-                "Verify every part of a compound question.",
-                "Insufficient verified evidence.",
-                4,
-                512,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of("read_rule_pages"),
-                16,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.iterations()).isEqualTo(3);
-        assertThat(result.observations()).extracting(observation -> observation.toolName())
-                .containsExactly("search_rule_evidence", "read_rule_pages");
-        assertThat(audited.recordedOperations).contains("nativeCompletionRequirement");
-    }
-
-    @Test
-    void returnsDirectlyWhenThePlayerRequestNeedsNoTool() {
-        RecordingInvocations audited = new RecordingInvocations();
-        BoundedNativeToolAgent agent = agent(
-                new QueueModel(finalTurn("READY")),
-                List.of(successTool("search_rule_evidence")),
-                audited);
-
-        var result = agent.run(request(scope(), 3));
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.toolCalls()).isZero();
-        assertThat(result.observations()).isEmpty();
-        assertThat(audited.invokedTypes).containsExactly(ActivityType.MODEL);
-    }
-
-    @Test
-    void rejectsOneEmptyEarlyStopAndLetsTheAgentContinueWithinItsExistingBudget() {
-        QueueModel model = new QueueModel(
-                new ModelTurn("", List.of(), 10, 0),
-                finalTurn("EVIDENCE_READY"));
-        RecordingInvocations audited = new RecordingInvocations();
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence")),
-                audited);
-
-        var result = agent.run(request(scope(), 2));
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.text()).isEqualTo("EVIDENCE_READY");
-        assertThat(result.iterations()).isEqualTo(2);
-        assertThat(model.requests).isEqualTo(2);
-        assertThat(audited.recordedOperations).contains("nativeEmptyCompletion");
-    }
-
-    @Test
-    void rejectsProseAndAcceptsOnlyTheStrictJsonTerminalContract() {
-        QueueModel model = new QueueModel(
-                finalTurn("I think the evidence is ready."),
-                finalTurn(terminal("EVIDENCE_READY")));
-        RecordingInvocations audited = new RecordingInvocations();
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence")),
-                audited);
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Use the exact terminal protocol.",
-                "Verify the compound request.",
-                "Insufficient verified evidence.",
-                2,
-                256,
-                Set.of("search_rule_evidence"),
-                Set.of(),
-                2,
-                TerminalContract.exact(NativeToolAgent.TerminalStatus.EVIDENCE_READY),
-                Map.of(),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.text()).isEqualTo(terminal("EVIDENCE_READY"));
-        assertThat(result.terminalStatus()).isEqualTo(NativeToolAgent.TerminalStatus.EVIDENCE_READY);
-        assertThat(result.iterations()).isEqualTo(2);
-        assertThat(audited.recordedOperations).contains("nativeCompletionProtocol");
-    }
-
-    @Test
-    void performsAtMostOneTerminalSchemaRepair() {
+    void returnsEveryDistinctInvalidTerminalCandidateWithErrorSchemaAndAllowedIdentities() {
         QueueModel model = new QueueModel(
                 finalTurn("EVIDENCE_READY"),
-                finalTurn("{\"status\":\"EVIDENCE_READY\",\"explanation\":\"extra\"}"),
+                finalTurn("{\"status\":\"UNKNOWN\"}"),
+                finalTurn("{\"status\":\"EVIDENCE_READY\",\"extra\":true}"),
                 finalTurn(terminal("EVIDENCE_READY")));
         BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Use the structured terminal contract.",
-                "Verify the request.",
-                "Insufficient verified evidence.",
-                4,
-                256,
-                Set.of("search_rule_evidence"),
-                Set.of(),
-                2,
-                TerminalContract.evidenceReview(),
-                Map.of(),
-                true);
+                model, List.of(tool("search_rule_evidence")), new RecordingInvocations());
 
-        var result = agent.run(request);
+        var result = agent.run(request(
+                scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.evidenceReview()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.terminalStatus()).isEqualTo(NativeToolAgent.TerminalStatus.EVIDENCE_READY);
+        assertThat(result.iterations()).isEqualTo(4);
+        assertThat(model.conversations.get(1)).extracting(ConversationMessage::content)
+                .anySatisfy(content -> assertThat(content)
+                        .contains("EVIDENCE_READY", "JSON parsing failed", "Original JSON schema",
+                                "EVIDENCE_NOT_FOUND"));
+    }
+
+    @Test
+    void stopsWhenTheSameInvalidTerminalCandidateIsReturnedAgain() {
+        QueueModel model = new QueueModel(finalTurn("not-json"), finalTurn("not-json"));
+        BoundedNativeToolAgent agent = agent(
+                model, List.of(tool("search_rule_evidence")), new RecordingInvocations());
+
+        var result = agent.run(request(
+                scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.evidenceReview()));
 
         assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("COMPLETION_PROTOCOL_REJECTED");
+        assertThat(result.reason()).isEqualTo("COMPLETION_NO_PROGRESS");
         assertThat(model.requests).isEqualTo(2);
     }
 
     @Test
-    void feedsOneInvalidArgumentObservationBackWithoutPublishingItAsEvidence() {
-        NativeAgentTool invalid = failingTool("search_rule_evidence", true);
+    void returnsTypedToolErrorsAndLetsTheAgentReplaceTheWholeAction() {
+        NativeAgentTool correcting = new TestTool("search_rule_evidence") {
+            @Override
+            public ToolObservation execute(String argumentsJson, ToolScope scope) {
+                if (argumentsJson.contains("bad")) throw new IllegalArgumentException("invalid");
+                return super.execute(argumentsJson, scope);
+            }
+        };
         QueueModel model = new QueueModel(
-                turn(call("call-1", "search_rule_evidence", "{\"limit\":99}")),
-                finalTurn("I cannot verify that request."));
-        BoundedNativeToolAgent agent = agent(model, List.of(invalid), new RecordingInvocations());
+                turn(call("call-1", correcting.name(), "{\"query\":\"bad\"}")),
+                turn(call("call-2", correcting.name(), "{\"query\":\"corrected\"}")),
+                finalTurn("Verified."));
+        BoundedNativeToolAgent agent = agent(model, List.of(correcting), new RecordingInvocations());
 
-        var result = agent.run(request(scope(), 3));
+        var result = agent.run(request(scope(), Set.of(correcting.name()), Set.of(), TerminalContract.none()));
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.observations()).singleElement().satisfies(observation -> {
-            assertThat(observation.observation().status()).isEqualTo(NativeAgentTool.ObservationStatus.ERROR);
-            assertThat(observation.observation().code()).isEqualTo("INVALID_ARGUMENT");
-            assertThat(observation.observation().evidenceCount()).isZero();
-        });
+        assertThat(result.observations()).extracting(record -> record.observation().code())
+                .containsExactly("INVALID_ARGUMENT", "FOUND");
+        assertThat(model.conversations.get(1)).extracting(ConversationMessage::content)
+                .anySatisfy(content -> assertThat(content)
+                        .contains("INVALID_ARGUMENT", "validationError", "invalid", "inputSchema"));
     }
 
     @Test
-    void opensCircuitOnAnIdenticalRepeatedFailedCall() {
-        NativeAgentTool invalid = failingTool("search_rule_evidence", true);
-        ModelToolCall repeated = call("call-1", "search_rule_evidence", "{\"limit\":99}");
-        QueueModel model = new QueueModel(turn(repeated), turn(new ModelToolCall("call-2", repeated.name(), repeated.argumentsJson())));
+    void stopsOnlyAfterARepeatedActionProducesAnIdenticalObservation() {
+        NativeAgentTool invalid = new TestTool("search_rule_evidence") {
+            @Override
+            public ToolObservation execute(String argumentsJson, ToolScope scope) {
+                throw new IllegalArgumentException("invalid");
+            }
+        };
+        ModelToolCall repeated = call("call-1", invalid.name(), "{\"limit\":99}");
+        QueueModel model = new QueueModel(
+                turn(repeated),
+                turn(new ModelToolCall("call-2", repeated.name(), repeated.argumentsJson())));
         RecordingInvocations audited = new RecordingInvocations();
         BoundedNativeToolAgent agent = agent(model, List.of(invalid), audited);
 
-        var result = agent.run(request(scope(), 4));
+        var result = agent.run(request(scope(), Set.of(invalid.name()), Set.of(), TerminalContract.none()));
 
         assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("TOOL_CIRCUIT_OPEN");
-        assertThat(result.toolCalls()).isEqualTo(1);
-        assertThat(audited.recordedOperations).contains("nativeCircuit|search_rule_evidence");
+        assertThat(result.reason()).isEqualTo("OBSERVATION_NO_PROGRESS");
+        assertThat(result.toolCalls()).isEqualTo(2);
+        assertThat(audited.recordedOperations).contains("nativeObservationNoProgress|search_rule_evidence");
     }
 
     @Test
-    void terminatesBeforeCallingTheModelWhenDeadlineExpired() {
-        QueueModel model = new QueueModel(finalTurn("must not run"));
-        BoundedNativeToolAgent agent = agent(model, List.of(successTool("search_rule_evidence")), new RecordingInvocations());
-        ToolScope expired = new ToolScope("player", UUID.randomUUID(), UUID.randomUUID(), Instant.now().minusSeconds(1));
+    void diagnosticPersistenceFailureDoesNotDestroyAValidAgentResult() {
+        QueueModel model = new QueueModel(
+                turn(call("call-1", "search_rule_evidence", "{}")),
+                finalTurn("Verified."));
+        RecordingInvocations audited = new RecordingInvocations();
+        audited.failDiagnostics = true;
+        BoundedNativeToolAgent agent = agent(model, List.of(tool("search_rule_evidence")), audited);
 
-        var result = agent.run(request(expired, 3));
+        var result = agent.run(request(scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
 
-        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("TIMEOUT");
-        assertThat(model.requests).isZero();
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("Verified.");
     }
 
     @Test
-    void isolatesProviderFailureBehindDeterministicFallback() {
-        NativeToolModel failing = request -> { throw new IllegalStateException("provider unavailable"); };
-        BoundedNativeToolAgent agent = agent(failing, List.of(successTool("search_rule_evidence")), new RecordingInvocations());
+    void keepsDeadlineProviderFailureAndCapabilityFailureExplicit() {
+        QueueModel expiredModel = new QueueModel(finalTurn("must not run"));
+        BoundedNativeToolAgent expiredAgent = agent(
+                expiredModel, List.of(tool("search_rule_evidence")), new RecordingInvocations());
+        ToolScope expired = new ToolScope(
+                "player", UUID.randomUUID(), UUID.randomUUID(), Instant.now().minusSeconds(1));
+        var expiredResult = expiredAgent.run(request(
+                expired, Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
+        assertThat(expiredResult.reason()).isEqualTo("TIMEOUT");
+        assertThat(expiredModel.requests).isZero();
 
-        var result = agent.run(request(scope(), 3));
+        NativeToolModel failing = request -> { throw new IllegalStateException("provider unavailable SECRET"); };
+        RecordingInvocations failedAudit = new RecordingInvocations();
+        var failedResult = agent(
+                        failing, List.of(tool("search_rule_evidence")), failedAudit)
+                .run(request(scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
+        assertThat(failedResult.reason()).isEqualTo("EXECUTION_FAILED");
+        assertThat(failedAudit.recordedOperations).contains("nativeToolFallback|EXECUTION_FAILED");
+        assertThat(failedAudit.recordedOperations).noneMatch(operation -> operation.contains("SECRET"));
 
-        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("EXECUTION_FAILED");
-        assertThat(result.text()).isEqualTo("Insufficient verified evidence.");
+        QueueModel unsupported = new QueueModel(finalTurn("must not run")) {
+            @Override
+            public boolean supports(Role role, String ownerUsername) {
+                return false;
+            }
+        };
+        var unsupportedResult = agent(
+                        unsupported, List.of(tool("search_rule_evidence")), new RecordingInvocations())
+                .run(request(scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
+        assertThat(unsupportedResult.reason()).isEqualTo("MODEL_CAPABILITY_UNAVAILABLE");
+        assertThat(unsupported.requests).isZero();
     }
 
     @Test
     void forwardsVisualToolMediaOnlyOnTheFollowingModelTurn() {
         InspectingMediaModel model = new InspectingMediaModel();
-        NativeAgentTool visual = new TestTool("read_rule_page_image", false, false) {
+        NativeAgentTool visual = new TestTool("read_rule_page_image") {
             @Override
             public Set<Role> allowedRoles() {
                 return Set.of(Role.VISUAL);
@@ -672,217 +332,196 @@ class BoundedNativeToolAgentTest {
             }
         };
         BoundedNativeToolAgent agent = agent(model, List.of(visual), new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.VISUAL, scope(), "Inspect literal appearance only.", "Locate one cited object.",
+                "No verified crop.", Set.of(visual.name()), Set.of(), TerminalContract.none());
 
-        RunRequest visualRequest = new RunRequest(
-                Role.VISUAL,
-                scope(),
-                "Inspect literal appearance only.",
-                "Locate one cited object.",
-                "No verified crop.",
-                3,
-                256,
-                Set.of("read_rule_page_image"),
-                Set.of(),
-                12,
-                TerminalContract.none(),
-                Map.of(),
-                true);
-        var result = agent.run(visualRequest);
+        var result = agent.run(request);
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(model.sawVisualMedia).isTrue();
     }
 
     @Test
-    void hidesToolsAfterTheConfiguredSuccessfulObservationAndLetsTheAgentComposeItsFinalResponse() {
-        AtomicInteger turn = new AtomicInteger();
-        List<List<String>> advertised = new ArrayList<>();
-        NativeToolModel model = request -> {
-            advertised.add(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
-            return switch (turn.incrementAndGet()) {
-                case 1 -> turn(call("call-page", "search_rule_evidence", "{}"));
-                case 2 -> turn(call("call-exact", "read_rule_pages", "{}"));
-                default -> finalTurn("{\"regions\":[{\"label\":\"已核对区域\"}]}");
-            };
-        };
-        BoundedNativeToolAgent agent = agent(
-                model,
-                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
-                new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Use observed evidence before composing the final structure.",
-                "Inspect one bounded source and then finish.",
-                "No verified result.",
-                4,
-                256,
-                Set.of("search_rule_evidence", "read_rule_pages"),
-                Set.of(),
-                4,
-                TerminalContract.none(),
-                Map.of("read_rule_pages", 1),
-                true);
+    void reconcilesProviderReportedPromptUsageThatIncludesMedia() {
+        QueueModel model = new QueueModel(new ModelTurn("verified", List.of(), 800, 17));
+        RecordingInvocations audited = new RecordingInvocations();
+        BoundedNativeToolAgent agent = agent(model, List.of(tool("search_rule_evidence")), audited);
 
-        var result = agent.run(request);
+        var result = agent.run(request(scope(), Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.text()).contains("已核对区域");
-        assertThat(result.toolCalls()).isEqualTo(2);
-        assertThat(advertised).hasSize(3);
-        assertThat(advertised.get(2)).isEmpty();
+        assertThat(audited.invokedInputTokens.getFirst() + audited.invokedOutputTokens.getFirst())
+                .isEqualTo(817);
     }
 
     @Test
-    void keepsToolsAvailableWhenTheConfiguredObservationIsOnlyPartial() {
-        List<List<String>> advertised = new ArrayList<>();
-        AtomicInteger turn = new AtomicInteger();
-        NativeToolModel model = request -> {
-            advertised.add(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
-            return turn.incrementAndGet() == 1
-                    ? turn(call("call-partial", "read_rule_pages", "{}"))
-                    : finalTurn("No complete source was found.");
-        };
-        NativeAgentTool partial = new TestTool("read_rule_pages", false, false) {
+    void stopsBeforeToolExecutionWhenTheCurrentRunHasNoObservationEnvelope() {
+        ToolScope original = scope();
+        java.util.concurrent.atomic.AtomicInteger observedEnvelope = new java.util.concurrent.atomic.AtomicInteger(-1);
+        java.util.concurrent.atomic.AtomicInteger toolExecutions = new java.util.concurrent.atomic.AtomicInteger();
+        NativeAgentTool probe = new TestTool("search_rule_evidence") {
             @Override
             public ToolObservation execute(String argumentsJson, ToolScope scope) {
-                return ToolObservation.partial("PAGE_NOT_FOUND", Map.of(), 0);
+                toolExecutions.incrementAndGet();
+                observedEnvelope.set(scope.maxObservationTokens());
+                return ToolObservation.partial("OBSERVATION_BUDGET_EXHAUSTED", Map.of("hasMore", true), 0);
             }
         };
-        BoundedNativeToolAgent agent = agent(model, List.of(partial), new RecordingInvocations());
-        RunRequest request = new RunRequest(
-                Role.ANSWER,
-                scope(),
-                "Use only successful observations.",
-                "Inspect one bounded source.",
-                "No verified result.",
-                3,
-                256,
-                Set.of("read_rule_pages"),
-                Set.of(),
-                3,
-                TerminalContract.none(),
-                Map.of("read_rule_pages", 1),
-                true);
-
-        var result = agent.run(request);
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(advertised).hasSize(2);
-        assertThat(advertised.get(1)).containsExactly("read_rule_pages");
-    }
-
-    @Test
-    void stopsBeforeModelOrToolCallsWhenTheRoleCapabilityIsUnavailable() {
-        QueueModel model = new QueueModel(finalTurn("must not run")) {
-            @Override
-            public boolean supports(Role role, String ownerUsername) {
-                return false;
-            }
-        };
-        BoundedNativeToolAgent agent = agent(
-                model, List.of(successTool("search_rule_evidence")), new RecordingInvocations());
-
-        var result = agent.run(request(scope(), 3));
-
-        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("MODEL_CAPABILITY_UNAVAILABLE");
-        assertThat(model.requests).isZero();
-    }
-
-    @Test
-    void preservesCancellationAsAnExplicitTerminalReason() {
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
-        ToolScope scope = scope();
-        doThrow(new AgentExecutionStoppedException(StopReason.CANCELLED))
-                .when(execution).assertStepAllowed(scope.runId(), 1);
+        org.mockito.Mockito.when(execution.budget(original.runId())).thenReturn(new AgentExecutionControl.BudgetSnapshot(
+                1_000, 0, 1, 900, original.deadlineAt(), null));
         var mapper = JsonMapper.builder().findAndAddModules().build();
-        BoundedNativeToolAgent agent = new BoundedNativeToolAgent(
-                new QueueModel(finalTurn("must not run")),
-                new NativeAgentToolRegistry(
-                        List.of(successTool("search_rule_evidence")), mapper, ignored -> true),
+        var agent = new BoundedNativeToolAgent(
+                new QueueModel(turn(call("call-1", probe.name(), "{}")), finalTurn("stop")),
+                new NativeAgentToolRegistry(List.of(probe), mapper, ignored -> true),
                 execution,
                 new RecordingInvocations(),
                 mapper);
 
-        var result = agent.run(request(scope, 3));
+        var result = agent.run(request(original, Set.of(probe.name()), Set.of(), TerminalContract.none()));
 
         assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("CANCELLED");
+        assertThat(result.reason()).isEqualTo("OBSERVATION_BUDGET_EXHAUSTED");
         assertThat(result.toolCalls()).isZero();
+        assertThat(toolExecutions).hasValue(0);
+        assertThat(observedEnvelope).hasValue(-1);
     }
 
     @Test
-    void interruptsABlockingReadToolAtTheRunDeadlineWithoutPublishingItsObservation() throws Exception {
-        AgentExecutionControl execution = mock(AgentExecutionControl.class);
-        UUID runId = UUID.randomUUID();
-        Instant deadlineAt = Instant.now().plusMillis(250);
-        ToolScope scope = new ToolScope("player", UUID.randomUUID(), runId, deadlineAt);
-        when(execution.budget(runId)).thenReturn(new BudgetSnapshot(
-                40, 24, 16, 24_000, 0, 0, 0, deadlineAt, null));
-        CountDownLatch interrupted = new CountDownLatch(1);
-        NativeAgentTool blockingTool = new TestTool("search_rule_evidence", false, false) {
+    void publishesUnicodeAndEscapeHeavyObservationOnlyWhenItsExactCanonicalJsonFits() {
+        String escaped = "quoted=\"value\"\\path\n".repeat(80);
+        String chinese = "玩家依次执行行动并核对胜利条件。".repeat(24);
+        String emoji = "🎲🧭🀄️".repeat(24);
+        ToolObservation observation = ToolObservation.success(
+                "ESCAPED_EVIDENCE", Map.of(
+                        "evidence", List.of(Map.of("excerpt", escaped + chinese + emoji)),
+                        "hasMore", true,
+                        "nextCursor", NativeEvidenceObservationBudget.PROVISIONAL_CURSOR), 1);
+        NativeAgentTool probe = new TestTool("search_rule_evidence") {
             @Override
-            public ToolObservation execute(String argumentsJson, ToolScope ignoredScope) {
-                try {
-                    Thread.sleep(Duration.ofMinutes(5));
-                } catch (InterruptedException stopped) {
-                    interrupted.countDown();
-                    Thread.currentThread().interrupt();
-                }
-                return super.execute(argumentsJson, ignoredScope);
+            public ToolObservation execute(String argumentsJson, ToolScope scope) {
+                return observation;
             }
         };
         var mapper = JsonMapper.builder().findAndAddModules().build();
+        var registry = new NativeAgentToolRegistry(List.of(probe), mapper, ignored -> true);
+        int exactEnvelope = NativeEvidenceObservationBudget.serializedTokens(
+                mapper, observation, registry.specification(Role.ANSWER, probe.name()).schemaHash());
+        ToolScope exactScope = scope().withMaxObservationTokens(exactEnvelope);
+        QueueModel model = new QueueModel(
+                turn(call("call-escaped", probe.name(), "{}")), finalTurn("verified"));
+        BoundedNativeToolAgent agent = new BoundedNativeToolAgent(
+                model, registry, mock(AgentExecutionControl.class), new RecordingInvocations(), mapper);
 
-        try (var calls = Executors.newVirtualThreadPerTaskExecutor()) {
-            AgentInvocationDeadline guard = new AgentInvocationDeadline(
-                    execution, calls, Duration.ofMillis(20));
-            BoundedNativeToolAgent agent = new BoundedNativeToolAgent(
-                    new QueueModel(turn(call("call-1", blockingTool.name(), "{}"))),
-                    new NativeAgentToolRegistry(List.of(blockingTool), mapper, ignored -> true),
-                    execution,
-                    new RecordingInvocations(),
-                    mapper,
-                    guard);
+        var result = agent.run(request(
+                exactScope, Set.of(probe.name()), Set.of(), TerminalContract.none()));
 
-            var result = agent.run(request(scope, 3));
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        String publishedJson = model.conversations.get(1).stream()
+                .filter(message -> message.role() == MessageRole.TOOL)
+                .findFirst()
+                .orElseThrow()
+                .content();
+        assertThat(NativeEvidenceObservationBudget.estimateTokens(publishedJson))
+                .isEqualTo(exactEnvelope);
+        assertThat(publishedJson).contains(chinese, emoji);
 
-            assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-            assertThat(result.reason()).isEqualTo("TIMEOUT");
-            assertThat(result.toolCalls()).isZero();
-            assertThat(result.observations()).isEmpty();
-            assertThat(interrupted.await(1, TimeUnit.SECONDS)).isTrue();
-        }
+        QueueModel tooSmallModel = new QueueModel(turn(call("call-too-large", probe.name(), "{}")));
+        BoundedNativeToolAgent tooSmallAgent = new BoundedNativeToolAgent(
+                tooSmallModel, registry, mock(AgentExecutionControl.class), new RecordingInvocations(), mapper);
+
+        var rejected = tooSmallAgent.run(request(
+                scope().withMaxObservationTokens(exactEnvelope - 1),
+                Set.of(probe.name()), Set.of(), TerminalContract.none()));
+
+        assertThat(rejected.status()).isEqualTo(RunStatus.FALLBACK);
+        assertThat(rejected.reason()).isEqualTo("OBSERVATION_BUDGET_EXCEEDED");
     }
 
     @Test
-    void doesNotContinueOrReplayWhenExecutionStopsAfterAToolSideCompletes() {
-        AtomicInteger toolExecutions = new AtomicInteger();
-        NativeAgentTool tool = new TestTool("search_rule_evidence", false, false) {
+    void estimatesAsciiCompactlyWithoutUndercountingCjkEmojiOrJsonEscapes() {
+        String ascii = "a".repeat(40);
+        String chinese = "玩家按照规则结算胜利点";
+        String emoji = "🎲🧭🀄";
+        String escapedJson = "\\\"quoted\\nvalue\\\\path\\\"";
+
+        assertThat(NativeEvidenceObservationBudget.estimateTokens(ascii)).isEqualTo(10);
+        assertThat(NativeEvidenceObservationBudget.estimateTokens(chinese))
+                .isGreaterThanOrEqualTo(chinese.codePointCount(0, chinese.length()));
+        assertThat(NativeEvidenceObservationBudget.estimateTokens(emoji))
+                .isGreaterThanOrEqualTo(emoji.codePointCount(0, emoji.length()) * 2);
+        assertThat(NativeEvidenceObservationBudget.estimateTokens(escapedJson))
+                .isGreaterThan((escapedJson.length() + 3) / 4);
+    }
+
+    @Test
+    void stopsOnTheFirstZeroEvidenceBudgetContinuationAndKeepsTheUsefulPrefix() {
+        AtomicInteger executions = new AtomicInteger();
+        NativeAgentTool paged = new TestTool("search_rule_evidence") {
             @Override
             public ToolObservation execute(String argumentsJson, ToolScope scope) {
-                toolExecutions.incrementAndGet();
-                return super.execute(argumentsJson, scope);
+                return executions.incrementAndGet() == 1
+                        ? ToolObservation.partial(
+                                "EVIDENCE_PAGE_FOUND", Map.of("hasMore", true, "nextCursor", "cursor-1"), 1)
+                        : ToolObservation.partial(
+                                "OBSERVATION_BUDGET_EXHAUSTED",
+                                Map.of("hasMore", true, "nextCursor", "cursor-1"), 0);
             }
         };
         QueueModel model = new QueueModel(
-                turn(call("call-1", tool.name(), "{}")),
-                finalTurn("must not continue"));
+                turn(call("call-first", paged.name(), "{\"query\":\"setup\"}")),
+                turn(call("call-next", paged.name(), "{\"cursor\":\"cursor-1\"}")),
+                finalTurn("must not be requested"));
+        RecordingInvocations audited = new RecordingInvocations();
+        BoundedNativeToolAgent agent = agent(model, List.of(paged), audited);
+
+        var result = agent.run(request(scope(), Set.of(paged.name()), Set.of(), TerminalContract.none()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
+        assertThat(result.reason()).isEqualTo("OBSERVATION_BUDGET_EXHAUSTED");
+        assertThat(result.observations()).extracting(record -> record.observation().code())
+                .containsExactly("EVIDENCE_PAGE_FOUND", "OBSERVATION_BUDGET_EXHAUSTED");
+        assertThat(result.observations().getFirst().observation().evidenceCount()).isPositive();
+        assertThat(executions).hasValue(2);
+        assertThat(model.requests).isEqualTo(2);
+        assertThat(audited.recordedOperations)
+                .contains("nativeObservationNoProgress|search_rule_evidence",
+                        "nativeToolFallback|OBSERVATION_BUDGET_EXHAUSTED");
+    }
+
+    @Test
+    void preservesCancellationAndNeverReplaysCompletedToolSideEffects() {
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        ToolScope cancelledScope = scope();
+        doThrow(new AgentExecutionStoppedException(StopReason.CANCELLED))
+                .when(execution).assertStepAllowed(cancelledScope.runId(), 1);
+        var mapper = JsonMapper.builder().findAndAddModules().build();
+        RecordingInvocations cancelledAudit = new RecordingInvocations();
+        BoundedNativeToolAgent cancelledAgent = new BoundedNativeToolAgent(
+                new QueueModel(finalTurn("must not run")),
+                new NativeAgentToolRegistry(List.of(tool("search_rule_evidence")), mapper, ignored -> true),
+                execution, cancelledAudit, mapper);
+        var cancelled = cancelledAgent.run(request(
+                cancelledScope, Set.of("search_rule_evidence"), Set.of(), TerminalContract.none()));
+        assertThat(cancelled.reason()).isEqualTo("CANCELLED");
+        assertThat(cancelledAudit.recordedOperations).contains("nativeToolFallback|CANCELLED");
+
+        AtomicInteger executions = new AtomicInteger();
+        NativeAgentTool sideEffectProbe = new TestTool("search_rule_evidence") {
+            @Override
+            public ToolObservation execute(String argumentsJson, ToolScope scope) {
+                executions.incrementAndGet();
+                return super.execute(argumentsJson, scope);
+            }
+        };
         AuditedAgentInvocations interrupted = new AuditedAgentInvocations() {
             @Override
             public <T> T invoke(
-                    UUID runId,
-                    ActivityType type,
-                    String operation,
-                    int estimatedInputTokens,
-                    String successSummary,
-                    Supplier<T> invocation,
-                    ToIntFunction<T> outputTokenEstimator) {
+                    UUID runId, ActivityType type, String operation, int inputTokens, String summary,
+                    Supplier<T> invocation, ToIntFunction<T> outputTokenEstimator) {
                 T result = invocation.get();
-                if (type == ActivityType.TOOL) {
-                    throw new AgentExecutionStoppedException(StopReason.CANCELLED);
-                }
+                if (type == ActivityType.TOOL) throw new AgentExecutionStoppedException(StopReason.CANCELLED);
                 return result;
             }
 
@@ -890,21 +529,16 @@ class BoundedNativeToolAgentTest {
             public void record(
                     UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {}
         };
-        var mapper = JsonMapper.builder().findAndAddModules().build();
-        BoundedNativeToolAgent agent = new BoundedNativeToolAgent(
+        QueueModel model = new QueueModel(turn(call("call-1", sideEffectProbe.name(), "{}")));
+        BoundedNativeToolAgent interruptedAgent = new BoundedNativeToolAgent(
                 model,
-                new NativeAgentToolRegistry(List.of(tool), mapper, ignored -> true),
-                mock(AgentExecutionControl.class),
-                interrupted,
-                mapper);
-
-        var result = agent.run(request(scope(), 3));
-
-        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("CANCELLED");
-        assertThat(result.toolCalls()).isZero();
-        assertThat(result.observations()).isEmpty();
-        assertThat(toolExecutions).hasValue(1);
+                new NativeAgentToolRegistry(List.of(sideEffectProbe), mapper, ignored -> true),
+                mock(AgentExecutionControl.class), interrupted, mapper);
+        var interruptedResult = interruptedAgent.run(request(
+                scope(), Set.of(sideEffectProbe.name()), Set.of(), TerminalContract.none()));
+        assertThat(interruptedResult.reason()).isEqualTo("CANCELLED");
+        assertThat(interruptedResult.observations()).isEmpty();
+        assertThat(executions).hasValue(1);
         assertThat(model.requests).isEqualTo(1);
     }
 
@@ -912,44 +546,25 @@ class BoundedNativeToolAgentTest {
             NativeToolModel model, List<NativeAgentTool> tools, RecordingInvocations audited) {
         var mapper = JsonMapper.builder().findAndAddModules().build();
         return new BoundedNativeToolAgent(
-                model,
-                new NativeAgentToolRegistry(tools, mapper, ignored -> true),
-                mock(AgentExecutionControl.class),
-                audited,
-                mapper);
+                model, new NativeAgentToolRegistry(tools, mapper, ignored -> true),
+                mock(AgentExecutionControl.class), audited, mapper);
     }
 
-    private RunRequest request(ToolScope scope, int iterations) {
-        return request(scope, iterations, Set.of("search_rule_evidence"));
-    }
-
-    private RunRequest request(ToolScope scope, int iterations, Set<String> allowedTools) {
+    private RunRequest request(
+            ToolScope scope, Set<String> allowedTools, Set<String> requiredTools, TerminalContract terminalContract) {
         return new RunRequest(
-                Role.ANSWER,
-                scope,
-                "Use read tools only when evidence is needed.",
-                "Help the player verify one rule.",
-                "Insufficient verified evidence.",
-                iterations,
-                512,
-                allowedTools,
-                Set.of(),
-                Math.min(24, iterations * 4),
-                TerminalContract.none(),
-                Map.of(),
-                true);
+                Role.ANSWER, scope, "Use read tools only when evidence is needed.",
+                "Help the player verify one rule.", "Insufficient verified evidence.",
+                allowedTools, requiredTools, terminalContract);
     }
 
     private ToolScope scope() {
-        return new ToolScope("player", UUID.randomUUID(), UUID.randomUUID(), Instant.now().plusSeconds(30));
+        return new ToolScope(
+                "player", UUID.randomUUID(), UUID.randomUUID(), Instant.now().plusSeconds(30));
     }
 
-    private NativeAgentTool successTool(String name) {
-        return new TestTool(name, false, false);
-    }
-
-    private NativeAgentTool failingTool(String name, boolean invalid) {
-        return new TestTool(name, invalid, !invalid);
+    private NativeAgentTool tool(String name) {
+        return new TestTool(name);
     }
 
     private ModelToolCall call(String id, String name, String arguments) {
@@ -970,6 +585,7 @@ class BoundedNativeToolAgentTest {
 
     private static class QueueModel implements NativeToolModel {
         private final Deque<ModelTurn> turns;
+        private final List<List<ConversationMessage>> conversations = new ArrayList<>();
         private int requests;
 
         private QueueModel(ModelTurn... turns) {
@@ -979,6 +595,7 @@ class BoundedNativeToolAgentTest {
         @Override
         public ModelTurn next(ModelRequest request) {
             requests++;
+            conversations.add(request.conversation());
             return turns.removeFirst();
         }
     }
@@ -989,14 +606,10 @@ class BoundedNativeToolAgentTest {
 
         @Override
         public ModelTurn next(ModelRequest request) {
-            turn++;
-            if (turn == 1) {
+            if (++turn == 1) {
                 return new ModelTurn(
-                        "",
-                        List.of(new ModelToolCall(
-                                "visual-call", "read_rule_page_image", "{\"evidenceId\":\"ignored\"}")),
-                        10,
-                        5);
+                        "", List.of(new ModelToolCall(
+                                "visual-call", "read_rule_page_image", "{\"evidenceId\":\"ignored\"}")), 10, 5);
             }
             sawVisualMedia = request.conversation().stream().anyMatch(message -> !message.media().isEmpty());
             return new ModelTurn("verified", List.of(), 10, 5);
@@ -1005,50 +618,47 @@ class BoundedNativeToolAgentTest {
 
     private static class TestTool implements NativeAgentTool {
         private final String name;
-        private final boolean invalid;
-        private final boolean failure;
 
-        private TestTool(String name, boolean invalid, boolean failure) {
+        private TestTool(String name) {
             this.name = name;
-            this.invalid = invalid;
-            this.failure = failure;
         }
 
         @Override public String name() { return name; }
-        @Override public String description() { return "Read bounded rule evidence"; }
+        @Override public String description() { return "Read rule evidence"; }
         @Override public String inputSchema() { return "{\"type\":\"object\"}"; }
         @Override public String schemaVersion() { return "1"; }
         @Override public Set<Role> allowedRoles() { return Set.of(Role.ANSWER); }
 
         @Override
         public ToolObservation execute(String argumentsJson, ToolScope scope) {
-            if (invalid) throw new IllegalArgumentException("invalid");
-            if (failure) throw new IllegalStateException("failed");
-            return ToolObservation.success("FOUND", Map.of("evidence", List.of("bounded")), 1);
+            return ToolObservation.success("FOUND", Map.of("query", argumentsJson), 1);
         }
     }
 
     private static final class RecordingInvocations implements AuditedAgentInvocations {
         private final List<ActivityType> invokedTypes = new ArrayList<>();
         private final List<String> invokedOperations = new ArrayList<>();
+        private final List<Integer> invokedInputTokens = new ArrayList<>();
+        private final List<Integer> invokedOutputTokens = new ArrayList<>();
         private final List<String> recordedOperations = new ArrayList<>();
+        private boolean failDiagnostics;
 
         @Override
         public <T> T invoke(
-                UUID runId,
-                ActivityType type,
-                String operation,
-                int estimatedInputTokens,
-                String successSummary,
-                Supplier<T> invocation,
-                ToIntFunction<T> outputTokenEstimator) {
+                UUID runId, ActivityType type, String operation, int inputTokens, String summary,
+                Supplier<T> invocation, ToIntFunction<T> outputTokenEstimator) {
             invokedTypes.add(type);
             invokedOperations.add(operation);
-            return invocation.get();
+            invokedInputTokens.add(inputTokens);
+            T result = invocation.get();
+            invokedOutputTokens.add(outputTokenEstimator.applyAsInt(result));
+            return result;
         }
 
         @Override
-        public void record(UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
+        public void record(
+                UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
+            if (failDiagnostics) throw new IllegalStateException("diagnostic store unavailable");
             recordedOperations.add(operation);
         }
     }

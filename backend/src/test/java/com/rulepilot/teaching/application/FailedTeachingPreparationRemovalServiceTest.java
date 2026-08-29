@@ -113,7 +113,7 @@ class FailedTeachingPreparationRemovalServiceTest {
                 state.terminal() ? now : null,
                 state == AssistantRunState.FAILED ? "TEACHING_PREPARATION_FAILED" : null);
         var budget = new AgentExecutionControl.BudgetSnapshot(
-                40, 24, 16, 24_000, 0, 0, 0, now.plusSeconds(60), null);
+                24_000, 0, 0, 0, now.plusSeconds(60), null);
         return new AssistantRuns.RunDetails(snapshot, List.of(), budget, List.of());
     }
 }

@@ -179,6 +179,37 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
+    void canonicalPageReadDoesNotErasePartialSearchSourceCoverage() {
+        HybridEvidenceHit initial = hit(
+                UUID.randomUUID(), "Victory", "Reaching the final space is one listed way to win.");
+        RuleEvidenceHit observed = source(
+                UUID.randomUUID(), "Alternative", "One special card changes the victory condition.");
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(completed(observed.chunkId())),
+                (documentVersionId, ids) -> List.of(observed),
+                scopes(),
+                limiter(mock(Permit.class)));
+        AnswerEvidenceRetriever.Result partial = new AnswerEvidenceRetriever.Result(
+                List.of(initial), AnswerEvidenceRetriever.State.PARTIAL);
+
+        var result = agent.refine(
+                runId,
+                question("What are all ways to win?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                new AnswerQuestionPlan(
+                        List.of(new AnswerQuestionPlan.Subquestion(
+                                "What are all ways to win?", Set.of(EvidenceNeed.DIRECT_RULE))),
+                        false),
+                partial);
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.PARTIAL);
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
+                .contains(initial.evidence().chunkId(), observed.chunkId());
+    }
+
+    @Test
     void neverPromotesSearchOnlyHandlesAndPreservesDeterministicEvidence() {
         HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
         RuleEvidenceHit searchOnly = source(UUID.randomUUID(), "Candidate", "Candidate exception.");
@@ -359,7 +390,7 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
-    void completesOneMissingDirectRuleObligationAsSoonAsItsExactPageIsRead() {
+    void requiresOneMissingDirectRuleObservationBeforeTheAgentMayFinish() {
         AtomicReference<RunRequest> captured = new AtomicReference<>();
         Permit permit = mock(Permit.class);
         AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
@@ -380,7 +411,6 @@ class AnswerEvidenceAgentTest {
                 new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY));
 
         assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
-        assertThat(captured.get().completeAfterRequiredTools()).isTrue();
         assertThat(captured.get().terminalContract().required()).isFalse();
         verify(permit).close();
     }
@@ -452,8 +482,7 @@ class AnswerEvidenceAgentTest {
                 ready(hit(UUID.randomUUID(), "Restriction", "This restriction applies in one mode.")));
 
         assertThat(captured.get().requiredToolsBeforeCompletion()).isEmpty();
-        assertThat(captured.get().maxIterations()).isEqualTo(5);
-        assertThat(captured.get().maxToolCalls()).isEqualTo(5);
+        assertThat(captured.get().terminalContract().required()).isTrue();
         verify(permit).close();
     }
 
@@ -485,10 +514,6 @@ class AnswerEvidenceAgentTest {
                 .containsExactlyInAnyOrder(
                         NativeToolAgent.TerminalStatus.EVIDENCE_READY,
                         NativeToolAgent.TerminalStatus.EVIDENCE_NOT_FOUND);
-        assertThat(captured.get().maxIterations()).isEqualTo(4);
-        assertThat(captured.get().maxToolCalls()).isEqualTo(4);
-        assertThat(captured.get().finalResponseAfterToolSuccesses())
-                .containsExactly(Map.entry("read_rule_pages", 1));
         verify(permit).close();
     }
 
@@ -524,7 +549,7 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
-    void priorGroundedReferenceCanOnlyTriggerOneFreshExactPageRead() {
+    void priorGroundedReferenceRequiresAFreshReadOfEveryCitedPage() {
         RuleEvidenceHit prior = source(UUID.randomUUID(), "Exception", "Verified exception timing.");
         AtomicReference<RunRequest> captured = new AtomicReference<>();
         NativeToolAgent nativeAgent = new NativeToolAgent() {
@@ -543,7 +568,7 @@ class AnswerEvidenceAgentTest {
                 versionId,
                 "When does the phase end?",
                 "It ends after the exception.",
-                List.of(new PriorCitationReference(prior.chunkId(), versionId, 2, 2)));
+                List.of(new PriorCitationReference(prior.chunkId(), versionId, 2, 9)));
         QuestionContext context = new QuestionContext(
                 versionId, reference.question(), null, null, reference);
         AnswerQuestionPlan plan = new AnswerQuestionPlan(
@@ -562,12 +587,10 @@ class AnswerEvidenceAgentTest {
 
         assertThat(captured.get().allowedTools()).containsExactly("read_rule_pages");
         assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
-        assertThat(captured.get().maxIterations()).isEqualTo(2);
-        assertThat(captured.get().maxToolCalls()).isEqualTo(1);
         assertThat(captured.get().playerRequest()).contains(
                 "Prior grounded reference hint (not current evidence)",
                 prior.chunkId().toString(),
-                "Prior cited pages to re-read: [2]");
+                "Prior cited pages to re-read: [2, 3, 4, 5, 6, 7, 8, 9]");
         assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId()).contains(prior.chunkId());
         verify(permit).close();
     }

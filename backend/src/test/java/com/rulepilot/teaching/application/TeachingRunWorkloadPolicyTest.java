@@ -15,35 +15,26 @@ class TeachingRunWorkloadPolicyTest {
     private final TeachingRunWorkloadPolicy policy = new TeachingRunWorkloadPolicy(3);
 
     @Test
-    void countsEverySectionFallbackReadAndItsSharedTwoCallRecovery() {
+    void sizesAdmissionFromTheOrdinaryOneCandidatePerSectionPath() {
         var demand = policy.demand(plan(19, true));
 
-        // Three searches, one possible image read, and one canonical fallback read per section.
-        assertThat(demand.requiredToolCalls()).isEqualTo(95);
-        // Three shared section calls, page interpretation/recovery, one whole-lesson review, one complete replacement
-        // allowance, and two bounded synchronous visual passes per chapter. Admission itself performs none of them.
-        assertThat(demand.requiredModelCalls()).isEqualTo(441);
+        // Candidate correction and additional candidate batches are intentionally absent from this source-window
+        // estimate: the durable token/deadline owner governs useful recovery instead of imposing an attempt count.
+        assertThat(demand.estimatedModelCalls()).isEqualTo(57);
     }
 
     @Test
     void doesNotInflateACompactTextLessonToAnUnrelatedConfiguredFloor() {
         var demand = policy.demand(plan(3, false));
 
-        assertThat(demand.requiredToolCalls()).isEqualTo(9);
-        assertThat(demand.requiredModelCalls()).isEqualTo(67);
+        assertThat(demand.estimatedModelCalls()).isEqualTo(3);
     }
 
     @Test
-    void derivesAFiniteBudgetForALargerUnlikePlanWithoutAFixedPlanCeiling() {
+    void derivesACapacityEstimateForALargerUnlikePlanWithoutAFixedPlanCeiling() {
         var demand = policy.demand(plan(30, true));
 
-        assertThat(demand.requiredToolCalls()).isEqualTo(150);
-        assertThat(demand.requiredModelCalls()).isEqualTo(694);
-    }
-
-    @Test
-    void countsVisualInterpretationFromTheImmutablePlanInsteadOfMutableCatalogAvailability() {
-        assertThat(policy.demand(plan(19, true)).requiredModelCalls()).isEqualTo(441);
+        assertThat(demand.estimatedModelCalls()).isEqualTo(90);
     }
 
     @Test
@@ -54,21 +45,19 @@ class TeachingRunWorkloadPolicyTest {
                 List.of(12), List.of(13), List.of(14), List.of(15), List.of(16),
                 List.of(17), List.of(18, 20, 21), List.of(19), List.of(22));
         TeachingPlan plan = plan(pageBindings);
-        int visualCalls = TeachingVisualEvidenceResolver.maximumModelCalls(plan);
+        int visualCalls = TeachingVisualEvidenceResolver.estimatedCatalogModelCalls(plan);
 
-        assertThat(visualCalls).isEqualTo(42);
+        assertThat(visualCalls).isEqualTo(21);
         assertThat(policy.demand(plan))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 445));
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(59));
     }
 
     @Test
-    void reservesBothBoundedVisualPassesWithoutDependingOnMutableVisualResults() {
+    void estimatesVisualWorkFromActualSourcePageWindowsWithoutCreatingACallLimit() {
         TeachingPlan plan = plan(2, false);
 
-        assertThat(VisualLessonEnricher.maximumTeachingRunModelCalls(plan))
-                .isEqualTo(2 * 2 * VisualLessonStepLocator.MAX_CANDIDATE_BATCHES_PER_SECTION
-                        * VisualLessonStepLocator.MAX_MODEL_CALLS_PER_CANDIDATE_BATCH);
-        assertThat(policy.demand(plan).requiredModelCalls()).isEqualTo(46);
+        assertThat(VisualLessonEnricher.estimatedTeachingRunModelCalls(plan)).isZero();
+        assertThat(policy.demand(plan).estimatedModelCalls()).isEqualTo(2);
     }
 
     private TeachingPlan plan(int sectionCount, boolean sourceBound) {

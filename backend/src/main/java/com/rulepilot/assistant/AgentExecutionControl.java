@@ -21,19 +21,31 @@ public interface AgentExecutionControl {
         REJECTED
     }
 
-    record BudgetLimits(int maxSteps, int maxToolCalls, int maxModelCalls, int maxTokens, Duration timeout) {
+    record BudgetLimits(int maxTokens, Duration timeout) {
         public BudgetLimits {
-            if (maxSteps < 1 || maxToolCalls < 1 || maxModelCalls < 1 || maxTokens < 1
-                    || timeout == null || timeout.isZero() || timeout.isNegative()) {
+            if (maxTokens < 1 || timeout == null || timeout.isZero() || timeout.isNegative()) {
                 throw new IllegalArgumentException("agent budget limits are invalid");
             }
+        }
+
+        /**
+         * A step must consume at least one unit of the persisted token envelope. This derived ceiling is a safety
+         * budget, not a product-authored workflow length.
+         */
+        public int maxSteps() {
+            return maxTokens;
+        }
+
+        /**
+         * A tool reservation must consume at least one unit of the persisted token envelope. This keeps tool work
+         * bounded without reintroducing a hand-written call count that rejects otherwise valid workflows.
+         */
+        public int maxToolCalls() {
+            return maxTokens;
         }
     }
 
     record BudgetSnapshot(
-            int maxSteps,
-            int maxToolCalls,
-            int maxModelCalls,
             int maxTokens,
             int usedToolCalls,
             int usedModelCalls,

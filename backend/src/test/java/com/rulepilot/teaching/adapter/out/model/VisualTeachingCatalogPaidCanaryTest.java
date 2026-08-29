@@ -160,8 +160,7 @@ class VisualTeachingCatalogPaidCanaryTest {
         return new SpringAiVisualRulebookPageCatalogModel(
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
-                new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt"),
-                4_800);
+                new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt"));
     }
 
 

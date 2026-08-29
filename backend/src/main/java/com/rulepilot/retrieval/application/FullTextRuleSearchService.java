@@ -12,7 +12,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Profile("!test")
 public class FullTextRuleSearchService implements FullTextRuleSearch {
 
-    private static final int MAX_RESULTS = 20;
     private final FullTextRuleSearchRepository repository;
 
     public FullTextRuleSearchService(FullTextRuleSearchRepository repository) {
@@ -22,10 +21,15 @@ public class FullTextRuleSearchService implements FullTextRuleSearch {
     @Override
     @Transactional(readOnly = true)
     public List<RuleEvidenceHit> search(UUID documentVersionId, String query, int limit) {
-        if (documentVersionId == null || query == null || query.isBlank()) {
+        return search(documentVersionId, query, 0, limit);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<RuleEvidenceHit> search(UUID documentVersionId, String query, int offset, int limit) {
+        if (documentVersionId == null || query == null || query.isBlank() || offset < 0 || limit < 1) {
             throw new IllegalArgumentException("document version and search query are required");
         }
-        int boundedLimit = Math.max(1, Math.min(limit, MAX_RESULTS));
-        return repository.search(documentVersionId, query.strip(), boundedLimit);
+        return repository.search(documentVersionId, query.strip(), offset, limit);
     }
 }

@@ -140,9 +140,8 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
     @Override
     public Reconciliation reconcileLaunched(int limit) {
         int checkedLimit = checkedClaimLimit(limit);
-        int restarted = 0;
         int settled = 0;
-        int exhausted = 0;
+        int failed = 0;
         for (var handoff : handoffs.findUnreconciledLaunched(checkedLimit)) {
             ReuseAssessment assessment = teachingEvidenceFreshness.assess(
                     handoff.documentVersionId(), handoff.preparationRunId(), handoff.ownerUsername());
@@ -154,7 +153,7 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
                         handoff.preparationRunId(),
                         "TEACHING_PREPARATION_INVALID_PLAN",
                         Instant.now(clock))) {
-                    exhausted++;
+                    failed++;
                 }
             } else if (assessment == ReuseAssessment.EXTERNAL_REPAIR_REQUIRED) {
                 if (handoffs.failTerminal(
@@ -162,17 +161,16 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
                         handoff.preparationRunId(),
                         "TEACHING_PREPARATION_STORAGE_FAILED",
                         Instant.now(clock))) {
-                    exhausted++;
+                    failed++;
                 }
             } else if (assessment == ReuseAssessment.REFRESH_REQUIRED
                     || assessment == ReuseAssessment.RETRYABLE_FAILURE) {
-                if (handoffs.retryAutomatically(
-                        handoff.id(), handoff.preparationRunId(), Instant.now(clock))) {
-                    restarted++;
-                } else if (handoff.automaticRecoveryCount() == 1
-                        && handoffs.failRecoveryExhausted(
-                                handoff.id(), handoff.preparationRunId(), Instant.now(clock))) {
-                    exhausted++;
+                if (handoffs.failTerminal(
+                        handoff.id(),
+                        handoff.preparationRunId(),
+                        "TEACHING_PREPARATION_FAILED",
+                        Instant.now(clock))) {
+                    failed++;
                 }
             } else if (assessment == ReuseAssessment.REUSABLE
                     && handoffs.markReconciled(
@@ -180,7 +178,7 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
                 settled++;
             }
         }
-        return new Reconciliation(restarted, settled, exhausted);
+        return new Reconciliation(settled, failed);
     }
 
     private HandoffView view(UploadedRulebookTeachingHandoffStore.Snapshot snapshot) {

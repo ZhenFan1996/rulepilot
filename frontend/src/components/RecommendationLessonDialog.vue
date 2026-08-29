@@ -11,6 +11,11 @@ import {
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
 import {
+  playerJourneyFailurePresentation,
+  playerJourneyRunIsTerminal,
+  typedFailurePolicy,
+} from '@/lib/playerJourney'
+import {
   mergeTeachingRunProgress,
   teachingActivityText,
   teachingRunPresentationState,
@@ -125,11 +130,11 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   noReadable: '本轮生成已经结束，但还没有具备可用规则依据的章节。',
   progressAria: (done: number, total: number) => `${done} / ${total} 章已通过独立规则依据核对`,
   refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。',
-  refreshIdentity: '登录会话已失效，已停止刷新；已显示章节仍然保留。重新登录后可以直接重试。',
+  refreshIdentity: '登录会话已失效，只停止当前页面刷新；已显示章节仍然保留，后台任务保持持久状态。重新登录后会重新绑定并刷新最新进度。',
   refreshResponseIdentity: '服务器返回了另一个讲解任务的状态，已停止合并；当前已显示章节仍然保留。',
   refreshService: '有限刷新重试已用完，已停止自动刷新；已显示章节仍然保留，可以手动重试。',
   ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
-  failureBoundary: '一次返回被拒或一次服务调用失败，只表示正在进行有限修正或重试，不等于本轮失败。修正用尽后，单页不可读、单章证据不足或单章配图不可用只会让对应内容缺失；已发布正文继续保留。只有来源整体不可用、没有任何可验证规则锚点、最终无章可发布、用户取消或会话失效、到达总时限或调用预算，以及持久化/服务在有限恢复后仍失败时，本轮才会停止。',
+  failureBoundary: '格式校验没通过不等于整轮失败：系统会把模型刚才的完整结果、具体哪里不对、正确格式和本次可用的页码或来源全部交回同一个模型。只要新结果还在变化，而且本轮仍有文字处理额度和有效工作时间，就会继续修正；只有模型再次给出一模一样、且已经被拒绝的结果，才会停止这一步以免空转。单页读不到、单章依据不足或某章配图失败都只影响对应局部，其他页面和已发布正文保留。整轮只有在用户取消、文字处理额度或有效工作时间用完、整份规则书不可读、没有任何可核验依据、最终一章都无法发布，或模型服务、保存、身份、引用发生无法恢复的错误时才停止。登录失效只停止当前页面刷新；后台任务保持持久状态，重新登录后会重新绑定并刷新。',
 } : {
   dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', updates: 'Guide updates', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
   draft: '{done} / {total} chapters passed citation-ownership, rulebook-version, and structure checks; the remaining chapters are still being generated.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only chapters with usable rulebook support.',
@@ -142,11 +147,11 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   noReadable: 'This generation run finished without a chapter backed by usable rulebook evidence.',
   progressAria: (done: number, total: number) => `${done} of ${total} chapters independently supported by rulebook evidence`,
   refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.',
-  refreshIdentity: 'The signed-in session expired, so refreshing stopped. Displayed chapters remain available; sign in and retry.',
+  refreshIdentity: "The signed-in session expired. Only this page's refresh has stopped; displayed chapters remain available, and the background task keeps its durable state. Sign in again to rebind and refresh the latest progress.",
   refreshResponseIdentity: 'The server returned status for a different guide, so merging stopped. Displayed chapters remain available.',
   refreshService: 'The bounded refresh retries were exhausted, so automatic refresh stopped. Displayed chapters remain available; retry manually.',
   ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
-  failureBoundary: 'One rejected response or service call starts a bounded correction or retry; it is not a failed run. After that recovery is exhausted, an unreadable page, unsupported chapter, or unavailable chapter visual omits only that local content and preserves published text. The run stops only when the whole source is unavailable, no verifiable rule anchor exists, no chapter is publishable, the player cancels or the session expires, the wall-time or call budget is exhausted, or persistence/service recovery is exhausted.',
+  failureBoundary: "A format check is not a failed run. The same model receives its complete result, exactly what was wrong, the required format, and the page or source IDs available for this request. It keeps correcting while the replacement changes and the run still has text-processing allowance and active-work time. This step stops only when the model repeats an identical result that was already rejected, preventing an endless loop. An unreadable page, unsupported chapter, or missing chapter visual affects only that item; other pages and published text remain. The whole run stops only after cancellation, exhausted text-processing allowance or active-work time, a wholly unreadable rulebook, no verifiable rule source, no publishable chapter, or a model-service, persistence, identity, or citation error that cannot be recovered safely. Sign-in expiry stops only this page's refresh; the background task keeps its durable state. Sign in again to rebind and refresh the latest progress.",
 })
 
 const active = computed(() => teachingRunIsActive(run.value?.run.state))
@@ -155,6 +160,17 @@ const supportedChapterCount = computed(() => lesson.value?.sections
 const citedDraftChapterCount = computed(() => lesson.value?.sections
   .filter(section => section.evidenceStatus === 'CITED_DRAFT').length ?? 0)
 const readableChapterCount = computed(() => supportedChapterCount.value + citedDraftChapterCount.value)
+const teachingFailurePolicy = computed(() => {
+  const current = run.value?.run
+  if (!current || current.state === 'COMPLETED' || !playerJourneyRunIsTerminal(current.state)) return null
+  return typedFailurePolicy(current.lastErrorCode ?? current.state, 'GENERATE_LESSON', false)
+})
+function withFailureGuidance(text: string) {
+  if (!teachingFailurePolicy.value) return text
+  const guidance = playerJourneyFailurePresentation(teachingFailurePolicy.value, locale.value)
+  const separator = locale.value === 'en' ? '. ' : '。'
+  return `${text} ${guidance.title}${separator}${guidance.detail}`
+}
 const teachingStatusPresentation = computed(() => {
   if (!plan.value || !lesson.value) return { text: '', tone: 'active' as const }
   const state = teachingRunPresentationState(run.value)
@@ -166,18 +182,18 @@ const teachingStatusPresentation = computed(() => {
   if (state === 'FAILED') {
     const reason = teachingRunStopReasonText(run.value, locale.value)
     return {
-      text: `${readableChapterCount.value
+      text: withFailureGuidance(`${readableChapterCount.value
         ? copy.value.failedReadable(readableChapterCount.value)
-        : copy.value.failedEmpty}${reason ? ` ${reason}` : ''}`,
+        : copy.value.failedEmpty}${reason ? ` ${reason}` : ''}`),
       tone: 'failed' as const,
     }
   }
   if (state === 'CANCELLED') {
     const reason = teachingRunStopReasonText(run.value, locale.value)
     return {
-      text: `${readableChapterCount.value
+      text: withFailureGuidance(`${readableChapterCount.value
         ? copy.value.cancelledReadable(readableChapterCount.value)
-        : copy.value.cancelledEmpty}${reason ? ` ${reason}` : ''}`,
+        : copy.value.cancelledEmpty}${reason ? ` ${reason}` : ''}`),
       tone: 'cancelled' as const,
     }
   }
@@ -193,12 +209,17 @@ const teachingStatusPresentation = computed(() => {
     && lesson.value.sections.length > 0
     && lesson.value.sections.every(section => section.evidenceStatus === 'SUPPORTED')
   if (fullySupported) return { text: copy.value.complete, tone: 'complete' as const }
-  if (!readableChapterCount.value) return { text: copy.value.noReadable, tone: 'partial' as const }
+  if (!readableChapterCount.value) {
+    return { text: withFailureGuidance(copy.value.noReadable), tone: 'partial' as const }
+  }
   if (state === 'COMPLETED') {
     return { text: copy.value.reviewedDraft(readableChapterCount.value), tone: 'partial' as const }
   }
   if (state === 'DEGRADED' || state === 'INSUFFICIENT_EVIDENCE') {
-    return { text: copy.value.terminalIncomplete(readableChapterCount.value), tone: 'partial' as const }
+    return {
+      text: withFailureGuidance(copy.value.terminalIncomplete(readableChapterCount.value)),
+      tone: 'partial' as const,
+    }
   }
   return { text: interpolate(copy.value.settledDraft), tone: 'partial' as const }
 })
@@ -474,7 +495,7 @@ onBeforeUnmount(() => {
             <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
           </div>
           <div v-if="plan && lesson" class="mt-3">
-            <div data-testid="recommendation-lesson-teaching-status" role="status" aria-live="polite" aria-atomic="true">
+            <div data-testid="recommendation-lesson-teaching-status" :data-failure-classification="teachingFailurePolicy?.failureClassification ?? undefined" :data-failure-recovery="teachingFailurePolicy?.failureRecovery ?? undefined" role="status" aria-live="polite" aria-atomic="true">
               <div class="flex items-center justify-between gap-3 text-xs"><p data-testid="recommendation-lesson-teaching-status-text" class="font-semibold" :class="teachingStatusClass">{{ teachingStatusPresentation.text }}</p><span class="font-mono font-semibold text-ink/50">{{ supportedChapterCount }} / {{ plan.sections.length }}</span></div>
               <p v-if="citedDraftChapterCount" data-testid="recommendation-lesson-cited-draft-status" class="mt-2 text-xs leading-5 text-ink/55">{{ copy.citedDraft(citedDraftChapterCount) }}</p>
             </div>

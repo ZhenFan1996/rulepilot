@@ -77,6 +77,7 @@ describe('GameRecommendationAgent', () => {
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/login', name: 'login', component: { template: '<div />' } },
         { path: '/register', name: 'register', component: { template: '<div />' } },
+        { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },
         { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
       ],
@@ -370,6 +371,72 @@ describe('GameRecommendationAgent', () => {
     const otherAccount = await mountAgent({}, { sessionIdentity: 'bob' })
     expect(otherAccount.text()).not.toContain('自然主题游戏')
     expect(otherAccount.text()).not.toContain('上次已核对候选')
+  })
+
+  it('sends the complete server transcript and every remembered candidate identity on a long follow-up', async () => {
+    const transcript = Array.from({ length: 30 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      text: `完整历史-${index}`,
+    }))
+    const knownGames = Array.from({ length: 70 }, (_, index) => ({
+      bggId: index + 1,
+      name: `候选-${index + 1}`,
+      originalName: `Candidate-${index + 1}`,
+    }))
+    type LongConversationRequest = {
+      clientTurnId: string
+      transcript: Array<{ role: string; text: string }>
+      knownGames: Array<{ bggId: number }>
+      shownBggIds: number[]
+    }
+    const streamBodies: LongConversationRequest[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        return Response.json({
+          conversationId: '2efc8376-883b-4ec0-b310-e1fc39a75473',
+          revision: 15,
+          profile: baseProfile,
+          transcript,
+          knownGames,
+          shownBggIds: knownGames.map(game => game.bggId),
+          processing: false,
+          processingSince: null,
+          latestResponse: null,
+        })
+      }
+      if (path === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      if (path.includes('/recommendation-agent/stream')) {
+        const streamBody = JSON.parse(String(init?.body)) as LongConversationRequest
+        streamBodies.push(streamBody)
+        return recommendationStreamResult({
+          conversationId: '2efc8376-883b-4ec0-b310-e1fc39a75473',
+          revision: 16,
+          clientTurnId: streamBody?.clientTurnId,
+          outcome: 'conversation', mode: 'model_assisted', assistantMessage: '完整上下文仍在。',
+          profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+        })
+      }
+      throw new Error(`unexpected request: ${path}`)
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('继续，但不要忘记前面排除过的候选')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const streamBody = streamBodies.at(-1)
+    expect(streamBody).toBeDefined()
+    expect(streamBody?.transcript).toHaveLength(31)
+    expect(streamBody?.transcript[0]).toEqual(transcript[0])
+    expect(streamBody?.transcript.at(-1)?.text).toBe('继续，但不要忘记前面排除过的候选')
+    expect(streamBody?.knownGames).toHaveLength(70)
+    expect(streamBody?.knownGames.map(game => game.bggId)).toContain(1)
+    expect(streamBody?.knownGames.map(game => game.bggId)).toContain(70)
+    expect(streamBody?.shownBggIds).toHaveLength(70)
   })
 
   it('restores the selected verified game identity so its guide and Q&A can be found after refresh', async () => {
@@ -754,6 +821,92 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('这次请求已经重新核对完成。')
     expect(wrapper.findAll('[data-conversation-message]').filter(turn => turn.text().includes(originalRequest)))
       .toHaveLength(1)
+  })
+
+  it('requires model configuration instead of retrying an unchanged request that cannot succeed', async () => {
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      return recommendationStreamResult({
+        conversationId: '03bdd68c-8310-490f-bce4-531cafb13358',
+        revision: 1,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        responseLocale: 'zh-CN',
+        outcome: 'unavailable',
+        mode: 'model_assisted',
+        assistantMessage: '当前账号没有可用的推荐模型配置。本轮没有调用检索，也没有发布临时结果。',
+        failureBoundary: 'service_configuration',
+        failureReason: 'model_not_configured',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 0,
+        candidatesEvaluated: 0,
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('找一款适合四个人的合作游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const failedTurn = wrapper.get('[role="alert"]')
+    expect(failedTurn.text()).toContain('配置并保存推荐模型')
+    expect(failedTurn.text()).toContain('不会自动重试')
+    expect(failedTurn.findAll('button').filter(button => button.text() === '重试')).toHaveLength(0)
+    const settingsLink = failedTurn.get('[data-testid="recommendation-model-settings"]')
+    expect(settingsLink.text()).toBe('前往模型设置')
+    expect(settingsLink.attributes('href')).toBe('/settings/models')
+    expect(requestBodies).toHaveLength(1)
+  })
+
+  it('requires a smaller request or new conversation after the resource safety budget is exhausted', async () => {
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      return recommendationStreamResult({
+        conversationId: '67c9bff0-02af-454a-b0ac-8bf770d3b017',
+        revision: 1,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        responseLocale: 'zh-CN',
+        outcome: 'unavailable',
+        mode: 'model_assisted',
+        assistantMessage: '本轮已在资源安全边界停止，没有发布未完成结果。',
+        failureBoundary: 'action_budget',
+        failureReason: 'resource_budget_exhausted',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 0,
+        candidatesEvaluated: 0,
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('请综合所有历史偏好和候选做一份非常完整的比较')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const failedTurn = wrapper.get('[role="alert"]')
+    expect(failedTurn.text()).toContain('token')
+    expect(failedTurn.text()).toContain('派生的 step/tool')
+    expect(failedTurn.text()).toContain('缩小问题')
+    expect(failedTurn.text()).toContain('新对话')
+    expect(failedTurn.findAll('button').filter(button => button.text() === '重试')).toHaveLength(0)
+    const reviseAction = failedTurn.get('[data-testid="recommendation-revise-after-budget"]')
+    await reviseAction.trigger('click')
+    expect(document.activeElement).toBe(wrapper.get('textarea').element)
+    expect(requestBodies).toHaveLength(1)
   })
 
   it('removes stale clarification choices when the submitted choice becomes unavailable', async () => {

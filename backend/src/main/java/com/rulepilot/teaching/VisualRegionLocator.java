@@ -291,8 +291,7 @@ public interface VisualRegionLocator {
             boolean claimContradicted,
             VisualSourceKind sourceKind) {
         public LocatedRegion {
-            if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
-                    || (visibleDescription != null && visibleDescription.length() > 240)
+            if (pageNumber < 1 || label == null || label.isBlank()
                     || x < 0 || y < 0 || width < 20 || height < 20 || x + width > 1_000 || y + height > 1_000
                     || supportedEvidenceIds == null || supportedEvidenceIds.isEmpty()
                     || supportedEvidenceIds.stream().anyMatch(java.util.Objects::isNull)

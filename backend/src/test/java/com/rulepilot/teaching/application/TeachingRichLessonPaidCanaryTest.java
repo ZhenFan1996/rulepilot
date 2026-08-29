@@ -14,17 +14,15 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.PlayerLocale;
-import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
-import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.CandidateRejection;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
@@ -112,7 +110,7 @@ class TeachingRichLessonPaidCanaryTest {
         UUID runId = UUID.randomUUID();
         PdfEvidence corpus = new PdfEvidence(pdf, versionId);
         List<PageInput> activePages = CANARY_PAGES.stream()
-                .map(page -> new PageInput(page, TeachingPageCatalogText.bounded(corpus.page(page))))
+                .map(page -> new PageInput(page, corpus.page(page).strip()))
                 .toList();
 
         List<String> rawOutlineResponses = Collections.synchronizedList(new ArrayList<>());
@@ -171,8 +169,6 @@ class TeachingRichLessonPaidCanaryTest {
         RecordingTeachingModel sections = new RecordingTeachingModel(new SpringAiTeachingLessonModel(
                 sectionConfiguration, prompts, teachingTemperature));
         CanaryInvocations audit = new CanaryInvocations();
-        GeneratedContentCritic publicationCritic = new ConditionalGeneratedContentCritic(
-                new SpringAiContentCriticModel(sectionConfiguration, prompts), audit, false);
         NativeToolScopes scopes = mock(NativeToolScopes.class);
         when(scopes.create(eq(OWNER), eq(versionId), eq(runId))).thenReturn(java.util.Optional.of(
                 new ToolScope(OWNER, versionId, runId, Instant.now().plusSeconds(300))));
@@ -183,7 +179,6 @@ class TeachingRichLessonPaidCanaryTest {
                 corpus,
                 sections,
                 new PolicyEvidenceVerifier(),
-                publicationCritic,
                 audit,
                 visualFacts,
                 3,
@@ -241,7 +236,7 @@ class TeachingRichLessonPaidCanaryTest {
                 .containsEntry("sectionRequestsRetainOwnUnitsAndEvidence", true)
                 .containsEntry("wholeGameCompletedBeforeSectionFanOut", true)
                 .containsEntry("withinLatencyBudget", true);
-        assertThat(audit.criticCalls.get()).isPositive();
+        assertThat(audit.criticCalls.get()).isZero();
         assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
         assertThat(rawOutlineResponses).isNotEmpty().hasSizeLessThanOrEqualTo(2);
         assertThat(rawSectionResponses).isNotEmpty();
@@ -664,22 +659,22 @@ class TeachingRichLessonPaidCanaryTest {
         }
 
         @Override
-        public SectionDraft repairCompositionContract(SectionRequest request) {
+        public SectionDraft continueAfterRejection(
+                SectionRequest request, CandidateRejection rejection) {
             recordRequest(request);
-            return record(request, delegate.repairCompositionContract(request));
+            return record(request, delegate.continueAfterRejection(request, rejection));
         }
 
         @Override
-        public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-            recordRequest(request);
-            return record(request, delegate.revise(request, previousDraft, feedback));
+        public CandidateRejection rejectionObservation(
+                SectionRequest request, SectionDraft candidate, String validationError) {
+            return delegate.rejectionObservation(request, candidate, validationError);
         }
 
         @Override
-        public SectionDraft repairRevisionContract(
-                SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-            recordRequest(request);
-            return record(request, delegate.repairRevisionContract(request, previousDraft, feedback));
+        public CandidateRejection rejectionObservation(
+                SectionRequest request, String candidateJson, String validationError) {
+            return delegate.rejectionObservation(request, candidateJson, validationError);
         }
 
         private void recordRequest(SectionRequest request) {

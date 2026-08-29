@@ -20,9 +20,9 @@ public interface UploadedRulebookTeachingHandoffs {
 
     Reconciliation reconcileLaunched(int limit);
 
-    record Reconciliation(int restarted, int settled, int exhausted) {
+    record Reconciliation(int settled, int failed) {
         public Reconciliation {
-            if (restarted < 0 || settled < 0 || exhausted < 0) {
+            if (settled < 0 || failed < 0) {
                 throw new IllegalArgumentException("uploaded teaching reconciliation counts are invalid");
             }
         }

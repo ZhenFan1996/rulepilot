@@ -12,6 +12,7 @@ public record AnswerWarning(Type type) {
     public enum Type {
         INDIRECT_CITATION,
         LOW_CONFIDENCE,
+        SOURCE_COVERAGE_PARTIAL,
         REVIEW_UNRESOLVED,
         REVIEW_UNAVAILABLE
     }

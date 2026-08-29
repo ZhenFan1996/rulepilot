@@ -5,6 +5,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.text.Normalizer;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -42,6 +43,7 @@ final class TeachingWholeGameUnderstandingPolicy {
             }
         }
 
+        List<String> sourceBindingErrors = new ArrayList<>();
         for (GlobalConceptDraft concept : outline.wholeGameUnderstanding().concepts()) {
             for (String prerequisite : concept.prerequisiteConceptIds()) {
                 Integer prerequisitePosition = conceptPositions.get(prerequisite);
@@ -57,17 +59,55 @@ final class TeachingWholeGameUnderstandingPolicy {
                 }
             }
             for (String identifier : concept.sourceIdentifiers()) {
-                boolean sourceBound = outline.sourceCoverageSlots().stream()
+                var identifierSlots = outline.sourceCoverageSlots().stream()
                         .filter(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
                         .filter(slot -> identity(slot.sourceIdentifier()).equals(identity(identifier)))
-                        .anyMatch(slot -> concept.relatedTopicKeys().contains(slot.ownerTopicKey())
-                                && concept.sourcePageNumbers().containsAll(slot.sourcePageNumbers()));
-                if (!sourceBound) {
-                    throw new IllegalArgumentException(
-                            "whole-game concept has no matching sourced slot in its related chapters: "
-                                    + concept.conceptId());
+                        .toList();
+                if (identifierSlots.isEmpty()) {
+                    List<String> allowedIdentifiers = outline.sourceCoverageSlots().stream()
+                            .filter(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
+                            .map(slot -> slot.sourceIdentifier())
+                            .distinct()
+                            .toList();
+                    sourceBindingErrors.add("conceptId='" + concept.conceptId() + "', sourceIdentifier='" + identifier
+                            + "': sourceIdentifiers[] must exactly match a SOURCED "
+                            + "sourceCoverageSlots[].sourceIdentifier; allowedSourcedIdentifiers="
+                            + allowedIdentifiers);
+                    continue;
+                }
+
+                var relatedSlots = identifierSlots.stream()
+                        .filter(slot -> concept.relatedTopicKeys().contains(slot.ownerTopicKey()))
+                        .toList();
+                if (relatedSlots.isEmpty()) {
+                    List<String> matchingOwners = identifierSlots.stream()
+                            .map(slot -> slot.ownerTopicKey())
+                            .distinct()
+                            .toList();
+                    sourceBindingErrors.add("conceptId='" + concept.conceptId() + "', sourceIdentifier='" + identifier
+                            + "': relatedTopicKeys=" + concept.relatedTopicKeys()
+                            + " must contain an owner of the matching SOURCED slot; matchingOwnerTopicKeys="
+                            + matchingOwners);
+                    continue;
+                }
+
+                boolean pagesContainCompleteSlot = relatedSlots.stream()
+                        .anyMatch(slot -> concept.sourcePageNumbers().containsAll(slot.sourcePageNumbers()));
+                if (!pagesContainCompleteSlot) {
+                    List<String> matchingRequirements = relatedSlots.stream()
+                            .map(slot -> "{ownerTopicKey='" + slot.ownerTopicKey() + "', requiredSourcePageNumbers="
+                                    + slot.sourcePageNumbers() + "}")
+                            .toList();
+                    sourceBindingErrors.add("conceptId='" + concept.conceptId() + "', sourceIdentifier='" + identifier
+                            + "': sourcePageNumbers=" + concept.sourcePageNumbers()
+                            + " must contain every page from at least one matching SOURCED slot; matchingRequirements="
+                            + matchingRequirements);
                 }
             }
+        }
+        if (!sourceBindingErrors.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "whole-game source binding validation failed:\n- " + String.join("\n- ", sourceBindingErrors));
         }
 
         Set<String> dependencies = new LinkedHashSet<>();

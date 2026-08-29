@@ -7,6 +7,8 @@ readonly WATCHDOG_DEADLINE_SECONDS=2100
 readonly WATCHDOG_POLL_SECONDS=5
 readonly WATCHDOG_READY_ATTEMPTS=100
 readonly WATCHDOG_READY_POLL_SECONDS=0.05
+readonly ROLLBACK_READY_TIMEOUT_SECONDS=360
+readonly ROLLBACK_READY_POLL_SECONDS=2
 readonly QUALIFIED_MAIN_REMOTE=https://github.com/ZhenFan1996/rulepilot.git
 
 fail() {
@@ -162,17 +164,18 @@ compose_loopback_endpoint() {
 }
 
 wait_for_http() {
-	local url=$1
-	local attempts=$2
-	local attempt=1
-	while (( attempt <= attempts )); do
-		if curl -fsS "$url" >/dev/null 2>&1; then
+	local label=$1
+	local url=$2
+	local deadline=$3
+	shift 3
+	while :; do
+		if curl -fsS --max-time 6 "$@" "$url" >/dev/null 2>&1; then
 			return 0
 		fi
-		attempt=$((attempt + 1))
-		sleep 2
+		(( $(date +%s) < deadline )) || break
+		sleep "$ROLLBACK_READY_POLL_SECONDS"
 	done
-	fail "Immutable rollback service did not become ready"
+	fail "Immutable rollback ${label} did not become ready before the recovery deadline"
 }
 
 require_running_image() {
@@ -191,9 +194,9 @@ require_running_image() {
 wait_for_worker() {
 	local release_dir=$1
 	local expected_image=$2
-	local attempts=$3
-	local attempt=1 container running actual_image worker_health
-	while (( attempt <= attempts )); do
+	local deadline=$3
+	local container running actual_image worker_health
+	while :; do
 		container=$(compose_container "$release_dir" worker)
 		if [[ -n "$container" ]]; then
 			running=$(docker inspect --format '{{.State.Running}}' "$container")
@@ -205,10 +208,10 @@ wait_for_worker() {
 				return 0
 			fi
 		fi
-		attempt=$((attempt + 1))
-		sleep 2
+		(( $(date +%s) < deadline )) || break
+		sleep "$ROLLBACK_READY_POLL_SECONDS"
 	done
-	fail "Immutable rollback worker did not become ready"
+	fail "Immutable rollback worker did not become ready before the recovery deadline"
 }
 
 atomic_write() {
@@ -557,7 +560,7 @@ finalize_unchanged() {
 rollback_held() {
 	local application_root release_id previous_release_id state_dir releases_root
 	local failed_release previous_release active_release backend_image frontend_image backend_image_id frontend_image_id
-	local backend_endpoint frontend_endpoint
+	local backend_endpoint frontend_endpoint rollback_ready_deadline
 	application_root=$(resolve_application_root "$1")
 	release_id=$2
 	previous_release_id=$3
@@ -609,15 +612,23 @@ rollback_held() {
 	)
 	backend_endpoint=$(compose_loopback_endpoint "$previous_release" api 8080)
 	frontend_endpoint=$(compose_loopback_endpoint "$previous_release" frontend 80)
-	wait_for_http "http://${backend_endpoint}/actuator/health" 60
-	wait_for_http "http://${frontend_endpoint}/" 45
-	wait_for_worker "$previous_release" "$backend_image_id" 60
+	rollback_ready_deadline=$(($(date +%s) + ROLLBACK_READY_TIMEOUT_SECONDS))
+	wait_for_http api "http://${backend_endpoint}/actuator/health" "$rollback_ready_deadline"
+	wait_for_http frontend "http://${frontend_endpoint}/" "$rollback_ready_deadline"
+	wait_for_worker "$previous_release" "$backend_image_id" "$rollback_ready_deadline"
+	# Verify the restored route through Caddy on loopback. This proves the complete application path without letting
+	# an external DNS, CDN, firewall, or filing edge redefine whether the immutable host rollback succeeded.
+	wait_for_http gateway "https://rulepilot.cn/api/auth/csrf" "$rollback_ready_deadline" \
+		--proto '=https' --noproxy '*' --resolve 'rulepilot.cn:443:127.0.0.1'
 	# A service that became ready earlier in the recovery window can still restart while a sibling catches up. Verify
 	# the complete immutable topology once more immediately before making the rollback terminal and visible.
 	require_running_image "$previous_release" api "$backend_image_id"
 	require_running_image "$previous_release" worker "$backend_image_id"
 	require_running_image "$previous_release" frontend "$frontend_image_id"
 	ln -sfn "$previous_release" "$application_root/current"
+	active_release=$(readlink -f "$application_root/current")
+	[[ "$active_release" == "$previous_release" ]] \
+		|| fail "Rollback release pointer did not return to the immutable checkpoint"
 	atomic_write "$state_dir/rolled-back" "$previous_release_id"
 	discard_transaction_secrets "$state_dir" "$release_id"
 	release_active_transaction_held "$application_root" "$release_id"

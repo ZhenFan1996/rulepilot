@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.SyncTaskExecutor;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -48,14 +49,14 @@ class BggRecommendationAgentStreamControllerTest {
                 ignored -> {},
                 null,
                 new BoardGameRecommendationProperties(
-                        8, 3, new BigDecimal("0.66"), Duration.ofSeconds(45)));
+                        8, 3, new BigDecimal("0.66"), Duration.ofMinutes(2)));
 
         SseEmitter emitter = controller.converse(
                 new BggRecommendationAgentController.RecommendationConversationRequest(null, "四人区控"),
                 "zh-CN",
                 () -> "player");
 
-        assertThat(emitter.getTimeout()).isEqualTo(50_000L);
+        assertThat(emitter.getTimeout()).isEqualTo(125_000L);
         verify(agent, never()).converse(any(), any(), any(), any(), any());
     }
 
@@ -64,8 +65,7 @@ class BggRecommendationAgentStreamControllerTest {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         AtomicReference<Runnable> queued = new AtomicReference<>();
-        var controller = new BggRecommendationAgentStreamController(
-                agent, presentation, queued::set);
+        var controller = controller(agent, presentation, queued::set);
         var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
         var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
@@ -108,8 +108,7 @@ class BggRecommendationAgentStreamControllerTest {
         });
         when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
-        var controller = new BggRecommendationAgentStreamController(
-                agent, presentation, new SyncTaskExecutor());
+        var controller = controller(agent, presentation, new SyncTaskExecutor());
         var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
         var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
@@ -183,8 +182,7 @@ class BggRecommendationAgentStreamControllerTest {
                     20,
                     List.of());
         });
-        var controller = new BggRecommendationAgentStreamController(
-                agent, presentation, new SyncTaskExecutor());
+        var controller = controller(agent, presentation, new SyncTaskExecutor());
         var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
         var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
@@ -215,5 +213,18 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("event:result")
                 .contains("没有未经验证的推荐")
                 .containsSubsequence("event:progress", "event:result");
+    }
+
+    private BggRecommendationAgentStreamController controller(
+            BoardGameRecommendationAgent agent,
+            BggRecommendationPresentation presentation,
+            TaskExecutor executor) {
+        return new BggRecommendationAgentStreamController(
+                agent,
+                presentation,
+                executor,
+                null,
+                new BoardGameRecommendationProperties(
+                        8, 3, new BigDecimal("0.66"), Duration.ofMinutes(2)));
     }
 }

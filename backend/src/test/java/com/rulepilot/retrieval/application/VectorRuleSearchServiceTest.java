@@ -20,7 +20,7 @@ class VectorRuleSearchServiceTest {
         VectorRuleSearchRepository repository = (version, requestedVector, providerId, limit) -> {
             assertThat(requestedVector).isEqualTo(vector);
             assertThat(providerId).isEqualTo("test:2");
-            assertThat(limit).isEqualTo(20);
+            assertThat(limit).isEqualTo(50);
             return List.of();
         };
         var service = new VectorRuleSearchService(provider, repository, metrics);
@@ -54,6 +54,33 @@ class VectorRuleSearchServiceTest {
         assertThat(metrics.find(VectorRuleSearchService.PHASE_DURATION_METRIC)
                         .tag("phase", "query-embedding").timer().count())
                 .isEqualTo(1);
+    }
+
+    @Test
+    void passesTheStableOffsetToTheVectorRepository() {
+        EmbeddingVector vector = new EmbeddingVector(List.of(1.0f, 0.0f));
+        java.util.concurrent.atomic.AtomicInteger offset = new java.util.concurrent.atomic.AtomicInteger();
+        VectorRuleSearchRepository repository = new VectorRuleSearchRepository() {
+            @Override
+            public List<com.rulepilot.retrieval.evidence.RuleEvidenceHit> search(
+                    UUID version, EmbeddingVector query, String providerId, int limit) {
+                throw new AssertionError("paged vector search must use the offset-aware repository contract");
+            }
+
+            @Override
+            public List<com.rulepilot.retrieval.evidence.RuleEvidenceHit> search(
+                    UUID version, EmbeddingVector query, String providerId, int resultOffset, int limit) {
+                offset.set(resultOffset);
+                assertThat(limit).isEqualTo(4);
+                return List.of();
+            }
+        };
+        var service = new VectorRuleSearchService(
+                provider(List.of(vector)), repository, new SimpleMeterRegistry());
+
+        assertThat(service.search(UUID.randomUUID(), "turn order", 90, 4)).isEmpty();
+
+        assertThat(offset).hasValue(90);
     }
 
     private EmbeddingProvider provider(List<EmbeddingVector> vectors) {

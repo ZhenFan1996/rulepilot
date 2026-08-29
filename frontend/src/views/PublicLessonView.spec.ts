@@ -324,8 +324,11 @@ describe('PublicLessonView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('这次答复没有通过完整性核对')
+    expect(wrapper.text()).toContain('返回的答案没有通过完整性检查')
     expect(wrapper.text()).not.toContain('这条不完整结论不能发布')
+    expect(wrapper.get('[data-testid="public-answer-failure-retry-guidance"]')
+      .attributes('data-retry-unchanged')).toBe('false')
+    expect(wrapper.text()).toContain('不要立即原样重试')
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
       .toBe('三名玩家每人获得四枚时总数是多少？')
     const storedThread = Array.from({ length: sessionStorage.length }, (_, index) =>
@@ -379,6 +382,9 @@ describe('PublicLessonView', () => {
     await vi.waitFor(() => expect(answerSignal?.aborted).toBe(true))
 
     expect(wrapper.text()).toContain('这次未完成的结果不会替换当前页面')
+    expect(wrapper.get('[data-testid="public-answer-failure-retry-guidance"]')
+      .attributes('data-retry-unchanged')).toBe('false')
+    expect(wrapper.text()).toContain('不要立即原样重试')
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value).toBe('这个效果何时结算？')
     expect(wrapper.findAll('button').some(button => button.text() === '停止等待')).toBe(false)
   })
@@ -497,8 +503,8 @@ describe('PublicLessonView', () => {
           assistantRunId: internalId,
           schemaDiagnostic: 'internal response envelope',
           answer: {
-            status: 'MODEL_TIMEOUT',
-            shortVerdict: "I couldn't finish checking the rule in time.",
+            status: 'MODEL_UNAVAILABLE',
+            shortVerdict: 'No configured answer model or provider was available for this request.',
             explanation: '', citations: [], exceptions: [], confidence: 'LOW', answerBasis: null,
             clarification: null, warnings: [],
             documentVersionId: internalId,
@@ -518,17 +524,18 @@ describe('PublicLessonView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.text()).toContain("I couldn't finish checking the rule in time.")
-    expect(wrapper.text().match(/I couldn't finish checking the rule in time\./g)).toHaveLength(1)
-    expect(wrapper.text()).toContain('Your question is still here. Review or edit it, then try again.')
-    expect(wrapper.text()).toContain('Review and try again')
+    expect(wrapper.text()).toContain('No configured answer model or provider was available for this request.')
+    expect(wrapper.text().match(/No configured answer model or provider was available for this request\./g)).toHaveLength(1)
+    expect(wrapper.text()).toContain('The question and rule sources were not rejected.')
+    expect(wrapper.text()).toContain('retry the same question unchanged')
+    expect(wrapper.text()).toContain('Reuse the same question')
     expect(wrapper.text()).not.toContain('没有在时限内完成')
     expect(wrapper.find('[data-confidence="LOW"]').exists()).toBe(false)
     const storedAnswer = Array.from({ length: sessionStorage.length }, (_, index) =>
       sessionStorage.getItem(sessionStorage.key(index) ?? '') ?? '').join('\n')
     expect(storedAnswer).not.toMatch(/assistantRunId|schemaDiagnostic|documentVersionId|11111111/)
 
-    await wrapper.findAll('button').find(button => button.text() === 'Review and try again')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Reuse the same question')!.trigger('click')
     expect(answerRequests).toBe(1)
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
       .toBe('When does the cobalt spindle resolve?')
@@ -537,10 +544,81 @@ describe('PublicLessonView', () => {
     await flushPromises()
 
     expect(answerRequests).toBe(2)
-    expect(wrapper.text()).toContain("I couldn't send this question. It is still here; review it and try again.")
+    expect(wrapper.text()).toContain('The rules answer service is temporarily unavailable.')
+    expect(wrapper.get('[data-testid="public-answer-failure-retry-guidance"]')
+      .attributes('data-retry-unchanged')).toBe('true')
+    expect(wrapper.text()).toContain('After the service recovers')
     expect(wrapper.text()).not.toMatch(/public answer unavailable|503|schema/i)
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
       .toBe('When does the cobalt spindle resolve?')
+    wrapper.unmount()
+  })
+
+  it('distinguishes public-answer rate limits, invalid context, and unknown transport failures', async () => {
+    setLocale('en')
+    const lesson = publicLessonPayload('plan-1', 'Boundary Rules', 'en')
+    let answerRequests = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerRequests += 1
+        if (answerRequests === 1) return new Response(null, { status: 429 })
+        if (answerRequests === 2) return new Response(null, { status: 422 })
+        throw new TypeError('private network diagnostic')
+      }
+      return Response.json(lesson)
+    }))
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1/questions')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('When does this resolve?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    let guidance = wrapper.get('[data-testid="public-answer-failure-retry-guidance"]')
+    expect(wrapper.text()).toContain('Wait for the limit to clear')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('true')
+
+    await wrapper.get('[data-testid="public-answer-failure-retry-unchanged"]').trigger('click')
+    await flushPromises()
+
+    guidance = wrapper.get('[data-testid="public-answer-failure-retry-guidance"]')
+    expect(wrapper.text()).toContain("This guide's answer context changed")
+    expect(wrapper.text()).toContain('Editing the question cannot repair it')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('false')
+
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(answerRequests).toBe(2)
+
+    expect(wrapper.find('[data-testid="public-answer-failure-edit-question"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="public-answer-failure-return-guide"]').attributes('href'))
+      .toBe('/read/plan-1')
+    await wrapper.get('#public-question').setValue('When does this resolve during final scoring?')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(answerRequests).toBe(2)
+
+    await wrapper.get('[data-testid="public-answer-failure-refresh-context"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('The guide and answer context were refreshed')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    guidance = wrapper.get('[data-testid="public-answer-failure-retry-guidance"]')
+    expect(wrapper.text()).toContain('check the connection, session, and rulebook context')
+    expect(wrapper.text()).not.toContain('private network diagnostic')
+    expect(guidance.attributes('data-retry-unchanged')).toBe('false')
+    await wrapper.get('[data-testid="public-answer-failure-edit-question"]').trigger('click')
+    expect(document.activeElement).toBe(wrapper.get('#public-question').element)
     wrapper.unmount()
   })
 
@@ -641,7 +719,8 @@ describe('PublicLessonView', () => {
       if (init?.method === 'POST') {
         return Response.json({
           answer: {
-            status: 'ANSWERED', shortVerdict: 'Place the mat in front of you.', explanation: 'It starts your personal play area.', warnings: [],
+            status: 'ANSWERED_WITH_WARNING', shortVerdict: 'Place the mat in front of you.', explanation: 'It starts your personal play area.',
+            warnings: [{ type: 'SOURCE_COVERAGE_PARTIAL' }],
             citations: [{ heading: 'Setup', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'MEDIUM',
             answerBasis: 'DIRECT_RULE', clarification: null,
           }, visualAids: [], examples: [],
@@ -685,6 +764,7 @@ describe('PublicLessonView', () => {
     })
     expect(JSON.parse(String(request?.[1]?.body))).not.toHaveProperty('sectionPosition')
     expect(wrapper.text()).toContain('Place the mat in front of you.')
+    expect(wrapper.text()).toContain('Some retrieval sources are temporarily unavailable')
     const mediumConfidence = wrapper.get('[data-confidence="MEDIUM"]')
     expect(mediumConfidence.classes()).toContain('bg-amber-50')
     expect(mediumConfidence.classes()).not.toContain('bg-emerald-50')

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
+import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
@@ -16,6 +17,9 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
@@ -90,6 +94,54 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
                 .isInstanceOf(ProviderFailureException.class)
                 .hasMessage("teaching model provider failed")
                 .hasRootCauseMessage("private provider endpoint");
+    }
+
+    @Test
+    void retainsTheCompleteRejectedPayloadAndExactContractObservation() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.providerFor(Role.TEACHING, "alice")).thenReturn("deepseek");
+        when(configuration.modelFor(Role.TEACHING, "alice")).thenReturn(chatModel);
+        when(configuration.modelNameFor(Role.TEACHING, "alice")).thenReturn("teaching-model");
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
+        String rejected = "{\"title\":\"完整但坏掉的候选\",\"steps\":not-an-array}";
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                new ChatResponse(List.of(new Generation(new AssistantMessage(rejected)))));
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Return cited teaching JSON.");
+        when(prompts.teachingUser()).thenReturn("""
+                {section} {objective} {coverage} {requiredRules} {teachingUnits} {wholeGameContext}
+                {continuity} {chapterScope} {evidence} {repair}
+                """);
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(configuration, prompts);
+        UUID evidenceId = UUID.randomUUID();
+        SectionRequest request = new SectionRequest(
+                "setup",
+                "Setup",
+                "Learn setup",
+                List.of("setup"),
+                List.of(),
+                List.of(new EvidenceInput(evidenceId, "RULE", "Setup", "Place the token.", 1, 1)),
+                List.of(),
+                List.of(),
+                List.of(),
+                "alice",
+                "Setup only");
+
+        assertThatThrownBy(() -> model.composeInvocation(request))
+                .isInstanceOfSatisfying(InvalidOutputException.class, failure -> {
+                    assertThat(failure.rejectedCandidate()).isEqualTo(rejected);
+                    assertThat(failure.validationError())
+                            .contains("malformed structured output", "JsonParseException");
+                    var observation = model.rejectionObservation(
+                            request, failure.rejectedCandidate(), failure.validationError());
+                    assertThat(observation.candidateJson()).isEqualTo(rejected);
+                    assertThat(observation.outputContract())
+                            .contains("Return one JSON object", "visualCitationIds", "teachingUnitIds");
+                    assertThat(observation.sectionIdentity()).isEqualTo("setup");
+                    assertThat(observation.allowedEvidenceIdentities()).containsExactly("E1");
+                    assertThat(observation.allowedTeachingUnitIdentities()).isEmpty();
+                });
     }
 
     @Test

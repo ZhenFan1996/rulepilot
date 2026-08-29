@@ -107,7 +107,7 @@ public record PlayerFacingRuleAnswer(
     }
 
     /** Natural-language recovery copy; draft is placed in the editor and is never submitted automatically. */
-    public record Recovery(String message, String actionLabel, String draft) {
+    public record Recovery(String message, String actionLabel, String draft, boolean canRetryUnchanged) {
         public Recovery {
             if (message == null || message.isBlank() || actionLabel == null || actionLabel.isBlank() || draft == null) {
                 throw new IllegalArgumentException("player-facing recovery is invalid");
