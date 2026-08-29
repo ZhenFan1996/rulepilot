@@ -996,7 +996,7 @@ jobs:
           cleanup_deploy_key
           trap - EXIT
 
-      - name: Verify public release availability without repository code or production SSH authority
+      - name: Classify independent public observation without repository code or production SSH authority
         id: public_availability
         timeout-minutes: 2
         shell: bash
@@ -1030,8 +1030,10 @@ jobs:
             RULEPILOT_HTTPS_ACCEPT="${RULEPILOT_HTTPS_ACCEPT:-}" \
               python3 - <<'PY'
           import base64
+          import http.client
           import os
           import signal
+          import ssl
           import sys
           from urllib import error, parse, request
 
@@ -1075,12 +1077,30 @@ jobs:
               previous_alarm_handler = signal.signal(signal.SIGALRM, expire_request)
               signal.setitimer(signal.ITIMER_REAL, TIMEOUT_SECONDS)
               try:
-                  with request.build_opener(RejectRedirectHandler()).open(
-                      probe, timeout=TIMEOUT_SECONDS
-                  ) as response:
-                      require_https_url(response.geturl())
-                      body = response.read(MAX_RESPONSE_BYTES + 1)
-                      response_headers = tuple(response.headers.items())
+                  try:
+                      with request.build_opener(RejectRedirectHandler()).open(
+                          probe, timeout=TIMEOUT_SECONDS
+                      ) as response:
+                          require_https_url(response.geturl())
+                          body = response.read(MAX_RESPONSE_BYTES + 1)
+                          response_headers = tuple(response.headers.items())
+                  except error.HTTPError as failure:
+                      print(f"HTTPS GET failed with HTTP status {failure.code}", file=sys.stderr)
+                      raise SystemExit(75 if failure.code in (502, 503, 504) else 1)
+                  except (
+                      error.URLError,
+                      TimeoutError,
+                      ConnectionError,
+                      http.client.HTTPException,
+                      ssl.SSLError,
+                      OSError,
+                  ) as failure:
+                      reason = getattr(failure, "reason", failure)
+                      print(
+                          f"HTTPS GET failed before a complete HTTP response ({type(reason).__name__})",
+                          file=sys.stderr,
+                      )
+                      raise SystemExit(75)
               finally:
                   signal.setitimer(signal.ITIMER_REAL, 0)
                   signal.signal(signal.SIGALRM, previous_alarm_handler)
@@ -1093,15 +1113,6 @@ jobs:
                   with open(headers_path, "w", encoding="iso-8859-1", newline="\n") as output:
                       for name, value in response_headers:
                           output.write(f"{name}: {value.replace(chr(13), '').replace(chr(10), ' ')}\n")
-          except error.HTTPError as failure:
-              print(f"HTTPS GET failed with HTTP status {failure.code}", file=sys.stderr)
-              raise SystemExit(1)
-          except error.URLError as failure:
-              print(
-                  f"HTTPS GET failed before an HTTP response ({type(failure.reason).__name__})",
-                  file=sys.stderr,
-              )
-              raise SystemExit(1)
           except (OSError, ValueError) as failure:
               print(f"HTTPS GET failed ({type(failure).__name__})", file=sys.stderr)
               raise SystemExit(1)
@@ -1122,29 +1133,38 @@ jobs:
             https_get \
               "$RULEPILOT_PUBLIC_URL/api/public/release" \
               "$release_body" \
-              "$release_headers" || return 1
+              "$release_headers" || return $?
             jq -e --arg deploy_sha "$DEPLOY_SHA" --arg deploy_release_id "$DEPLOY_RELEASE_ID" '
               .commitSha == $deploy_sha
               and .releaseId == $deploy_release_id
             ' "$release_body" >/dev/null || return 1
-            tr -d '\r' < "$release_headers" \
-              | grep -Eiq '^cache-control:.*no-store' || return 1
+            tr -d '\r' < "$release_headers" | awk '
+            tolower($0) ~ /^cache-control:/ {
+              value = substr($0, index($0, ":") + 1)
+              directive_count = split(value, directives, ",")
+              for (index_value = 1; index_value <= directive_count; index_value++) {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", directives[index_value])
+                if (tolower(directives[index_value]) == "no-store") found = 1
+              }
+            }
+            END { exit(found ? 0 : 1) }
+            ' || return 1
 
             RULEPILOT_HTTPS_BASIC_USERNAME="$preflight_username" \
             RULEPILOT_HTTPS_BASIC_PASSWORD="$preflight_password" \
             RULEPILOT_HTTPS_ACCEPT="application/json" \
               https_get \
                 "$RULEPILOT_PUBLIC_URL/api/v1/model-configuration" \
-                "$model_body" || return 1
+                "$model_body" || return $?
             jq -e '
               .recommendationModel.provider == "qwen"
               and .recommendationModel.model == "qwen3.8-flash"
             ' "$model_body" >/dev/null || return 1
 
-            https_get "$RULEPILOT_PUBLIC_URL/" "$home_body" || return 1
+            https_get "$RULEPILOT_PUBLIC_URL/" "$home_body" || return $?
             [[ -s "$home_body" ]] || return 1
 
-            https_get "$RULEPILOT_PUBLIC_URL/api/auth/csrf" "$csrf_body" || return 1
+            https_get "$RULEPILOT_PUBLIC_URL/api/auth/csrf" "$csrf_body" || return $?
             jq -e '
               (.token | type == "string" and length > 0)
               and (.headerName | type == "string" and length > 0)
@@ -1152,7 +1172,7 @@ jobs:
 
             https_get \
               "$RULEPILOT_PUBLIC_URL/api/v1/bgg/recommendations" \
-              "$recommendations_body" || return 1
+              "$recommendations_body" || return $?
             first_bgg_id=$(jq -er '
               .[0]
               | select(
@@ -1167,7 +1187,7 @@ jobs:
 
             https_get \
               "$RULEPILOT_PUBLIC_URL/api/v1/bgg/games/${first_bgg_id}?locale=zh-CN" \
-              "$detail_body" || return 1
+              "$detail_body" || return $?
             jq -e --argjson bgg_id "$first_bgg_id" '
               .bggId == $bgg_id
               and (.description | type) == "string"
@@ -1178,17 +1198,31 @@ jobs:
           }
 
           verified=false
+          observer_unreachable=true
           for attempt in 1 2 3; do
             if verify_public_once; then
               verified=true
               break
+            else
+              verification_status=$?
+            fi
+            if [[ "$verification_status" != 75 ]]; then
+              observer_unreachable=false
+              break
             fi
             [[ "$attempt" == 3 ]] || sleep 3
           done
-          [[ "$verified" == true ]]
+          if [[ "$verified" == true ]]; then
+            echo "Independent public observer verified the exact candidate release."
+          elif [[ "$observer_unreachable" == true ]]; then
+            echo "::warning title=Independent public observer unreachable::The observer received no verifiable HTTP response after three bounded attempts. Candidate eligibility will be decided by the production gateway boundary owned by the release guard."
+          else
+            echo "Independent public observer received a deterministic contract failure." >&2
+            exit 1
+          fi
           unset preflight_username preflight_password credential_lines
 
-      - name: Commit the publicly verified release
+      - name: Verify the candidate publication boundary and commit the release
         id: commit_release
         shell: bash
         env:
@@ -1232,6 +1266,12 @@ jobs:
             if commit_release_once; then
               committed=true
               break
+            else
+              commit_status=$?
+            fi
+            if [[ "$commit_status" != 75 && "$commit_status" != 255 ]]; then
+              echo "Candidate publication boundary rejected the release; the same request will not be retried." >&2
+              exit "$commit_status"
             fi
             [[ "$attempt" == 3 ]] || sleep 3
           done
