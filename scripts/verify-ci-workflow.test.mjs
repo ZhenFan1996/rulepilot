@@ -1268,6 +1268,16 @@ test('deployment seals control-plane code before build and keeps it isolated thr
   const buildVerification = buildJob.indexOf('name: Verify and extract an isolated sealed source copy')
   const firstRepositoryExecution = buildJob.indexOf('name: Build immutable deployment artifacts')
   assert.ok(buildVerification >= 0 && buildVerification < firstRepositoryExecution)
+  const setupJava = buildJob.indexOf('- uses: actions/setup-java@v5')
+  assert.ok(setupJava >= 0 && setupJava < firstRepositoryExecution)
+  const isolatedToolchainSetup = buildJob.slice(
+    setupJava,
+    firstRepositoryExecution,
+  )
+  assert.doesNotMatch(isolatedToolchainSetup, /\n\s+cache:/)
+  assert.doesNotMatch(isolatedToolchainSetup, /cache-dependency-path:/)
+  assert.match(isolatedToolchainSetup,
+    /actions\/setup-node@v6[\s\S]*?package-manager-cache: false/)
 
   assert.match(deployJob, /needs: \[seal_source, build\]/)
   assert.match(deployJob,
