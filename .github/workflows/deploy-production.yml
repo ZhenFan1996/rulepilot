@@ -1173,7 +1173,6 @@ jobs:
           DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          RULEPILOT_PUBLIC_URL: https://rulepilot.cn
         run: |
           set -Eeuo pipefail
           cleanup_deploy_key() {
@@ -1206,40 +1205,6 @@ jobs:
           test -x "$guard_script"
           "$guard_script" rollback "$application_root" "$failed_release_id" "$previous_release_id"
           REMOTE
-          cleanup_deploy_key
-          unset DEPLOY_HOST DEPLOY_PATH DEPLOY_SSH_PORT DEPLOY_SSH_PRIVATE_KEY DEPLOY_USER
-          previous_sha=${DEPLOY_PREVIOUS_RELEASE_ID%%-*}
-          [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]]
-          release_headers=$(mktemp "$RUNNER_TEMP/rulepilot-rollback-release-headers.XXXXXX")
-          trap 'rm -f "$release_headers"' EXIT
-          release_snapshot=$(curl \
-            --proto '=https' \
-            --silent \
-            --show-error \
-            --fail \
-            --max-time 10 \
-            --dump-header "$release_headers" \
-            "$RULEPILOT_PUBLIC_URL/api/public/release")
-          jq -e \
-            --arg previous_sha "$previous_sha" \
-            --arg previous_release_id "$DEPLOY_PREVIOUS_RELEASE_ID" '
-            .commitSha == $previous_sha
-            and .releaseId == $previous_release_id
-          ' <<< "$release_snapshot" >/dev/null
-          tr -d '\r' < "$release_headers" | grep -Eiq '^cache-control:.*no-store'
-          csrf_payload=$(curl \
-            --proto '=https' \
-            --silent \
-            --show-error \
-            --fail \
-            --max-time 10 \
-            "$RULEPILOT_PUBLIC_URL/api/auth/csrf")
-          jq -e '
-            (.token | type == "string" and length > 0)
-            and (.headerName | type == "string" and length > 0)
-          ' <<< "$csrf_payload" >/dev/null
-          rm -f "$release_headers"
-          trap - EXIT
 
       - name: Collect production service status after a failed verification
         if: failure() && steps.configure_ssh.outcome == 'success'

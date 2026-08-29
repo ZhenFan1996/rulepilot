@@ -353,7 +353,20 @@ async function createReleaseGuardFixture() {
   const installPath = join(fakeBin, 'install')
   const gitPath = join(fakeBin, 'git')
   await writeFile(dockerPath, `${dockerStub}\n`, { mode: 0o755 })
-  await writeFile(curlPath, '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 })
+  await writeFile(curlPath, [
+    '#!/usr/bin/env bash',
+    'set -Eeuo pipefail',
+    'if [[ -n "${RULEPILOT_TEST_CURL_LOG:-}" ]]; then printf "%s\\n" "$*" >> "$RULEPILOT_TEST_CURL_LOG"; fi',
+    'if [[ -n "${RULEPILOT_TEST_CURL_FAILURE_COUNTER:-}" ]]; then',
+    '  remaining=$(<"$RULEPILOT_TEST_CURL_FAILURE_COUNTER")',
+    '  if (( remaining > 0 )); then',
+    '    printf "%s\\n" "$((remaining - 1))" > "$RULEPILOT_TEST_CURL_FAILURE_COUNTER"',
+    '    exit 22',
+    '  fi',
+    'fi',
+    'exit 0',
+    '',
+  ].join('\n'), { mode: 0o755 })
   await writeFile(installPath, [
     '#!/usr/bin/env bash',
     'set -Eeuo pipefail',
@@ -423,6 +436,8 @@ async function writeFastReleaseGuard(fixture, deadlineSeconds = 4) {
       `readonly WATCHDOG_DEADLINE_SECONDS=${deadlineSeconds}`,
     )
     .replace('readonly WATCHDOG_POLL_SECONDS=5', 'readonly WATCHDOG_POLL_SECONDS=1')
+    .replace('readonly ROLLBACK_READY_TIMEOUT_SECONDS=360', 'readonly ROLLBACK_READY_TIMEOUT_SECONDS=3')
+    .replace('readonly ROLLBACK_READY_POLL_SECONDS=2', 'readonly ROLLBACK_READY_POLL_SECONDS=0.05')
   await writeFile(guardPath, fastGuard, { mode: 0o755 })
   return guardPath
 }
@@ -2112,22 +2127,39 @@ test('rollback is bounded to immutable releases and publishes only a revalidated
   assert.doesNotMatch(endpointGuard, /sed|BACKEND_PORT|RULEPILOT_HTTP_PORT|\.env.*=|0\.0\.0\.0/)
   assert.match(rollbackGuard,
     /compose_loopback_endpoint "\$previous_release" api 8080[\s\S]*?compose_loopback_endpoint "\$previous_release" frontend 80/)
+  assert.match(rollbackGuard,
+    /rollback_ready_deadline=.*?ROLLBACK_READY_TIMEOUT_SECONDS[\s\S]*?wait_for_http api[\s\S]*?wait_for_http frontend[\s\S]*?wait_for_worker[\s\S]*?wait_for_http gateway/)
+  assert.match(rollbackGuard,
+    /https:\/\/rulepilot\.cn\/api\/auth\/csrf[\s\S]*?--noproxy '\*'[\s\S]*?--resolve 'rulepilot\.cn:443:127\.0\.0\.1'/)
+  assert.match(rollbackGuard,
+    /ln -sfn "\$previous_release"[\s\S]*?readlink -f "\$application_root\/current"[\s\S]*?"\$active_release" == "\$previous_release"[\s\S]*?rolled-back/)
 })
 
-test('rollback accepts a single IPv6 loopback Compose endpoint', async (context) => {
+test('rollback recovers a delayed candidate through IPv6 loopback and the compatible gateway route', async (context) => {
   if (process.platform !== 'linux') {
     context.skip('rollback IPv6 endpoint validation is exercised on the Linux CI runner')
     return
   }
   const fixture = await createReleaseGuardFixture()
+  const guardPath = await writeFastReleaseGuard(fixture)
+  const curlLog = join(fixture.root, 'rollback-curl.log')
+  const curlFailures = join(fixture.root, 'rollback-curl-failures')
   try {
     await invokeReleaseGuard(fixture, 'checkpoint')
     await invokeReleaseGuard(fixture, 'arm')
+    await rm(fixture.current)
+    await symlink(fixture.candidateRelease, fixture.current)
+    await writeFile(
+      fixture.environmentFile,
+      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=127.0.0.1:28081\n',
+      { mode: 0o600 },
+    )
+    await writeFile(curlFailures, '2\n')
 
     await execFileAsync(
       'bash',
       [
-        productionReleaseGuardPath,
+        guardPath,
         'rollback',
         fixture.root,
         fixture.release,
@@ -2138,12 +2170,25 @@ test('rollback accepts a single IPv6 loopback Compose endpoint', async (context)
           ...fixture.processEnvironment,
           RULEPILOT_TEST_API_ENDPOINT: '[::1]:18080',
           RULEPILOT_TEST_FRONTEND_ENDPOINT: '[::1]:18081',
+          RULEPILOT_TEST_CURL_LOG: curlLog,
+          RULEPILOT_TEST_CURL_FAILURE_COUNTER: curlFailures,
         },
       },
     )
 
-    await access(join(fixture.guardState, 'rolled-back'))
+    assert.equal(await readFile(join(fixture.guardState, 'rolled-back'), 'utf8'), `${fixture.previous}\n`)
     await assert.rejects(access(join(fixture.root, 'deployment-guards', 'active-transaction')))
+    assert.equal(await realpath(fixture.current), fixture.previousRelease)
+    assert.equal(
+      await readFile(fixture.environmentFile, 'utf8'),
+      'DEPLOY_MARKER=checkpoint\nBACKEND_PORT=18080\nRULEPILOT_HTTP_PORT=127.0.0.1:18081\n',
+    )
+    const probes = await readFile(curlLog, 'utf8')
+    assert.match(probes, /http:\/\/\[::1\]:18080\/actuator\/health/)
+    assert.match(probes, /http:\/\/\[::1\]:18081\//)
+    assert.match(probes,
+      /--noproxy \* --resolve rulepilot\.cn:443:127\.0\.0\.1 https:\/\/rulepilot\.cn\/api\/auth\/csrf/)
+    assert.doesNotMatch(probes, /api\/public\/release/)
   } finally {
     await stopReleaseGuardWatchdog(fixture)
     await rm(fixture.root, { recursive: true, force: true })
@@ -2527,8 +2572,6 @@ test('deployment availability is deterministic and does not invoke a paid Agent'
     /verify_public_once\(\)[\s\S]*?\/api\/public\/release[\s\S]*?\.commitSha == \$deploy_sha[\s\S]*?\.releaseId == \$deploy_release_id[\s\S]*?cache-control:.*no-store/)
   assert.match(deploymentWorkflow,
     /for attempt in 1 2 3; do[\s\S]{0,180}?if verify_public_once; then/)
-  assert.match(deploymentWorkflow,
-    /--arg previous_release_id "\$DEPLOY_PREVIOUS_RELEASE_ID"[\s\S]*?\.releaseId == \$previous_release_id/)
   assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendations/)
   assert.match(deploymentWorkflow,
     /\/api\/v1\/bgg\/games\/\$\{first_bgg_id\}\?locale=zh-CN/)
@@ -2542,6 +2585,13 @@ test('deployment availability is deterministic and does not invoke a paid Agent'
   assert.doesNotMatch(deploymentWorkflow, /echo "\$preflight_password"/)
   assert.match(deploymentWorkflow,
     /commit_release_once\(\)[\s\S]*?for attempt in 1 2 3; do[\s\S]{0,180}?if commit_release_once; then/)
+
+  const rollbackStep = workflowRunBlock(
+    deploymentWorkflow,
+    'Roll back any uncommitted production mutation',
+  )
+  assert.match(rollbackStep, /"\$guard_script" rollback/)
+  assert.doesNotMatch(rollbackStep, /RULEPILOT_PUBLIC_URL|curl|api\/public\/release|api\/auth\/csrf/)
 })
 
 test('deployment failure diagnostics expose service state without logs, secrets, or environment files', () => {

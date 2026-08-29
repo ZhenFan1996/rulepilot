@@ -240,11 +240,13 @@ read tool 的一次临时失败先作为 observation 交还 Agent，Agent 可以
 2. 合并后部署先在无生产权限的 job 封存精确 SHA 源码，再在隔离 job 构建不可变镜像，最后才把校验过的
    release 和临时凭据交给部署 job。部署事务在切换前保存环境和旧 release，活跃 watchdog 覆盖整个激活窗口；
    新 checkpoint 持有同一部署锁时，至多恢复一个已经 armed 且 lease 过期的前序事务，fresh lease 即使带有
-   watchdog failure 也拒绝接管，unarmed 状态则保持 fail closed。回滚健康探测读取 Compose 已求值的唯一
-   loopback published endpoint，而不是再次解释 `.env` 端口表达式；失败诊断只输出容器状态、重启/OOM、退出码、
-   错误与时间戳，不读取日志或环境变量。Compose、migration、容器健康、公开 availability 和
-   `Cache-Control: no-store` release identity 任一不满足都回滚到经过重新校验的旧 topology。公开 `current`
-   只在 commit checkpoint 后成为新 release。
+   watchdog failure 也拒绝接管，unarmed 状态则保持 fail closed。回滚守卫独占一个共享的六分钟恢复期限，读取
+   Compose 已求值的唯一 loopback published endpoint，重新校验旧 API/worker/frontend 镜像、worker health、
+   回环 Caddy 路由和 `current` 指针；它不再次解释 `.env` 端口，也不让 DNS、CDN、防火墙或备案边缘决定主机内
+   回滚是否完成。失败诊断只输出容器状态、重启/OOM、退出码、错误与时间戳，不读取日志或环境变量。Compose、
+   migration、候选容器健康、公开 availability 和 `Cache-Control: no-store` release identity 任一不满足都触发
+   回滚；公网仍不可用是独立的边缘结果，不能覆盖已验证的旧 topology 恢复事实。`current` 只在 commit checkpoint
+   后成为新 release。
 3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 验证一次登录用户的新目录推荐、完整回复、
    每卡证据文案、持久化和页面逐字呈现，同时记录实际模型/工具调用图但不规定 exact 次数；门禁只要求没有
    完全相同的重复读取、没有超过 Agent 总安全预算，并在页面 SLO 内形成正确结果。provider 修复后只要仍满足
