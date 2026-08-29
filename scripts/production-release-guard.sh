@@ -10,6 +10,8 @@ readonly WATCHDOG_READY_POLL_SECONDS=0.05
 readonly ROLLBACK_READY_TIMEOUT_SECONDS=360
 readonly ROLLBACK_READY_POLL_SECONDS=2
 readonly QUALIFIED_MAIN_REMOTE=https://github.com/ZhenFan1996/rulepilot.git
+readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen
+readonly EXPECTED_RECOMMENDATION_MODEL=qwen3.8-flash
 
 fail() {
 	printf '%s\n' "$*" >&2
@@ -167,9 +169,11 @@ wait_for_http() {
 	local label=$1
 	local url=$2
 	local deadline=$3
+	local http_status
 	shift 3
 	while :; do
-		if curl -fsS --max-time 6 "$@" "$url" >/dev/null 2>&1; then
+		if http_status=$(curl -sS --max-time 6 --output /dev/null --write-out '%{http_code}' \
+			"$@" "$url" 2>/dev/null) && [[ "$http_status" == 200 ]]; then
 			return 0
 		fi
 		(( $(date +%s) < deadline )) || break
@@ -177,6 +181,238 @@ wait_for_http() {
 	done
 	fail "Immutable rollback ${label} did not become ready before the recovery deadline"
 }
+
+verify_candidate_publication_boundary() (
+	set -Eeuo pipefail
+	local active_release=$1
+	local release_id=$2
+	local candidate_sha api_container preflight_dir auth_config
+	local username password first_bgg_id
+	local curl_status http_status request_label body_path headers_path
+
+	candidate_sha=${release_id%%-*}
+	api_container=$(compose_container "$active_release" api)
+	[[ -n "$api_container" ]] || fail "Candidate API container is unavailable for publication verification"
+	preflight_dir=$(mktemp -d "/tmp/rulepilot-candidate-boundary.${release_id}.XXXXXX")
+	auth_config="$preflight_dir/model-auth.curl"
+	cleanup_candidate_boundary() {
+		if [[ "$preflight_dir" == "/tmp/rulepilot-candidate-boundary.${release_id}."* ]]; then
+			rm -rf -- "$preflight_dir"
+		fi
+	}
+	trap cleanup_candidate_boundary EXIT
+
+	read_environment_value() {
+		local key=$1 line value first_character last_character
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			[[ "${line%%=*}" == "$key" ]] || continue
+			value=${line#*=}
+			if (( ${#value} >= 2 )); then
+				first_character=${value:0:1}
+				last_character=${value: -1}
+				if [[ "$first_character" == "$last_character"
+					&& ( "$first_character" == '"' || "$first_character" == "'" ) ]]; then
+					value=${value:1:${#value}-2}
+				fi
+			fi
+			printf '%s' "$value"
+			return 0
+		done < "$active_release/.env"
+		return 1
+	}
+
+	escape_curl_config_value() {
+		local value=$1
+		[[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] \
+			|| fail "Candidate publication credential contains an unsupported line break"
+		value=${value//\\/\\\\}
+		value=${value//\"/\\\"}
+		printf '%s' "$value"
+	}
+
+	username=$(read_environment_value RULEPILOT_USER_USERNAME) \
+		|| fail "Candidate publication username is unavailable"
+	password=$(read_environment_value RULEPILOT_USER_PASSWORD) \
+		|| fail "Candidate publication password is unavailable"
+	[[ -n "$username" && "$username" != *:* && -n "$password" ]] \
+		|| fail "Candidate publication configuration is incomplete"
+	umask 077
+	printf 'user = "%s:%s"\n' \
+		"$(escape_curl_config_value "$username")" \
+		"$(escape_curl_config_value "$password")" > "$auth_config"
+
+	candidate_https_get() {
+		request_label=$1
+		local request_path=$2
+		body_path=$3
+		headers_path=$4
+		shift 4
+		if http_status=$(curl \
+			--silent \
+			--show-error \
+			--connect-timeout 3 \
+			--max-time 6 \
+			--max-filesize 1048576 \
+			--max-redirs 0 \
+			--proto '=https' \
+			--noproxy '*' \
+			--resolve 'rulepilot.cn:443:127.0.0.1' \
+			--dump-header "$headers_path" \
+			--output "$body_path" \
+			--write-out '%{http_code}' \
+			"$@" \
+			"https://rulepilot.cn${request_path}"); then
+			:
+		else
+			curl_status=$?
+			case "$curl_status" in
+				5|6|7|16|18|28|35|52|55|56|80|92)
+					printf 'Candidate publication boundary temporarily could not reach %s (curl exit %s).\n' \
+						"$request_label" "$curl_status" >&2
+					exit 75
+					;;
+				*)
+					fail "Candidate publication boundary transport rejected ${request_label} (curl exit ${curl_status})"
+					;;
+			esac
+		fi
+		case "$http_status" in
+			200)
+				return 0
+				;;
+			502|503|504)
+				printf 'Candidate publication boundary temporarily received HTTP %s from %s.\n' \
+					"$http_status" "$request_label" >&2
+				exit 75
+				;;
+			*)
+				fail "Candidate publication boundary received HTTP ${http_status} from ${request_label}"
+				;;
+		esac
+	}
+
+	assert_json_contract() {
+		local contract=$1
+		local payload=$2
+		local expected_id=${3:-}
+		docker exec -i \
+			-e "RULEPILOT_BOUNDARY_CONTRACT=$contract" \
+			-e "RULEPILOT_EXPECTED_RELEASE_ID=$release_id" \
+			-e "RULEPILOT_EXPECTED_COMMIT_SHA=$candidate_sha" \
+			-e "RULEPILOT_EXPECTED_PROVIDER=$EXPECTED_RECOMMENDATION_PROVIDER" \
+			-e "RULEPILOT_EXPECTED_MODEL=$EXPECTED_RECOMMENDATION_MODEL" \
+			-e "RULEPILOT_EXPECTED_BGG_ID=$expected_id" \
+			"$api_container" python3 -c '
+import json
+import os
+import sys
+
+contract = os.environ["RULEPILOT_BOUNDARY_CONTRACT"]
+
+def reject(reason):
+    print(f"Candidate publication boundary rejected {contract}: {reason}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    payload = json.load(sys.stdin)
+except (UnicodeDecodeError, json.JSONDecodeError):
+    reject("invalid JSON")
+
+if contract == "release":
+    if not isinstance(payload, dict):
+        reject("response is not an object")
+    if payload.get("releaseId") != os.environ["RULEPILOT_EXPECTED_RELEASE_ID"]:
+        reject("release identity mismatch")
+    if payload.get("commitSha") != os.environ["RULEPILOT_EXPECTED_COMMIT_SHA"]:
+        reject("commit identity mismatch")
+elif contract == "model":
+    recommendation = payload.get("recommendationModel") if isinstance(payload, dict) else None
+    if not isinstance(recommendation, dict):
+        reject("recommendation model is absent")
+    if recommendation.get("provider") != os.environ["RULEPILOT_EXPECTED_PROVIDER"]:
+        reject("recommendation provider mismatch")
+    if recommendation.get("model") != os.environ["RULEPILOT_EXPECTED_MODEL"]:
+        reject("recommendation model mismatch")
+elif contract == "csrf":
+    if not isinstance(payload, dict):
+        reject("response is not an object")
+    if not isinstance(payload.get("token"), str) or not payload["token"]:
+        reject("token is absent")
+    if not isinstance(payload.get("headerName"), str) or not payload["headerName"]:
+        reject("header name is absent")
+elif contract == "recommendations":
+    if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+        reject("catalog has no first game")
+    game = payload[0]
+    bgg_id = game.get("bggId")
+    if type(bgg_id) is not int or bgg_id <= 0:
+        reject("first game id is invalid")
+    if not isinstance(game.get("name"), str) or not game["name"]:
+        reject("first game name is absent")
+    print(bgg_id)
+elif contract == "detail":
+    if not isinstance(payload, dict):
+        reject("response is not an object")
+    expected_bgg_id = int(os.environ["RULEPILOT_EXPECTED_BGG_ID"])
+    if payload.get("bggId") != expected_bgg_id:
+        reject("game identity mismatch")
+    if not isinstance(payload.get("description"), str):
+        reject("description is invalid")
+    if type(payload.get("descriptionTranslated")) is not bool:
+        reject("translation marker is invalid")
+    if not isinstance(payload.get("categories"), list):
+        reject("categories are invalid")
+    if not isinstance(payload.get("mechanics"), list):
+        reject("mechanics are invalid")
+else:
+    reject("unknown contract")
+' < "$payload"
+	}
+
+	candidate_https_get release /api/public/release \
+		"$preflight_dir/release.body" "$preflight_dir/release.headers"
+	assert_json_contract release "$preflight_dir/release.body"
+	tr -d '\r' < "$preflight_dir/release.headers" | awk '
+tolower($0) ~ /^cache-control:/ {
+    value = substr($0, index($0, ":") + 1)
+    directive_count = split(value, directives, ",")
+    for (index_value = 1; index_value <= directive_count; index_value++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", directives[index_value])
+        if (tolower(directives[index_value]) == "no-store") found = 1
+    }
+}
+END { exit(found ? 0 : 1) }
+' \
+		|| fail "Candidate release identity is cacheable"
+
+	candidate_https_get model /api/v1/model-configuration \
+		"$preflight_dir/model.body" "$preflight_dir/model.headers" \
+		--config "$auth_config" --header 'Accept: application/json'
+	assert_json_contract model "$preflight_dir/model.body"
+
+	candidate_https_get home / "$preflight_dir/home.body" "$preflight_dir/home.headers"
+	[[ -s "$preflight_dir/home.body" ]] || fail "Candidate home page is empty"
+	tr -d '\r' < "$preflight_dir/home.headers" \
+		| grep -Eiq '^content-type:[[:space:]]*text/html([;[:space:]]|$)' \
+		|| fail "Candidate home page is not HTML"
+
+	candidate_https_get csrf /api/auth/csrf \
+		"$preflight_dir/csrf.body" "$preflight_dir/csrf.headers"
+	assert_json_contract csrf "$preflight_dir/csrf.body"
+
+	candidate_https_get recommendations /api/v1/bgg/recommendations \
+		"$preflight_dir/recommendations.body" "$preflight_dir/recommendations.headers"
+	first_bgg_id=$(assert_json_contract recommendations "$preflight_dir/recommendations.body")
+	[[ "$first_bgg_id" =~ ^[1-9][0-9]*$ ]] \
+		|| fail "Candidate recommendation catalog returned an invalid game id"
+
+	candidate_https_get detail \
+		"/api/v1/bgg/games/${first_bgg_id}?locale=zh-CN" \
+		"$preflight_dir/detail.body" "$preflight_dir/detail.headers"
+	assert_json_contract detail "$preflight_dir/detail.body" "$first_bgg_id"
+	printf 'Candidate publication boundary verified release %s through the production gateway.\n' \
+		"$release_id"
+)
 
 require_running_image() {
 	local release_dir=$1
@@ -713,11 +949,18 @@ commit_release() {
 	releases_root=$(readlink -f "$application_root/releases")
 	active_release=$(readlink -f "$application_root/current")
 	[[ "$active_release" == "$releases_root/$release_id" ]] \
-		|| fail "Only the exact publicly verified active release can be committed"
+		|| fail "Only the exact active candidate release can be committed"
 	backend_image="rulepilot-backend:${release_id}"
 	frontend_image="rulepilot-frontend:${release_id}"
 	backend_image_id=$(docker image inspect --format '{{.Id}}' "$backend_image")
 	frontend_image_id=$(docker image inspect --format '{{.Id}}' "$frontend_image")
+	# Publication eligibility belongs to this transaction owner. The candidate must prove the complete production
+	# route through Caddy on host loopback, with the real public SNI and deterministic player-safe contracts, before
+	# a terminal commit can make rollback ineligible. External observers remain useful evidence but cannot redefine
+	# candidate correctness when their own DNS, TLS, or egress path is unavailable.
+	verify_candidate_publication_boundary "$active_release" "$release_id"
+	# A container can restart while the route contract is being checked. Revalidate every immutable runtime identity
+	# and worker readiness immediately before publishing the terminal marker.
 	require_running_image "$active_release" api "$backend_image_id"
 	require_running_image "$active_release" worker "$backend_image_id"
 	require_running_image "$active_release" frontend "$frontend_image_id"

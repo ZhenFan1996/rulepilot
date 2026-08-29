@@ -280,10 +280,15 @@ whole-run owner 才能把整轮
    watchdog failure 也拒绝接管，unarmed 状态则保持 fail closed。回滚守卫独占一个共享的六分钟恢复期限，读取
    Compose 已求值的唯一 loopback published endpoint，重新校验旧 API/worker/frontend 镜像、worker health、
    回环 Caddy 路由和 `current` 指针；它不再次解释 `.env` 端口，也不让 DNS、CDN、防火墙或备案边缘决定主机内
-   回滚是否完成。失败诊断只输出容器状态、重启/OOM、退出码、错误与时间戳，不读取日志或环境变量。Compose、
-   migration、候选容器健康、公开 availability 和 `Cache-Control: no-store` release identity 任一不满足都触发
-   回滚；公网仍不可用是独立的边缘结果，不能覆盖已验证的旧 topology 恢复事实。`current` 只在 commit checkpoint
-   后成为新 release。
+   回滚是否完成。失败诊断只输出容器状态、重启/OOM、退出码、错误与时间戳，不读取日志或环境变量。候选
+   release 的提交资格由同一个 release guard 在部署锁内拥有：它通过主机 loopback 强制真实
+   `rulepilot.cn` SNI，逐一验证 exact release identity、独立 `no-store` directive、普通用户模型配置、首页、
+   CSRF、目录与详情，再复核不可变镜像和 worker health，最后才原子写入 `committed`；模型 identity 由 sealed
+   guard 固定为生产批准的 `qwen/qwen3.8-flash`，不允许待验证的候选 `.env` 生成自己的 expected 值。GitHub
+   runner 的公网检查只负责独立观察：确定性 4xx、identity 或 schema 错误立即拒绝候选；DNS、连接、TLS、响应
+   截断及 502/503/504 归为未取得完整 HTTP 结果并做三次有界重试，三次仍不可验证时明确标为 observer
+   unreachable，由主机发布边界决定提交，不再用观察器自己的网络故障抹掉健康候选。公网仍不可用是独立的
+   边缘结果，也不能覆盖已验证的旧 topology 恢复事实。
 3. 线上 canary 不再组成一个全有或全无的总门禁。推荐 canary 验证一次登录用户的新目录推荐、完整回复、
    每卡证据文案、持久化和页面逐字呈现，同时记录实际模型/工具调用图但不规定 exact 次数；门禁只要求没有
    完全相同的重复读取、没有超过本轮 token/active-work deadline，并在页面 SLO 内形成正确结果。provider 修复后只要仍满足
@@ -302,7 +307,9 @@ whole-run owner 才能把整轮
 如果 GitHub 没有送达 `main` 的 push CI 事件，恢复动作是手工触发同一份 `CI` workflow；只有该 main SHA
 的 CI 成功，`workflow_run` 才能进入部署。部署 workflow 本身没有直接手工入口，因而恢复不会绕过测试。
 
-因此失败含义是可定位的：CI 红表示代码或运行镜像不满足确定性合同；deploy 红表示该 SHA 未能安全激活；
+因此失败含义是可定位的：CI 红表示代码或运行镜像不满足确定性合同；deploy 红表示该 SHA 未通过主机发布
+边界、收到确定性的公网合同拒绝，或提交/回滚控制面没有完成；独立公网观察器只发生 transport unreachable
+时则告警但不把健康候选改写成 deploy 红；
 推荐 canary 红只说明推荐结果；规则书 canary 红只说明其最后到达的 acquisition、preparation、lesson 或
 Q&A 阶段，章节视觉作为 lesson 内部的可选局部结果单列计数。provider 变慢会单独记录为延迟超标，不再把
 已经生成的正确结果改写成“功能失败”。

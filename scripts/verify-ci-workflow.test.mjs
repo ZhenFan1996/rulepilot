@@ -105,6 +105,164 @@ const productionOrdinaryUserSuccessGate = workflowRunBlock(
   'Require a successful ordinary-user journey',
 )
 
+function embeddedCandidateBoundaryParser() {
+  const startMarker = '"$api_container" python3 -c \'\n'
+  const endMarker = '\n\' < "$payload"'
+  const start = productionReleaseGuard.indexOf(startMarker)
+  assert.notEqual(start, -1, 'candidate publication parser start was not found')
+  const bodyStart = start + startMarker.length
+  const end = productionReleaseGuard.indexOf(endMarker, bodyStart)
+  assert.notEqual(end, -1, 'candidate publication parser end was not found')
+  return productionReleaseGuard.slice(bodyStart, end)
+}
+
+function embeddedPublicObserverPython() {
+  const runBlock = workflowRunBlock(
+    deploymentWorkflow,
+    'Classify independent public observation without repository code or production SSH authority',
+  )
+  const startMarker = "python3 - <<'PY'\n"
+  const endMarker = '\nPY\n'
+  const start = runBlock.indexOf(startMarker)
+  assert.notEqual(start, -1, 'public observer Python start was not found')
+  const bodyStart = start + startMarker.length
+  const end = runBlock.indexOf(endMarker, bodyStart)
+  assert.notEqual(end, -1, 'public observer Python end was not found')
+  return runBlock.slice(bodyStart, end)
+}
+
+function embeddedPublicObserverRetryBlock() {
+  const runBlock = workflowRunBlock(
+    deploymentWorkflow,
+    'Classify independent public observation without repository code or production SSH authority',
+  )
+  const startMarker = 'verified=false\n'
+  const endMarker = 'unset preflight_username preflight_password credential_lines'
+  const start = runBlock.indexOf(startMarker)
+  assert.notEqual(start, -1, 'public observer retry start was not found')
+  const end = runBlock.indexOf(endMarker, start)
+  assert.notEqual(end, -1, 'public observer retry end was not found')
+  return runBlock.slice(start, end + endMarker.length)
+}
+
+async function runCandidateBoundaryParser(contract, payload, overrides = {}) {
+  const source = [
+    'import io',
+    'import os',
+    'import sys',
+    'sys.stdin = io.StringIO(os.environ.pop("RULEPILOT_TEST_PAYLOAD"))',
+    embeddedCandidateBoundaryParser(),
+  ].join('\n')
+  return execFileAsync('python3', ['-c', source], {
+    env: {
+      ...process.env,
+      RULEPILOT_TEST_PAYLOAD: payload,
+      RULEPILOT_BOUNDARY_CONTRACT: contract,
+      RULEPILOT_EXPECTED_RELEASE_ID: `${'a'.repeat(40)}-101-2`,
+      RULEPILOT_EXPECTED_COMMIT_SHA: 'a'.repeat(40),
+      RULEPILOT_EXPECTED_PROVIDER: 'qwen',
+      RULEPILOT_EXPECTED_MODEL: 'qwen3.8-flash',
+      RULEPILOT_EXPECTED_BGG_ID: '1',
+      ...overrides,
+    },
+  })
+}
+
+async function publicObserverPythonExit(scenario, root, overrides = {}) {
+  const monkeyPatch = `
+import http.client as _http_client
+import os as _os
+import ssl as _ssl
+from urllib import error as _error
+from urllib import request as _request
+
+class _Headers:
+    def items(self):
+        return [("Cache-Control", "no-store"), ("Content-Type", "application/json")]
+
+class _Response:
+    headers = _Headers()
+    def __enter__(self):
+        return self
+    def __exit__(self, *_args):
+        return False
+    def geturl(self):
+        return _os.environ["RULEPILOT_HTTPS_URL"]
+    def read(self, _limit):
+        scenario = _os.environ["RULEPILOT_TEST_OBSERVER_SCENARIO"]
+        if scenario == "incomplete-read":
+            raise _http_client.IncompleteRead(b"partial", 8)
+        if scenario == "ssl-eof":
+            raise _ssl.SSLEOFError(8, "unexpected EOF")
+        return b"{}"
+
+class _Opener:
+    def open(self, request_value, timeout=None):
+        scenario = _os.environ["RULEPILOT_TEST_OBSERVER_SCENARIO"]
+        if scenario.startswith("http-"):
+            status = int(scenario.removeprefix("http-"))
+            raise _error.HTTPError(request_value.full_url, status, "injected", {}, None)
+        if scenario == "connection-reset":
+            raise _error.URLError(ConnectionResetError("injected"))
+        return _Response()
+
+_request.build_opener = lambda *_handlers: _Opener()
+`
+  try {
+    await execFileAsync('python3', ['-c', `${monkeyPatch}\n${embeddedPublicObserverPython()}`], {
+      env: {
+        ...process.env,
+        RULEPILOT_TEST_OBSERVER_SCENARIO: scenario,
+        RULEPILOT_HTTPS_URL: 'https://rulepilot.cn/api/public/release',
+        RULEPILOT_HTTPS_BODY_PATH: join(root, 'observer.body'),
+        RULEPILOT_HTTPS_HEADERS_PATH: join(root, 'observer.headers'),
+        RULEPILOT_HTTPS_BASIC_USERNAME: '',
+        RULEPILOT_HTTPS_BASIC_PASSWORD: '',
+        RULEPILOT_HTTPS_ACCEPT: '',
+        ...overrides,
+      },
+    })
+    return 0
+  } catch (error) {
+    return Number(error.code)
+  }
+}
+
+async function runPublicObserverRetry(statuses) {
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-public-observer.'))
+  const callLog = join(root, 'calls')
+  const source = `
+set -Eeuo pipefail
+statuses=(${statuses.join(' ')})
+verification_call=0
+verify_public_once() {
+  local status=\${statuses[verification_call]}
+  verification_call=$((verification_call + 1))
+  printf '%s\\n' "$status" >> "$RULEPILOT_TEST_CALL_LOG"
+  return "$status"
+}
+sleep() { :; }
+${embeddedPublicObserverRetryBlock()}
+`
+  let status = 0
+  let stdout = ''
+  let stderr = ''
+  try {
+    const result = await execFileAsync('bash', ['-c', source], {
+      env: { ...process.env, RULEPILOT_TEST_CALL_LOG: callLog },
+    })
+    stdout = result.stdout
+    stderr = result.stderr
+  } catch (error) {
+    status = Number(error.code)
+    stdout = error.stdout ?? ''
+    stderr = error.stderr ?? ''
+  }
+  const calls = (await readFile(callLog, 'utf8')).trim().split('\n').filter(Boolean).map(Number)
+  await rm(root, { recursive: true, force: true })
+  return { status, stdout, stderr, calls }
+}
+
 function productionRecommendationRawReport(overrides = {}) {
   const testedSha = 'a'.repeat(40)
   const activeReleaseId = `${testedSha}-101-1`
@@ -311,6 +469,20 @@ async function createReleaseGuardFixture() {
     '    exit 0',
     '  fi',
     'fi',
+    'if [[ "$1" == exec ]]; then',
+    '  if [[ -n "${RULEPILOT_TEST_CANDIDATE_BOUNDARY_EXIT:-}" ]]; then',
+    '    exit "$RULEPILOT_TEST_CANDIDATE_BOUNDARY_EXIT"',
+    '  fi',
+    '  shift',
+    '  if [[ "${1:-}" == -i ]]; then shift; fi',
+    '  while [[ "${1:-}" == -e ]]; do',
+    '    export "$2"',
+    '    shift 2',
+    '  done',
+    '  [[ $# -ge 2 ]] || { echo "Malformed docker exec invocation." >&2; exit 64; }',
+    '  shift',
+    '  exec "$@"',
+    'fi',
     'if [[ "$1" == inspect ]]; then',
     '  format=$3',
     '  container=$4',
@@ -364,6 +536,83 @@ async function createReleaseGuardFixture() {
     '    exit 22',
     '  fi',
     'fi',
+    'body_path=',
+    'headers_path=',
+    'request_url=',
+    'write_status=false',
+    'while (( $# > 0 )); do',
+    '  case "$1" in',
+    '    --output)',
+    '      body_path=$2',
+    '      shift 2',
+    '      ;;',
+    '    --dump-header)',
+    '      headers_path=$2',
+    '      shift 2',
+    '      ;;',
+    '    --write-out)',
+    '      write_status=true',
+    '      shift 2',
+    '      ;;',
+    '    *)',
+    '      if [[ "$1" == https://* || "$1" == http://* ]]; then request_url=$1; fi',
+    '      shift',
+    '      ;;',
+    '  esac',
+    'done',
+    'if [[ -n "${RULEPILOT_TEST_CANDIDATE_CURL_EXIT:-}" ]]; then',
+    '  exit "$RULEPILOT_TEST_CANDIDATE_CURL_EXIT"',
+    'fi',
+    'http_status=${RULEPILOT_TEST_CANDIDATE_HTTP_STATUS:-200}',
+    'if [[ -n "$body_path" && "$body_path" != /dev/null ]]; then',
+    '  case "$request_url" in',
+    '    */api/public/release)',
+    '      if [[ -n "${RULEPILOT_TEST_RELEASE_BODY+x}" ]]; then',
+    '        printf "%s\\n" "$RULEPILOT_TEST_RELEASE_BODY" > "$body_path"',
+    '      else',
+    '        printf "{\\"releaseId\\":\\"%s\\",\\"commitSha\\":\\"%s\\"}\\n" "$RULEPILOT_TEST_RELEASE_ID" "$RULEPILOT_TEST_CURRENT_MAIN_SHA" > "$body_path"',
+    '      fi',
+    '      ;;',
+    '    */api/v1/model-configuration)',
+    '      if [[ -n "${RULEPILOT_TEST_MODEL_BODY+x}" ]]; then',
+    '        printf "%s\\n" "$RULEPILOT_TEST_MODEL_BODY" > "$body_path"',
+    '      else',
+    '        printf "{\\"recommendationModel\\":{\\"provider\\":\\"qwen\\",\\"model\\":\\"qwen3.8-flash\\"}}\\n" > "$body_path"',
+    '      fi',
+    '      ;;',
+    '    */api/auth/csrf)',
+    '      if [[ -n "${RULEPILOT_TEST_CSRF_BODY+x}" ]]; then',
+    '        printf "%s\\n" "$RULEPILOT_TEST_CSRF_BODY" > "$body_path"',
+    '      else',
+    '        printf "{\\"token\\":\\"csrf-token\\",\\"headerName\\":\\"X-CSRF-TOKEN\\"}\\n" > "$body_path"',
+    '      fi',
+    '      ;;',
+    '    */api/v1/bgg/recommendations)',
+    '      if [[ -n "${RULEPILOT_TEST_RECOMMENDATIONS_BODY+x}" ]]; then',
+    '        printf "%s\\n" "$RULEPILOT_TEST_RECOMMENDATIONS_BODY" > "$body_path"',
+    '      else',
+    '        printf "[{\\"bggId\\":1,\\"name\\":\\"Fixture Game\\"}]\\n" > "$body_path"',
+    '      fi',
+    '      ;;',
+    '    */api/v1/bgg/games/1*)',
+    '      if [[ -n "${RULEPILOT_TEST_DETAIL_BODY+x}" ]]; then',
+    '        printf "%s\\n" "$RULEPILOT_TEST_DETAIL_BODY" > "$body_path"',
+    '      else',
+    '        printf "{\\"bggId\\":1,\\"description\\":\\"Fixture\\",\\"descriptionTranslated\\":false,\\"categories\\":[],\\"mechanics\\":[]}\\n" > "$body_path"',
+    '      fi',
+    '      ;;',
+    '    */)',
+    '      printf "<html><body>RulePilot</body></html>\\n" > "$body_path"',
+    '      ;;',
+    '    *)',
+    '      printf "{}\\n" > "$body_path"',
+    '      ;;',
+    '  esac',
+    'fi',
+    'if [[ -n "$headers_path" ]]; then',
+    '  printf "HTTP/2 %s\\nCache-Control: %s\\nContent-Type: text/html; charset=utf-8\\n\\n" "$http_status" "${RULEPILOT_TEST_CACHE_CONTROL:-no-cache, no-store}" > "$headers_path"',
+    'fi',
+    'if [[ "$write_status" == true ]]; then printf "%s" "$http_status"; fi',
     'exit 0',
     '',
   ].join('\n'), { mode: 0o755 })
@@ -400,6 +649,7 @@ async function createReleaseGuardFixture() {
       PATH: `${fakeBin}:${process.env.PATH}`,
       RULEPILOT_TEST_ROOT: root,
       RULEPILOT_TEST_CURRENT_MAIN_SHA: release.slice(0, 40),
+      RULEPILOT_TEST_RELEASE_ID: release,
     },
   }
 }
@@ -1237,9 +1487,9 @@ test('production SSH authority is unavailable to build and local verification co
 
   const localPublicVerification = deploymentWorkflow.slice(
     deploymentWorkflow.indexOf(
-      'name: Verify public release availability without repository code or production SSH authority',
+      'name: Classify independent public observation without repository code or production SSH authority',
     ),
-    deploymentWorkflow.indexOf('name: Commit the publicly verified release'),
+    deploymentWorkflow.indexOf('name: Verify the candidate publication boundary and commit the release'),
   )
   assert.match(localPublicVerification, /test ! -e "\$HOME\/\.ssh\/id_ed25519"/)
   assert.doesNotMatch(localPublicVerification,
@@ -1325,7 +1575,7 @@ test('deployment seals control-plane code before build and keeps it isolated thr
   assert.ok(remoteExtraction >= 0 && remoteExtraction < necessaryProductionStart)
   const activationStep = deployJob.slice(
     deployJob.indexOf('name: Activate release and verify production health'),
-    deployJob.indexOf('name: Verify public release availability'),
+    deployJob.indexOf('name: Classify independent public observation'),
   )
   assert.match(activationStep, /"\$guard_script" assert-activation-held/)
   assert.match(activationStep,
@@ -1340,7 +1590,7 @@ test('every mutation after checkpoint failure restores the validated environment
     'name: Synchronize protected BGG credential and managed runtime configuration',
   )
   const activation = deploymentWorkflow.indexOf('name: Activate release and verify production health')
-  const availability = deploymentWorkflow.indexOf('name: Verify public release availability')
+  const availability = deploymentWorkflow.indexOf('name: Classify independent public observation')
   const rollback = deploymentWorkflow.indexOf(
     'name: Roll back any uncommitted production mutation',
   )
@@ -2337,7 +2587,16 @@ test('release guard commit keeps the candidate environment and removes the secre
     await symlink(fixture.candidateRelease, fixture.current)
     await writeFile(
       fixture.environmentFile,
-      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=127.0.0.1:28081\n',
+      [
+        'DEPLOY_MARKER=candidate',
+        'BACKEND_PORT=28080',
+        'RULEPILOT_HTTP_PORT=127.0.0.1:28081',
+        'RULEPILOT_USER_USERNAME=player',
+        'RULEPILOT_USER_PASSWORD=player-secret-marker',
+        'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen',
+        'BGG_RECOMMENDATION_MODEL=qwen3.8-flash',
+        '',
+      ].join('\n'),
     )
     await chmod(fixture.environmentFile, 0o600)
     await invokeReleaseGuard(fixture, 'heartbeat')
@@ -2345,13 +2604,144 @@ test('release guard commit keeps the candidate environment and removes the secre
 
     assert.equal(
       await readFile(fixture.environmentFile, 'utf8'),
-      'DEPLOY_MARKER=candidate\nBACKEND_PORT=28080\nRULEPILOT_HTTP_PORT=127.0.0.1:28081\n',
+      [
+        'DEPLOY_MARKER=candidate',
+        'BACKEND_PORT=28080',
+        'RULEPILOT_HTTP_PORT=127.0.0.1:28081',
+        'RULEPILOT_USER_USERNAME=player',
+        'RULEPILOT_USER_PASSWORD=player-secret-marker',
+        'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen',
+        'BGG_RECOMMENDATION_MODEL=qwen3.8-flash',
+        '',
+      ].join('\n'),
     )
     await access(join(fixture.guardState, 'committed'))
     await assert.rejects(access(snapshot))
   } finally {
     await stopReleaseGuardWatchdog(fixture)
     await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('candidate publication failures preserve exact rollback eligibility', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('candidate publication failure classification is exercised on the Linux CI runner')
+    return
+  }
+  const scenarios = [
+    {
+      name: 'wrong release identity',
+      expectedStatus: 1,
+      environment: (fixture) => ({
+        RULEPILOT_TEST_RELEASE_BODY: JSON.stringify({
+          releaseId: fixture.release,
+          commitSha: 'c'.repeat(40),
+        }),
+      }),
+    },
+    {
+      name: 'invalid release JSON',
+      expectedStatus: 1,
+      environment: () => ({ RULEPILOT_TEST_RELEASE_BODY: '{' }),
+    },
+    {
+      name: 'candidate environment self-certifies a wrong model',
+      expectedStatus: 1,
+      candidateModel: 'wrong-model',
+      environment: () => ({
+        RULEPILOT_TEST_MODEL_BODY: JSON.stringify({
+          recommendationModel: { provider: 'qwen', model: 'wrong-model' },
+        }),
+      }),
+    },
+    {
+      name: 'release identity is cacheable',
+      expectedStatus: 1,
+      environment: () => ({ RULEPILOT_TEST_CACHE_CONTROL: 'public, max-age=60' }),
+    },
+    {
+      name: 'HTTP/2 framing fails before a complete response',
+      expectedStatus: 75,
+      environment: () => ({ RULEPILOT_TEST_CANDIDATE_CURL_EXIT: '16' }),
+    },
+    {
+      name: 'response body is truncated',
+      expectedStatus: 75,
+      environment: () => ({ RULEPILOT_TEST_CANDIDATE_CURL_EXIT: '18' }),
+    },
+    {
+      name: 'TLS shutdown fails before publication is proven',
+      expectedStatus: 75,
+      environment: () => ({ RULEPILOT_TEST_CANDIDATE_CURL_EXIT: '80' }),
+    },
+    {
+      name: 'HTTP/2 stream resets before a complete response',
+      expectedStatus: 75,
+      environment: () => ({ RULEPILOT_TEST_CANDIDATE_CURL_EXIT: '92' }),
+    },
+    {
+      name: 'gateway is temporarily unavailable',
+      expectedStatus: 75,
+      environment: () => ({ RULEPILOT_TEST_CANDIDATE_HTTP_STATUS: '502' }),
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const fixture = await createReleaseGuardFixture()
+    const snapshot = join(fixture.guardState, 'environment.snapshot')
+    const ownership = join(fixture.root, 'deployment-guards', 'active-transaction')
+    try {
+      await invokeReleaseGuard(fixture, 'checkpoint')
+      await invokeReleaseGuard(fixture, 'arm')
+      await rm(fixture.current)
+      await symlink(fixture.candidateRelease, fixture.current)
+      await writeFile(
+        fixture.environmentFile,
+        [
+          'DEPLOY_MARKER=candidate',
+          'BACKEND_PORT=28080',
+          'RULEPILOT_HTTP_PORT=127.0.0.1:28081',
+          'RULEPILOT_USER_USERNAME=player',
+          'RULEPILOT_USER_PASSWORD=player-secret-marker',
+          'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen',
+          `BGG_RECOMMENDATION_MODEL=${scenario.candidateModel ?? 'qwen3.8-flash'}`,
+          '',
+        ].join('\n'),
+        { mode: 0o600 },
+      )
+      await invokeReleaseGuard(fixture, 'heartbeat')
+
+      await assert.rejects(
+        execFileAsync(
+          'bash',
+          [
+            productionReleaseGuardPath,
+            'commit',
+            fixture.root,
+            fixture.release,
+            fixture.previous,
+          ],
+          {
+            env: {
+              ...fixture.processEnvironment,
+              ...scenario.environment(fixture),
+            },
+          },
+        ),
+        (error) => {
+          assert.equal(Number(error.code), scenario.expectedStatus, scenario.name)
+          return true
+        },
+      )
+
+      await assert.rejects(access(join(fixture.guardState, 'committed')), scenario.name)
+      await access(snapshot)
+      assert.equal(await readFile(ownership, 'utf8'), `${fixture.release}\n`, scenario.name)
+      assert.equal(await realpath(fixture.current), fixture.candidateRelease, scenario.name)
+    } finally {
+      await stopReleaseGuardWatchdog(fixture)
+      await rm(fixture.root, { recursive: true, force: true })
+    }
   }
 })
 
@@ -2561,12 +2951,106 @@ test('deploy-only reruns retain the immutable identity of the successful build a
   assert.notEqual(artifactRelease, `${sha}-${runId}-${deployOnlyRerunAttempt}`)
 })
 
-test('deployment availability is deterministic and does not invoke a paid Agent', () => {
+test('candidate publication parser executes exact positive and negative contracts', async () => {
+  const releaseId = `${'a'.repeat(40)}-101-2`
+  const releaseSha = 'a'.repeat(40)
+  await runCandidateBoundaryParser('release', JSON.stringify({ releaseId, commitSha: releaseSha }))
+  await runCandidateBoundaryParser('model', JSON.stringify({
+    recommendationModel: { provider: 'qwen', model: 'qwen3.8-flash' },
+  }))
+  await runCandidateBoundaryParser('csrf', JSON.stringify({
+    token: 'csrf-token',
+    headerName: 'X-CSRF-TOKEN',
+  }))
+  const recommendation = await runCandidateBoundaryParser('recommendations', JSON.stringify([
+    { bggId: 1, name: 'Fixture Game' },
+  ]))
+  assert.equal(recommendation.stdout.trim(), '1')
+  await runCandidateBoundaryParser('detail', JSON.stringify({
+    bggId: 1,
+    description: 'Fixture',
+    descriptionTranslated: false,
+    categories: [],
+    mechanics: [],
+  }))
+
+  const rejected = [
+    ['release', JSON.stringify({ releaseId, commitSha: 'b'.repeat(40) }), /commit identity mismatch/],
+    ['release', JSON.stringify({ releaseId: `${releaseSha}-999-9`, commitSha: releaseSha }), /release identity mismatch/],
+    ['release', '{', /invalid JSON/],
+    ['model', JSON.stringify({
+      recommendationModel: { provider: 'qwen', model: 'wrong-model' },
+    }), /recommendation model mismatch/],
+    ['csrf', JSON.stringify({ token: '', headerName: 'X-CSRF-TOKEN' }), /token is absent/],
+    ['recommendations', JSON.stringify([{ bggId: true, name: 'Invalid' }]), /first game id is invalid/],
+    ['detail', JSON.stringify({
+      bggId: 1,
+      description: 'Fixture',
+      descriptionTranslated: 'false',
+      categories: [],
+      mechanics: [],
+    }), /translation marker is invalid/],
+  ]
+  for (const [contract, payload, expectedError] of rejected) {
+    await assert.rejects(
+      runCandidateBoundaryParser(contract, payload),
+      (error) => {
+        assert.equal(Number(error.code), 1)
+        assert.match(error.stderr, expectedError)
+        return true
+      },
+    )
+  }
+})
+
+test('public observer distinguishes incomplete transport, transient HTTP, and local failures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-observer-python.'))
+  try {
+    assert.equal(await publicObserverPythonExit('success', root), 0)
+    assert.equal(await publicObserverPythonExit('connection-reset', root), 75)
+    assert.equal(await publicObserverPythonExit('incomplete-read', root), 75)
+    assert.equal(await publicObserverPythonExit('ssl-eof', root), 75)
+    for (const status of [502, 503, 504]) {
+      assert.equal(await publicObserverPythonExit(`http-${status}`, root), 75)
+    }
+    for (const status of [400, 401, 404, 500]) {
+      assert.equal(await publicObserverPythonExit(`http-${status}`, root), 1)
+    }
+    assert.equal(await publicObserverPythonExit('success', root, {
+      RULEPILOT_HTTPS_BODY_PATH: join(root, 'missing', 'observer.body'),
+    }), 1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('public observer retry state machine follows its three-state truth table', async () => {
+  const transientThenSuccess = await runPublicObserverRetry([75, 75, 0])
+  assert.equal(transientThenSuccess.status, 0)
+  assert.deepEqual(transientThenSuccess.calls, [75, 75, 0])
+  assert.match(transientThenSuccess.stdout, /verified the exact candidate release/)
+
+  const unreachable = await runPublicObserverRetry([75, 75, 75])
+  assert.equal(unreachable.status, 0)
+  assert.deepEqual(unreachable.calls, [75, 75, 75])
+  assert.match(unreachable.stdout, /Independent public observer unreachable/)
+
+  const deterministic = await runPublicObserverRetry([1, 0, 0])
+  assert.equal(deterministic.status, 1)
+  assert.deepEqual(deterministic.calls, [1])
+  assert.match(deterministic.stderr, /deterministic contract failure/)
+
+  const transientThenDeterministic = await runPublicObserverRetry([75, 1, 0])
+  assert.equal(transientThenDeterministic.status, 1)
+  assert.deepEqual(transientThenDeterministic.calls, [75, 1])
+})
+
+test('deployment classifies independent public observation without invoking a paid Agent', () => {
   const publicAvailability = workflowRunBlock(
     deploymentWorkflow,
-    'Verify public release availability without repository code or production SSH authority',
+    'Classify independent public observation without repository code or production SSH authority',
   )
-  assert.match(deploymentWorkflow, /name: Verify public release availability/)
+  assert.match(deploymentWorkflow, /name: Classify independent public observation/)
   assert.match(deploymentWorkflow, /::add-mask::\$preflight_username/)
   assert.match(deploymentWorkflow, /::add-mask::\$preflight_password/)
   assert.doesNotMatch(publicAvailability, /\bcurl\b/)
@@ -2592,12 +3076,18 @@ test('deployment availability is deterministic and does not invoke a paid Agent'
   assert.match(deploymentWorkflow,
     /\.recommendationModel\.provider == "qwen"[\s\S]*?\.recommendationModel\.model == "qwen3\.8-flash"/)
   assert.match(deploymentWorkflow,
-    /verify_public_once\(\)[\s\S]*?\/api\/public\/release[\s\S]*?\.commitSha == \$deploy_sha[\s\S]*?\.releaseId == \$deploy_release_id[\s\S]*?cache-control:.*no-store/)
+    /verify_public_once\(\)[\s\S]*?\/api\/public\/release[\s\S]*?\.commitSha == \$deploy_sha[\s\S]*?\.releaseId == \$deploy_release_id[\s\S]*?tolower\(directives\[index_value\]\) == "no-store"/)
   assert.match(publicAvailability, /\[\[ -s "\$home_body" \]\]/)
   assert.match(publicAvailability,
     /\.token \| type == "string" and length > 0[\s\S]*?\.headerName \| type == "string" and length > 0/)
   assert.match(deploymentWorkflow,
     /for attempt in 1 2 3; do[\s\S]{0,180}?if verify_public_once; then/)
+  assert.match(publicAvailability,
+    /except error\.HTTPError[\s\S]*?failure\.code in \(502, 503, 504\)[\s\S]*?except \([\s\S]*?http\.client\.HTTPException[\s\S]*?ssl\.SSLError[\s\S]*?OSError[\s\S]*?raise SystemExit\(75\)/)
+  assert.match(publicAvailability,
+    /observer_unreachable=true[\s\S]*?verification_status=\$\?[\s\S]*?"\$verification_status" != 75[\s\S]*?observer_unreachable=false/)
+  assert.match(publicAvailability,
+    /Independent public observer unreachable[\s\S]*?Candidate eligibility will be decided by the production gateway boundary/)
   assert.match(publicAvailability,
     /\/api\/v1\/bgg\/recommendations[\s\S]*?\.bggId > 0[\s\S]*?\.name \| type\) == "string"/)
   assert.match(publicAvailability,
@@ -2612,6 +3102,8 @@ test('deployment availability is deterministic and does not invoke a paid Agent'
   assert.doesNotMatch(deploymentWorkflow, /echo "\$preflight_password"/)
   assert.match(deploymentWorkflow,
     /commit_release_once\(\)[\s\S]*?for attempt in 1 2 3; do[\s\S]{0,180}?if commit_release_once; then/)
+  assert.match(deploymentWorkflow,
+    /commit_status=\$\?[\s\S]*?"\$commit_status" != 75 && "\$commit_status" != 255[\s\S]*?same request will not be retried/)
 
   const rollbackStep = workflowRunBlock(
     deploymentWorkflow,
@@ -2619,6 +3111,54 @@ test('deployment availability is deterministic and does not invoke a paid Agent'
   )
   assert.match(rollbackStep, /"\$guard_script" rollback/)
   assert.doesNotMatch(rollbackStep, /RULEPILOT_PUBLIC_URL|curl|api\/public\/release|api\/auth\/csrf/)
+})
+
+test('release guard owns the exact candidate publication boundary before commit', () => {
+  const boundary = productionReleaseGuard.slice(
+    productionReleaseGuard.indexOf('verify_candidate_publication_boundary()'),
+    productionReleaseGuard.indexOf('\nrequire_running_image()'),
+  )
+  assert.match(boundary,
+    /--proto '=https'[\s\S]*?--noproxy '\*'[\s\S]*?--resolve 'rulepilot\.cn:443:127\.0\.0\.1'/)
+  assert.match(boundary,
+    /--connect-timeout 3[\s\S]*?--max-time 6[\s\S]*?--max-filesize 1048576[\s\S]*?--max-redirs 0/)
+  assert.match(boundary,
+    /read_environment_value RULEPILOT_USER_USERNAME[\s\S]*?read_environment_value RULEPILOT_USER_PASSWORD/)
+  assert.doesNotMatch(boundary,
+    /read_environment_value BGG_RECOMMENDATION_MODEL_(?:PROVIDER|MODEL)/)
+  assert.match(productionReleaseGuard,
+    /readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen[\s\S]*?readonly EXPECTED_RECOMMENDATION_MODEL=qwen3\.8-flash/)
+  assert.match(boundary,
+    /RULEPILOT_EXPECTED_PROVIDER=\$EXPECTED_RECOMMENDATION_PROVIDER[\s\S]*?RULEPILOT_EXPECTED_MODEL=\$EXPECTED_RECOMMENDATION_MODEL/)
+  assert.match(boundary,
+    /umask 077[\s\S]*?user = "%s:%s"[\s\S]*?> "\$auth_config"/)
+  assert.doesNotMatch(boundary, /source "?\$active_release\/\.env|--user|Authorization:/)
+  assert.equal(
+    [...boundary.matchAll(/^\s*candidate_https_get\s/gm)].length,
+    6,
+    'commit must verify the six existing deterministic publication surfaces',
+  )
+  for (const contract of ['release', 'model', 'csrf', 'recommendations', 'detail']) {
+    assert.match(boundary, new RegExp(`contract == "${contract}"`))
+  }
+  assert.match(boundary,
+    /releaseId[\s\S]*?RULEPILOT_EXPECTED_RELEASE_ID[\s\S]*?commitSha[\s\S]*?RULEPILOT_EXPECTED_COMMIT_SHA/)
+  assert.match(boundary,
+    /tolower\(directives\[index_value\]\) == "no-store"/)
+
+  const commitGuard = productionReleaseGuard.slice(
+    productionReleaseGuard.indexOf('commit_release()'),
+    productionReleaseGuard.indexOf('\nrecord_watchdog_failure()'),
+  )
+  const publicationBoundary = commitGuard.indexOf('verify_candidate_publication_boundary')
+  const apiIdentity = commitGuard.indexOf('require_running_image "$active_release" api', publicationBoundary)
+  const workerIdentity = commitGuard.indexOf('require_running_image "$active_release" worker', apiIdentity)
+  const frontendIdentity = commitGuard.indexOf('require_running_image "$active_release" frontend', workerIdentity)
+  const workerHealth = commitGuard.indexOf('"$worker_health" == healthy', frontendIdentity)
+  const committed = commitGuard.indexOf('atomic_write "$state_dir/committed"', workerHealth)
+  assert.ok(publicationBoundary >= 0 && publicationBoundary < apiIdentity)
+  assert.ok(apiIdentity < workerIdentity && workerIdentity < frontendIdentity)
+  assert.ok(frontendIdentity < workerHealth && workerHealth < committed)
 })
 
 test('deployment failure diagnostics expose service state without logs, secrets, or environment files', () => {
