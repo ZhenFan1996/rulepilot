@@ -707,6 +707,81 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
+    void sessionReadsReleaseOnlyAStaleCrashedClaimAndRetainItsCheckpointForExactRetry() {
+        InMemoryStore store = new InMemoryStore();
+        UUID staleConversationId = UUID.randomUUID();
+        UUID staleTurnId = UUID.randomUUID();
+        UUID staleAttemptId = UUID.randomUUID();
+        String fingerprint = "stale-request-fingerprint";
+        ConversationState initial = new ConversationState(
+                RecommendationProfile.empty(), List.of(), List.of(), List.of());
+        ConversationState checkpoint = new ConversationState(
+                RecommendationProfile.empty(),
+                List.of(new DialogueMessage("user", "checkpointed request")),
+                List.of(),
+                List.of());
+        store.createNew(staleConversationId, "alice", initial, NOW);
+        assertThat(store.claimTurn(
+                        staleConversationId,
+                        "alice",
+                        0,
+                        staleTurnId,
+                        fingerprint,
+                        staleAttemptId,
+                        NOW,
+                        NOW.minusSeconds(10)))
+                .isTrue();
+        assertThat(store.checkpointTurn(
+                        staleConversationId,
+                        "alice",
+                        0,
+                        staleTurnId,
+                        fingerprint,
+                        staleAttemptId,
+                        checkpoint,
+                        NOW.plusSeconds(1)))
+                .isTrue();
+
+        UUID freshConversationId = UUID.randomUUID();
+        UUID freshTurnId = UUID.randomUUID();
+        UUID freshAttemptId = UUID.randomUUID();
+        store.createNew(freshConversationId, "alice", initial, NOW.plusSeconds(15));
+        assertThat(store.claimTurn(
+                        freshConversationId,
+                        "alice",
+                        0,
+                        freshTurnId,
+                        "fresh-request-fingerprint",
+                        freshAttemptId,
+                        NOW.plusSeconds(15),
+                        NOW))
+                .isTrue();
+        RecommendationConversationCoordinator coordinator = new RecommendationConversationCoordinator(
+                mock(BoardGameRecommendationAgent.class),
+                store,
+                Clock.fixed(NOW.plusSeconds(20), ZoneOffset.UTC),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(10));
+
+        var recovered = coordinator.find(staleConversationId, "alice").orElseThrow();
+        var stillRunning = coordinator.find(freshConversationId, "alice").orElseThrow();
+
+        assertThat(recovered.activeClientTurnId()).isNull();
+        assertThat(recovered.state()).isEqualTo(checkpoint);
+        assertThat(stillRunning.activeClientTurnId()).isEqualTo(freshTurnId);
+        assertThat(store.checkpointTurn(
+                        staleConversationId,
+                        "alice",
+                        0,
+                        staleTurnId,
+                        fingerprint,
+                        staleAttemptId,
+                        initial,
+                        NOW.plusSeconds(21)))
+                .isFalse();
+    }
+
+    @Test
     void deletesOnlyTheOwnedConversation() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         when(agent.conversePersisted(any(), any(), any(), any(), any())).thenReturn(response("Done."));

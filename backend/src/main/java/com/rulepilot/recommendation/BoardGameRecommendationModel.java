@@ -100,10 +100,10 @@ public interface BoardGameRecommendationModel {
     record Request(
             List<Message> messages,
             List<ToolSpec> tools,
-            int maxOutputTokens,
+            Integer maxOutputTokens,
             ToolChoice toolChoice) {
         public Request(List<Message> messages, List<ToolSpec> tools, ToolChoice toolChoice) {
-            this(messages, tools, Integer.MAX_VALUE, toolChoice);
+            this(messages, tools, null, toolChoice);
         }
 
         public Request {
@@ -111,7 +111,7 @@ public interface BoardGameRecommendationModel {
                     || messages.isEmpty()
                     || tools == null
                     || tools.isEmpty()
-                    || maxOutputTokens < 1
+                    || maxOutputTokens != null && maxOutputTokens < 1
                     || toolChoice != ToolChoice.AUTO) {
                 throw new IllegalArgumentException("recommendation model request is invalid");
             }

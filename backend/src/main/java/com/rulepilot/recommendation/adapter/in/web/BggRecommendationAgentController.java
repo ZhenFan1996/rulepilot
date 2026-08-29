@@ -420,7 +420,8 @@ public class BggRecommendationAgentController {
             List<Integer> shownBggIds,
             boolean processing,
             Instant processingSince,
-            RecommendationConversationResponse latestResponse) {
+            RecommendationConversationResponse latestResponse,
+            RecommendationTurnResultResponse lastTurnResult) {
         static RecommendationSessionResponse from(
                 SessionSnapshot snapshot,
                 BggRecommendationPresentation presentation) {
@@ -448,7 +449,32 @@ public class BggRecommendationAgentController {
                     snapshot.state().shownBggIds(),
                     snapshot.activeClientTurnId() != null,
                     snapshot.activeStartedAt(),
-                    latestResponse);
+                    latestResponse,
+                    RecommendationTurnResultResponse.from(snapshot));
+        }
+    }
+
+    record RecommendationTurnResultResponse(
+            UUID clientTurnId,
+            String responseLocale,
+            String outcome,
+            String assistantMessage,
+            String failureBoundary,
+            String failureReason) {
+        static RecommendationTurnResultResponse from(SessionSnapshot snapshot) {
+            if (snapshot.lastClientTurnId() == null
+                    || snapshot.lastResponseLocale() == null
+                    || snapshot.lastResponse() == null) {
+                return null;
+            }
+            ConversationResponse response = snapshot.lastResponse();
+            return new RecommendationTurnResultResponse(
+                    snapshot.lastClientTurnId(),
+                    snapshot.lastResponseLocale(),
+                    response.outcome().name().toLowerCase(Locale.ROOT),
+                    response.assistantMessage(),
+                    RecommendationConversationResponse.publicFailureBoundary(response),
+                    RecommendationConversationResponse.publicFailureReason(response));
         }
     }
 

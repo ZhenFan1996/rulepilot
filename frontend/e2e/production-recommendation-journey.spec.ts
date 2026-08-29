@@ -46,8 +46,8 @@ const PUBLIC_FAILURE_BOUNDARIES = new Set([
 ])
 const PUBLIC_FAILURE_REASONS = new Set([
   'time_limit',
-  'resource_budget_exhausted',
   'model_not_configured',
+  'resource_budget_exhausted',
   'provider_protocol_invalid',
   'provider_output_truncated',
   'empty_model_response',
@@ -205,6 +205,14 @@ interface RecommendationSession {
   profile: RecommendationProfile
   processing: boolean
   latestResponse: RecommendationResult | null
+  lastTurnResult: {
+    clientTurnId: string
+    responseLocale: 'zh-CN' | 'en'
+    outcome: RecommendationResult['outcome']
+    assistantMessage: string
+    failureBoundary?: string | null
+    failureReason?: string | null
+  } | null
 }
 
 type TerminalCategory =
@@ -1658,9 +1666,9 @@ async function waitForPersistedTerminal(
         lastSession = session
         if (!session.processing
           && session.revision > baselineRevision
-          && session.latestResponse?.clientTurnId === clientTurnId) {
+          && session.lastTurnResult?.clientTurnId === clientTurnId) {
           return {
-            category: session.latestResponse.outcome === 'recommendations'
+            category: session.lastTurnResult.outcome === 'recommendations'
               ? 'RECOMMENDATIONS'
               : 'NON_RECOMMENDATION',
             session,
@@ -2068,9 +2076,14 @@ test('production returns one recommendation slate and hands its exact identity t
       && slate.elapsedMs !== null
       && slate.elapsedMs <= INTERACTION_SLO_MS
 
-    const result = terminal.session?.latestResponse ?? null
+    const persistedTerminal = terminal.session?.lastTurnResult ?? null
+    const result = persistedTerminal?.outcome === 'recommendations'
+      && terminal.session?.latestResponse?.clientTurnId === persistedTerminal.clientTurnId
+      ? terminal.session.latestResponse
+      : null
     const sseOutcome = sseResult?.outcome
-    report.recommendationOutcome = result?.outcome
+    report.recommendationOutcome = persistedTerminal?.outcome
+      ?? result?.outcome
       ?? (sseOutcome === 'conversation'
         || sseOutcome === 'needs_clarification'
         || sseOutcome === 'recommendations'
@@ -2078,9 +2091,11 @@ test('production returns one recommendation slate and hands its exact identity t
         || sseOutcome === 'unavailable'
         ? sseOutcome
         : null)
-    report.recommendationFailureBoundary = publicFailureBoundary(result?.failureBoundary)
+    report.recommendationFailureBoundary = publicFailureBoundary(persistedTerminal?.failureBoundary)
+      ?? publicFailureBoundary(result?.failureBoundary)
       ?? publicFailureBoundary(sseResult?.failureBoundary)
-    report.recommendationFailureReason = publicFailureReason(result?.failureReason)
+    report.recommendationFailureReason = publicFailureReason(persistedTerminal?.failureReason)
+      ?? publicFailureReason(result?.failureReason)
       ?? publicFailureReason(sseResult?.failureReason)
     report.recommendationModelCalls = publicNonNegativeInteger(result?.modelCalls ?? sseResult?.modelCalls)
     report.recommendationModelCallElapsedMs = publicNonNegativeIntegers(
@@ -2107,7 +2122,9 @@ test('production returns one recommendation slate and hands its exact identity t
     report.recommendationPublishedBggIds = result?.games.map(({ game }) => game.bggId)
       ?? sseResult?.bggIds
       ?? []
-    const observedAssistantMessage = result?.assistantMessage ?? sseResult?.content.assistantMessage
+    const observedAssistantMessage = persistedTerminal?.assistantMessage
+      ?? result?.assistantMessage
+      ?? sseResult?.content.assistantMessage
     report.recommendationAssistantReplyCharacterCount = observedAssistantMessage === undefined
       ? null
       : Array.from(observedAssistantMessage.trim()).length
@@ -2202,7 +2219,7 @@ test('production returns one recommendation slate and hands its exact identity t
         ? null
         : samePlayerVisibleContent(persistedVisibleContent, domContent)
     }
-    const observedOutcome = result?.outcome ?? report.recommendationOutcome
+    const observedOutcome = persistedTerminal?.outcome ?? result?.outcome ?? report.recommendationOutcome
     report.recommendationCanaryFailureClass = classifyRecommendationCanaryFailure({
       observerFailed: report.recommendationStreamProbeFailed
         || terminal.category === 'SESSION_READ_FAILURE',

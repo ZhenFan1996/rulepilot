@@ -59,10 +59,15 @@ the product must commit or fail them atomically.
 - A replay diagnoses a defect but may not add sample vocabulary, aliases, prompt clauses, schemas, expected answers, or
   special routes to production. Deterministic heuristics must express input-independent invariants.
 - Page images are first-class evidence. OCR is optional and fail-open for usable page evidence.
-- Enforce persisted token and active-work deadlines, tool allow-lists, cancellation, and genuine resource boundaries.
+- For durable asynchronous assistant runs, enforce persisted token and active-work deadlines, tool allow-lists,
+  cancellation, and genuine resource boundaries.
   Step and tool-call safety ceilings must be derived from the persisted token envelope, never from a hand-written
   workflow length; model-call counts remain observational. Never expose private reasoning, prompts, credentials, or
   sensitive parameters. Real or paid models are opt-in and never run in normal CI.
+- A synchronous adaptive ReAct loop whose external calls all share one measured wall-clock deadline may rely on that
+  deadline, provider context/output limits, account quota, cancellation, typed tool bounds, and state-based
+  no-progress detection. Do not add an unpersisted cumulative token ledger merely to manufacture step/tool ceilings;
+  never charge the same prompt, tool arguments, or observation more than once.
 - Never invent a fixed product-content, response-length, chapter, page, candidate, model-call, or long-task ceiling.
   A limit is allowed only when it is derived from a measured external protocol, physical resource, cost, or safety
   constraint and its owner and evidence are documented. Prefer adaptive chunking, concurrency backpressure, and

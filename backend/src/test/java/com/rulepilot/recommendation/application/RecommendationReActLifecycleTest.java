@@ -62,26 +62,6 @@ import org.junit.jupiter.api.Test;
 class RecommendationReActLifecycleTest {
 
     @Test
-    void stopsBeforeCallingTheProviderWhenTheCompletePromptCannotFitTheTurnTokenEnvelope() {
-        ScriptedModel model = new ScriptedModel(List.of(answer("This response must not be requested.")));
-        BoardGameRecommendationProperties properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30), 1);
-        RecommendationReActLoop loop = loop(model, new RecordingCatalog(), properties);
-
-        var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "帮我选一款游戏"),
-                "zh-CN",
-                "player",
-                ignored -> {});
-
-        assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
-        assertThat(response.harness().failureReason()).isEqualTo(FailureReason.RESOURCE_BUDGET_EXHAUSTED);
-        assertThat(response.harness().actions()).contains("RUN_TOKEN_BUDGET_EXCEEDED");
-        assertThat(model.requests).isEmpty();
-        loop.stopBoundedCalls();
-    }
-
-    @Test
     void validatesLongConversationContextWithoutDroppingTurnsOrCandidateIdentities() {
         RecommendationReActLoop loop = loop(mock(BoardGameRecommendationModel.class), new RecordingCatalog());
         List<DialogueMessage> transcript = java.util.stream.IntStream.range(0, 30)
@@ -1600,7 +1580,7 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void stopsARepeatedCanonicalContractErrorWithItsEarliestCodeInsteadOfExhaustingBudget() {
+    void stopsARepeatedCanonicalContractErrorAtTheEarliestNoProgressBoundary() {
         ScriptedModel model = new ScriptedModel(List.of(
                 action(
                         "invalid-contract-first",
@@ -1638,7 +1618,7 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
-    void allowsANaturalAnswerAfterSixDistinctLegalReadsWithinTheRunDeadline() {
+    void keepsUsefulDistinctReadsRunningAcrossAFormerlyOversizedCumulativeContext() {
         ScriptedModel model = new ScriptedModel(List.of(
                 action("legal-read-1", BoardGameRecommendationAgent.BROWSE_TOOL,
                         "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"offset\":0}"),
@@ -1658,7 +1638,15 @@ class RecommendationReActLifecycleTest {
                 new RecordingCatalog(game(522, "Deadline Harbor", "时限港", "A verified fixture.")));
 
         var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "逐项核对后自然回答。"),
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "逐项核对后自然回答。",
+                        List.of(),
+                        List.of(new DialogueMessage("user", "长期偏好背景".repeat(10_000))),
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of()),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -1669,6 +1657,8 @@ class RecommendationReActLifecycleTest {
         assertThat(response.harness().modelCalls()).isEqualTo(7);
         assertThat(response.harness().catalogCalls()).isEqualTo(6);
         assertThat(response.harness().actions()).contains("FINAL_ANSWER");
+        assertThat(model.requests)
+                .allSatisfy(request -> assertThat(request.maxOutputTokens()).isNull());
 
         loop.stopBoundedCalls();
     }

@@ -309,9 +309,6 @@ rulepilot:
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
       timeout: ${AGENT_TIMEOUT:PT2M}
-      # One complete recommendation turn owns this aggregate resource envelope. Step/tool safety ceilings derive from
-      # it; the remaining tokens also bound each provider response without imposing a model-call count.
-      max-tokens: ${BGG_RECOMMENDATION_AGENT_MAX_TOKENS:64000}
       web-research:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
         api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}

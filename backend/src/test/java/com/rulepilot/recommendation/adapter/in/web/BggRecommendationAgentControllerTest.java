@@ -351,6 +351,11 @@ class BggRecommendationAgentControllerTest {
         assertThat(restored.knownGames()).extracting(value -> value.bggId()).containsExactly(1);
         assertThat(restored.latestResponse().clientTurnId()).isEqualTo(clientTurnId);
         assertThat(restored.latestResponse().assistantMessage()).isEqualTo("I kept the context.");
+        assertThat(restored.lastTurnResult()).satisfies(result -> {
+            assertThat(result.clientTurnId()).isEqualTo(clientTurnId);
+            assertThat(result.outcome()).isEqualTo("conversation");
+            assertThat(result.failureBoundary()).isNull();
+        });
 
         statefulController.delete(conversationId, principal);
         verify(conversations).delete(conversationId, "player");
@@ -373,15 +378,7 @@ class BggRecommendationAgentControllerTest {
                 10,
                 1,
                 List.of(new RecommendedGame(game, List.of("已核验"), List.of())));
-        ConversationResponse unavailable = new ConversationResponse(
-                Outcome.UNAVAILABLE,
-                DecisionMode.MODEL_ASSISTED,
-                "这一轮没有完成。",
-                RecommendationProfile.empty(),
-                null,
-                10,
-                0,
-                List.of());
+        ConversationResponse unavailable = unavailable(FailureReason.PROVIDER_CALL_FAILED);
         ConversationState state = new ConversationState(
                 RecommendationProfile.empty(),
                 List.of(
@@ -418,26 +415,27 @@ class BggRecommendationAgentControllerTest {
         assertThat(restored.latestResponse().games())
                 .extracting(candidate -> candidate.game().bggId())
                 .containsExactly(401);
+        assertThat(restored.lastTurnResult()).satisfies(result -> {
+            assertThat(result.clientTurnId()).isEqualTo(unavailableTurnId);
+            assertThat(result.responseLocale()).isEqualTo("en");
+            assertThat(result.outcome()).isEqualTo("unavailable");
+            assertThat(result.assistantMessage()).isEqualTo("这一轮没有完成。");
+            assertThat(result.failureBoundary()).isEqualTo("service_failure");
+            assertThat(result.failureReason()).isEqualTo("provider_call_failed");
+        });
     }
 
     @Test
     void doesNotInventPublishedCardsWhenTheConversationHasOnlyAnUnavailableTurn() {
         RecommendationConversationCoordinator conversations = mock(RecommendationConversationCoordinator.class);
         var statefulController = new BggRecommendationAgentController(agent, presentation, conversations);
-        ConversationResponse unavailable = new ConversationResponse(
-                Outcome.UNAVAILABLE,
-                DecisionMode.MODEL_ASSISTED,
-                "这一轮没有完成。",
-                RecommendationProfile.empty(),
-                null,
-                10,
-                0,
-                List.of());
+        UUID unavailableTurnId = UUID.randomUUID();
+        ConversationResponse unavailable = unavailable(FailureReason.PROVIDER_CALL_FAILED);
         when(conversations.latest("player")).thenReturn(Optional.of(new SessionSnapshot(
                 UUID.randomUUID(),
                 1,
                 new ConversationState(RecommendationProfile.empty(), List.of(), List.of(), List.of()),
-                UUID.randomUUID(),
+                unavailableTurnId,
                 null,
                 null,
                 unavailable,
@@ -447,6 +445,11 @@ class BggRecommendationAgentControllerTest {
 
         assertThat(restored).isNotNull();
         assertThat(restored.latestResponse()).isNull();
+        assertThat(restored.lastTurnResult()).satisfies(result -> {
+            assertThat(result.clientTurnId()).isEqualTo(unavailableTurnId);
+            assertThat(result.outcome()).isEqualTo("unavailable");
+            assertThat(result.failureReason()).isEqualTo("provider_call_failed");
+        });
     }
 
     @Test
@@ -855,5 +858,29 @@ class BggRecommendationAgentControllerTest {
                         List.of(),
                         List.of(),
                         List.of()));
+    }
+
+    private static ConversationResponse unavailable(FailureReason reason) {
+        return new ConversationResponse(
+                Outcome.UNAVAILABLE,
+                DecisionMode.MODEL_ASSISTED,
+                "这一轮没有完成。",
+                RecommendationProfile.empty(),
+                null,
+                10,
+                0,
+                new BoardGameRecommendationAgent.UserModelView("", List.of()),
+                List.of(),
+                new BoardGameRecommendationAgent.HarnessTrace(
+                        1,
+                        1,
+                        1,
+                        false,
+                        List.of("MODEL_CALL_FAILED", "UNAVAILABLE:MODEL_CALL_FAILED"),
+                        1_000,
+                        List.of(900L),
+                        reason),
+                List.of(),
+                null);
     }
 }
