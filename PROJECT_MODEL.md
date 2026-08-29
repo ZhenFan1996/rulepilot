@@ -304,6 +304,15 @@ whole-run owner 才能把整轮
    仍然必须红，不能把“有诊断可下载”误当成产品链路成功。生产 SSH 只出现在固定 bootstrap 边界；repo-owned
    canary 代码运行前必须删掉 key 并通过 `env -i` 只接收其最小玩家或管理员权限。容器化 canary 还必须显式
    把 bootstrap 写入的固定 `known_hosts` 传给 OpenSSH，不能假定容器进程的 `$HOME` 与系统用户目录相同。
+5. 推荐 canary 把三个不同时间合同分开：20 秒只判断玩家是否及时看到完整可用卡片；155 秒诊断窗观察到
+   两分钟 Agent deadline、五秒 SSE 收尾和额外三十秒 stale-turn recovery eligibility 后，才判断生命周期是否
+   没有收敛；它本身不重放请求，也不把“已经可恢复”冒充成“已经执行恢复”。
+   规则书接力仍使用独立的 50 秒观察窗。晚到的正确结果仍然是 `interaction_slo` 失败，不会因诊断窗变长而
+   通过。真实 `UNAVAILABLE` 使用产品 `failureBoundary`/`failureReason`；终态证据缺失、生命周期截止和探针
+   自身故障使用独立 canary 分类，不能把探针的等待截止冒充成模型、工具或服务返回的失败。
+   `AGENT_TIMEOUT=PT2M` 是应用、compose 与生产发布唯一的共享 Agent 时间真相；旧的推荐专用 45 秒变量只在
+   发布清理名单中保留一次，用来移除远端存量配置。模型、catalog 与 web 调用数仍被安全记录，但不再规定固定
+   路线或上限；artifact 只保留 allow-list 后的最后 stage/phase/action、耗时和精确失败原因，不发布 raw progress。
 
 如果 GitHub 没有送达 `main` 的 push CI 事件，恢复动作是手工触发同一份 `CI` workflow；只有该 main SHA
 的 CI 成功，`workflow_run` 才能进入部署。部署 workflow 本身没有直接手工入口，因而恢复不会绕过测试。
