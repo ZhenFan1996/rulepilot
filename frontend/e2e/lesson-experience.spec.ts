@@ -106,7 +106,8 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page).toHaveURL('/read/plan-1/questions')
   await expect(page.getByTestId('public-questions-reader')).toBeVisible()
   await expect(page.locator('#public-question')).toBeVisible()
-  await expect(page.locator('[data-testid="lesson-reading-column"]')).toHaveCount(0)
+  await expect(page.getByTestId('lesson-reading-column')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
 })
 
 test('keeps the tabletop guide and agent workspace usable on mobile', async ({ page }) => {

@@ -102,7 +102,7 @@ describe('useLessonAnswers', () => {
     expect(answers.answerError.value).not.toContain('上下文已不匹配')
   })
 
-  it('rejects a malformed answer envelope without exposing schema or runtime diagnostics', async () => {
+  it('treats a malformed answer envelope as an internal correction without rejecting the question', async () => {
     setLocale('zh-CN')
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
@@ -118,12 +118,12 @@ describe('useLessonAnswers', () => {
     expect(answers.answer.value).toBeNull()
     expect(answers.answerTurns.value).toEqual([])
     expect(answers.answerError.value).toBe(
-      'The returned answer did not pass the completeness check, so it was not shown. Keep the question, but review its context or wording before trying again.',
+      'The returned answer did not pass the response contract, so it was not shown. This is an internal correction failure; the question itself was not rejected.',
     )
     expect(answers.answerError.value).not.toMatch(/schema|citations|PlayerFacingRuleAnswer|undefined/i)
     expect(answers.answerFailureRecovery.value).toMatchObject({
       code: 'answer_result_invalid',
-      canRetryUnchanged: false,
+      canRetryUnchanged: true,
     })
     expect(answers.question.value).toBe('Can the cobalt spindle move now?')
   })
@@ -151,7 +151,7 @@ describe('useLessonAnswers', () => {
     })
   })
 
-  it('treats a malformed stream failure as non-retryable and clears it with answer feedback', async () => {
+  it('treats a malformed stream failure as retryable transport failure and preserves the question', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
       .mockResolvedValueOnce(new Response(
@@ -159,14 +159,16 @@ describe('useLessonAnswers', () => {
         { headers: { 'Content-Type': 'text/event-stream' } },
       )))
     const answers = createAnswers('zh-CN')
+    answers.question.value = '这个效果何时结算？'
 
-    await answers.submitQuestion('这个效果何时结算？', null)
+    await answers.submitQuestion(answers.question.value, null)
 
     expect(answers.answerFailureRecovery.value).toMatchObject({
-      code: 'answer_request_failed',
-      canRetryUnchanged: false,
+      code: 'answer_transport_failed',
+      canRetryUnchanged: true,
     })
-    expect(answers.answerError.value).not.toContain('直接重试')
+    expect(answers.answerError.value).toBe('这次请求传输没有完成。问题仍保留，可以原样发起新任务。')
+    expect(answers.question.value).toBe('这个效果何时结算？')
 
     answers.clearAnswerFeedback()
     expect(answers.answerError.value).toBe('')
@@ -225,10 +227,10 @@ describe('useLessonAnswers', () => {
     expect(answers.answerLoading.value).toBe(false)
     expect(answers.question.value).toBe('What if scoring is interrupted?')
     expect(answers.answerTurns.value).toHaveLength(1)
-    expect(answers.answerError.value).toBe('Stopped waiting. This unfinished result will not replace the current page. Edit or review the question before sending a new request.')
+    expect(answers.answerError.value).toBe('Stopped waiting. This unfinished result will not replace the current page; the question remains available for a fresh attempt.')
     expect(answers.answerFailureRecovery.value).toMatchObject({
       code: 'answer_cancelled',
-      canRetryUnchanged: false,
+      canRetryUnchanged: true,
     })
     expect(answers.answerOutcome.value).toBe('cancelled')
     expect(answers.agentTrace.value).toEqual([])

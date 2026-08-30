@@ -360,8 +360,8 @@ describe('LessonsView', () => {
   })
 
   it.each([
-    ['TEACHING_PREPARATION_INVALID_PLAN', '无效输入'],
-  ])('does not offer a blind retry for manual-repair code %s', async (errorCode, expectedDetail) => {
+    'TEACHING_PREPARATION_INVALID_PLAN',
+  ])('does not offer a blind retry for internal-correction code %s', async (errorCode) => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') return Response.json([])
@@ -393,10 +393,10 @@ describe('LessonsView', () => {
     await flushPromises()
 
     const pending = wrapper.get('[data-testid="pending-guide-journey"]')
-    expect(pending.attributes('data-failure-classification')).toBe('repair-required')
-    expect(pending.attributes('data-failure-recovery')).toBe('manual-repair')
-    expect(pending.text()).toContain('这不是可以安全原样重试的失败')
-    expect(pending.text()).toContain(expectedDetail)
+    expect(pending.attributes('data-failure-classification')).toBe('internal-correction')
+    expect(pending.attributes('data-failure-recovery')).toBeUndefined()
+    expect(pending.text()).toContain('内部结构化结果修正已停止')
+    expect(pending.text()).toContain('这不是玩家输入被拒绝')
     expect(pending.findAll('button').some(button => button.text().includes('重试'))).toBe(false)
     expect(pending.findAll('button').some(button => button.text().includes('重新准备'))).toBe(false)
     wrapper.unmount()
