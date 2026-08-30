@@ -13,7 +13,7 @@ AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
 AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
 AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-teaching-real agent-teaching-page-canary agent-visual-real agent-recommendation-canary agent-rulebook-acquisition-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e workflow-test verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-teaching-real agent-teaching-page-canary agent-visual-real agent-recommendation-canary agent-rulebook-acquisition-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e production-dependency-test workflow-test verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -114,6 +114,11 @@ security-test: ## Audit frontend and backend dependencies for known vulnerabilit
 
 e2e: ## Run Playwright end-to-end tests
 	@cd frontend && npm run test:e2e
+
+production-dependency-test: ## Verify the production dependency and diagnostic contracts used by PR CI
+	@node --test \
+		--test-name-pattern='CI owns automatic and manual deployment qualification|production dependency health|production activation observes existing dependencies|activation diagnostics safely describe containers' \
+		scripts/verify-ci-workflow.test.mjs
 
 workflow-test: ## Verify CI, deployment, release, and production journey contracts
 	@node --test scripts/verify-ci-workflow.test.mjs

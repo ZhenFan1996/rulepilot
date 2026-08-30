@@ -851,7 +851,8 @@ test('CI owns automatic and manual deployment qualification', () => {
   assert.match(ciWorkflow, /if-no-files-found:\s*error/)
   assert.match(playwrightConfig, /outputFolder:\s*'playwright-report'/)
   assert.match(ciWorkflow, /make backend-test[\s\S]*?make backend-runtime-image-smoke/)
-  assert.match(ciWorkflow, /node-version:\s*'24'[\s\S]*?make workflow-test[\s\S]*?make frontend-test/)
+  assert.match(ciWorkflow,
+    /node-version:\s*'24'[\s\S]*?make production-dependency-test[\s\S]*?make frontend-test/)
   assert.match(ciWorkflow, /^  workflow_dispatch:\s*$/m)
   assert.match(deploymentWorkflow,
     /docker build[\s\S]*?--file "\$RULEPILOT_BUILD_SOURCE\/backend\/Dockerfile\.runtime"/)
