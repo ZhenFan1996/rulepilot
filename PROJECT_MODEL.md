@@ -169,7 +169,7 @@ PR CI 只运行可重复、无付费模型的确定性检查；真实模型 cana
 
 合并到 `main` 后，部署 workflow 只接受该 SHA 已成功的 CI。源码、控制面和运行产物先在无生产权限 job 中封存并绑定 SHA，再交给隔离的生产 runner；release guard 在部署锁内验证镜像、数据库迁移、API、worker、前端、健康状态和 exact release identity，失败时回滚到上一个已提交 release。
 
-生产主机装载镜像或构建基础镜像后，PostgreSQL、Redis、RabbitMQ 和 MinIO 必须在至少 60 秒内各自完成至少 12 个新的成功 Docker healthcheck，候选应用才会启动；重复读取尚未翻转的旧 `healthy` 状态不算成功。每个 Docker 查询和整个观察阶段都有硬上限。既有容器不会因配置或镜像漂移被隐式重建；声明与运行容器不一致时部署 fail closed，要求走单独评审的 stateful maintenance，而不是在应用发布中修改有状态依赖。对于已在运行但 unhealthy 的容器，部署只观察其自行恢复，不执行 restart、force-recreate 或删除持久卷。失败诊断先记录全部共享依赖与应用容器的安全状态，再执行耗时的磁盘扫描，避免丢失最接近故障时刻的 owner 证据。
+生产主机装载应用镜像后，PostgreSQL、Redis、RabbitMQ 和 MinIO 必须在至少 60 秒内各自完成至少 12 个新的成功 Docker healthcheck，候选应用才会启动；重复读取尚未翻转的旧 `healthy` 状态不算成功。每个 Docker 查询和整个观察阶段都有硬上限。应用发布对有状态依赖只有观察权：不会 build、create、start、restart 或 recreate 容器，也不会删除持久卷；缺失、停止或声明配置漂移要求走单独评审的 stateful maintenance/bootstrap。观察开始时固定每个运行容器的 ID、实际 image ID、启动时间、重启次数和 Compose 配置 hash，窗口内任一运行时身份变化都会 fail closed。可变镜像标签后来指向另一个 image 不代表运行容器被替换，也不参与应用发布的身份判定。对于已在运行但 unhealthy 的容器，部署只观察其自行恢复。失败诊断先记录全部共享依赖与应用容器的安全状态，再执行耗时的磁盘扫描，避免丢失最接近故障时刻的 owner 证据。
 
 推荐 canary 与规则书→讲解→答疑 canary 分开运行。它们记录完整结果、模型/工具调用图、各段延迟、typed failure、部署 SHA 和清理结果，但不以固定模型调用数、固定页数、固定章节数或固定延迟充当产品正确性合同。sanitizer 删除凭据、模型私有 reasoning、用户上传和受版权保护的原始规则书内容；有 artifact 不等于旅程成功。
 
