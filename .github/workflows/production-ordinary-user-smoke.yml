@@ -363,7 +363,7 @@ jobs:
           rm -rf "$raw_dir"
           mkdir -p "$raw_dir"
           chmod 700 "$raw_dir"
-          printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED"}' > "$public_status"
+          printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED","answerDiagnostic":null}' > "$public_status"
           printf '%s\n' 1 > "$raw_exit"
           : > "$raw_diagnostics"
           chmod 600 "$public_status" "$raw_exit" "$raw_diagnostics"
@@ -447,13 +447,13 @@ jobs:
             else
               public_release_failure=PUBLIC_RELEASE_UNAVAILABLE
             fi
-            printf '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"%s","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED"}\n' \
+            printf '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"%s","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED","answerDiagnostic":null}\n' \
               "$public_release_failure" > "$public_status"
             unset player_username player_password credential_lines
             exit 1
           fi
 
-          printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED"}' > "$public_status"
+          printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","failureCauseCode":null,"cleanupOutcome":"NOT_REQUIRED","answerDiagnostic":null}' > "$public_status"
           chmod 600 "$public_status"
           smoke_args=(
             --base-url "$RULEPILOT_PUBLIC_URL"
@@ -518,7 +518,7 @@ jobs:
               else
                 public_release_failure=PUBLIC_RELEASE_UNAVAILABLE
               fi
-              printf '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"journey-completed","failureCode":"%s","failureCauseCode":null,"cleanupOutcome":"SUCCEEDED"}\n' \
+              printf '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"journey-completed","failureCode":"%s","failureCauseCode":null,"cleanupOutcome":"SUCCEEDED","answerDiagnostic":null}\n' \
                 "$public_release_failure" > "$public_status"
               smoke_exit=1
             fi
@@ -612,17 +612,54 @@ jobs:
                 def is_cause:
                   . == null or (type == "string" and length >= 1 and length <= 80
                     and test("^[A-Z][A-Z0-9_]*$"));
+                def is_answer_status:
+                  IN("ANSWERED", "ANSWERED_WITH_WARNING", "CLARIFICATION_REQUIRED",
+                    "INSUFFICIENT_EVIDENCE", "RETRIEVAL_UNAVAILABLE", "MODEL_UNAVAILABLE",
+                    "MODEL_TIMEOUT", "INVALID_MODEL_OUTPUT", "VERSION_CONFLICT");
+                def is_run_state:
+                  IN("RECEIVED", "DOCUMENT_READINESS", "LESSON_PLANNING",
+                    "QUESTION_UNDERSTANDING", "NEED_CLARIFICATION", "RETRIEVAL_PLANNING",
+                    "RETRIEVING", "VERIFYING_EVIDENCE", "INSUFFICIENT_EVIDENCE",
+                    "LESSON_COMPOSITION", "ANSWER_COMPOSITION", "MEDIA_PACKAGING",
+                    "CRITIQUING", "COMPLETED", "FAILED", "DEGRADED");
+                def is_answer_diagnostic:
+                  . == null or (
+                    type == "object"
+                    and (keys | sort) == ["assistantRunId", "lastErrorCode", "ownerVerified",
+                      "runState", "status", "stopReason"]
+                    and (.status | is_answer_status)
+                    and (.assistantRunId | type == "string"
+                      and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+                    and (.runState | is_run_state)
+                    and (.lastErrorCode == null or (.lastErrorCode | type == "string"
+                      and test("^[A-Z][A-Z0-9_]{2,63}$")))
+                    and (.stopReason == null or (.stopReason | IN("MODEL_CAPABILITY_UNAVAILABLE",
+                      "TIMEOUT", "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
+                      "CANCELLED", "EXECUTION_FAILED", "TOOL_ALLOWLIST_UNAVAILABLE",
+                      "COMPLETION_NO_PROGRESS", "ACTION_NO_PROGRESS",
+                      "OBSERVATION_BUDGET_EXHAUSTED", "OBSERVATION_BUDGET_EXCEEDED",
+                      "OBSERVATION_NO_PROGRESS")))
+                    and .ownerVerified == true
+                  );
                 select(type == "object")
-                | select((keys | sort) == ["cleanupOutcome", "exitCode", "failureCauseCode",
-                    "failureCode", "lastCompletedStage", "outcome"])
+                | select((keys | sort) == ["answerDiagnostic", "cleanupOutcome", "exitCode",
+                    "failureCauseCode", "failureCode", "lastCompletedStage", "outcome"])
                 | select(.exitCode == $expectedExit and (.lastCompletedStage | is_stage))
                 | select(.cleanupOutcome | IN("SUCCEEDED", "FAILED", "NOT_REQUIRED"))
+                | select(.answerDiagnostic | is_answer_diagnostic)
                 | select(if $expectedExit == 0 then
                     .outcome == "SUCCEEDED"
                       and .failureCode == null
                       and .failureCauseCode == null
                       and .lastCompletedStage == "journey-completed"
                       and .cleanupOutcome != "FAILED"
+                      and .answerDiagnostic != null
+                      and ((.answerDiagnostic.status == "ANSWERED"
+                          and .answerDiagnostic.runState == "COMPLETED"
+                          and .answerDiagnostic.stopReason == null)
+                        or (.answerDiagnostic.status == "ANSWERED_WITH_WARNING"
+                          and .answerDiagnostic.runState == "DEGRADED"
+                          and .answerDiagnostic.stopReason == null))
                   else
                     .outcome == "FAILED"
                       and (.failureCode | is_failure_code)
@@ -631,7 +668,16 @@ jobs:
                         .cleanupOutcome == "FAILED" and .lastCompletedStage == "journey-completed"
                       else true end)
                   end)
-                | {outcome, exitCode, lastCompletedStage, failureCode, failureCauseCode, cleanupOutcome}
+                | {outcome, exitCode, lastCompletedStage, failureCode, failureCauseCode,
+                    cleanupOutcome,
+                    answerDiagnostic: (if .answerDiagnostic == null then null else {
+                      status: .answerDiagnostic.status,
+                      assistantRunId: .answerDiagnostic.assistantRunId,
+                      runState: .answerDiagnostic.runState,
+                      lastErrorCode: .answerDiagnostic.lastErrorCode,
+                      stopReason: .answerDiagnostic.stopReason,
+                      ownerVerified: .answerDiagnostic.ownerVerified
+                    } end)}
               ' "$raw_status" > "$sanitized_status"; then
               status_valid=true
             fi
@@ -640,7 +686,7 @@ jobs:
             jq -n \
               '{outcome:"FAILED",exitCode:1,lastCompletedStage:"status-unavailable",
                failureCode:"UNEXPECTED_SMOKE_FAILURE",failureCauseCode:null,
-               cleanupOutcome:"FAILED"}
+               cleanupOutcome:"FAILED",answerDiagnostic:null}
             ' > "$sanitized_status"
             journey_exit=1
           fi
@@ -748,7 +794,7 @@ jobs:
             if [[ "$journey_exit" == 0 && "$status_outcome" == SUCCEEDED ]]; then
               jq '{outcome:"FAILED",exitCode:1,lastCompletedStage:"summary-unavailable",
                    failureCode:"UNEXPECTED_SMOKE_FAILURE",failureCauseCode:null,
-                   cleanupOutcome}' "$sanitized_status" > "$temporary_artifact"
+                   cleanupOutcome,answerDiagnostic}' "$sanitized_status" > "$temporary_artifact"
             else
               cp "$sanitized_status" "$temporary_artifact"
             fi

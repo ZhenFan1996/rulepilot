@@ -10,8 +10,36 @@ validate_public_status() {
 		return 2
 	fi
 	jq -e --argjson expectedExit "$expected_exit" '
+		def is_answer_status:
+			IN("ANSWERED", "ANSWERED_WITH_WARNING", "CLARIFICATION_REQUIRED",
+				"INSUFFICIENT_EVIDENCE", "RETRIEVAL_UNAVAILABLE", "MODEL_UNAVAILABLE",
+				"MODEL_TIMEOUT", "INVALID_MODEL_OUTPUT", "VERSION_CONFLICT");
+		def is_run_state:
+			IN("RECEIVED", "DOCUMENT_READINESS", "LESSON_PLANNING", "QUESTION_UNDERSTANDING",
+				"NEED_CLARIFICATION", "RETRIEVAL_PLANNING", "RETRIEVING",
+				"VERIFYING_EVIDENCE", "INSUFFICIENT_EVIDENCE", "LESSON_COMPOSITION",
+				"ANSWER_COMPOSITION", "MEDIA_PACKAGING", "CRITIQUING", "COMPLETED",
+				"FAILED", "DEGRADED");
+		def is_answer_diagnostic:
+			. == null or (
+				type == "object"
+				and (keys | sort == ["assistantRunId", "lastErrorCode", "ownerVerified", "runState", "status", "stopReason"])
+				and (.status | is_answer_status)
+				and (.assistantRunId | type == "string"
+					and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+				and (.runState | is_run_state)
+				and (.lastErrorCode == null or (.lastErrorCode | type == "string"
+					and test("^[A-Z][A-Z0-9_]{2,63}$")))
+				and (.stopReason == null or (.stopReason | IN("MODEL_CAPABILITY_UNAVAILABLE",
+					"TIMEOUT", "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
+					"CANCELLED", "EXECUTION_FAILED", "TOOL_ALLOWLIST_UNAVAILABLE",
+					"COMPLETION_NO_PROGRESS", "ACTION_NO_PROGRESS", "OBSERVATION_BUDGET_EXHAUSTED",
+					"OBSERVATION_BUDGET_EXCEEDED", "OBSERVATION_NO_PROGRESS")))
+				and .ownerVerified == true
+			);
 		type == "object"
-		and (keys | sort == ["cleanupOutcome", "exitCode", "failureCauseCode", "failureCode", "lastCompletedStage", "outcome"])
+		and (keys | sort == ["answerDiagnostic", "cleanupOutcome", "exitCode", "failureCauseCode", "failureCode", "lastCompletedStage", "outcome"])
+		and (.answerDiagnostic | is_answer_diagnostic)
 		and (.exitCode == $expectedExit)
 		and (.lastCompletedStage | type == "string" and test("^[a-z0-9-]+$"))
 		and (.cleanupOutcome == "SUCCEEDED" or .cleanupOutcome == "FAILED" or .cleanupOutcome == "NOT_REQUIRED")
@@ -22,6 +50,13 @@ validate_public_status() {
 				and .failureCauseCode == null
 				and .lastCompletedStage == "journey-completed"
 				and .cleanupOutcome != "FAILED"
+				and .answerDiagnostic != null
+				and ((.answerDiagnostic.status == "ANSWERED"
+						and .answerDiagnostic.runState == "COMPLETED"
+						and .answerDiagnostic.stopReason == null)
+					or (.answerDiagnostic.status == "ANSWERED_WITH_WARNING"
+						and .answerDiagnostic.runState == "DEGRADED"
+						and .answerDiagnostic.stopReason == null))
 			else
 				.outcome == "FAILED"
 				and (.failureCauseCode == null
@@ -62,6 +97,7 @@ pending_failure_code=INPUT_INVALID
 cleanup_outcome=NOT_REQUIRED
 cleanup_required=false
 run_failure_code_file=
+answer_diagnostic_json=null
 
 write_public_status() {
 	local exit_status=$1
@@ -99,8 +135,17 @@ write_public_status() {
 	mkdir -p "$status_dir"
 	status_tmp="${public_status_file}.tmp.$$"
 	umask 077
-	printf '{"outcome":"%s","exitCode":%d,"lastCompletedStage":"%s","failureCode":%s,"failureCauseCode":%s,"cleanupOutcome":"%s"}\n' \
-		"$outcome" "$exit_status" "$safe_stage" "$failure_json" "$failure_cause_json" "$safe_cleanup" > "$status_tmp"
+	jq -cn \
+		--arg outcome "$outcome" \
+		--argjson exitCode "$exit_status" \
+		--arg lastCompletedStage "$safe_stage" \
+		--argjson failureCode "$failure_json" \
+		--argjson failureCauseCode "$failure_cause_json" \
+		--arg cleanupOutcome "$safe_cleanup" \
+		--argjson answerDiagnostic "$answer_diagnostic_json" \
+		'{outcome: $outcome, exitCode: $exitCode, lastCompletedStage: $lastCompletedStage,
+		  failureCode: $failureCode, failureCauseCode: $failureCauseCode,
+		  cleanupOutcome: $cleanupOutcome, answerDiagnostic: $answerDiagnostic}' > "$status_tmp"
 	chmod 600 "$status_tmp"
 	mv "$status_tmp" "$public_status_file"
 }
@@ -582,6 +627,110 @@ post_json() {
 		--header "$csrf_header: $csrf_token" \
 		--data "$payload" \
 		"$base_url$path"
+}
+
+latest_question_run() {
+	local version_id=$1
+	local response http_code body
+	response=$(forward_curl --silent --show-error --write-out $'\n%{http_code}' \
+		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+		"$base_url/api/v1/assistant-runs/latest?mode=QUESTION_ANSWER&subjectId=$version_id") || return
+	http_code=${response##*$'\n'}
+	body=${response%$'\n'*}
+	if [ "$http_code" = 404 ]; then
+		printf 'null\n'
+		return 0
+	fi
+	if [ "$http_code" != 200 ]; then
+		echo "Latest question-answer run endpoint returned HTTP $http_code" >&2
+		return 1
+	fi
+	jq -ce --arg version_id "$version_id" --arg owner "$username" '
+		def is_run_state:
+			IN("RECEIVED", "DOCUMENT_READINESS", "LESSON_PLANNING", "QUESTION_UNDERSTANDING",
+				"NEED_CLARIFICATION", "RETRIEVAL_PLANNING", "RETRIEVING",
+				"VERIFYING_EVIDENCE", "INSUFFICIENT_EVIDENCE", "LESSON_COMPOSITION",
+				"ANSWER_COMPOSITION", "MEDIA_PACKAGING", "CRITIQUING", "COMPLETED",
+				"FAILED", "DEGRADED");
+		select(type == "object" and (.run | type == "object"))
+		| select(.run.mode == "QUESTION_ANSWER")
+		| select(.run.subjectId == $version_id)
+		| select(.run.ownerUsername == $owner)
+		| select(.run.id | type == "string"
+			and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+		| select(.run.state | is_run_state)
+		| select(.run | has("lastErrorCode"))
+		| select(.run.lastErrorCode == null or (.run.lastErrorCode | type == "string"
+			and test("^[A-Z][A-Z0-9_]{2,63}$")))
+		| ([.activities[]?
+			| select(.type == "VALIDATION" and .outcome == "REJECTED")
+			| .operation
+			| select(type == "string")
+			| capture("^nativeToolFallback\\|(?<reason>MODEL_CAPABILITY_UNAVAILABLE|TIMEOUT|STEP_BUDGET|TOOL_BUDGET|MODEL_BUDGET|TOKEN_BUDGET|CANCELLED|EXECUTION_FAILED|TOOL_ALLOWLIST_UNAVAILABLE|COMPLETION_NO_PROGRESS|ACTION_NO_PROGRESS|OBSERVATION_BUDGET_EXHAUSTED|OBSERVATION_BUDGET_EXCEEDED|OBSERVATION_NO_PROGRESS)$")
+			| .reason] | last // null) as $stopReason
+		| {id: .run.id, state: .run.state, lastErrorCode: .run.lastErrorCode,
+			stopReason: $stopReason, ownerVerified: true}
+	' <<<"$body"
+}
+
+request_rule_answer() {
+	local version_id=$1
+	local payload=$2
+	local previous_run=null latest_run=null answer_http_status=0 answer_status
+	local previous_run_valid=true latest_run_valid=true
+	if ! previous_run=$(latest_question_run "$version_id"); then
+		previous_run_valid=false
+		previous_run=null
+		echo "Rule answer baseline audit was unavailable or invalid" >&2
+	fi
+	answer_response=$(post_json "/api/v1/document-versions/$version_id/answers" "$payload") \
+		|| answer_http_status=$?
+	if ! latest_run=$(latest_question_run "$version_id"); then
+		latest_run_valid=false
+		latest_run=null
+		echo "Rule answer completion audit was unavailable or invalid" >&2
+	fi
+	if [ "$answer_http_status" -ne 0 ]; then
+		record_failure_cause ANSWER_REQUEST_FAILED
+		echo "Rule answer HTTP request failed" >&2
+		return "$answer_http_status"
+	fi
+	if ! answer_status=$(jq -er '
+		.answer.status
+		| select(IN("ANSWERED", "ANSWERED_WITH_WARNING", "CLARIFICATION_REQUIRED",
+			"INSUFFICIENT_EVIDENCE", "RETRIEVAL_UNAVAILABLE", "MODEL_UNAVAILABLE",
+			"MODEL_TIMEOUT", "INVALID_MODEL_OUTPUT", "VERSION_CONFLICT"))
+	' <<<"$answer_response"); then
+		record_failure_cause ANSWER_RESPONSE_INVALID
+		echo "Rule answer response did not expose a valid status" >&2
+		return 1
+	fi
+	if [ "$previous_run_valid" = true ] && [ "$latest_run_valid" = true ] \
+			&& [ "$latest_run" != null ] \
+			&& [ "$(jq -r '.id' <<<"$latest_run")" != "$(jq -r '.id // empty' <<<"$previous_run")" ]; then
+		answer_diagnostic_json=$(jq -cn --arg status "$answer_status" --argjson run "$latest_run" '
+			{status: $status, assistantRunId: $run.id, runState: $run.state,
+			 lastErrorCode: $run.lastErrorCode, stopReason: $run.stopReason,
+			 ownerVerified: $run.ownerVerified}
+		')
+		if { [ "$answer_status" = ANSWERED ] \
+				&& { [ "$(jq -r '.state' <<<"$latest_run")" != COMPLETED ] \
+					|| [ "$(jq -r '.stopReason // empty' <<<"$latest_run")" != "" ]; }; } \
+				|| { [ "$answer_status" = ANSWERED_WITH_WARNING ] \
+					&& { [ "$(jq -r '.state' <<<"$latest_run")" != DEGRADED ] \
+						|| [ "$(jq -r '.stopReason // empty' <<<"$latest_run")" != "" ]; }; }; then
+			record_failure_cause ANSWER_RUN_AUDIT_INVALID
+			echo "Rule answer publication status did not match its terminal run state" >&2
+			return 1
+		fi
+		return 0
+	fi
+	if [ "$answer_status" = ANSWERED ] || [ "$answer_status" = ANSWERED_WITH_WARNING ]; then
+		record_failure_cause ANSWER_RUN_AUDIT_INVALID
+		echo "Rule answer completion did not expose one new owned question-answer run" >&2
+		return 1
+	fi
+	echo "Rule answer failure had no safely attributable run diagnostic" >&2
 }
 
 wait_for_official_import() {
@@ -1278,15 +1427,13 @@ run_official_image_gallery() {
 	fi
 	answer_payload=$(jq -cn --arg question "$question" --arg language "$answer_language" \
 		'{question: $question, language: $language}')
-	if ! answer_response=$(post_json "/api/v1/document-versions/$version_id/answers" "$answer_payload"); then
-		record_failure_cause ANSWER_REQUEST_FAILED
-		echo "Rule answer HTTP request failed" >&2
+	if ! request_rule_answer "$version_id" "$answer_payload"; then
 		return 1
 	fi
 	if ! validate_rule_answer_response "$answer_response" "$answer_language" "$expected_page_count"; then
 		return 1
 	fi
-	answer_run_id=$(jq -r '.assistantRunId // "not-exposed"' <<<"$answer_response")
+	answer_run_id=$(jq -r '.assistantRunId' <<<"$answer_diagnostic_json")
 	answer_status=$(jq -er '.answer.status' <<<"$answer_response")
 	answer_citation_count=$(jq -er '.answer.citations | length' <<<"$answer_response")
 	log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
@@ -1531,14 +1678,7 @@ if ! refresh_csrf; then
 fi
 answer_payload=$(jq -cn --arg question "$question" --arg language "$answer_language" \
 	'{question: $question, language: $language}')
-if ! answer_response=$(forward_curl --fail-with-body --silent --show-error \
-		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
-		--request POST --header "Content-Type: application/json" \
-		--header "$csrf_header: $csrf_token" \
-		--data "$answer_payload" \
-		"$base_url/api/v1/document-versions/$version_id/answers"); then
-	record_failure_cause ANSWER_REQUEST_FAILED
-	echo "Rule answer HTTP request failed" >&2
+if ! request_rule_answer "$version_id" "$answer_payload"; then
 	exit 1
 fi
 if [ -n "$result_file" ]; then
@@ -1551,7 +1691,7 @@ fi
 if ! validate_rule_answer_response "$answer_response" "$answer_language"; then
 	exit 1
 fi
-answer_run_id=$(jq -r '.assistantRunId // "not-exposed"' <<<"$answer_response")
+answer_run_id=$(jq -r '.assistantRunId' <<<"$answer_diagnostic_json")
 answer_status=$(jq -er '.answer.status' <<<"$answer_response")
 answer_citation_count=$(jq -er '.answer.citations | length' <<<"$answer_response")
 log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
