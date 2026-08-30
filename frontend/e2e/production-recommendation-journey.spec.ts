@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 
 import {
   expect,
@@ -141,6 +142,10 @@ type StreamTerminal =
   | { kind: 'result', result: RecommendationResult }
   | { kind: 'error', code: string, boundary: string | null, reason: string | null }
 
+type BrowserStreamObservation =
+  | { kind: 'terminal', block: string }
+  | { kind: 'observer_error', code: string }
+
 function sha256(value: string) {
   return createHash('sha256').update(value, 'utf8').digest('hex')
 }
@@ -279,7 +284,163 @@ function parseStream(text: string): StreamTerminal {
   }
   return terminal ?? { kind: 'error', code: 'unknown_stream_error', boundary: null, reason: null }
 }
+async function installRecommendationStreamObserver(page: Page) {
+  await page.addInitScript(({ maximumEventCharacters, streamPath }) => {
+    interface StreamEvidenceState {
+      generation: number
+      terminalBlock: string | null
+      observerError: string | null
+    }
+
+    const observedWindow = window as typeof window & {
+      __rulepilotRecommendationStreamEvidence?: StreamEvidenceState
+    }
+    if (observedWindow.__rulepilotRecommendationStreamEvidence) return
+
+    const state: StreamEvidenceState = {
+      generation: 0,
+      terminalBlock: null,
+      observerError: null,
+    }
+    observedWindow.__rulepilotRecommendationStreamEvidence = state
+    const nativeFetch: typeof window.fetch = window.fetch.bind(window)
+
+    const belongsToGeneration = (generation: number) => generation === state.generation
+    const fail = (generation: number, code: string) => {
+      if (belongsToGeneration(generation) && state.terminalBlock === null) {
+        state.observerError = code
+      }
+    }
+    const isTerminalBlock = (block: string) => {
+      let event = 'message'
+      let hasData = false
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim()
+        if (line.startsWith('data:')) hasData = true
+      }
+      return hasData && (event === 'result' || event === 'error')
+    }
+    const observe = async (response: Response, generation: number) => {
+      if (!response.body) {
+        fail(generation, 'observer_stream_body_missing')
+        return
+      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const chunk = await reader.read()
+        buffer = `${buffer}${decoder.decode(chunk.value, { stream: !chunk.done })}`
+          .replaceAll('\r\n', '\n')
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          if (isTerminalBlock(block)) {
+            if (belongsToGeneration(generation)) state.terminalBlock = block
+            void reader.cancel()
+            return
+          }
+          boundary = buffer.indexOf('\n\n')
+        }
+        if (buffer.length > maximumEventCharacters) {
+          void reader.cancel()
+          fail(generation, 'observer_stream_event_too_large')
+          return
+        }
+        if (chunk.done) break
+      }
+      if (buffer.trim() && isTerminalBlock(buffer)) {
+        if (belongsToGeneration(generation)) state.terminalBlock = buffer
+        return
+      }
+      fail(generation, 'observer_stream_ended_without_terminal')
+    }
+
+    observedWindow.fetch = async (...args: Parameters<typeof window.fetch>) => {
+      const generation = state.generation
+      const [input, init] = args
+      const requestUrl = input instanceof Request ? input.url : input.toString()
+      const requestMethod = (init?.method ?? (input instanceof Request ? input.method : 'GET'))
+        .toUpperCase()
+      let observesRecommendationStream = false
+      try {
+        observesRecommendationStream = requestMethod === 'POST'
+          && new URL(requestUrl, window.location.href).pathname === streamPath
+      } catch {
+        // An unrelated malformed request remains the application's responsibility.
+      }
+
+      const response = await nativeFetch(...args)
+      if (observesRecommendationStream && response.ok) {
+        try {
+          void observe(response.clone(), generation)
+            .catch(() => fail(generation, 'observer_stream_read_failed'))
+        } catch {
+          fail(generation, 'observer_stream_clone_failed')
+        }
+      }
+      return response
+    }
+  }, {
+    maximumEventCharacters: 1_048_576,
+    streamPath: '/api/v1/bgg/recommendation-agent/stream',
+  })
+}
+async function resetRecommendationStreamObserver(page: Page) {
+  await page.evaluate(() => {
+    const observedWindow = window as typeof window & {
+      __rulepilotRecommendationStreamEvidence?: {
+        generation: number
+        terminalBlock: string | null
+        observerError: string | null
+      }
+    }
+    const state = observedWindow.__rulepilotRecommendationStreamEvidence
+    if (!state) throw new Error('Recommendation stream observer is unavailable')
+    state.generation += 1
+    state.terminalBlock = null
+    state.observerError = null
+  })
+}
+async function waitForRecommendationStreamObservation(page: Page) {
+  const result = await page.waitForFunction(() => {
+    const observedWindow = window as typeof window & {
+      __rulepilotRecommendationStreamEvidence?: {
+        terminalBlock: string | null
+        observerError: string | null
+      }
+    }
+    const state = observedWindow.__rulepilotRecommendationStreamEvidence
+    if (state?.terminalBlock !== null && state?.terminalBlock !== undefined) {
+      return { kind: 'terminal', block: state.terminalBlock }
+    }
+    if (state?.observerError) return { kind: 'observer_error', code: state.observerError }
+    return null
+  }, undefined, { polling: 50, timeout: TURN_OBSERVATION_MS })
+  let observation: BrowserStreamObservation
+  try {
+    observation = await result.jsonValue() as BrowserStreamObservation
+  } finally {
+    await result.dispose()
+  }
+  await page.evaluate(() => {
+    const observedWindow = window as typeof window & {
+      __rulepilotRecommendationStreamEvidence?: {
+        terminalBlock: string | null
+        observerError: string | null
+      }
+    }
+    const state = observedWindow.__rulepilotRecommendationStreamEvidence
+    if (state) {
+      state.terminalBlock = null
+      state.observerError = null
+    }
+  })
+  return observation
+}
 async function submitTurn(page: Page, prompt: string) {
+  await resetRecommendationStreamObserver(page)
   const responsePromise = page.waitForResponse(response => {
     const url = new URL(response.url())
     return url.pathname === '/api/v1/bgg/recommendation-agent/stream'
@@ -298,7 +459,13 @@ async function submitTurn(page: Page, prompt: string) {
       terminal: { kind: 'error', code: `http_${response.status()}`, boundary: null, reason: null } as StreamTerminal,
     }
   }
-  return { messageMatched: body?.message === prompt, terminal: parseStream(await response.text()) }
+  const observation = await waitForRecommendationStreamObservation(page)
+  return {
+    messageMatched: body?.message === prompt,
+    terminal: observation.kind === 'terminal'
+      ? parseStream(observation.block)
+      : { kind: 'error', code: observation.code, boundary: null, reason: null } as StreamTerminal,
+  }
 }
 function streamFailure(terminal: Extract<StreamTerminal, { kind: 'error' }>): FailureEvidence {
   return {
@@ -607,6 +774,119 @@ function thrownFailure(error: unknown): FailureEvidence {
   }
 }
 
+test('browser observer reads a cloned recommendation stream without taking the page response', async ({ page }) => {
+  const result: RecommendationResult = {
+    clientTurnId: 'observer-smoke-turn',
+    outcome: 'conversation',
+    assistantMessage: 'observer smoke reply',
+    profile: {
+      type: '', interaction: '', playerCount: null, durationMinutes: null, complexity: null,
+    },
+    catalogCalls: 0,
+    webResearchCalls: 0,
+    games: [],
+  }
+  const stream = `event: progress\ndata: {"stage":"understanding_request"}\n\n`
+    + `event: result\ndata: ${JSON.stringify(result)}\n\n`
+  const errorStream = 'event: error\ndata: '
+    + '{"code":"recommendation_unavailable","failureBoundary":"service_failure",'
+    + '"failureReason":"provider_call_failed"}\n\n'
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    if (request.method === 'GET' && url.pathname === '/') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end('<!doctype html><title>stream observer smoke</title>')
+      return
+    }
+    if (request.method === 'POST'
+      && url.pathname === '/api/v1/bgg/recommendation-agent/stream') {
+      response.writeHead(200, {
+        'cache-control': 'no-store',
+        'content-type': 'text/event-stream',
+      })
+      response.write(url.searchParams.get('case') === 'error' ? errorStream : stream)
+      return
+    }
+    response.writeHead(404)
+    response.end()
+  })
+  await new Promise<void>((resolve, reject) => {
+    const failed = (error: Error) => reject(error)
+    server.once('error', failed)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', failed)
+      resolve()
+    })
+  })
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('Observer server unavailable')
+  const consumePageTerminal = (streamCase: 'result' | 'error') => page.evaluate(async value => {
+    const response = await fetch(
+      `/api/v1/bgg/recommendation-agent/stream?case=${encodeURIComponent(value)}`,
+      { method: 'POST' },
+    )
+    if (!response.body) throw new Error('Synthetic stream unavailable')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const chunk = await reader.read()
+      buffer = `${buffer}${decoder.decode(chunk.value, { stream: !chunk.done })}`
+        .replaceAll('\r\n', '\n')
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        if (/^event: (?:result|error)$/mu.test(block) && /^data:/mu.test(block)) {
+          await reader.cancel()
+          return block
+        }
+        boundary = buffer.indexOf('\n\n')
+      }
+      if (chunk.done) throw new Error('Synthetic stream ended without a terminal')
+    }
+  }, streamCase)
+
+  try {
+    await installRecommendationStreamObserver(page)
+    await page.goto(`http://127.0.0.1:${address.port}/`)
+    await resetRecommendationStreamObserver(page)
+    const [pageResultBlock, resultObservation] = await Promise.all([
+      consumePageTerminal('result'),
+      waitForRecommendationStreamObservation(page),
+    ])
+
+    expect(parseStream(pageResultBlock).kind).toBe('result')
+    expect(resultObservation.kind).toBe('terminal')
+    if (resultObservation.kind !== 'terminal') throw new Error(resultObservation.code)
+    const terminal = parseStream(resultObservation.block)
+    expect(terminal.kind).toBe('result')
+    if (terminal.kind === 'result') expect(terminal.result).toEqual(result)
+
+    await resetRecommendationStreamObserver(page)
+    const [pageErrorBlock, errorObservation] = await Promise.all([
+      consumePageTerminal('error'),
+      waitForRecommendationStreamObservation(page),
+    ])
+
+    expect(parseStream(pageErrorBlock).kind).toBe('error')
+    expect(errorObservation.kind).toBe('terminal')
+    if (errorObservation.kind !== 'terminal') throw new Error(errorObservation.code)
+    expect(parseStream(errorObservation.block)).toEqual({
+      kind: 'error',
+      code: 'recommendation_unavailable',
+      boundary: 'service_failure',
+      reason: 'provider_call_failed',
+    })
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => server.close(error => {
+      if (error) reject(error)
+      else resolve()
+    }))
+  }
+})
+
 test('production publishes natural and grounded recommendation replies before the exact-card handoff', async ({ page }) => {
   test.skip(!enabled, 'Runs only through the credentialed production recommendation workflow')
   test.setTimeout(6 * 60_000)
@@ -665,6 +945,7 @@ test('production publishes natural and grounded recommendation replies before th
     expect(report.deployment.before.releaseId).toBe(report.deployment.activeReleaseId)
 
     report.stage = 'login'
+    await installRecommendationStreamObserver(page)
     await login(page, username, password)
     report.model.before = await modelAssignment(page.request)
     expect(report.model.before).toEqual(report.model.expected)
