@@ -84,6 +84,8 @@ jobs:
           openssl version -a | head -n 2
           python3 --version
           node --version
+          command -v node
+          readlink -f "$(command -v node)"
           for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
             if [[ -v "$name" ]]; then
               printf '%s=set\n' "$name"
