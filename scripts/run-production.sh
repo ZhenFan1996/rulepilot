@@ -266,6 +266,18 @@ wait_for_stateful_dependencies() {
 	redis_last_probe=
 	rabbitmq_last_probe=
 	minio_last_probe=
+	postgres_runtime_image_id=
+	redis_runtime_image_id=
+	rabbitmq_runtime_image_id=
+	minio_runtime_image_id=
+	postgres_runtime_started_at=
+	redis_runtime_started_at=
+	rabbitmq_runtime_started_at=
+	minio_runtime_started_at=
+	postgres_runtime_restart_count=
+	redis_runtime_restart_count=
+	rabbitmq_runtime_restart_count=
+	minio_runtime_restart_count=
 	postgres_successful_healthchecks=0
 	redis_successful_healthchecks=0
 	rabbitmq_successful_healthchecks=0
@@ -283,39 +295,64 @@ wait_for_stateful_dependencies() {
 			printf 'Could not resolve the declared %s configuration hash.\n' "$service"
 			return 1
 		fi
-		if ! expected_image_name=$(bounded_stateful_compose config --images "$service" 2>/dev/null); then
-			printf 'Could not resolve the declared %s image within the bounded Docker query window.\n' "$service"
+		if ! container=$(bounded_stateful_compose ps --all -q "$service" 2>/dev/null); then
+			printf 'Could not resolve the existing %s container within the bounded Docker query window.\n' "$service"
 			return 1
 		fi
-		expected_image_name=$(printf '%s\n' "$expected_image_name" | sed -n '1p')
-		if [ -z "$expected_image_name" ] \
-			|| ! expected_image_id=$(bounded_stateful_docker image inspect --format '{{.Id}}' "$expected_image_name" 2>/dev/null); then
-			printf 'The declared %s image is not available after the stateful start.\n' "$service"
+		if [ -z "$container" ]; then
+			printf 'The existing %s container is missing; use the explicit stateful maintenance path before deploying.\n' "$service"
 			return 1
 		fi
-		if ! container=$(bounded_stateful_compose ps -q "$service" 2>/dev/null) || [ -z "$container" ]; then
-			printf 'The %s container is missing after the stateful start.\n' "$service"
+		if ! runtime_snapshot=$(bounded_stateful_docker inspect --format \
+			'baseline|{{.State.Status}}|{{.Image}}|{{.State.StartedAt}}|{{.RestartCount}}|{{index .Config.Labels "com.docker.compose.config-hash"}}' \
+			"$container" 2>/dev/null); then
+			printf 'Could not inspect the existing %s container within the bounded Docker query window.\n' "$service"
+			return 1
+		fi
+		IFS='|' read -r snapshot_type runtime_state runtime_image_id runtime_started_at runtime_restart_count container_config_hash <<EOF
+$runtime_snapshot
+EOF
+		if [ "$snapshot_type" != baseline ] || [ -z "$runtime_image_id" ] \
+			|| [ -z "$runtime_started_at" ] || [ -z "$runtime_restart_count" ]; then
+			printf 'Could not establish the existing %s runtime image identity.\n' "$service"
+			return 1
+		fi
+		if [ "$runtime_state" != running ]; then
+			printf 'Stateful dependency %s is %s; application deployment will not start or restart it.\n' \
+				"$service" "$runtime_state"
+			return 1
+		fi
+		if [ "$container_config_hash" != "$expected_config_hash" ]; then
+			printf 'Stateful dependency %s has configuration drift; use the explicit stateful maintenance path before deploying.\n' "$service"
 			return 1
 		fi
 		case "$service" in
 			postgres)
 				postgres_expected_config_hash=$expected_config_hash
-				postgres_expected_image_id=$expected_image_id
+				postgres_runtime_image_id=$runtime_image_id
+				postgres_runtime_started_at=$runtime_started_at
+				postgres_runtime_restart_count=$runtime_restart_count
 				postgres_container=$container
 				;;
 			redis)
 				redis_expected_config_hash=$expected_config_hash
-				redis_expected_image_id=$expected_image_id
+				redis_runtime_image_id=$runtime_image_id
+				redis_runtime_started_at=$runtime_started_at
+				redis_runtime_restart_count=$runtime_restart_count
 				redis_container=$container
 				;;
 			rabbitmq)
 				rabbitmq_expected_config_hash=$expected_config_hash
-				rabbitmq_expected_image_id=$expected_image_id
+				rabbitmq_runtime_image_id=$runtime_image_id
+				rabbitmq_runtime_started_at=$runtime_started_at
+				rabbitmq_runtime_restart_count=$runtime_restart_count
 				rabbitmq_container=$container
 				;;
 			minio)
 				minio_expected_config_hash=$expected_config_hash
-				minio_expected_image_id=$expected_image_id
+				minio_runtime_image_id=$runtime_image_id
+				minio_runtime_started_at=$runtime_started_at
+				minio_runtime_restart_count=$runtime_restart_count
 				minio_container=$container
 				;;
 		esac
@@ -329,59 +366,81 @@ wait_for_stateful_dependencies() {
 				postgres)
 					container=$postgres_container
 					expected_config_hash=$postgres_expected_config_hash
-					expected_image_id=$postgres_expected_image_id
+					runtime_image_id=$postgres_runtime_image_id
+					runtime_started_at=$postgres_runtime_started_at
+					runtime_restart_count=$postgres_runtime_restart_count
 					previous_probe=$postgres_last_probe
 					previous_successes=$postgres_successful_healthchecks
 					;;
 				redis)
 					container=$redis_container
 					expected_config_hash=$redis_expected_config_hash
-					expected_image_id=$redis_expected_image_id
+					runtime_image_id=$redis_runtime_image_id
+					runtime_started_at=$redis_runtime_started_at
+					runtime_restart_count=$redis_runtime_restart_count
 					previous_probe=$redis_last_probe
 					previous_successes=$redis_successful_healthchecks
 					;;
 				rabbitmq)
 					container=$rabbitmq_container
 					expected_config_hash=$rabbitmq_expected_config_hash
-					expected_image_id=$rabbitmq_expected_image_id
+					runtime_image_id=$rabbitmq_runtime_image_id
+					runtime_started_at=$rabbitmq_runtime_started_at
+					runtime_restart_count=$rabbitmq_runtime_restart_count
 					previous_probe=$rabbitmq_last_probe
 					previous_successes=$rabbitmq_successful_healthchecks
 					;;
 				minio)
 					container=$minio_container
 					expected_config_hash=$minio_expected_config_hash
-					expected_image_id=$minio_expected_image_id
+					runtime_image_id=$minio_runtime_image_id
+					runtime_started_at=$minio_runtime_started_at
+					runtime_restart_count=$minio_runtime_restart_count
 					previous_probe=$minio_last_probe
 					previous_successes=$minio_successful_healthchecks
 					;;
 			esac
+			if ! current_container=$(bounded_stateful_compose ps --all -q "$service" 2>/dev/null); then
+				observation_valid=false
+				unsettled_services="${unsettled_services}${unsettled_services:+, }${service}(container-query-unavailable)"
+				continue
+			fi
+			if [ "$current_container" != "$container" ]; then
+				printf 'Stateful dependency %s changed container identity during the readiness gate; application deployment will not adopt it.\n' "$service"
+				return 1
+			fi
 			if [ -z "$stable_since" ]; then
 				previous_probe=
 				previous_successes=0
 			fi
 
 			if ! container_observation=$(bounded_stateful_docker inspect --format \
-				'container|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}|{{.Image}}|{{index .Config.Labels "com.docker.compose.config-hash"}}{{"\n"}}{{if .State.Health}}{{range .State.Health.Log}}probe|{{.End}}|{{.ExitCode}}{{"\n"}}{{end}}{{end}}' \
+				'container|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}|{{.Image}}|{{.State.StartedAt}}|{{.RestartCount}}|{{index .Config.Labels "com.docker.compose.config-hash"}}{{"\n"}}{{if .State.Health}}{{range .State.Health.Log}}probe|{{.End}}|{{.ExitCode}}{{"\n"}}{{end}}{{end}}' \
 				"$container" 2>/dev/null); then
 				observation_valid=false
 				unsettled_services="${unsettled_services}${unsettled_services:+, }${service}(docker-query-unavailable)"
 				continue
 			fi
 			container_header=$(printf '%s\n' "$container_observation" | sed -n '1p')
-			IFS='|' read -r record_type container_state container_health container_image container_config_hash <<EOF
+			IFS='|' read -r record_type container_state container_health container_image container_started_at container_restart_count container_config_hash <<EOF
 $container_header
 EOF
 			if [ "$record_type" != container ]; then
 				observation_valid=false
-				unsettled_services="${unsettled_services}${unsettled_services:+, }${service}(invalid-inspection)"
+				unsettled_services="${unsettled_services}${unsettled_services:+, }${service}(invalid-inspection-${record_type:-missing})"
 				continue
 			fi
 			if [ "$container_config_hash" != "$expected_config_hash" ]; then
 				printf 'Stateful dependency %s has configuration drift; use the explicit stateful maintenance path before deploying.\n' "$service"
 				return 1
 			fi
-			if [ "$container_image" != "$expected_image_id" ]; then
-				printf 'Stateful dependency %s has image drift; use the explicit stateful maintenance path before deploying.\n' "$service"
+			if [ "$container_image" != "$runtime_image_id" ]; then
+				printf 'Stateful dependency %s changed runtime image during the readiness gate; deployment will not mutate it.\n' "$service"
+				return 1
+			fi
+			if [ "$container_started_at" != "$runtime_started_at" ] \
+				|| [ "$container_restart_count" != "$runtime_restart_count" ]; then
+				printf 'Stateful dependency %s restarted during the readiness gate; application deployment will not adopt the changed runtime.\n' "$service"
 				return 1
 			fi
 
@@ -439,6 +498,10 @@ EOF
 
 		if [ "$observation_valid" = true ]; then
 			now=$(date +%s)
+			if [ "$now" -ge "$stateful_ready_deadline" ]; then
+				last_observation="readiness deadline reached after the final bounded observation"
+				break
+			fi
 			if [ -z "$stable_since" ]; then
 				stable_since=$now
 			fi
@@ -449,19 +512,6 @@ EOF
 				&& [ "$redis_successful_healthchecks" -ge "$required_successful_healthchecks" ] \
 				&& [ "$rabbitmq_successful_healthchecks" -ge "$required_successful_healthchecks" ] \
 				&& [ "$minio_successful_healthchecks" -ge "$required_successful_healthchecks" ]; then
-				for service in postgres redis rabbitmq minio; do
-					case "$service" in
-						postgres) expected_container=$postgres_container ;;
-						redis) expected_container=$redis_container ;;
-						rabbitmq) expected_container=$rabbitmq_container ;;
-						minio) expected_container=$minio_container ;;
-					esac
-					if ! current_container=$(bounded_stateful_compose ps -q "$service" 2>/dev/null) \
-						|| [ "$current_container" != "$expected_container" ]; then
-						echo "Stateful dependency container identity changed during the readiness gate."
-						return 1
-					fi
-				done
 				printf 'Production stateful dependencies completed at least %s new successful healthchecks and remained healthy for %s second(s).\n' \
 					"$required_successful_healthchecks" "$stable_duration_seconds"
 				return 0
@@ -528,13 +578,6 @@ case "${1:-config}" in
 		;;
 	up)
 		validate_tracing_export
-		infrastructure_start_timeout_seconds=${PRODUCTION_INFRASTRUCTURE_START_TIMEOUT_SECONDS:-300}
-		case "$infrastructure_start_timeout_seconds" in
-			''|*[!0-9]*|0)
-				echo "PRODUCTION_INFRASTRUCTURE_START_TIMEOUT_SECONDS must be a positive integer."
-				exit 1
-				;;
-		esac
 		if ! command -v timeout >/dev/null 2>&1; then
 			echo "timeout is required to bound production Docker commands."
 			exit 1
@@ -544,26 +587,9 @@ case "${1:-config}" in
 		chmod -R a+rX "$ROOT_DIR/backend/target"
 		# Keep metrics dashboards off the constrained host; configure_tracing_backend starts only the bounded Tempo
 		# service when the deployment has explicitly enabled exact-release traces.
-		# Compose treats an existing `unhealthy` dependency as terminal even when a later healthcheck would recover.
-		# Preserve existing stateful containers after image/build pressure. Configuration or image drift fails closed
-		# below and must be applied through a separately reviewed stateful maintenance operation.
-		if compose_with_timeout "$infrastructure_start_timeout_seconds" \
-			up -d --build --no-deps --no-recreate postgres redis rabbitmq minio; then
-			:
-		else
-			infrastructure_start_status=$?
-			case "$infrastructure_start_status" in
-				124|137)
-					printf 'Production stateful dependency start exceeded %s second(s).\n' \
-						"$infrastructure_start_timeout_seconds"
-					;;
-				*)
-					printf 'Production stateful dependency start failed with exit status %s.\n' \
-						"$infrastructure_start_status"
-					;;
-			esac
-			exit 1
-		fi
+		# Application delivery has no authority to build, create, start, restart, or recreate a stateful dependency.
+		# Observe the existing containers only. Missing, stopped, or declaratively changed infrastructure fails closed
+		# and belongs to a separately reviewed stateful maintenance or bootstrap operation.
 		wait_for_stateful_dependencies
 		configure_tracing_backend
 		prebuilt_backend=${RULEPILOT_PREBUILT_BACKEND_IMAGE:-false}

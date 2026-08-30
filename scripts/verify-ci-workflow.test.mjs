@@ -104,6 +104,12 @@ async function runStatefulDependencyWait({
   readyTimeoutSeconds = 90,
   timeoutRuntimeQueries = false,
   driftService = '',
+  tagMovedService = '',
+  runtimeImageChangeService = '',
+  runtimeRestartService = '',
+  runtimeChangeAfterRound = 2,
+  containerChangeService = '',
+  stoppedService = '',
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'rulepilot-stateful-health.'))
   const clock = join(root, 'clock')
@@ -159,8 +165,18 @@ docker() {
       esac
     done
     if [ "$compose_command" = ps ]; then
+      if [ "$1" = --all ]; then
+        shift
+      fi
       [ "$1" = -q ]
-      printf '%s-container\\n' "$2"
+      service=$2
+      current_round=$(sed -n '1p' "$RULEPILOT_TEST_ROUND")
+      if [ "$service" = "$RULEPILOT_TEST_CONTAINER_CHANGE_SERVICE" ] \
+        && [ "$current_round" -ge "$RULEPILOT_TEST_RUNTIME_CHANGE_AFTER_ROUND" ]; then
+        printf '%s-replacement-container\\n' "$service"
+      else
+        printf '%s-container\\n' "$service"
+      fi
       return 0
     fi
     if [ "$1" = --hash ]; then
@@ -175,10 +191,15 @@ docker() {
     [ "$2" = inspect ] && [ "$3" = --format ]
     image_name=$5
     service=\${image_name%:image}
-    printf '%s-image-id\\n' "$service"
+    if [ "$service" = "$RULEPILOT_TEST_TAG_MOVED_SERVICE" ]; then
+      printf '%s-new-tag-image-id\\n' "$service"
+    else
+      printf '%s-image-id\\n' "$service"
+    fi
     return 0
   fi
   [ "$1" = inspect ] && [ "$2" = --format ]
+  inspection_format=$3
   container=$4
   service=\${container%-container}
   current_round=$(sed -n '1p' "$RULEPILOT_TEST_ROUND")
@@ -186,7 +207,31 @@ docker() {
   if [ "$service" = "$RULEPILOT_TEST_DRIFT_SERVICE" ]; then
     config_hash="$service-drifted-config-hash"
   fi
-  printf 'container|running|healthy|%s-image-id|%s\\n' "$service" "$config_hash"
+  runtime_state=running
+  if [ "$service" = "$RULEPILOT_TEST_STOPPED_SERVICE" ]; then
+    runtime_state=exited
+  fi
+  runtime_image_id="$service-image-id"
+  runtime_started_at="$service-started-at-0"
+  runtime_restart_count=0
+  if [ "\${inspection_format%%|*}" = baseline ]; then
+    printf 'baseline|%s|%s|%s|%s|%s\\n' \
+      "$runtime_state" "$runtime_image_id" "$runtime_started_at" \
+      "$runtime_restart_count" "$config_hash"
+    return 0
+  fi
+  if [ "$service" = "$RULEPILOT_TEST_RUNTIME_IMAGE_CHANGE_SERVICE" ] \
+    && [ "$current_round" -ge "$RULEPILOT_TEST_RUNTIME_CHANGE_AFTER_ROUND" ]; then
+    runtime_image_id="$service-replaced-image-id"
+  fi
+  if [ "$service" = "$RULEPILOT_TEST_RUNTIME_RESTART_SERVICE" ] \
+    && [ "$current_round" -ge "$RULEPILOT_TEST_RUNTIME_CHANGE_AFTER_ROUND" ]; then
+    runtime_started_at="$service-started-at-1"
+    runtime_restart_count=1
+  fi
+  printf 'container|%s|healthy|%s|%s|%s|%s\\n' \
+    "$runtime_state" "$runtime_image_id" "$runtime_started_at" \
+    "$runtime_restart_count" "$config_hash"
   first_retained_round=$((current_round - 4))
   if [ "$first_retained_round" -lt 0 ]; then
     first_retained_round=0
@@ -234,6 +279,12 @@ wait_for_stateful_dependencies
         RULEPILOT_TEST_ROUND: round,
         RULEPILOT_TEST_TIMEOUT_RUNTIME_QUERIES: String(timeoutRuntimeQueries),
         RULEPILOT_TEST_DRIFT_SERVICE: driftService,
+        RULEPILOT_TEST_TAG_MOVED_SERVICE: tagMovedService,
+        RULEPILOT_TEST_RUNTIME_IMAGE_CHANGE_SERVICE: runtimeImageChangeService,
+        RULEPILOT_TEST_RUNTIME_RESTART_SERVICE: runtimeRestartService,
+        RULEPILOT_TEST_RUNTIME_CHANGE_AFTER_ROUND: String(runtimeChangeAfterRound),
+        RULEPILOT_TEST_CONTAINER_CHANGE_SERVICE: containerChangeService,
+        RULEPILOT_TEST_STOPPED_SERVICE: stoppedService,
       },
     })
   } finally {
@@ -1974,8 +2025,7 @@ test('production dependency health bounds unavailable Docker runtime queries', a
   await assert.rejects(
     runStatefulDependencyWait({ readyTimeoutSeconds: 8, timeoutRuntimeQueries: true }),
     (error) => {
-      assert.match(error.stdout, /docker-query-unavailable/)
-      assert.match(error.stdout, /did not prove stable health within 8 second\(s\)/)
+      assert.match(error.stdout, /Could not inspect the existing postgres container within the bounded Docker query window/)
       return true
     },
   )
@@ -2007,16 +2057,106 @@ test('production dependency health rejects stateful configuration drift without 
   )
 })
 
-test('production activation observes existing dependencies after pressure without restarting or recreating them', () => {
-  assert.match(productionLauncher,
-    /compose_with_timeout "\$infrastructure_start_timeout_seconds"[\s\\]+up -d --build --no-deps --no-recreate postgres redis rabbitmq minio[\s\S]+wait_for_stateful_dependencies/)
-  assert.doesNotMatch(productionLauncher,
-    /compose up -d --build --no-deps (?!--no-recreate\b)postgres redis rabbitmq minio/)
-  assert.doesNotMatch(productionLauncher,
-    /compose up -d --build --wait postgres redis rabbitmq minio/)
+test('production dependency health ignores a moved mutable tag when the observed runtime stays fixed', async () => {
+  const result = await runStatefulDependencyWait({ tagMovedService: 'postgres' })
+  assert.match(result.stdout, /completed at least 12 new successful healthchecks/)
   const dependencyWait = shellFunction(productionLauncher, 'wait_for_stateful_dependencies')
-  assert.doesNotMatch(dependencyWait, /restart|force-recreate/)
+  assert.doesNotMatch(dependencyWait, /config --images|docker image inspect/)
+})
+
+test('production dependency health rejects a runtime image change behind the same container identity', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ runtimeImageChangeService: 'postgres' }),
+    (error) => {
+      assert.match(error.stdout, /postgres changed runtime image during the readiness gate/)
+      return true
+    },
+  )
+})
+
+test('production dependency health rejects a same-container restart during the readiness gate', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ runtimeRestartService: 'redis' }),
+    (error) => {
+      assert.match(error.stdout, /redis restarted during the readiness gate/)
+      return true
+    },
+  )
+})
+
+test('production dependency health rejects a container replacement during the readiness gate', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ containerChangeService: 'rabbitmq' }),
+    (error) => {
+      assert.match(error.stdout, /rabbitmq changed container identity during the readiness gate/)
+      return true
+    },
+  )
+})
+
+test('production dependency health rejects a failed probe on the would-be qualification round', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ rabbitFailureRound: 20, readyTimeoutSeconds: 65 }),
+    (error) => {
+      assert.match(error.stdout, /rabbitmq\(healthcheck-exit-1\)/)
+      assert.match(error.stdout, /did not prove stable health within 65 second\(s\)/)
+      return true
+    },
+  )
+})
+
+test('production dependency health rejects a stopped stateful container without starting it', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ stoppedService: 'minio' }),
+    (error) => {
+      assert.match(error.stdout, /minio is exited; application deployment will not start or restart it/)
+      return true
+    },
+  )
+})
+
+test('production activation observes existing dependencies after pressure without restarting or recreating them', () => {
+  const upCase = productionLauncher.slice(
+    productionLauncher.indexOf('\n\tup)\n'),
+    productionLauncher.indexOf('\n\tdiagnose)\n'),
+  )
+  const dependencyBoundary = upCase.slice(0, upCase.indexOf('\t\twait_for_stateful_dependencies')
+    + '\t\twait_for_stateful_dependencies'.length)
+  assert.match(dependencyBoundary, /wait_for_stateful_dependencies$/)
+  const dependencyWait = shellFunction(productionLauncher, 'wait_for_stateful_dependencies')
+  const executableBoundary = dependencyBoundary
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*#.*$/, ''))
+    .join('\n')
+  const logicalUpCase = upCase
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*#.*$/, ''))
+    .join('\n')
+    .replace(/\\[ \t]*\r?\n/g, ' ')
+  const statefulCommandLines = dependencyWait
+    .replace(/\\[ \t]*\r?\n/g, ' ')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#/.test(line))
+    .filter((line) => /(?:compose|docker)/.test(line))
+  const runtimeMutationLines = logicalUpCase
+    .split(/\r?\n/)
+    .filter((line) => /(?:compose|docker)/.test(line))
+    .filter((line) => /\b(?:build|commit|create|down|kill|pause|pull|remove|restart|rm|run|start|stop|tag|unpause|up|update)\b/.test(line))
+  assert.doesNotMatch(executableBoundary, /\b(?:postgres|redis|rabbitmq|minio)\b/)
+  assert.doesNotMatch(executableBoundary, /(?:compose|docker)/)
+  for (const line of statefulCommandLines) {
+    assert.doesNotMatch(
+      line,
+      /\b(?:build|commit|create|down|kill|pause|pull|remove|restart|rm|run|start|stop|tag|unpause|up|update)\b|force-recreate/,
+    )
+  }
+  for (const line of runtimeMutationLines) {
+    assert.doesNotMatch(line, /\b(?:postgres|redis|rabbitmq|minio)\b/)
+  }
+  assert.match(dependencyWait, /bounded_stateful_compose ps --all -q "\$service"/)
   assert.match(dependencyWait, /\.State\.Health\.Log/)
+  assert.match(dependencyWait, /\.State\.StartedAt/)
+  assert.match(dependencyWait, /\.RestartCount/)
   assert.match(dependencyWait, /stable_duration_seconds=60/)
   assert.match(dependencyWait, /required_successful_healthchecks=12/)
   assert.doesNotMatch(dependencyWait, /PRODUCTION_INFRASTRUCTURE_STABLE_DURATION_SECONDS/)
