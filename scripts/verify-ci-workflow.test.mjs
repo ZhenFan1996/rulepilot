@@ -2171,6 +2171,26 @@ test('production activation observes existing dependencies after pressure withou
     /Ensuring the current release remains available[\s\S]*?up -d --no-build --no-deps api worker/)
 })
 
+test('application deployment observes existing Tempo without owning observability lifecycle', () => {
+  const tracingVerification = shellFunction(productionLauncher, 'verify_tracing_backend')
+  const executableTracingVerification = tracingVerification
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*#.*$/, ''))
+    .join('\n')
+  const upCase = productionLauncher.slice(
+    productionLauncher.indexOf('\n\tup)\n'),
+    productionLauncher.indexOf('\n\tdiagnose)\n'),
+  )
+
+  assert.match(tracingVerification, /PRODUCTION_TRACING_EXPORT_OTLP_ENABLED/)
+  assert.match(tracingVerification, /wait_for_tempo/)
+  assert.doesNotMatch(executableTracingVerification, /\b(?:compose|docker)\b/)
+  assert.doesNotMatch(executableTracingVerification,
+    /\b(?:create|down|kill|pause|pull|recreate|restart|rm|start|stop|up)\b/)
+  assert.match(upCase, /wait_for_stateful_dependencies[\s\S]*?verify_tracing_backend/)
+  assert.doesNotMatch(productionLauncher, /configure_tracing_backend/)
+})
+
 test('activation diagnostics safely describe containers without a Docker healthcheck', () => {
   const activation = workflowRunBlock(
     deploymentWorkflow,

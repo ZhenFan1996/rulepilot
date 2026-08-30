@@ -558,15 +558,15 @@ wait_for_tempo() {
 	exit 1
 }
 
-configure_tracing_backend() {
-	# Metrics dashboards remain opt-in on the small host. Tempo alone is the durable evidence needed by the
-	# deployment and single-user production journeys.
-	compose stop prometheus grafana >/dev/null 2>&1 || true
+verify_tracing_backend() {
+	# Observability has its own lifecycle. An application release may use an existing Tempo instance, but it must
+	# not recreate or stop observability containers merely because the release directory changed. Bind-mounted
+	# configuration paths are release-relative, so doing so turns every application deploy into an infrastructure
+	# restart and can discard an otherwise healthy candidate while Tempo recovers its local trace store.
 	if [ "${PRODUCTION_TRACING_EXPORT_OTLP_ENABLED:-false}" = true ]; then
-		compose up -d --no-deps tempo
 		wait_for_tempo
 	else
-		compose stop tempo >/dev/null 2>&1 || true
+		echo "Production tracing export is disabled; observability services are unchanged."
 	fi
 }
 
@@ -585,13 +585,11 @@ case "${1:-config}" in
 		# rsync can preserve a developer's restrictive target/ umask. Docker must be
 		# able to traverse it or it silently reuses a stale application layer.
 		chmod -R a+rX "$ROOT_DIR/backend/target"
-		# Keep metrics dashboards off the constrained host; configure_tracing_backend starts only the bounded Tempo
-		# service when the deployment has explicitly enabled exact-release traces.
-		# Application delivery has no authority to build, create, start, restart, or recreate a stateful dependency.
-		# Observe the existing containers only. Missing, stopped, or declaratively changed infrastructure fails closed
-		# and belongs to a separately reviewed stateful maintenance or bootstrap operation.
+		# Application delivery has no authority to build, create, start, restart, or recreate stateful or observability
+		# infrastructure. Observe existing dependencies only. Missing, stopped, or unhealthy infrastructure fails
+		# closed and belongs to a separately reviewed maintenance or bootstrap operation.
 		wait_for_stateful_dependencies
-		configure_tracing_backend
+		verify_tracing_backend
 		prebuilt_backend=${RULEPILOT_PREBUILT_BACKEND_IMAGE:-false}
 		prebuilt_frontend=${RULEPILOT_PREBUILT_FRONTEND_IMAGE:-false}
 		case "$prebuilt_backend" in
