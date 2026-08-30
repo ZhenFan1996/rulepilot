@@ -131,7 +131,7 @@ class BggRecommendationAgentControllerTest {
         assertThat(response.agentElapsedMs()).isEqualTo(432L);
         assertThat(response.catalogCalls()).isEqualTo(1);
         assertThat(response.webResearchCalls()).isZero();
-        assertThat(response.completedWork()).containsExactly("browse_bgg_catalog", "recommend_games");
+        assertThat(response.completedWork()).containsExactly("search_bgg_catalog", "recommend_games");
     }
 
     @Test
@@ -207,6 +207,27 @@ class BggRecommendationAgentControllerTest {
         assertThat(response.failureBoundary()).isEqualTo("time_budget");
         assertThat(response.failureReason()).isEqualTo("time_limit");
         assertThat(response.completedWork()).isEmpty();
+    }
+
+    @Test
+    void classifiesARepeatedInvalidModelActionAsAModelResponseFailureRatherThanAnActionBudget() {
+        var domain = unavailable(
+                FailureReason.REPEATED_INVALID_ACTION,
+                "RECOMMENDATION_EVIDENCE_NOT_GROUNDED");
+
+        var response = BggRecommendationAgentController.RecommendationConversationResponse.from(
+                domain,
+                new LocalizedTaxonomy(Map.of(), Map.of()),
+                "zh-CN",
+                presentation,
+                null,
+                null,
+                null,
+                false);
+
+        assertThat(response.failureBoundary()).isEqualTo("model_response");
+        assertThat(response.failureReason()).isEqualTo("repeated_invalid_action");
+        assertThat(response.failureDetailCode()).isEqualTo("RECOMMENDATION_EVIDENCE_NOT_GROUNDED");
     }
 
     @Test
@@ -861,6 +882,10 @@ class BggRecommendationAgentControllerTest {
     }
 
     private static ConversationResponse unavailable(FailureReason reason) {
+        return unavailable(reason, null);
+    }
+
+    private static ConversationResponse unavailable(FailureReason reason, String failureDetailCode) {
         return new ConversationResponse(
                 Outcome.UNAVAILABLE,
                 DecisionMode.MODEL_ASSISTED,
@@ -879,7 +904,8 @@ class BggRecommendationAgentControllerTest {
                         List.of("MODEL_CALL_FAILED", "UNAVAILABLE:MODEL_CALL_FAILED"),
                         1_000,
                         List.of(900L),
-                        reason),
+                        reason,
+                        failureDetailCode),
                 List.of(),
                 null);
     }

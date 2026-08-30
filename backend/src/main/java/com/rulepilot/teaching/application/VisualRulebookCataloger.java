@@ -905,10 +905,6 @@ class VisualRulebookCataloger {
                 fact.factualSummary(),
                 fact.keywords(),
                 fact.visualAnchors(),
-                fact.sourceDependencies(),
-                fact.ruleGroupIdentifiers(),
-                fact.ruleGroupInventoryComplete(),
-                List.of(),
                 fact.ruleGroupFacts());
     }
 
@@ -1002,9 +998,10 @@ class VisualRulebookCataloger {
                 .mapToInt(page -> page.printedTerms().length()
                         + page.factualSummary().length()
                         + page.keywords().stream().mapToInt(String::length).sum()
-                        + page.ruleGroupIdentifiers().stream().mapToInt(String::length).sum()
-                        + page.quantityObservations().stream()
-                                .mapToInt(observation -> observation.evidenceText().length())
+                        + page.ruleGroupFacts().stream()
+                                .mapToInt(fact -> fact.identifier().length()
+                                        + fact.label().length()
+                                        + fact.fact().length())
                                 .sum())
                 .sum();
         return Math.max(1, characters / 4);

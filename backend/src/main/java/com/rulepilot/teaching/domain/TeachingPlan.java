@@ -74,59 +74,20 @@ public record TeachingPlan(
     }
 
     public record WholeGameContext(
-            String summary,
-            List<GlobalConcept> concepts,
             List<TopicDependency> topicDependencies,
-            boolean evidenceBound) {
+            List<String> unresolvedTopics) {
         public WholeGameContext {
-            if (summary == null || summary.isBlank()
-                    || concepts == null || concepts.stream().anyMatch(java.util.Objects::isNull)
-                    || topicDependencies == null
-                    || topicDependencies.stream().anyMatch(java.util.Objects::isNull)
-                    || (evidenceBound && concepts.isEmpty())) {
+            topicDependencies = topicDependencies == null ? List.of() : List.copyOf(topicDependencies);
+            unresolvedTopics = unresolvedTopics == null ? List.of() : unresolvedTopics;
+            if (topicDependencies.stream().anyMatch(java.util.Objects::isNull)
+                    || unresolvedTopics.stream().anyMatch(topic -> topic == null || topic.isBlank())) {
                 throw new IllegalArgumentException("whole-game teaching context is invalid");
             }
-            concepts = List.copyOf(concepts);
-            topicDependencies = List.copyOf(topicDependencies);
+            unresolvedTopics = unresolvedTopics.stream().map(String::strip).distinct().toList();
         }
 
         public static WholeGameContext legacy(String premise) {
-            String summary = premise == null || premise.isBlank()
-                    ? "Legacy teaching plan without a source-bound whole-game context."
-                    : premise;
-            return new WholeGameContext(summary, List.of(), List.of(), false);
-        }
-    }
-
-    public record GlobalConcept(
-            String conceptId,
-            String label,
-            String explanation,
-            List<String> sourceIdentifiers,
-            List<Integer> sourcePageNumbers,
-            List<String> relatedTopicKeys,
-            List<String> prerequisiteConceptIds) {
-        public GlobalConcept {
-            if (conceptId == null || conceptId.isBlank()
-                    || label == null || label.isBlank()
-                    || explanation == null || explanation.isBlank()
-                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty()
-                    || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
-                            || identifier.isBlank())
-                    || sourcePageNumbers == null || sourcePageNumbers.isEmpty()
-                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
-                    || relatedTopicKeys == null
-                    || relatedTopicKeys.stream().anyMatch(topic -> topic == null
-                            || topic.isBlank())
-                    || prerequisiteConceptIds == null
-                    || prerequisiteConceptIds.stream().anyMatch(concept -> concept == null
-                            || concept.isBlank())) {
-                throw new IllegalArgumentException("whole-game teaching concept is invalid");
-            }
-            sourceIdentifiers = sourceIdentifiers.stream().distinct().toList();
-            sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
-            relatedTopicKeys = relatedTopicKeys.stream().distinct().toList();
-            prerequisiteConceptIds = prerequisiteConceptIds.stream().distinct().toList();
+            return new WholeGameContext(List.of(), List.of());
         }
     }
 

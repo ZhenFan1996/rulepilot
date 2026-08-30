@@ -214,6 +214,7 @@ public class PublicLessonController {
             String officialSourceUrl,
             PublicLessonReader.PublicCover gameCover,
             PublicGameIdentityLookup.Identity publicGame,
+            List<String> unresolvedTopics,
             com.rulepilot.teaching.domain.IllustratedLesson lesson,
             String contentLanguage,
             String localizationStatus) {
@@ -226,6 +227,7 @@ public class PublicLessonController {
                     source.officialSourceUrl(),
                     source.gameCover(),
                     source.publicGame(),
+                    source.unresolvedTopics(),
                     localized.lesson(),
                     localized.lesson() == null ? "zh-CN" : localized.language() == PlayerLocale.EN
                             && localized.status() == com.rulepilot.teaching.domain.LessonLocalization.Status.READY ? "en" : "zh-CN",

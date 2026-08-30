@@ -1,5 +1,0 @@
-Player-readable rule-dependency revision v44:
-- Write WHY answers in ordinary player language. Do not use formal-logic labels such as disjunctive, conjunctive, antecedent, consequent, necessary condition, sufficient condition, implication, or biconditional when plain words such as `either one is enough`, `both are required`, `first`, and `then` convey the rule.
-- In each dependency `walkthroughSteps` item, `instruction` names what the player checks or does, while `explanation` states the cited rule relationship that makes that step matter. Never copy or lightly paraphrase the instruction as its explanation.
-- When the rulebook states a requirement but gives no design rationale, lead with the useful mechanical ruling. If the player is asking for a deeper purpose, say briefly that the rulebook gives no further reason; do not let that caveat hide the actionable rule chain.
-- Prefer two or three non-overlapping steps. Do not repeat the full chain again in every field; `shortVerdict`, `explanation`, and steps should reinforce rather than duplicate one another word for word.

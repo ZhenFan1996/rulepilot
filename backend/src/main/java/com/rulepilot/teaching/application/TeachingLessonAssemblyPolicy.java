@@ -5,9 +5,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
-import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
-import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
@@ -36,20 +33,15 @@ final class TeachingLessonAssemblyPolicy {
     }
 
     LessonStatus status(TeachingPlan plan, List<LessonSection> sections) {
-        if (sections.size() < plan.sections().size()) return LessonStatus.INCOMPLETE;
-        List<LessonSection> required = sections.stream().filter(LessonSection::required).toList();
         boolean hasReadableSection = sections.stream()
                 .anyMatch(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE);
         if (!hasReadableSection) return LessonStatus.INCOMPLETE;
-        TeachingSourceCoverageContract.Assessment sourceCoverage =
-                TeachingSourceCoverageContract.assess(plan, sections);
-        boolean allRequiredSupported =
-                required.stream().allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
-        boolean sourcePageCatalogPartial = plan.sections().stream()
-                .flatMap(section -> section.coverageTags().stream())
-                .anyMatch(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG::equals);
-        boolean sourceCoverageComplete = !sourceCoverage.applicable() || sourceCoverage.complete();
-        return allRequiredSupported && sourceCoverageComplete && !sourcePageCatalogPartial
+        boolean everyPublishedSectionSupported = sections.stream()
+                .allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
+        boolean agentReportedUnresolved = !plan.wholeGameContext().unresolvedTopics().isEmpty();
+        return sections.size() == plan.sections().size()
+                        && everyPublishedSectionSupported
+                        && !agentReportedUnresolved
                 ? LessonStatus.COMPLETE
                 : LessonStatus.DRAFT_READY;
     }
@@ -73,32 +65,11 @@ final class TeachingLessonAssemblyPolicy {
     }
 
     List<PriorSectionContext> continuityContext(List<LessonSection> sections) {
-        List<LessonSection> supported = sections.stream()
+        return sections.stream()
                 .filter(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE)
-                .toList();
-        int fromIndex = Math.max(0, supported.size() - 2);
-        return supported.subList(fromIndex, supported.size()).stream()
                 .map(section -> new PriorSectionContext(
                         section.topicKey(), section.title(), section.steps().getLast().text()))
                 .toList();
     }
 
-    LessonSection insufficient(TeachingPlan.PlannedSection planned) {
-        return new LessonSection(
-                planned.position(),
-                planned.topicKey(),
-                planned.coverageTags(),
-                planned.title(),
-                planned.required(),
-                EvidenceStatus.INSUFFICIENT_EVIDENCE,
-                VisualKind.REFERENCE_CARD,
-                "本节等待可验证的规则证据",
-                List.of(new LessonStep(
-                        1,
-                        "暂时跳过",
-                        TeachingMove.WATCH,
-                        "规则资料中尚未找到这一节所需的可靠证据。",
-                        List.of(),
-                        List.of())));
-    }
 }

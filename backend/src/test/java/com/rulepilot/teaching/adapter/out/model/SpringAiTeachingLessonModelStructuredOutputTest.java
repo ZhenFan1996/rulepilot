@@ -2,234 +2,36 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
-import com.rulepilot.modelconfig.RuntimeModelConfiguration;
-import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
-import com.rulepilot.modelconfig.VersionedAgentPrompts;
-import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
-import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
-import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
-import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
-import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.openai.OpenAiChatOptions;
 
 class SpringAiTeachingLessonModelStructuredOutputTest {
 
-    private static final String VALID = """
-            {
-              "title":"开始行动",
-              "visualKind":"FLOW_DIAGRAM",
-              "visualCaption":"从选择行动到结算结果的顺序。",
-              "visualCitationIds":["E1"],
-              "steps":[{
-                "heading":"选择一项行动",
-                "kind":"DO",
-                "text":"选择当前可用的一项行动，然后支付对应费用。",
-                "citationIds":["E1"],
-                "teachingUnitIds":["turn-action"],
-                "ruleFacts":[
-                  {"role":"CHOICE","text":"选择一项当前可用的行动。","citationIds":["E1"]},
-                  {"role":"COST_OR_GAIN","text":"支付该行动列出的费用。","citationIds":["E1"]},
-                  {"role":"LIMIT","text":"本回合只能选择一项行动。","citationIds":["E1"]}
-                ]
-              }]
-            }
-            """;
-
     @Test
-    void advertisesOnlyTheTextCapabilityItActuallyUsesForSectionComposition() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
-        SpringAiTeachingLessonModel model =
-                new SpringAiTeachingLessonModel(configuration, mock(VersionedAgentPrompts.class));
+    void acceptsAdditiveFieldsWithoutChangingNaturalChapterText() throws Exception {
+        String natural = "先处理眼前最危险的故障；如果队友更适合修理，就把行动留给他。";
+        var draft = SpringAiTeachingLessonModel.parseStructuredDraft("""
+                {"title":"系统故障","providerNote":"ignored","steps":[{
+                  "heading":"协商行动","kind":"DO","text":"%s","citationIds":["E1"],
+                  "ruleFacts":[],"futureLayout":{"ignored":true}}]}
+                """.formatted(natural));
 
-        assertThat(model.providerId()).isEqualTo("deepseek");
-        assertThat(model.supportsVisualEvidence()).isFalse();
-        assertThat(model.supportsVisualEvidence("player")).isFalse();
+        assertThat(draft.title()).isEqualTo("系统故障");
+        assertThat(draft.steps().getFirst().text()).isEqualTo(natural);
     }
 
     @Test
-    void exposesProviderTransportFailureThroughTheSafeTeachingPortType() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = mock(ChatModel.class);
-        when(configuration.providerFor(Role.TEACHING, "alice")).thenReturn("deepseek");
-        when(configuration.modelFor(Role.TEACHING, "alice")).thenReturn(chatModel);
-        when(configuration.modelNameFor(Role.TEACHING, "alice")).thenReturn("private-model-name");
-        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
-        when(chatModel.call(any(Prompt.class)))
-                .thenThrow(new IllegalStateException("private provider endpoint"));
-        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
-        when(prompts.teachingRuntimeSystem()).thenReturn("Return cited teaching JSON.");
-        when(prompts.teachingUser()).thenReturn("""
-                {section} {objective} {coverage} {requiredRules} {teachingUnits} {wholeGameContext}
-                {continuity} {chapterScope} {evidence} {repair}
-                """);
-        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(configuration, prompts);
-        EvidenceInput evidence = new EvidenceInput(
-                UUID.randomUUID(), "RULE", "Setup", "Place the token.", 1, 1);
-        SectionRequest request = new SectionRequest(
-                "setup",
-                "Setup",
-                "Learn setup",
-                List.of("setup"),
-                List.of(),
-                List.of(evidence),
-                List.of(),
-                List.of(),
-                List.of(),
-                "alice",
-                "Setup only");
+    void keepsEvidenceReferencesTypedAndRejectsUnknownIdentity() {
+        UUID evidence = UUID.randomUUID();
 
-        assertThatThrownBy(() -> model.composeInvocation(request))
-                .isInstanceOf(ProviderFailureException.class)
-                .hasMessage("teaching model provider failed")
-                .hasRootCauseMessage("private provider endpoint");
-    }
-
-    @Test
-    void retainsTheCompleteRejectedPayloadAndExactContractObservation() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = mock(ChatModel.class);
-        when(configuration.providerFor(Role.TEACHING, "alice")).thenReturn("deepseek");
-        when(configuration.modelFor(Role.TEACHING, "alice")).thenReturn(chatModel);
-        when(configuration.modelNameFor(Role.TEACHING, "alice")).thenReturn("teaching-model");
-        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder().build());
-        String rejected = "{\"title\":\"完整但坏掉的候选\",\"steps\":not-an-array}";
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                new ChatResponse(List.of(new Generation(new AssistantMessage(rejected)))));
-        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
-        when(prompts.teachingRuntimeSystem()).thenReturn("Return cited teaching JSON.");
-        when(prompts.teachingUser()).thenReturn("""
-                {section} {objective} {coverage} {requiredRules} {teachingUnits} {wholeGameContext}
-                {continuity} {chapterScope} {evidence} {repair}
-                """);
-        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(configuration, prompts);
-        UUID evidenceId = UUID.randomUUID();
-        SectionRequest request = new SectionRequest(
-                "setup",
-                "Setup",
-                "Learn setup",
-                List.of("setup"),
-                List.of(),
-                List.of(new EvidenceInput(evidenceId, "RULE", "Setup", "Place the token.", 1, 1)),
-                List.of(),
-                List.of(),
-                List.of(),
-                "alice",
-                "Setup only");
-
-        assertThatThrownBy(() -> model.composeInvocation(request))
-                .isInstanceOfSatisfying(InvalidOutputException.class, failure -> {
-                    assertThat(failure.rejectedCandidate()).isEqualTo(rejected);
-                    assertThat(failure.validationError())
-                            .contains("malformed structured output", "JsonParseException");
-                    var observation = model.rejectionObservation(
-                            request, failure.rejectedCandidate(), failure.validationError());
-                    assertThat(observation.candidateJson()).isEqualTo(rejected);
-                    assertThat(observation.outputContract())
-                            .contains("Return one JSON object", "visualCitationIds", "teachingUnitIds");
-                    assertThat(observation.sectionIdentity()).isEqualTo("setup");
-                    assertThat(observation.allowedEvidenceIdentities()).containsExactly("E1");
-                    assertThat(observation.allowedTeachingUnitIdentities()).isEmpty();
-                });
-    }
-
-    @Test
-    void admitsEveryDeclaredDisplayFieldFromOneExactJsonObject() throws Exception {
-        var draft = SpringAiTeachingLessonModel.parseStructuredDraft(VALID);
-
-        assertThat(draft.title()).isEqualTo("开始行动");
-        assertThat(draft.steps()).singleElement().satisfies(step -> {
-            assertThat(step.heading()).isEqualTo("选择一项行动");
-            assertThat(step.ruleFacts()).extracting(SpringAiTeachingLessonModel.ModelRuleFact::role)
-                    .containsExactly(
-                            com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole.CHOICE,
-                            com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole.COST_OR_GAIN,
-                            com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole.LIMIT);
-        });
-    }
-
-    @Test
-    void admitsAtTableReferenceAndLimitStepsWithoutRegeneratingSupportedContent() throws Exception {
-        var reference = SpringAiTeachingLessonModel.parseStructuredDraft(
-                VALID.replace("\"kind\":\"DO\"", "\"kind\":\"REFERENCE_CARD\""));
-        var limit = SpringAiTeachingLessonModel.parseStructuredDraft(
-                VALID.replace("\"kind\":\"DO\"", "\"kind\":\"LIMIT\""));
-
-        assertThat(reference.steps().getFirst().kind())
-                .isEqualTo(com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove.REFERENCE_CARD);
-        assertThat(limit.steps().getFirst().kind())
-                .isEqualTo(com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove.LIMIT);
-    }
-
-    @Test
-    void preservesVisualIntentWithoutAskingTheTextModelForGeometry() throws Exception {
-        var visual = SpringAiTeachingLessonModel.parseStructuredDraft(
-                VALID.replace("\"kind\":\"DO\"", "\"kind\":\"VISUAL\""));
-
-        assertThat(visual.steps().getFirst().kind())
-                .isEqualTo(com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(SpringAiTeachingLessonModel.qwenTeachingSchema()).doesNotContain("visualFocus");
-    }
-
-    @Test
-    void rejectsMissingNestedFieldsInsteadOfDefaultingThemToEmptyLists() {
-        String missingRuleFacts = """
-                {
-                  "title":"开始行动",
-                  "visualKind":"FLOW_DIAGRAM",
-                  "visualCaption":"从选择行动到结算结果的顺序。",
-                  "visualCitationIds":["E1"],
-                  "steps":[{
-                    "heading":"选择一项行动",
-                    "kind":"DO",
-                    "text":"选择当前可用的一项行动。",
-                    "citationIds":["E1"],
-                    "teachingUnitIds":["turn-action"]
-                  }]
-                }
-                """;
-
-        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(missingRuleFacts))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-    }
-
-    @Test
-    void rejectsUnexpectedFieldsAndMarkdownWrappersInsteadOfRepairingThem() {
-        String unexpected = VALID.replace("\"title\":\"开始行动\"", "\"title\":\"开始行动\",\"statusLine\":\"完成\"");
-        String obsoleteGeometry = VALID.replace(
-                "\"ruleFacts\":[",
-                "\"visualFocus\":null,\"ruleFacts\":[");
-
-        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(unexpected))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(obsoleteGeometry))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft("```json\n" + VALID + "\n```"))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-    }
-
-    @Test
-    void rejectsNullOrDuplicateStructuredArraysInsteadOfNormalizingThem() {
-        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(
-                        VALID.replace("\"visualCitationIds\":[\"E1\"]", "\"visualCitationIds\":null")))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(
-                        VALID.replace("\"citationIds\":[\"E1\"]", "\"citationIds\":[\"E1\",\"E1\"]")))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-        assertThatThrownBy(() -> SpringAiTeachingLessonModel.parseStructuredDraft(
-                        VALID.replace("\"teachingUnitIds\":[\"turn-action\"]",
-                                "\"teachingUnitIds\":[\"turn-action\",\"turn-action\"]")))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        assertThat(SpringAiTeachingLessonModel.resolveReferences(
+                        java.util.List.of("e1", "E1"), Map.of("E1", evidence)))
+                .containsExactly(evidence);
+        assertThatThrownBy(() -> SpringAiTeachingLessonModel.resolveReferences(
+                        java.util.List.of("E2"), Map.of("E1", evidence)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unknown evidence reference");
     }
 }

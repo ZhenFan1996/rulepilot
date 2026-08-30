@@ -1,12 +1,10 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.document.DocumentProcessing;
-import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
-import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
-import com.rulepilot.teaching.VisualQuantityObservation;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -17,26 +15,24 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-/** Deterministic visual-page catalog transformations; model and storage work stay in the caller. */
+/** Page-local visual observations; no model-authored completeness flag controls whether a page remains usable. */
 final class VisualRulebookCatalogPolicy {
 
-    static final String VISUAL_CATALOG_PREFIX = "[Visual page catalog; verify against page image]";
+    static final String VISUAL_CATALOG_PREFIX = "[Visual page evidence; verify against page image]";
 
     private VisualRulebookCatalogPolicy() {}
 
     static Set<Integer> missingPages(Set<Integer> requestedPages, List<PageFact> cached) {
         LinkedHashSet<Integer> missing = new LinkedHashSet<>(requestedPages);
         cached.stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
+                .filter(VisualRulebookCatalogPolicy::hasReusablePageObservation)
                 .map(PageFact::pageNumber)
                 .forEach(missing::remove);
-        return Collections.unmodifiableSet(missing);
+        return Set.copyOf(missing);
     }
 
-    static boolean hasReusableCompleteRuleLedger(PageFact fact) {
-        return fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION
-                && fact.ruleGroupInventoryComplete()
-                && hasRuleGroupFactBindings(fact.ruleGroupIdentifiers(), fact.ruleGroupFacts());
+    static boolean hasReusablePageObservation(PageFact fact) {
+        return fact != null && fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION;
     }
 
     static Set<Integer> anchorlessPages(List<PageFact> cached) {
@@ -47,257 +43,111 @@ final class VisualRulebookCatalogPolicy {
     }
 
     static List<PageFact> mergeFreshFacts(List<PageFact> cached, List<PageFact> fresh) {
-        return Stream.concat(cached.stream(), fresh.stream())
-                .collect(Collectors.toMap(
-                        PageFact::pageNumber,
-                        Function.identity(),
-                        (existing, ignored) -> existing,
-                        LinkedHashMap::new))
-                .values().stream()
-                .sorted(Comparator.comparingInt(PageFact::pageNumber))
-                .toList();
+        return mergeByPage(cached, fresh, false);
     }
 
     static List<PageFact> backfillAnchors(List<PageFact> cached, List<PageFact> fresh) {
-        Map<Integer, PageFact> freshByPage = fresh.stream().collect(Collectors.toMap(
-                PageFact::pageNumber, Function.identity(), (first, ignored) -> first));
-        List<PageFact> retained = cached.stream()
-                .map(existing -> {
-                    PageFact refreshed = freshByPage.remove(existing.pageNumber());
-                    if (refreshed == null) return existing;
-                    if (refreshed.schemaVersion() > existing.schemaVersion()) return refreshed;
-                    if (hasReusableCompleteRuleLedger(refreshed) && !hasReusableCompleteRuleLedger(existing)) {
-                        return new PageFact(
-                                refreshed.pageNumber(),
-                                refreshed.printedTerms(),
-                                refreshed.factualSummary(),
-                                refreshed.keywords(),
-                                refreshed.visualAnchors().isEmpty()
-                                        ? existing.visualAnchors()
-                                        : refreshed.visualAnchors(),
-                                refreshed.schemaVersion(),
-                                refreshed.sourceDependencies(),
-                                refreshed.ruleGroupIdentifiers(),
-                                true,
-                                refreshed.ruleGroupFacts());
-                    }
-                    if (refreshed.visualAnchors().isEmpty()) return existing;
-                    return new PageFact(
-                            existing.pageNumber(),
-                            existing.printedTerms(),
-                            existing.factualSummary(),
-                            existing.keywords(),
-                            refreshed.visualAnchors().isEmpty()
-                                    ? existing.visualAnchors()
-                                    : refreshed.visualAnchors(),
-                            existing.schemaVersion(),
-                            existing.sourceDependencies(),
-                            existing.ruleGroupIdentifiers(),
-                            existing.ruleGroupInventoryComplete(),
-                            existing.ruleGroupFacts());
-                })
-                .toList();
-        return Stream.concat(retained.stream(), freshByPage.values().stream())
-                .sorted(Comparator.comparingInt(PageFact::pageNumber))
-                .toList();
+        return mergeByPage(cached, fresh, true);
     }
 
-    /**
-     * Narrows the model-facing summary contract to the durable fact contract. The model may return up to sixteen
-     * bounded retrieval keywords and the durable ledger preserves them intact. A valid page must not be discarded
-     * merely because its non-authoritative retrieval metadata is sparse or dense.
-     */
-    static PageFact toPageFact(
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
+    private static List<PageFact> mergeByPage(List<PageFact> cached, List<PageFact> fresh, boolean retainExistingText) {
+        Map<Integer, PageFact> merged = cached.stream().collect(Collectors.toMap(
+                PageFact::pageNumber, Function.identity(), (first, ignored) -> first, LinkedHashMap::new));
+        for (PageFact observation : fresh) {
+            merged.merge(observation.pageNumber(), observation, (existing, supplied) -> new PageFact(
+                    supplied.pageNumber(),
+                    retainExistingText ? existing.printedTerms() : supplied.printedTerms(),
+                    retainExistingText ? existing.factualSummary() : supplied.factualSummary(),
+                    retainExistingText ? existing.keywords() : supplied.keywords(),
+                    supplied.visualAnchors().isEmpty() ? existing.visualAnchors() : supplied.visualAnchors(),
+                    Math.max(existing.schemaVersion(), supplied.schemaVersion()),
+                    retainExistingText ? existing.ruleGroupFacts() : supplied.ruleGroupFacts()));
+        }
+        return merged.values().stream().sorted(Comparator.comparingInt(PageFact::pageNumber)).toList();
+    }
+
+    static PageFact toPageFact(PageSummary summary) {
         return new PageFact(
                 summary.pageNumber(),
                 summary.printedTerms(),
-                VisualQuantityObservation.appendEvidence(
-                        summary.factualSummary(), summary.quantityObservations()),
-                summary.keywords().stream().distinct().toList(),
+                summary.factualSummary(),
+                summary.keywords(),
                 summary.visualAnchors(),
                 PageFact.CURRENT_SCHEMA_VERSION,
-                summary.sourceDependencies(),
-                summary.ruleGroupIdentifiers(),
-                summary.ruleGroupInventoryComplete(),
                 summary.ruleGroupFacts());
     }
 
     static List<PageInput> pageInputs(List<DocumentProcessing.PageView> documentPages, List<PageFact> facts) {
-        Map<Integer, PageFact> factsByPage = facts.stream().collect(Collectors.toMap(
-                PageFact::pageNumber, Function.identity(), (first, duplicate) -> first));
-        return documentPages.stream()
-                .map(page -> pageInput(page.pageNumber(), factsByPage.get(page.pageNumber())))
-                .toList();
+        Map<Integer, PageFact> byPage = facts.stream().collect(Collectors.toMap(
+                PageFact::pageNumber, Function.identity(), (first, ignored) -> first));
+        return documentPages.stream().map(page -> pageInput(page.pageNumber(), byPage.get(page.pageNumber()))).toList();
     }
 
     static List<PageInput> appendFactsToPageInputs(List<PageInput> pages, List<PageFact> facts) {
         if (pages == null || pages.isEmpty() || facts == null || facts.isEmpty()) {
             return pages == null ? List.of() : List.copyOf(pages);
         }
-        Map<Integer, PageFact> factsByPage = facts.stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
+        Map<Integer, PageFact> byPage = facts.stream()
+                .filter(VisualRulebookCatalogPolicy::hasReusablePageObservation)
                 .collect(Collectors.toMap(PageFact::pageNumber, Function.identity(), (first, ignored) -> first));
-        return pages.stream()
-                .map(page -> {
-                    PageFact fact = factsByPage.get(page.pageNumber());
-                    if (fact == null) return page;
-                    return new PageInput(
-                            page.pageNumber(),
-                            page.text() + "\n\n" + pageInput(page.pageNumber(), fact).text(),
-                            Stream.concat(page.sourceDependencies().stream(), fact.sourceDependencies().stream())
-                                    .distinct()
-                                    .toList(),
-                            fact.ruleGroupIdentifiers(),
-                            fact.ruleGroupInventoryComplete(),
-                            fact.ruleGroupFacts(),
-                            page.pageLedgerState() == PageLedgerState.LEGACY_TEXT
-                                    ? PageLedgerState.LEGACY_TEXT
-                                    : PageLedgerState.VISUAL_EXACT_COMPLETE);
-                })
-                .toList();
+        return pages.stream().map(page -> {
+            PageFact fact = byPage.get(page.pageNumber());
+            if (fact == null) return page;
+            PageInput observed = pageInput(page.pageNumber(), fact);
+            return new PageInput(
+                    page.pageNumber(),
+                    page.text() + "\n\n" + observed.text(),
+                    page.available() && observed.available());
+        }).toList();
     }
 
-    /**
-     * A response is accepted only when it covers every supplied image. Keep pages independent so a partial visual
-     * response can never discard a legend or a gameplay page that has already been read successfully.
-     */
     static List<List<Integer>> singlePageBatches(List<Integer> pages) {
         return pages.stream().map(List::of).toList();
     }
 
-    /**
-     * The Teaching ledger is deliberately complete, not a thumbnail summary: one dense page may contain sixteen
-     * rule groups plus quantity observations. Keep that output budget page-local from the first request. Sending the
-     * transport's eight-image maximum here made a valid provider response exceed its completion budget, after which
-     * the caller had to repeat the same work as single-page recovery requests. Page-local calls are independently
-     * retryable, preserve every successful page, and make real progress visible while the rulebook is read.
-     */
     static List<List<Integer>> teachingStartupBatches(List<Integer> pages) {
         return singlePageBatches(pages);
     }
 
-    /** The bounded Teaching ledger keeps only page-owned source facts; spatial enrichment remains independent. */
-    static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary teachingStartupFact(
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
-        if (summary.ruleGroupInventoryComplete()) {
-            validateRuleGroupFactBindings(summary.ruleGroupIdentifiers(), summary.ruleGroupFacts());
-        }
-        return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
-                summary.pageNumber(),
-                summary.printedTerms(),
-                summary.factualSummary(),
-                summary.keywords(),
-                List.of(),
-                summary.sourceDependencies(),
-                summary.ruleGroupIdentifiers(),
-                summary.ruleGroupInventoryComplete(),
-                summary.quantityObservations(),
-                summary.ruleGroupFacts());
+    static PageSummary teachingStartupFact(PageSummary summary) {
+        return withoutRetiredMetadata(summary);
     }
 
-    /**
-     * A later application-validated complete page observation owns the canonical rule ledger for that immutable
-     * source page. It replaces a stale or partial ledger while retaining independently completed visual localization.
-     * Incomplete observations remain supplemental and therefore cannot promote the persisted completeness marker.
-     */
-    static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary mergePersistedPageObservation(
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary existing,
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary observation) {
-        if (!observation.ruleGroupInventoryComplete()) {
-            if (existing.pageNumber() != observation.pageNumber()) {
-                throw new IllegalArgumentException("persisted visual page observation does not match its existing page");
-            }
-            List<String> ruleGroups = existing.ruleGroupIdentifiers();
-            return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
-                    existing.pageNumber(),
-                    existing.printedTerms(),
-                    mergeTextBlocks(existing.factualSummary(), observation.factualSummary(), "\n"),
-                    Stream.concat(existing.keywords().stream(), observation.keywords().stream()).distinct().toList(),
-                    existing.visualAnchors().isEmpty() ? observation.visualAnchors() : existing.visualAnchors(),
-                    Stream.concat(existing.sourceDependencies().stream(), observation.sourceDependencies().stream())
-                            .distinct()
-                            .toList(),
-                    ruleGroups,
-                    existing.ruleGroupInventoryComplete(),
-                    compatibleQuantityObservations(ruleGroups, existing, observation),
-                    existing.ruleGroupFacts());
-        }
+    static PageSummary mergePersistedPageObservation(PageSummary existing, PageSummary observation) {
         if (existing.pageNumber() != observation.pageNumber()) {
-            throw new IllegalArgumentException("persisted visual page observation does not match its existing page");
+            throw new IllegalArgumentException("visual page observation does not match the persisted page");
         }
-        validateRuleGroupFactBindings(observation.ruleGroupIdentifiers(), observation.ruleGroupFacts());
-        return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
-                observation.pageNumber(),
-                observation.printedTerms(),
-                observation.factualSummary(),
-                observation.keywords(),
-                observation.visualAnchors().isEmpty()
-                        ? existing.visualAnchors()
-                        : observation.visualAnchors(),
-                observation.sourceDependencies(),
-                observation.ruleGroupIdentifiers(),
-                true,
-                observation.quantityObservations(),
-                observation.ruleGroupFacts());
+        LinkedHashMap<String, RuleGroupFact> facts = new LinkedHashMap<>();
+        Stream.concat(existing.ruleGroupFacts().stream(), observation.ruleGroupFacts().stream())
+                .forEach(fact -> facts.putIfAbsent(fact.identifier() + "\u0000" + fact.fact(), fact));
+        PageSummary merged = new PageSummary(
+                existing.pageNumber(),
+                mergeText(existing.printedTerms(), observation.printedTerms(), "; "),
+                mergeText(existing.factualSummary(), observation.factualSummary(), "\n"),
+                Stream.concat(existing.keywords().stream(), observation.keywords().stream()).distinct().toList(),
+                observation.visualAnchors().isEmpty() ? existing.visualAnchors() : observation.visualAnchors(),
+                List.copyOf(facts.values()));
+        return withoutRetiredMetadata(merged);
     }
 
     static PageFact mergePersistedPageFact(PageFact existing, PageFact observation) {
         if (existing.pageNumber() != observation.pageNumber()) {
-            throw new IllegalArgumentException("persisted visual page fact does not match its existing page");
+            throw new IllegalArgumentException("visual page fact does not match the persisted page");
         }
-        if (observation.schemaVersion() != PageFact.CURRENT_SCHEMA_VERSION) {
-            throw new IllegalArgumentException("new visual page fact does not use the current schema");
-        }
-        if (existing.schemaVersion() != PageFact.CURRENT_SCHEMA_VERSION) return observation;
-        return toPageFact(mergePersistedPageObservation(pageSummary(existing), pageSummary(observation)));
+        return mergeByPage(List.of(existing), List.of(observation), false).getFirst();
     }
 
-    private static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary pageSummary(PageFact fact) {
-        return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
-                fact.pageNumber(),
-                fact.printedTerms(),
-                fact.factualSummary(),
-                fact.keywords(),
-                fact.visualAnchors(),
-                fact.sourceDependencies(),
-                fact.ruleGroupIdentifiers(),
-                fact.ruleGroupInventoryComplete(),
-                List.of(),
-                fact.ruleGroupFacts());
+    private static PageSummary withoutRetiredMetadata(PageSummary summary) {
+        return new PageSummary(
+                summary.pageNumber(),
+                summary.printedTerms(),
+                summary.factualSummary(),
+                summary.keywords(),
+                summary.visualAnchors(),
+                summary.ruleGroupFacts());
     }
 
-    private static List<VisualQuantityObservation> compatibleQuantityObservations(
-            List<String> ruleGroups,
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary first,
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary second) {
-        Set<String> identities = Set.copyOf(ruleGroups);
-        return Stream.concat(first.quantityObservations().stream(), second.quantityObservations().stream())
-                .filter(observation -> identities.contains(observation.ruleGroupIdentifier()))
-                .distinct()
-                .toList();
-    }
-
-    static void validateRuleGroupFactBindings(
-            List<String> identifiers,
-            List<com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact> facts) {
-        if (hasRuleGroupFactBindings(identifiers, facts)) return;
-        for (String identifier : identifiers) {
-            if (!VisualSourceRuleGroupLedger.hasExactFactBinding(identifier, facts)) {
-                throw new IllegalArgumentException(
-                        "complete visual page lost a rule-group fact while merging supplemental evidence: "
-                                + identifier);
-            }
-        }
-    }
-
-    private static boolean hasRuleGroupFactBindings(
-            List<String> identifiers,
-            List<com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact> facts) {
-        return VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, facts);
-    }
-
-    private static String mergeTextBlocks(String first, String second, String separator) {
+    private static String mergeText(String first, String second, String separator) {
         String left = first == null ? "" : first.strip();
         String right = second == null ? "" : second.strip();
         if (left.isBlank()) return right;
@@ -309,35 +159,19 @@ final class VisualRulebookCatalogPolicy {
         if (fact == null) {
             return new PageInput(
                     pageNumber,
-                    VISUAL_CATALOG_PREFIX
-                            + "\nPrinted terms: unavailable because visual interpretation did not finish."
-                            + "\nVisible facts: No factual visual claim is available for this page. Keep its source binding"
-                            + " and verify the original page image before teaching any detail."
-                            + "\nKeywords: visual source page "
-                            + pageNumber
-                            + ", incomplete visual catalog",
-                    List.of(),
-                    List.of(),
-                    false,
-                    List.of(),
-                    PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE);
+                    VISUAL_CATALOG_PREFIX + "\nNo readable page observation is available.",
+                    false);
         }
-        boolean exactCompleteLedger = hasReusableCompleteRuleLedger(fact);
+        String ruleGroups = fact.ruleGroupFacts().stream()
+                .map(group -> group.identifier() + ": [" + group.label() + "] " + group.fact())
+                .collect(Collectors.joining("\n"));
         return new PageInput(
                 pageNumber,
                 VISUAL_CATALOG_PREFIX
-                        + "\nPrinted terms: "
-                        + fact.printedTerms()
-                        + "\nVisible facts: "
-                        + fact.factualSummary()
-                        + "\nKeywords: "
-                        + String.join(", ", fact.keywords()),
-                fact.sourceDependencies(),
-                fact.ruleGroupIdentifiers(),
-                exactCompleteLedger,
-                fact.ruleGroupFacts(),
-                exactCompleteLedger
-                        ? PageLedgerState.VISUAL_EXACT_COMPLETE
-                        : PageLedgerState.VISUAL_PARTIAL);
+                        + "\nPrinted terms: " + fact.printedTerms()
+                        + "\nVisible facts: " + fact.factualSummary()
+                        + "\nKeywords: " + String.join(", ", fact.keywords())
+                        + (ruleGroups.isBlank() ? "" : "\nPage-local rule facts:\n" + ruleGroups),
+                true);
     }
 }

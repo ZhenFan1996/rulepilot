@@ -32,7 +32,7 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
                 "cursor": {"description": "Opaque nextCursor from the preceding observation for this exact relationship search, or null for the first page.", "type": ["string", "null"], "format": "uuid"}
               },
               "required": ["topic", "limit"],
-              "additionalProperties": false
+              "additionalProperties": true
             }
             """;
 
@@ -219,7 +219,7 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
     private Arguments parse(String argumentsJson) {
         try {
             return objectMapper.readerFor(Arguments.class)
-                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .readValue(argumentsJson);
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException(

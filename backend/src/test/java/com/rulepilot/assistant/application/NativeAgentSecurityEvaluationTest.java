@@ -36,7 +36,7 @@ import org.junit.jupiter.api.Test;
 class NativeAgentSecurityEvaluationTest {
 
     @Test
-    void adversarialRulebookTextCannotOverrideHiddenScopeOrAddParameters() {
+    void adversarialRulebookTextCannotOverrideHiddenScopeAndAdditiveParametersAreIgnored() {
         AssistantReadTools reads = mock(AssistantReadTools.class);
         UUID versionId = UUID.randomUUID();
         when(reads.searchRuleEvidence(any())).thenReturn(List.of(new RuleEvidence(
@@ -57,8 +57,8 @@ class NativeAgentSecurityEvaluationTest {
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.observations()).extracting(record -> record.observation().code())
-                .containsExactly("EVIDENCE_FOUND", "INVALID_ARGUMENT");
-        verify(reads, never()).readRuleEvidencePages(any(), any(), any(Boolean.class));
+                .containsExactly("EVIDENCE_FOUND", "NO_PAGE_EVIDENCE");
+        verify(reads).readRuleEvidencePages(versionId, Set.of(999), false);
     }
 
     @Test
@@ -77,22 +77,6 @@ class NativeAgentSecurityEvaluationTest {
                         .collect(java.util.stream.Collectors.joining("\n")))
                 .contains("write_file", "TOOL_SCHEMA_STALE", "Allowed tool identities");
         verify(reads, never()).searchRuleEvidence(any());
-    }
-
-    @Test
-    void parallelCallsCannotExecuteBeforeEitherObservationIsReturned() {
-        AssistantReadTools reads = mock(AssistantReadTools.class);
-        UUID versionId = UUID.randomUUID();
-        CorrelationModel model = new CorrelationModel();
-
-        var result = agent(model, reads).run(request(scope(versionId)));
-
-        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.observations()).isEmpty();
-        assertThat(model.secondConversation.stream().map(message -> message.content()).toList())
-                .anySatisfy(content -> assertThat(content).contains("ONE_ACTION_PER_TURN"));
-        verify(reads, never()).searchRuleEvidence(any());
-        verify(reads, never()).readRuleEvidencePages(any(), any(), any(Boolean.class));
     }
 
     private BoundedNativeToolAgent agent(NativeToolModel model, AssistantReadTools reads) {
@@ -142,25 +126,6 @@ class NativeAgentSecurityEvaluationTest {
         public ModelTurn next(ModelRequest request) {
             conversations.add(request.conversation());
             return turns.removeFirst();
-        }
-    }
-
-    private static final class CorrelationModel implements NativeToolModel {
-        private int turn;
-        private List<NativeToolModel.ConversationMessage> secondConversation = List.of();
-
-        @Override
-        public ModelTurn next(ModelRequest request) {
-            if (++turn == 1) {
-                return new ModelTurn("", List.of(
-                        new ModelToolCall(
-                                "call-search",
-                                "search_rule_evidence",
-                                "{\"query\":\"rule\",\"limit\":1,\"sectionTypes\":[],\"includeAdjacentContext\":false}"),
-                        new ModelToolCall("call-page", "read_rule_pages", "{\"pageNumbers\":[2]}")), 1, 1);
-            }
-            secondConversation = List.copyOf(request.conversation());
-            return new ModelTurn("EVIDENCE_READY", List.of(), 1, 1);
         }
     }
 

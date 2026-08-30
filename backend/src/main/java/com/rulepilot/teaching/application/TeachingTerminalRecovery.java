@@ -4,7 +4,6 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -30,8 +29,6 @@ import org.springframework.stereotype.Component;
 final class TeachingTerminalRecovery {
 
     static final int MAX_PENDING_INTENTS = 128;
-    private static final int MAX_ATTEMPTS_PER_SWEEP = 32;
-    static final int MAX_RECOVERY_ATTEMPTS = 30;
     private static final Duration INITIAL_RETRY = Duration.ofSeconds(5);
     private static final Duration MAX_RETRY = Duration.ofMinutes(5);
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingTerminalRecovery.class);
@@ -89,16 +86,14 @@ final class TeachingTerminalRecovery {
     }
 
     private void reconcile() {
-        List<Attempt> attempts = new ArrayList<>();
+        List<Attempt> attempts;
         synchronized (this) {
             scheduled = null;
             long now = System.nanoTime();
-            for (Map.Entry<UUID, PendingIntent> entry : pending.entrySet()) {
-                if (attempts.size() >= MAX_ATTEMPTS_PER_SWEEP) break;
-                if (now - entry.getValue().nextAttemptNanos() >= 0) {
-                    attempts.add(new Attempt(entry.getKey(), entry.getValue()));
-                }
-            }
+            attempts = pending.entrySet().stream()
+                    .filter(entry -> now - entry.getValue().nextAttemptNanos() >= 0)
+                    .map(entry -> new Attempt(entry.getKey(), entry.getValue()))
+                    .toList();
         }
 
         for (Attempt attempt : attempts) {
@@ -131,27 +126,18 @@ final class TeachingTerminalRecovery {
                     }
                 } else {
                     metrics.counter("rulepilot.teaching.terminal.recovery.retryable").increment();
-                    if (attempt.intent().attempt() >= MAX_RECOVERY_ATTEMPTS) {
-                        pending.remove(attempt.runId());
-                        metrics.counter("rulepilot.teaching.terminal.recovery.exhausted").increment();
+                    long nextAttempt = attempt.intent().attempt() + 1;
+                    pending.put(
+                            attempt.runId(),
+                            new PendingIntent(
+                                    attempt.intent().recorder(),
+                                    nextAttempt,
+                                    nextAttemptNanos(attempt.runId(), nextAttempt)));
+                    if (attempt.intent().attempt() == 7) {
                         LOGGER.error(
-                                "Teaching terminal recovery exhausted {} bounded attempts for run {}; "
-                                        + "process-start recovery must reconcile it",
-                                MAX_RECOVERY_ATTEMPTS,
+                                "Teaching terminal recovery entered low-frequency reconciliation for run {}; "
+                                        + "it will continue until the terminal write settles or startup recovery takes ownership",
                                 attempt.runId());
-                    } else {
-                        int nextAttempt = attempt.intent().attempt() + 1;
-                        pending.put(
-                                attempt.runId(),
-                                new PendingIntent(
-                                        attempt.intent().recorder(),
-                                        nextAttempt,
-                                        nextAttemptNanos(attempt.runId(), nextAttempt)));
-                        if (attempt.intent().attempt() == 7) {
-                            LOGGER.error(
-                                    "Teaching terminal recovery entered low-frequency reconciliation for run {}",
-                                    attempt.runId());
-                        }
                     }
                 }
             }
@@ -178,26 +164,26 @@ final class TeachingTerminalRecovery {
         }
     }
 
-    private long nextAttemptNanos(UUID runId, int attempt) {
+    private long nextAttemptNanos(UUID runId, long attempt) {
         return System.nanoTime() + retryDelay(runId, attempt, initialRetry, maxRetry).toNanos();
     }
 
-    static Duration retryDelay(UUID runId, int attempt) {
+    static Duration retryDelay(UUID runId, long attempt) {
         return retryDelay(runId, attempt, INITIAL_RETRY, MAX_RETRY);
     }
 
     private static Duration retryDelay(
             UUID runId,
-            int attempt,
+            long attempt,
             Duration initialRetry,
             Duration maxRetry) {
         if (runId == null || attempt < 1) {
             throw new IllegalArgumentException("teaching terminal recovery attempt is invalid");
         }
-        int exponent = Math.min(attempt - 1, 6);
+        int exponent = (int) Math.min(attempt - 1, 6);
         Duration base = initialRetry.multipliedBy(1L << exponent);
         if (base.compareTo(maxRetry) > 0) base = maxRetry;
-        int percentage = 80 + Math.floorMod(runId.hashCode() * 31 + attempt, 21);
+        int percentage = 80 + (int) Math.floorMod(runId.hashCode() * 31L + attempt, 21L);
         return base.multipliedBy(percentage).dividedBy(100);
     }
 
@@ -207,7 +193,7 @@ final class TeachingTerminalRecovery {
 
     private record PendingIntent(
             Supplier<TeachingTerminalRecordResult> recorder,
-            int attempt,
+            long attempt,
             long nextAttemptNanos) {}
 
     private record Attempt(UUID runId, PendingIntent intent) {}

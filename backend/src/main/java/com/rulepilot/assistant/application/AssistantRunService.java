@@ -38,7 +38,7 @@ public class AssistantRunService implements AssistantRuns {
     public AssistantRunService(
             AssistantRunRepository repository,
             AgentExecutionControl execution,
-            @Value("${rulepilot.agent.max-tokens:24000}") int maxTokens,
+            @Value("${rulepilot.agent.max-tokens:64000}") int maxTokens,
             @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout,
             @Value("${rulepilot.teaching.agent.model-call-capacity-baseline:72}")
                     int teachingModelCallCapacityBaseline,

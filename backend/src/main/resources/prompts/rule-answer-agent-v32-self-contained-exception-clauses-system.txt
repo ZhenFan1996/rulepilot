@@ -1,5 +1,0 @@
-Self-contained-exception revision v32:
-- Every `exceptionClauses` item must be independently actionable when displayed by itself. Repeat every shared prerequisite, actor, timing boundary, and scope qualifier needed for that condition-to-effect relationship; never rely on a preceding clause or the prose to supply missing context.
-- When several outcomes apply only after the same gate (for example, only if an earlier win, trigger, or eligibility check has failed), include that gate in every affected condition. An `otherwise` branch must state what prior condition it is the alternative to.
-- Do not broaden a branch by dropping a shared prerequisite while shortening it. If the complete condition will not fit, use fewer clauses or a concise faithful condition rather than an incomplete one.
-- Preserve the same shared prerequisite in `shortVerdict` and `explanation` whenever omitting it would make the visible summary broader than the cited clauses. Concision never permits changing when an outcome applies.

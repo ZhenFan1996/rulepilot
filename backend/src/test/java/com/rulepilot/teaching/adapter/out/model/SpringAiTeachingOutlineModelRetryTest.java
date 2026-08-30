@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,7 +16,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import java.net.SocketTimeoutException;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -29,216 +27,154 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 
 class SpringAiTeachingOutlineModelRetryTest {
 
-    private static final String VALID_OUTLINE = """
-            {
-              "gameTitle":"示例游戏",
-              "premise":"先完成准备，再轮流行动。",
-              "topics":[{
-                "key":"start-playing",
-                "title":"准备并开始行动",
-                "objective":"能够完成准备并执行行动。",
-                "required":true,
-                "visualEvidenceRecommended":false,
-                "retrievalQueries":["SETUP","TAKE TURN"],
-                "coverageTags":["setup","core_loop","source_coverage"],
-                "sourcePageNumbers":[1]
-              }],
-              "sourceCoverageSlots":[
-                {"slotId":"setup","role":"SETUP","sourceIdentifier":"SETUP",
-                 "sourcePageNumbers":[1],"ownerTopicKey":"start-playing",
-                 "teachingUnitId":"start-playing","availability":"SOURCED"},
-                {"slotId":"take-turn","role":"CORE_LOOP","sourceIdentifier":"TAKE TURN",
-                 "sourcePageNumbers":[1],"ownerTopicKey":"start-playing",
-                 "teachingUnitId":"start-playing","availability":"SOURCED"}
-              ],
-              "sourceCoverageInventoryComplete":true,
-              "wholeGameUnderstanding":{
-                "summary":"准备建立初始状态，随后玩家轮流行动。",
-                "concepts":[{
-                  "conceptId":"turn-state",
-                  "label":"回合状态",
-                  "explanation":"完成准备后才能进入轮流行动。",
-                  "sourceIdentifiers":["SETUP","TAKE TURN"],
-                  "sourcePageNumbers":[1],
-                  "relatedTopicKeys":["start-playing"],
-                  "prerequisiteConceptIds":[]
-                }],
-                "topicDependencies":[]
-              }
-            }
-            """;
-
     @Test
-    void reportsOneTransportTimeoutFromTheOwningInvocationThreadWithoutHiddenReplay() {
-        RuntimeModelConfiguration configuration = configuration();
-        ChatModel chatModel = chatModel(configuration);
-        AtomicReference<Thread> providerThread = new AtomicReference<>();
-        when(chatModel.call(any(Prompt.class))).thenAnswer(ignored -> {
-            providerThread.set(Thread.currentThread());
-            throw new RuntimeException("provider stalled", new SocketTimeoutException("read timed out"));
+    void letsOneAgentReadPublishAndFinishWhileKeepingUnresolvedEvidenceVisible() {
+        Fixture fixture = fixture();
+        when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
+                response("""
+                        {"action":"read_pages","pageNumbers":[2],"reason":"Need repair rules","note":"additive field"}
+                        """),
+                response("""
+                        {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
+                        "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
+                        "afterChapterIds":[],"providerMetadata":{"ignored":true}},"reason":"Page 1 supports it"}
+                        """),
+                response("""
+                        {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动并维护系统。",
+                        "coveredChapterIds":["play-turn"],"unresolvedTopics":["维修细节仍需补充"],
+                        "reason":"Publish the readable chapter and report the gap"}
+                        """));
+
+        var outline = fixture.model.organize(request());
+
+        assertThat(outline.topics()).singleElement().satisfies(topic -> {
+            assertThat(topic.key()).isEqualTo("play-turn");
+            assertThat(topic.sourcePageNumbers()).containsExactly(1);
         });
-        SpringAiTeachingOutlineModel model = model(configuration);
-        Thread invocationOwner = Thread.currentThread();
-
-        try {
-            assertThatThrownBy(() -> model.organize(request()))
-                    .isInstanceOf(OutlineGenerationException.class)
-                    .hasRootCauseMessage("read timed out");
-            assertThat(providerThread.get()).isSameAs(invocationOwner);
-            verify(chatModel, times(1)).call(any(Prompt.class));
-        } finally {
-            model.close();
-        }
+        assertThat(outline.unresolvedTopics())
+                .containsExactly("维修细节仍需补充", "Read rulebook page not used by any chapter 2");
+        verify(fixture.chatModel, times(3)).call(any(Prompt.class));
     }
 
     @Test
-    void doesNotReplayProviderFailuresAsSchemaRepair() {
-        RuntimeModelConfiguration configuration = configuration();
-        ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class)))
-                .thenThrow(new RuntimeException("provider timeout", new SocketTimeoutException("read timed out")));
-        SpringAiTeachingOutlineModel model = model(configuration);
+    void returnsTheWholeRejectedJsonAndTypedBoundaryToTheSameAgent() {
+        Fixture fixture = fixture();
+        String invalid = """
+                {"action":"publish_chapter","chapter":{"key":"bad_key","title":"坏标识",
+                "objective":"测试","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
+                "afterChapterIds":[]},"reason":"try"}
+                """;
+        when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
+                response(invalid),
+                response("""
+                        {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
+                        "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
+                        "afterChapterIds":[]},"reason":"correct identity"}
+                        """),
+                response("""
+                        {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动。",
+                        "coveredChapterIds":["play-turn"],"unresolvedTopics":[],"reason":"done"}
+                        """));
 
-        try {
-            assertThatThrownBy(() -> model.organize(request()))
-                    .isInstanceOf(OutlineGenerationException.class)
-                    .hasMessageContaining("no valid outline");
-            verify(chatModel, times(1)).call(any(Prompt.class));
-            verify(configuration).resolvedModelFor(Role.TEACHING, "player");
-            verify(configuration, never()).modelFor(Role.TEACHING, "player");
-            verify(configuration, never()).providerFor(Role.TEACHING, "player");
-            verify(configuration, never()).modelNameFor(Role.TEACHING, "player");
-            verify(configuration, never()).usesDeepSeekNonThinkingGeneration(Role.TEACHING, "player");
-        } finally {
-            model.close();
-        }
+        assertThat(fixture.model.organize(onePageRequest()).topics()).singleElement();
 
-        RuntimeModelConfiguration unavailableConfiguration = configuration();
-        ChatModel unavailableChatModel = chatModel(unavailableConfiguration);
-        IllegalStateException applicationFailure = new IllegalStateException("prompt configuration is invalid");
-        when(unavailableChatModel.call(any(Prompt.class))).thenThrow(applicationFailure);
-        SpringAiTeachingOutlineModel unavailableModel = model(unavailableConfiguration);
-
-        try {
-            assertThatThrownBy(() -> unavailableModel.organize(request()))
-                    .isSameAs(applicationFailure);
-            verify(unavailableChatModel, times(1)).call(any(Prompt.class));
-        } finally {
-            unavailableModel.close();
-        }
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel, times(3)).call(prompts.capture());
+        String repairState = promptText(prompts.getAllValues().get(1));
+        assertThat(repairState)
+                .contains("\"code\":\"INVALID_CHAPTER_ID\"")
+                .contains("\"path\":\"$.chapter.key\"")
+                .contains("\"reason\":\"chapter key must be unique kebab-case\"")
+                .contains("\"schema\":")
+                .contains("\"candidateJson\":")
+                .contains("bad_key")
+                .contains("\"allowedPageIds\":[\"page-1\"]")
+                .contains("\"allowedChapterIds\":[]");
     }
 
     @Test
-    void continuesTheSameAgentPastTwoChangedRejectionsUntilTheCandidateIsValid() {
-        RuntimeModelConfiguration configuration = configuration();
-        ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                response("{}"),
-                response("{\"gameTitle\":\"first changed candidate\"}"),
-                response("{\"gameTitle\":\"second changed candidate\"}"),
-                response(VALID_OUTLINE));
-        SpringAiTeachingOutlineModel model = model(configuration);
+    void finishingBeforeReadingAvailablePagesKeepsTheChapterAndMarksItDegraded() {
+        Fixture fixture = fixture();
+        when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
+                response("""
+                        {"action":"publish_chapter","chapter":{"key":"setup","title":"设置",
+                        "objective":"完成设置","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
+                        "afterChapterIds":[]},"reason":"Page 1 is enough for this chapter"}
+                        """),
+                response("""
+                        {"action":"complete","gameTitle":"示例游戏","premise":"先设置。",
+                        "coveredChapterIds":["setup"],"unresolvedTopics":[],"reason":"done for now"}
+                        """));
 
-        try {
-            assertThat(model.organize(request()).gameTitle()).isEqualTo("示例游戏");
+        var outline = fixture.model.organize(request());
 
-            ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
-            verify(chatModel, times(4)).call(prompts.capture());
-            String finalConversation = prompts.getAllValues().getLast().getInstructions().stream()
-                    .map(message -> message.getText())
-                    .reduce("", (left, right) -> left + "\n" + right);
-            assertThat(finalConversation)
-                    .contains("<untrusted_outline_rejection_observation>")
-                    .contains("\"candidateJson\":\"{}\"")
-                    .contains("first changed candidate", "second changed candidate")
-                    .contains("\"outputContract\"", "\"allowedIdentities\":[\"page-1\"]");
-        } finally {
-            model.close();
-        }
+        assertThat(outline.topics()).singleElement();
+        assertThat(outline.unresolvedTopics())
+                .containsExactly("Unread available rulebook page 2");
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel, times(2)).call(prompts.capture());
+        assertThat(promptText(prompts.getAllValues().get(1)))
+                .contains("\"unreadAvailablePageIds\":[2]")
+                .contains("\"publishedChapters\":[{");
     }
 
     @Test
-    void returnsTheExactTopicKeyContractAndRejectedIdentityToTheSameAgent() {
-        RuntimeModelConfiguration configuration = configuration();
-        ChatModel chatModel = chatModel(configuration);
-        String invalidKey = VALID_OUTLINE.replace("start-playing", "start_playing");
-        when(chatModel.call(any(Prompt.class))).thenReturn(response(invalidKey), response(VALID_OUTLINE));
-        SpringAiTeachingOutlineModel model = model(configuration);
+    void transportFailureIsTerminalAndIsNotReplayedAsSchemaRepair() {
+        Fixture fixture = fixture();
+        when(fixture.chatModel.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException("provider stalled", new SocketTimeoutException("read timed out")));
 
-        try {
-            assertThat(model.organize(request()).gameTitle()).isEqualTo("示例游戏");
-
-            ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
-            verify(chatModel, times(2)).call(prompts.capture());
-            String correctionConversation = prompts.getAllValues().getLast().getInstructions().stream()
-                    .map(message -> message.getText())
-                    .reduce("", (left, right) -> left + "\n" + right);
-            assertThat(correctionConversation)
-                    .contains("topic key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$")
-                    .contains("rejected key=start_playing")
-                    .contains("\"candidateJson\"")
-                    .contains("\"outputContract\"");
-        } finally {
-            model.close();
-        }
+        assertThatThrownBy(() -> fixture.model.organize(request()))
+                .isInstanceOf(OutlineGenerationException.class)
+                .hasRootCauseMessage("read timed out");
+        verify(fixture.chatModel, times(1)).call(any(Prompt.class));
     }
 
-    @Test
-    void stopsAWholeOutlineWhenACompleteRejectionObservationRecursAfterAnInterveningChange() {
-        RuntimeModelConfiguration configuration = configuration();
-        ChatModel chatModel = chatModel(configuration);
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                response("{}"),
-                response("{\"gameTitle\":\"changed candidate\"}"),
-                response("{}"));
-        SpringAiTeachingOutlineModel model = model(configuration);
-
-        try {
-            assertThatThrownBy(() -> model.organize(request()))
-                    .isInstanceOf(OutlineGenerationException.class)
-                    .hasRootCauseMessage(
-                            "OUTLINE_NO_PROGRESS: the whole outline Agent repeated a previously rejected complete candidate, validation error, output contract, and allowed identities");
-            verify(chatModel, times(3)).call(any(Prompt.class));
-        } finally {
-            model.close();
-        }
+    private static String promptText(Prompt prompt) {
+        return prompt.getInstructions().stream()
+                .map(message -> message.getText())
+                .reduce("", (left, right) -> left + "\n" + right);
     }
 
-    private RuntimeModelConfiguration configuration() {
+    private static Fixture fixture() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
-        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("compatible");
-        return configuration;
-    }
-
-    private ChatModel chatModel(RuntimeModelConfiguration configuration) {
-        ChatModel model = mock(ChatModel.class);
+        ChatModel chatModel = mock(ChatModel.class);
         ToolCallingChatOptions options = ToolCallingChatOptions.builder().build();
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
         when(configuration.resolvedModelFor(Role.TEACHING, "player"))
                 .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
-                        model, "compatible", "teaching-test-model", false));
-        when(model.getDefaultOptions()).thenReturn(options);
-        when(model.getOptions()).thenReturn(options);
-        return model;
+                        chatModel, "compatible", "teaching-test-model", false));
+        when(chatModel.getDefaultOptions()).thenReturn(options);
+        when(chatModel.getOptions()).thenReturn(options);
+        return new Fixture(
+                chatModel,
+                new SpringAiTeachingOutlineModel(
+                        configuration,
+                        mock(VersionedAgentPrompts.class),
+                        0.1,
+                        "Choose one action as JSON.",
+                        "Goal={learningGoal}\nState={state}"));
     }
 
-    private SpringAiTeachingOutlineModel model(RuntimeModelConfiguration configuration) {
-        return new SpringAiTeachingOutlineModel(
-                configuration,
-                mock(VersionedAgentPrompts.class),
-                0.1,
-                "Return one exact JSON outline.",
-                "Goal={learningGoal}\nPages={pages}\nImages={visualPages}\nRepair={repair}");
-    }
-
-    private OutlineRequest request() {
+    private static OutlineRequest request() {
         return new OutlineRequest(
-                List.of(new PageInput(1, "SETUP: Place one marker. TAKE TURN: Move one marker.")),
+                List.of(
+                        new PageInput(1, "SETUP: Place one marker. TAKE TURN: Move one marker."),
+                        new PageInput(2, "SYSTEMS AND REPAIR: Repair a damaged system.")),
                 List.of(),
                 "player");
     }
 
-    private ChatResponse response(String content) {
+    private static OutlineRequest onePageRequest() {
+        return new OutlineRequest(
+                List.of(new PageInput(1, "TAKE TURN: Move one marker.")),
+                List.of(),
+                "player");
+    }
+
+    private static ChatResponse response(String content) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
     }
+
+    private record Fixture(ChatModel chatModel, SpringAiTeachingOutlineModel model) {}
 }

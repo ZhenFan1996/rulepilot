@@ -92,7 +92,7 @@ class SpringAiLessonLocalizationModelTest {
     }
 
     @Test
-    void parsesOneExactTranslationEnvelopeWithoutDefaultingNestedFields() throws Exception {
+    void parsesOneTranslationEnvelopeWithAdditiveMetadataWithoutDefaultingRequiredFields() throws Exception {
         String valid = """
                 {
                   "position":1,
@@ -114,9 +114,9 @@ class SpringAiLessonLocalizationModelTest {
         assertThat(draft.steps()).singleElement().satisfies(step ->
                 assertThat(step.ruleFacts()).singleElement().satisfies(fact ->
                         assertThat(fact.text()).isEqualTo("Place the board in the center of the table.")));
-        assertThatThrownBy(() -> SpringAiLessonLocalizationModel.parseSectionTranslation(
-                        valid.replace("\"ruleFacts\":[{", "\"statusLine\":\"done\",\"ruleFacts\":[{")))
-                .isInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+        assertThat(SpringAiLessonLocalizationModel.parseSectionTranslation(
+                        valid.replace("\"ruleFacts\":[{", "\"statusLine\":\"done\",\"ruleFacts\":[{")).steps())
+                .singleElement();
         assertThatThrownBy(() -> SpringAiLessonLocalizationModel.parseSectionTranslation(
                         valid.replace(
                                 "\"visualDescription\":\"The board is centered between the player areas.\",\n",

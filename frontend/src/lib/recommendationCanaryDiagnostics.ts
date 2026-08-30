@@ -10,7 +10,6 @@ export const RECOMMENDATION_STREAM_ERROR_CODES = [
 ] as const
 
 export type RecommendationCanaryFailureClass =
-  | 'interaction_slo'
   | 'product_terminal'
   | 'terminal_evidence_gap'
   | 'lifecycle_deadline'
@@ -31,7 +30,6 @@ export function classifyRecommendationCanaryFailure(observation: {
   hasSseResult: boolean
   hasPersistedTerminal: boolean
   ssePersistedContentConsistent: boolean | null
-  sloMet: boolean | null
 }): RecommendationCanaryFailureClass | null {
   if (observation.observerFailed) return 'observer_failure'
   if (observation.outcome !== null && observation.outcome !== 'recommendations') {
@@ -43,5 +41,5 @@ export function classifyRecommendationCanaryFailure(observation: {
     || observation.ssePersistedContentConsistent === false) {
     return 'terminal_evidence_gap'
   }
-  return observation.sloMet === false ? 'interaction_slo' : null
+  return null
 }

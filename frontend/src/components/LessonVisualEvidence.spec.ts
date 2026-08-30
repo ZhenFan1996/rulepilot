@@ -187,9 +187,10 @@ describe('LessonVisualEvidence', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('[data-testid="lesson-visual-detail-retrying"]').text()).toContain('图像解码容量暂时繁忙')
-    expect(wrapper.text()).toContain('自动重试这张局部图一次')
-    expect(wrapper.text()).toContain('已发布的带引用正文不受影响')
+    const retrying = wrapper.get('[data-testid="lesson-visual-detail-retrying"]')
+    expect(retrying.text()).toContain('图像解码容量暂时繁忙')
+    expect(retrying.text()).toContain('正在按服务返回的状态重新读取这张局部图')
+    expect(retrying.text()).toContain('已发布的带引用正文不受影响')
 
     await vi.advanceTimersByTimeAsync(999)
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -233,9 +234,10 @@ describe('LessonVisualEvidence', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[data-testid="lesson-visual-detail"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="lesson-visual-detail-failure"]').text()).toContain('原页图重试后仍暂时无法读取')
-    expect(wrapper.text()).toContain('本次局部图已停止自动重试')
-    expect(wrapper.text()).toContain('只省略此图，已发布的带引用正文保留')
+    const failure = wrapper.get('[data-testid="lesson-visual-detail-failure"]')
+    expect(failure.text()).toContain('原页图仍无法读取')
+    expect(failure.text()).toContain('本次局部图已停止读取')
+    expect(failure.text()).toContain('只省略此图，已发布的带引用正文保留')
     expect(fetchMock.mock.calls.every(([url]) => url === '/crop/6')).toBe(true)
   })
 

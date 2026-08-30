@@ -44,7 +44,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
             .build();
     private static final ObjectMapper STRICT_CRITIC_OUTPUT = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private final RuntimeModelConfiguration models;

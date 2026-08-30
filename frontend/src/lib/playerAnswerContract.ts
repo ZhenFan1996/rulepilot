@@ -10,7 +10,7 @@ export interface PlayerRuleCitation {
 
 /** Player-visible answer content; operational identities live in AnswerRulingReference instead. */
 export interface PlayerFacingRuleAnswer {
-  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_UNAVAILABLE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
+  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'RETRIEVAL_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
   shortVerdict: string
   explanation: string
   citations: PlayerRuleCitation[]
@@ -447,7 +447,7 @@ function isWarning(value: unknown) {
 function isAnswerStatus(value: unknown) {
   return value === 'ANSWERED' || value === 'ANSWERED_WITH_WARNING'
     || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
-    || value === 'MODEL_UNAVAILABLE' || value === 'MODEL_TIMEOUT'
+    || value === 'RETRIEVAL_UNAVAILABLE' || value === 'MODEL_UNAVAILABLE' || value === 'MODEL_TIMEOUT'
     || value === 'INVALID_MODEL_OUTPUT' || value === 'VERSION_CONFLICT'
 }
 

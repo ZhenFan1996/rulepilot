@@ -10,30 +10,29 @@ import java.util.UUID;
 /**
  * Pure query and evidence-selection rules for one teaching section.
  *
- * <p>The policy never reads a rulebook or validates a claim. It only makes a bounded request plan and preserves
+ * <p>The policy never reads a rulebook or validates a claim. It makes the source-owned request plan and preserves
  * coverage across the resulting immutable retrieval lists.</p>
  */
 final class TeachingEvidenceRetrievalPolicy {
 
-    private static final int MAX_EVIDENCE_PER_SECTION = 10;
     private TeachingEvidenceRetrievalPolicy() {}
 
     static String focusedQuery(String query) {
         return query.strip();
     }
 
-    static List<String> queries(TeachingPlan.PlannedSection topic, int limit) {
-        return TeachingUnitContract.sourceIdentifiers(topic.retrievalQueries()).stream()
+    static List<String> queries(TeachingPlan.PlannedSection topic) {
+        if (!topic.sourcePageNumbers().isEmpty()) return List.of();
+        return topic.retrievalQueries().stream()
                 .map(String::strip)
                 .filter(query -> !query.isBlank())
                 .distinct()
-                .limit(limit)
                 .toList();
     }
 
     static List<RuleEvidence> balancedEvidence(List<List<RuleEvidence>> evidenceByIntent) {
         Map<UUID, RuleEvidence> merged = new LinkedHashMap<>();
-        for (int rank = 0; merged.size() < MAX_EVIDENCE_PER_SECTION; rank++) {
+        for (int rank = 0; ; rank++) {
             boolean candidateAtRank = false;
             for (List<RuleEvidence> intentEvidence : evidenceByIntent) {
                 if (rank >= intentEvidence.size()) {
@@ -42,9 +41,6 @@ final class TeachingEvidenceRetrievalPolicy {
                 candidateAtRank = true;
                 RuleEvidence candidate = intentEvidence.get(rank);
                 merged.putIfAbsent(candidate.chunkId(), candidate);
-                if (merged.size() == MAX_EVIDENCE_PER_SECTION) {
-                    break;
-                }
             }
             if (!candidateAtRank) {
                 break;

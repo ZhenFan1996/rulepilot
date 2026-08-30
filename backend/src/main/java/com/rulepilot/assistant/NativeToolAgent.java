@@ -29,13 +29,56 @@ public interface NativeToolAgent {
         EVIDENCE_NOT_FOUND
     }
 
-    record TerminalContract(Set<TerminalStatus> allowedStatuses) {
+    @FunctionalInterface
+    interface TerminalValidator {
+
+        TerminalValidation validate(String candidate, List<ObservationRecord> observations);
+    }
+
+    record TerminalValidation(
+            boolean valid,
+            String code,
+            String path,
+            String reason,
+            Set<String> allowedEvidenceIds) {
+        public TerminalValidation {
+            allowedEvidenceIds = allowedEvidenceIds == null ? Set.of() : Set.copyOf(allowedEvidenceIds);
+            if (valid) {
+                code = null;
+                path = null;
+                reason = null;
+            } else if (blank(code) || blank(path) || blank(reason)) {
+                throw new IllegalArgumentException("native terminal rejection is invalid");
+            }
+        }
+
+        public static TerminalValidation accepted() {
+            return new TerminalValidation(true, null, null, null, Set.of());
+        }
+
+        public static TerminalValidation rejected(
+                String code, String path, String reason, Set<String> allowedEvidenceIds) {
+            return new TerminalValidation(false, code, path, reason, allowedEvidenceIds);
+        }
+    }
+
+    record TerminalContract(
+            Set<TerminalStatus> allowedStatuses,
+            String jsonSchema,
+            TerminalValidator validator) {
+        public TerminalContract(Set<TerminalStatus> allowedStatuses) {
+            this(allowedStatuses, null, null);
+        }
+
         public TerminalContract {
             if (allowedStatuses == null
-                    || allowedStatuses.stream().anyMatch(java.util.Objects::isNull)) {
+                    || allowedStatuses.stream().anyMatch(java.util.Objects::isNull)
+                    || (validator == null) != blank(jsonSchema)
+                    || (validator != null && !allowedStatuses.isEmpty())) {
                 throw new IllegalArgumentException("native tool Agent terminal contract is invalid");
             }
             allowedStatuses = Set.copyOf(allowedStatuses);
+            jsonSchema = jsonSchema == null ? null : jsonSchema.strip();
         }
 
         public static TerminalContract none() {
@@ -50,8 +93,16 @@ public interface NativeToolAgent {
             return new TerminalContract(Set.of(TerminalStatus.EVIDENCE_READY, TerminalStatus.EVIDENCE_NOT_FOUND));
         }
 
+        public static TerminalContract json(String jsonSchema, TerminalValidator validator) {
+            return new TerminalContract(Set.of(), jsonSchema, validator);
+        }
+
         public boolean required() {
-            return !allowedStatuses.isEmpty();
+            return !allowedStatuses.isEmpty() || validator != null;
+        }
+
+        public boolean custom() {
+            return validator != null;
         }
     }
 

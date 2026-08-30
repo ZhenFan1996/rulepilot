@@ -32,12 +32,12 @@ class SpringAiContentCriticModelStructuredOutputTest {
     }
 
     @Test
-    void rejectsMissingOrUnexpectedCriticFieldsInsteadOfInventingDefaults() {
+    void rejectsMissingCriticFieldsAndAcceptsAdditiveMetadata() {
         assertThatThrownBy(() -> SpringAiContentCriticModel.parseStructuredDraft("{}"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> SpringAiContentCriticModel.parseStructuredDraft(
-                        "{\"issues\":[],\"answer\":\"looks fine\"}"))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(SpringAiContentCriticModel.parseStructuredDraft(
+                        "{\"issues\":[],\"answer\":\"looks fine\"}").issues())
+                .isEmpty();
         assertThatThrownBy(() -> SpringAiContentCriticModel.parseStructuredDraft("""
                         {"issues":[{
                           "defectConfirmed":true,

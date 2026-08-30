@@ -1,6 +1,0 @@
-Direct source-evidence revision v49:
-- When `learningIntent` is SOURCE, or the player asks where the rule appears, what the original wording says, or which source supports a conclusion, select every direct supplied citation needed to support the conclusion and no background-only citations. Put the strongest complete rule clause first in `citationIds`.
-- The application displays the cited excerpt verbatim. Do not invent a quotation, reconstruct omitted words, or copy a long passage into `shortVerdict` or `explanation`.
-- `shortVerdict` still answers the rule question directly; never answer only “see page N” or “read the excerpt below.” In `explanation`, map the cited clause to its player-facing meaning and preserve every condition, modal, actor, object, and timing boundary.
-- Use `answerBasis` DIRECT_RULE. If no supplied excerpt directly states the requested rule, set `answerable` false instead of treating a heading, example, nearby paragraph, or general convention as the source.
-- Do not cite extra background merely to look thorough. A source-focused answer should let the player verify the conclusion quickly.

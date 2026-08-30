@@ -307,7 +307,7 @@ function stateClass(planId: string) {
   }
   if (state === 'GENERATING') return 'bg-indigo/10 text-indigo'
   if (failurePolicy?.failureClassification === 'local-degradation') return 'bg-emerald-50 text-emerald-800'
-  if (failurePolicy?.failureClassification === 'preserved-stop') return 'bg-amber-50 text-amber-800'
+  if (failurePolicy?.failureClassification === 'retry-preserved') return 'bg-amber-50 text-amber-800'
   if (state === 'FAILED' || state === 'NEEDS_ATTENTION') return 'bg-red-50 text-red-800'
   return 'bg-amber-50 text-amber-800'
 }

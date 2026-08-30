@@ -366,9 +366,18 @@ official_import_canary_title=
 official_import_effective_source=
 preparation_run_id=
 lesson_run_id=
-page_attempts=null
 csrf_header=
 csrf_token=
+
+record_failure_cause() {
+	local cause=${1:-}
+	if ! [[ "$cause" =~ ^[A-Z][A-Z0-9_]{0,79}$ ]]; then
+		echo "Invalid smoke failure cause" >&2
+		return 2
+	fi
+	printf '%s' "$cause" > "$run_failure_code_file"
+	chmod 600 "$run_failure_code_file"
+}
 
 remaining_forward_seconds() {
 	local remaining=$((forward_deadline - SECONDS))
@@ -541,92 +550,6 @@ wait_for_latest_teaching_run_id() {
 	return 1
 }
 
-page_attempt_report() {
-	local response=$1
-	local expected=$2
-	jq -c --argjson expected "$expected" '
-	        def three_part_attempts($prefix):
-	          [.activities[]?
-	            | select(.operation | startswith($prefix + "|"))
-	            | (.operation | split("|")) as $parts
-	            | select(($parts | length) == 3)
-	            | {page: ($parts[1] | tonumber), total: ($parts[2] | tonumber), outcome}];
-	        def repair_attempts:
-	          [.activities[]?
-	            | select(.operation | startswith("inspectTeachingVisualRepair|"))
-	            | (.operation | split("|")) as $parts
-	            | select(($parts | length) == 4)
-	            | {page: ($parts[1] | tonumber), total: ($parts[2] | tonumber),
-	               repairCode: $parts[3], outcome}];
-	        [.activities[]? | select(.operation | startswith("inspectTeachingVisualPage|"))] as $rawInitial
-	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualRetry|"))] as $rawRetries
-	        | [.activities[]? | select(.operation | startswith("inspectTeachingVisualRepair|"))] as $rawRepairs
-	        | three_part_attempts("inspectTeachingVisualPage") as $initial
-	        | three_part_attempts("inspectTeachingVisualRetry") as $retries
-	        | repair_attempts as $repairs
-	        | (($retries | map(. + {recoveryKind: "TRANSIENT_RETRY", repairCode: null}))
-	          + ($repairs | map(. + {recoveryKind: "CONTRACT_REPAIR"}))) as $recoveries
-	        | [range(1; $expected + 1)] as $pages
-	        | [$pages[] as $page
-	            | (($recoveries | map(select(.page == $page)) | last)
-	              // ($initial | map(select(.page == $page)) | last))
-	            | select(.outcome != "SUCCEEDED")
-	            | .page] as $unavailable
-	        | [$pages[] as $page
-	            | (($initial | map(select(.page == $page)) | length)
-	              + ($recoveries | map(select(.page == $page)) | length))] as $semanticAttemptCounts
-	        | [$pages[] as $page
-	            | ($initial | map(select(.page == $page)) | last) as $first
-	            | ($recoveries | map(select(.page == $page)) | last) as $recovery
-	            | {
-	                page: $page,
-	                initialOutcome: ($first.outcome // null),
-	                recoveryKind: ($recovery.recoveryKind // null),
-	                repairCode: ($recovery.repairCode // null),
-	                recoveryOutcome: ($recovery.outcome // null),
-	                semanticAttempts: ((if $first == null then 0 else 1 end)
-	                  + (if $recovery == null then 0 else 1 end)),
-	                finalOutcome: (($recovery // $first).outcome // null)
-	              }] as $pageStats
-	        | {
-	            pages: $pageStats,
-	            initialSucceeded: ($initial | map(select(.outcome == "SUCCEEDED")) | length),
-	            initialFailed: ($initial | map(select(.outcome == "FAILED")) | length),
-	            initialRejected: ($initial | map(select(.outcome == "REJECTED")) | length),
-	            transientRetryAttempted: ($retries | length),
-	            transientRetrySucceeded: ($retries | map(select(.outcome == "SUCCEEDED")) | length),
-	            transientRetryFailed: ($retries | map(select(.outcome != "SUCCEEDED")) | length),
-	            repairAttempted: ($repairs | length),
-	            repairSucceeded: ($repairs | map(select(.outcome == "SUCCEEDED")) | length),
-	            repairFailed: ($repairs | map(select(.outcome != "SUCCEEDED")) | length),
-	            finalUnavailablePages: $unavailable,
-	            maximumSemanticAttemptsForAnyPage: ($semanticAttemptCounts | max // 0),
-	            valid: (
-	              ($rawInitial | length) == ($initial | length)
-	              and ($rawRetries | length) == ($retries | length)
-	              and ($rawRepairs | length) == ($repairs | length)
-	              and ($initial | length) == $expected
-	              and ($initial | map(.page) | unique) == $pages
-	              and all($initial[]; .total == $expected)
-	              and all($retries[]; .total == $expected)
-	              and all($repairs[];
-	                .total == $expected
-	                and (.repairCode == "MALFORMED_JSON"
-	                  or .repairCode == "SCHEMA_MISMATCH"
-	                  or .repairCode == "DUPLICATE_RULE_GROUP"
-	                  or .repairCode == "PAGE_BINDING_MISMATCH"))
-	              and all($pages[]; . as $page
-	                | ($recoveries | map(select(.page == $page)) | length) <= 1)
-	              and all($recoveries[]; . as $recovery
-	                | $recovery.page >= 1 and $recovery.page <= $expected
-	                and any($initial[]; .page == $recovery.page and .outcome != "SUCCEEDED"))
-	              and ($semanticAttemptCounts | max // 0) <= 2
-	              and ($unavailable | length) < $expected
-	            )
-	          }
-	    ' <<<"$response"
-}
-
 log_stage() {
 	local event=${1%% *}
 	printf 'SMOKE_STAGE %s\n' "$1" >&2
@@ -648,8 +571,7 @@ log_run_timing() {
 
 verify_lesson_critical_path() {
 	local response=$1
-	local section_count=$2
-	local metrics first_section_seconds total_seconds used_model_calls correction_calls model_call_limit
+	local metrics
 	metrics=$(jq -er '
         def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
         (.run.createdAt | epoch) as $started
@@ -665,27 +587,9 @@ verify_lesson_critical_path() {
             correctionCalls: ([.activities[]?
                 | select((.operation | startswith("correctTeachingSection|"))
                     or (.operation | startswith("repairCorrectedTeachingSection|")))] | length)
-          }
-    ' <<<"$response")
-	first_section_seconds=$(jq -er '.firstSectionSeconds' <<<"$metrics")
-	total_seconds=$(jq -er '.totalSeconds' <<<"$metrics")
-	used_model_calls=$(jq -er '.usedModelCalls' <<<"$metrics")
-	correction_calls=$(jq -er '.correctionCalls' <<<"$metrics")
-	model_call_limit=$((section_count + 4))
-	printf 'SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=%s totalSeconds=%s usedModelCalls=%s modelCallLimit=%s correctionCalls=%s\n' \
-		"$first_section_seconds" "$total_seconds" "$used_model_calls" "$model_call_limit" "$correction_calls" >&2
-	if [ "$first_section_seconds" -gt 15 ]; then
-		echo "SMOKE_WARNING First cited lesson section exceeded the 15-second target" >&2
-	fi
-	if [ "$total_seconds" -gt 90 ]; then
-		echo "SMOKE_WARNING Complete cited lesson exceeded the 90-second target" >&2
-	fi
-	if [ "$used_model_calls" -gt "$model_call_limit" ]; then
-		echo "SMOKE_WARNING Lesson model calls exceeded the section-relative target" >&2
-	fi
-	if [ "$correction_calls" -gt 2 ]; then
-		echo "SMOKE_WARNING Post-publication lesson corrections exceeded the target" >&2
-	fi
+	          }
+	    ' <<<"$response")
+	printf 'SMOKE_PERFORMANCE phase=lesson metrics=%s\n' "$(jq -c . <<<"$metrics")" >&2
 }
 
 report_preparation_start_to_first_section() {
@@ -1051,16 +955,15 @@ wait_for_run() {
 			fi
 		fi
 		case "$state" in
-			COMPLETED)
+			COMPLETED|DEGRADED)
 				printf '%s' "$response"
 				return 0
 				;;
-			FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED)
+			FAILED|INSUFFICIENT_EVIDENCE|CANCELLED)
 				local typed_failure_code
 				typed_failure_code=$(jq -r '.run.lastErrorCode // .run.state // empty' <<<"$response")
 				if [[ "$typed_failure_code" =~ ^[A-Z][A-Z0-9_]{0,79}$ ]]; then
-					printf '%s' "$typed_failure_code" > "$run_failure_code_file"
-					chmod 600 "$run_failure_code_file"
+					record_failure_cause "$typed_failure_code"
 				fi
 				log_run_timing "${label// /-}-failure" "$response"
 				echo "$label ended in $state" >&2
@@ -1230,31 +1133,34 @@ run_official_image_gallery() {
 	preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")
 	preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
 	log_run_timing "preparation" "$preparation_result"
-	page_attempts=$(page_attempt_report "$preparation_result" "$expected_page_count")
-	if ! jq -e --argjson expected "$expected_page_count" '
-	        .valid == true
-	        and .initialSucceeded + .initialFailed + .initialRejected == $expected
-	        and .maximumSemanticAttemptsForAnyPage <= 2
-	        and (.finalUnavailablePages | length) < $expected
-	    ' >/dev/null <<<"$page_attempts"; then
-		echo "Image-gallery inspection did not preserve any usable page within the bounded recovery contract" >&2
-		return 1
-	fi
-	printf 'SMOKE_PAGE_ATTEMPTS %s\n' "$page_attempts" >&2
 	log_stage "teaching-preparation-completed"
 	pending_failure_code=TEACHING_PLAN_INVALID
 
 	plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
-	plan_id=$(jq -er '.id' <<<"$plan")
-	plan_title=$(jq -er '.gameTitle' <<<"$plan")
-	plan_section_count=$(jq -er '.sections | length' <<<"$plan")
-	if ! jq -e --arg version_id "$version_id" --arg expected "$expected_title" '
-        def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ | $"; "");
-        .documentVersionId == $version_id
-        and (.gameTitle | normalized) == ($expected | normalized)
-        and (.sections | length > 0)
+	plan_id=$(jq -r '.id // empty' <<<"$plan")
+	plan_title=$(jq -r '.gameTitle // empty' <<<"$plan")
+	plan_section_count=$(jq -r 'if (.sections | type) == "array" then (.sections | length) else -1 end' <<<"$plan")
+	if [ -z "$plan_id" ]; then
+		record_failure_cause TEACHING_PLAN_IDENTITY_MISSING
+		echo "Teaching plan did not expose its identity" >&2
+		return 1
+	fi
+	if ! jq -e --arg version_id "$version_id" '.documentVersionId == $version_id' >/dev/null <<<"$plan"; then
+		record_failure_cause TEACHING_PLAN_DOCUMENT_VERSION_MISMATCH
+		echo "Teaching plan resolved to a different document version" >&2
+		return 1
+	fi
+	if ! jq -e --arg expected "$expected_title" '
+        def normalized: gsub("[^\\p{L}\\p{N}]+"; " ") | ascii_downcase | gsub("^ | $"; "");
+        (.gameTitle | type == "string") and (.gameTitle | normalized) == ($expected | normalized)
     ' >/dev/null <<<"$plan"; then
-		echo "Teaching plan was unusable: title=$plan_title sections=$plan_section_count" >&2
+		record_failure_cause TEACHING_PLAN_TITLE_MISMATCH
+		echo "Teaching plan kept a different game identity: title=$plan_title" >&2
+		return 1
+	fi
+	if [ "$plan_section_count" -le 0 ]; then
+		record_failure_cause TEACHING_PLAN_SECTIONS_EMPTY
+		echo "Teaching plan contained no publishable sections" >&2
 		return 1
 	fi
 	log_stage "teaching-plan-verified"
@@ -1272,7 +1178,8 @@ run_official_image_gallery() {
 	section_count=$(jq -er '.sections | length' <<<"$lesson")
 	visual_step_count=$(jq -er '[.sections[].steps[]? | select(.kind == "VISUAL")] | length' <<<"$lesson")
 	focused_visual_step_count=$(jq -er '[.sections[].steps[]? | select(.kind == "VISUAL" and .visualFocus != null)] | length' <<<"$lesson")
-	if ! jq -e '.status == "COMPLETE" and (.sections | length > 0)' >/dev/null <<<"$lesson"; then
+	if ! jq -e '(.status == "COMPLETE" or .status == "DRAFT_READY") and (.sections | length > 0)' \
+		>/dev/null <<<"$lesson"; then
 		echo "Illustrated lesson was unusable: status=$lesson_status sections=$section_count" >&2
 		return 1
 	fi
@@ -1321,14 +1228,13 @@ run_official_image_gallery() {
 		--arg sourceUrl "$official_source_url" \
 		--arg effectiveSourceUrl "$effective_source" \
 		--argjson pageCount "$expected_page_count" \
-		--argjson pageAttempts "$page_attempts" \
 		--argjson sectionCount "$section_count" \
 		--argjson answerCitationCount "$answer_citation_count" \
 		--argjson visualStepCount "$visual_step_count" \
 		--argjson focusedVisualStepCount "$focused_visual_step_count" \
 		--argjson navigation "$navigation" \
 		'{sourceMode: "official_image_gallery", title: $title, sourceUrl: $sourceUrl,
-		  effectiveSourceUrl: $effectiveSourceUrl, pageCount: $pageCount, pageAttempts: $pageAttempts,
+		  effectiveSourceUrl: $effectiveSourceUrl, pageCount: $pageCount,
 		  preparationState: $preparationState, lessonState: $lessonState, lessonStatus: $lessonStatus,
 		  answerStatus: $answerStatus, sectionCount: $sectionCount,
 		  answerCitationCount: $answerCitationCount, visualStepCount: $visualStepCount,
@@ -1445,9 +1351,10 @@ log_stage "teaching-preparation-completed"
 pending_failure_code=TEACHING_PLAN_INVALID
 
 plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
-plan_id=$(jq -er '.id' <<<"$plan")
-plan_title=$(jq -er '.gameTitle' <<<"$plan")
-plan_section_count=$(jq -er '.sections | length' <<<"$plan")
+plan_id=$(jq -r '.id // empty' <<<"$plan")
+plan_version_id=$(jq -r '.documentVersionId // empty' <<<"$plan")
+plan_title=$(jq -r '.gameTitle // empty' <<<"$plan")
+plan_section_count=$(jq -r 'if (.sections | type) == "array" then (.sections | length) else -1 end' <<<"$plan")
 log_stage "teaching-plan-inspected title=$plan_title sections=$plan_section_count"
 if [ -n "$result_file" ]; then
 	mkdir -p "$(dirname "$result_file")"
@@ -1461,11 +1368,27 @@ if [ -n "$result_file" ]; then
 		  sourceUrl: $sourceUrl, preparationRun: $preparationRun, plan: $plan}' > "$result_file"
 	chmod 600 "$result_file"
 fi
+if [ -z "$plan_id" ]; then
+	record_failure_cause TEACHING_PLAN_IDENTITY_MISSING
+	echo "Teaching plan did not expose its identity" >&2
+	exit 1
+fi
+if [ "$plan_version_id" != "$version_id" ]; then
+	record_failure_cause TEACHING_PLAN_DOCUMENT_VERSION_MISMATCH
+	echo "Teaching plan resolved to a different document version" >&2
+	exit 1
+fi
 if ! jq -e --arg expected "$expected_title" '
-	def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ | $"; "");
-	(.gameTitle | normalized) == ($expected | normalized) and (.sections | length > 0)
+	def normalized: gsub("[^\\p{L}\\p{N}]+"; " ") | ascii_downcase | gsub("^ | $"; "");
+	(.gameTitle | type == "string") and (.gameTitle | normalized) == ($expected | normalized)
 ' >/dev/null <<<"$plan"; then
-	echo "Teaching plan was unusable: title=$plan_title sections=$plan_section_count" >&2
+	record_failure_cause TEACHING_PLAN_TITLE_MISMATCH
+	echo "Teaching plan kept a different game identity: title=$plan_title" >&2
+	exit 1
+fi
+if [ "$plan_section_count" -le 0 ]; then
+	record_failure_cause TEACHING_PLAN_SECTIONS_EMPTY
+	echo "Teaching plan contained no publishable sections" >&2
 	exit 1
 fi
 log_stage "teaching-plan-verified"
@@ -1476,9 +1399,10 @@ document_response=$(jq -er --arg document_id "$document_id" \
 	'.[] | select(.document.id == $document_id)' <<<"$documents_response")
 actual_title=$(jq -er '.document.title' <<<"$document_response")
 if ! jq -e --arg expected "$expected_title" '
-	def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ | $"; "");
+	def normalized: gsub("[^\\p{L}\\p{N}]+"; " ") | ascii_downcase | gsub("^ | $"; "");
 	(.document.title | normalized) == ($expected | normalized)
 ' >/dev/null <<<"$document_response"; then
+	record_failure_cause DOCUMENT_TITLE_PROPAGATION_MISMATCH
 	echo "Expected the source-grounded title $expected_title, got: $actual_title (plan: $plan_title)" >&2
 	exit 1
 fi

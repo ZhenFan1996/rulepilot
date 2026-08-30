@@ -2,13 +2,11 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import com.rulepilot.teaching.domain.TeachingPlan.GlobalConcept;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import com.rulepilot.teaching.domain.TeachingPlan.TopicDependency;
 import com.rulepilot.teaching.domain.TeachingPlan.WholeGameContext;
 import java.time.Instant;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -47,10 +45,10 @@ public class TeachingPlanFactory {
                             key,
                             topic.title(),
                             topic.objective(),
-                            topic.required(),
+                            true,
                             topic.visualEvidenceRecommended(),
-                            plannedRetrievalContracts(outline, topic),
-                            planTags(outline, topic),
+                            List.of(topic.objective()),
+                            List.of(),
                             topic.sourcePageNumbers());
                 })
                 .toList();
@@ -72,75 +70,27 @@ public class TeachingPlanFactory {
                 || outline.topics().isEmpty()) {
             throw new IllegalArgumentException("model did not produce a usable teaching outline");
         }
-        TeachingSourceCoverageContract.validateStructure(outline);
-        if (!outline.wholeGameUnderstanding().concepts().isEmpty()) {
-            TeachingWholeGameUnderstandingPolicy.validateComplete(outline);
-        }
         Set<String> keys = new HashSet<>();
         for (int index = 0; index < outline.topics().size(); index++) {
             var topic = outline.topics().get(index);
             if (!keys.add(normalizedKey(topic.key(), index + 1))) {
                 throw new IllegalArgumentException("teaching topic keys must be unique");
             }
-            boolean ownsSourceSlots = outline.sourceCoverageSlots().stream()
-                    .anyMatch(slot -> slot.ownerTopicKey().equals(topic.key()));
-            if (!ownsSourceSlots) normalizedQueries(topic.retrievalQueries());
         }
-    }
-
-    private List<String> plannedRetrievalContracts(
-            OutlineDraft outline, com.rulepilot.teaching.TeachingOutlineModel.TopicDraft topic) {
-        List<com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft> ownedSlots =
-                outline.sourceCoverageSlots().stream()
-                        .filter(slot -> slot.ownerTopicKey().equals(topic.key()))
-                        .toList();
-        return ownedSlots.isEmpty()
-                ? normalizedQueries(topic.retrievalQueries())
-                : TeachingUnitContract.encodeUnits(ownedSlots);
     }
 
     private String normalizedKey(String value, int position) {
         return value == null || value.isBlank() ? "topic-" + position : value;
     }
 
-    private List<String> normalizedTags(List<String> values) {
-        return values == null ? List.of() : values.stream()
-                .filter(value -> value != null && !value.isBlank())
-                .distinct()
-                .toList();
-    }
-
-    private List<String> planTags(OutlineDraft outline, com.rulepilot.teaching.TeachingOutlineModel.TopicDraft topic) {
-        LinkedHashSet<String> tags = new LinkedHashSet<>(normalizedTags(topic.coverageTags()));
-        tags.addAll(TeachingSourceCoverageContract.metadataForTopic(outline, topic));
-        if (!outline.wholeGameUnderstanding().concepts().isEmpty()) {
-            tags.add(TeachingWholeGameUnderstandingPolicy.CONTRACT_TAG);
-        }
-        return List.copyOf(tags);
-    }
-
     private WholeGameContext wholeGameContext(OutlineDraft outline) {
-        var understanding = outline.wholeGameUnderstanding();
-        if (understanding.concepts().isEmpty()) return WholeGameContext.legacy(outline.premise());
-        List<GlobalConcept> concepts = understanding.concepts().stream()
-                .map(concept -> new GlobalConcept(
-                        concept.conceptId(),
-                        concept.label(),
-                        concept.explanation(),
-                        concept.sourceIdentifiers(),
-                        concept.sourcePageNumbers(),
-                        concept.relatedTopicKeys().stream()
-                                .map(key -> normalizedTopicKey(outline, key))
-                                .toList(),
-                        concept.prerequisiteConceptIds()))
-                .toList();
-        List<TopicDependency> dependencies = understanding.topicDependencies().stream()
+        List<TopicDependency> dependencies = outline.topicDependencies().stream()
                 .map(dependency -> new TopicDependency(
                         normalizedTopicKey(outline, dependency.prerequisiteTopicKey()),
                         normalizedTopicKey(outline, dependency.dependentTopicKey()),
                         dependency.reason()))
                 .toList();
-        return new WholeGameContext(understanding.summary(), concepts, dependencies, true);
+        return new WholeGameContext(dependencies, outline.unresolvedTopics());
     }
 
     private String normalizedTopicKey(OutlineDraft outline, String key) {
@@ -151,13 +101,4 @@ public class TeachingPlanFactory {
                 .orElseThrow(() -> new IllegalArgumentException("whole-game context references an unknown topic"));
     }
 
-    private List<String> normalizedQueries(List<String> values) {
-        if (values == null || values.isEmpty()) {
-            throw new IllegalArgumentException("every teaching topic needs at least one retrieval question");
-        }
-        return values.stream()
-                .filter(value -> value != null && !value.isBlank())
-                .distinct()
-                .toList();
-    }
 }

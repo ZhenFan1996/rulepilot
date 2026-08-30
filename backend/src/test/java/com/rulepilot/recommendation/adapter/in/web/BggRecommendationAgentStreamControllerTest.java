@@ -158,7 +158,7 @@ class BggRecommendationAgentStreamControllerTest {
             progress.accept(new ProgressUpdate(
                     ProgressStage.SEARCHING_BGG_CATALOG,
                     BoardGameRecommendationAgent.ProgressPhase.COMPLETED,
-                    BoardGameRecommendationAgent.ProgressAction.BROWSE_BGG_CATALOG,
+                    BoardGameRecommendationAgent.ProgressAction.SEARCH_BGG_CATALOG,
                     18,
                     2,
                     2,
@@ -203,7 +203,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("\"phase\":\"completed\"")
                 .contains("\"action\":\"understand_request\"")
                 .contains("searching_bgg_catalog")
-                .contains("\"action\":\"browse_bgg_catalog\"")
+                .contains("\"action\":\"search_bgg_catalog\"")
                 .contains("\"focus\":{\"kind\":\"catalog_mechanics\",\"values\":[\"Deck Building\"]}")
                 .contains("\"observedCandidates\":8")
                 .contains("\"verifiedCandidates\":6")

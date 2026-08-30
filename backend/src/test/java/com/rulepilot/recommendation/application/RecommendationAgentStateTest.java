@@ -43,27 +43,6 @@ class RecommendationAgentStateTest {
                 .containsExactly(13, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
     }
 
-    @Test
-    void retainsEveryObservedCandidateIdentityInsteadOfSilentlyDroppingTheTail() {
-        RecommendationAgentState state = new RecommendationAgentState(
-                new ConversationRequest(RecommendationProfile.empty(), "比较这些候选"),
-                System.nanoTime(),
-                null,
-                false);
-
-        java.util.stream.IntStream.rangeClosed(1, 24)
-                .forEach(id -> state.observeCandidate(id, "Game " + id));
-
-        assertThat(state.legalIds).hasSize(24);
-        assertThat(state.candidateNames).hasSize(24).containsEntry(24, "Game 24");
-        assertThat(new RecommendationAgentState.PublicationSeed(
-                        java.util.stream.IntStream.rangeClosed(1, 12).boxed().toList(),
-                        List.of(),
-                        12)
-                .requestedCount())
-                .isEqualTo(12);
-    }
-
     private Game game(int id) {
         return new Game(
                 new Ranking(

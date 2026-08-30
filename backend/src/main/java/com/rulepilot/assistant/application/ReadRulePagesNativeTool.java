@@ -35,7 +35,7 @@ public class ReadRulePagesNativeTool implements NativeAgentTool {
                 "cursor": {"description": "Opaque nextCursor from the preceding observation for this exact page set, or null for the first page.", "type": ["string", "null"], "format": "uuid"}
               },
               "required": ["pageNumbers"],
-              "additionalProperties": false
+              "additionalProperties": true
             }
             """;
 
@@ -242,7 +242,7 @@ public class ReadRulePagesNativeTool implements NativeAgentTool {
     private ReadArguments parse(String argumentsJson) {
         try {
             return objectMapper.readerFor(ReadArguments.class)
-                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .readValue(argumentsJson);
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException("page read arguments JSON could not be decoded", exception);

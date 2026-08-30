@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.NativeAgentTool;
 import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
@@ -119,26 +120,49 @@ class NativeAgentToolRegistryTest {
 
         assertThat(result.observation().code()).isEqualTo("INVALID_ARGUMENT");
         assertThat(result.observation().data())
-                .containsEntry("validationError", "limit must be a positive requested candidate count")
-                .containsEntry("inputSchema", rejecting.inputSchema())
+                .containsEntry("path", "/")
+                .containsEntry("reason", "limit must be a positive requested candidate count")
+                .containsEntry("currentSchema", rejecting.inputSchema())
                 .containsEntry("schemaHash", result.specification().schemaHash())
-                .containsEntry("allowedToolName", rejecting.name());
-        assertThat(result.observation().data().toString()).doesNotContain("{\"limit\":0}");
+                .containsEntry("allowedToolNames", List.of(rejecting.name()))
+                .containsEntry("rejectedArgumentsJson", "{\"limit\":0}");
 
         NativeAgentTool search = new SearchRuleEvidenceNativeTool(
                 request -> List.of(), JsonMapper.builder().build());
         var malformed = registry(List.of(search)).execute(
                 Role.ANSWER, search.name(), "{\"query\":", scope());
-        assertThat(malformed.observation().data().get("validationError").toString())
+        assertThat(malformed.observation().data().get("reason").toString())
                 .contains("search arguments JSON could not be decoded", "line 1", "column");
-        assertThat(malformed.observation().data().get("validationError").toString())
+        assertThat(malformed.observation().data().get("reason").toString())
                 .doesNotContain("Unexpected end-of-input", "query");
+        assertThat(malformed.observation().data())
+                .containsEntry("rejectedArgumentsJson", "{\"query\":");
 
         var blank = registry(List.of(search)).execute(Role.ANSWER, search.name(), " ", scope());
         assertThat(blank.observation().data())
-                .containsEntry("validationError", "argumentsJson must contain one JSON object")
-                .containsEntry("inputSchema", search.inputSchema())
-                .containsEntry("allowedToolName", search.name());
+                .containsEntry("path", "/")
+                .containsEntry("reason", "argumentsJson must contain one JSON object")
+                .containsEntry("currentSchema", search.inputSchema())
+                .containsEntry("allowedToolNames", List.of(search.name()))
+                .containsEntry("rejectedArgumentsJson", " ");
+    }
+
+    @Test
+    void preservesTheRunWideCancellationBoundaryInsteadOfLocalizingItAsAToolFailure() {
+        NativeAgentTool valid = tool("search_rule_evidence", Set.of(Role.ANSWER), new AtomicReference<>());
+        NativeAgentTool cancelled = new DelegatingTool(valid) {
+            @Override
+            public ToolObservation execute(String input, ToolScope scope) {
+                throw new AgentExecutionStoppedException(
+                        AgentExecutionStoppedException.StopReason.CANCELLED);
+            }
+        };
+
+        assertThatThrownBy(() -> registry(List.of(cancelled)).execute(
+                        Role.ANSWER, cancelled.name(), "{}", scope()))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .hasFieldOrPropertyWithValue(
+                        "reason", AgentExecutionStoppedException.StopReason.CANCELLED);
     }
 
     private NativeAgentToolRegistry registry(List<NativeAgentTool> tools) {

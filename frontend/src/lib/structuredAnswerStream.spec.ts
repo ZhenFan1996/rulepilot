@@ -30,8 +30,8 @@ describe('streamStructuredAnswer', () => {
   it('streams player-safe agent activities and validated answer fields without treating them as the final result', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response([
       'event: run\ndata: {"runId":"run-3"}\n\n',
-      'event: activity\ndata: {"sequence":1,"actor":"rulebook_search","stage":"searching_evidence","message":"正在查找直接依据","status":"running","nextAction":"下一步：读取命中规则","latencyMs":0}\n\n',
-      'event: activity\ndata: {"sequence":1,"actor":"rulebook_search","stage":"searching_evidence","message":"已找到直接依据","status":"succeeded","nextAction":"下一步：读取命中规则","latencyMs":84}\n\n',
+      'event: activity\ndata: {"sequence":1,"actor":"rulebook_tool","stage":"read_tool","message":"正在查找直接依据","status":"running","latencyMs":0}\n\n',
+      'event: activity\ndata: {"sequence":1,"actor":"rulebook_tool","stage":"read_tool","message":"已找到直接依据","status":"succeeded","latencyMs":84}\n\n',
       'event: answer_part\ndata: {"field":"verdict","text":"可以。"}\n\n',
       'event: result\ndata: {"answer":{"status":"ANSWERED","shortVerdict":"可以。"}}\n\n',
     ].join(''), { headers: { 'Content-Type': 'text/event-stream' } })))
@@ -44,17 +44,17 @@ describe('streamStructuredAnswer', () => {
     })
 
     expect(activities).toEqual([
-      'rulebook_search:searching_evidence:running',
-      'rulebook_search:searching_evidence:succeeded',
+      'rulebook_tool:read_tool:running',
+      'rulebook_tool:read_tool:succeeded',
     ])
     expect(parts).toEqual(['verdict:可以。'])
     expect(result).toEqual({ answer: { status: 'ANSWERED', shortVerdict: '可以。' } })
   })
 
   it('drops duplicate replayed activity states while accepting a later terminal update', async () => {
-    const activity = 'event: activity\ndata: {"sequence":7,"actor":"answer_validator","stage":"validating_citations","message":"正在校验引用","status":"running","nextAction":"下一步：发布回答","latencyMs":0}\n\n'
+    const activity = 'event: activity\ndata: {"sequence":7,"actor":"answer_agent","stage":"publication_boundary","message":"正在校验引用","status":"running","latencyMs":0}\n\n'
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      `${activity}${activity}event: activity\ndata: {"sequence":7,"actor":"answer_validator","stage":"validating_citations","message":"引用校验完成","status":"succeeded","nextAction":"下一步：发布回答","latencyMs":12}\n\nevent: result\ndata: {}\n\n`,
+      `${activity}${activity}event: activity\ndata: {"sequence":7,"actor":"answer_agent","stage":"publication_boundary","message":"引用校验完成","status":"succeeded","latencyMs":12}\n\nevent: result\ndata: {}\n\n`,
       { headers: { 'Content-Type': 'text/event-stream' } },
     )))
     const statuses: string[] = []
@@ -68,8 +68,8 @@ describe('streamStructuredAnswer', () => {
 
   it('keeps correction and no-progress activity stages instead of silently dropping them', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response([
-      'event: activity\ndata: {"sequence":8,"actor":"answer_validator","stage":"correcting_answer","message":"回答草稿未通过校验，正在修正","status":"running","nextAction":"下一步：继续核对","latencyMs":0}\n\n',
-      'event: activity\ndata: {"sequence":9,"actor":"answer_validator","stage":"evidence_search_stalled","message":"补充证据查找没有新增进展，已停止这一步","status":"rejected","nextAction":"下一步：使用已有证据继续","latencyMs":12}\n\n',
+      'event: activity\ndata: {"sequence":8,"actor":"answer_agent","stage":"repairing_terminal","message":"回答草稿未通过校验，正在修正","status":"running","latencyMs":0}\n\n',
+      'event: activity\ndata: {"sequence":9,"actor":"answer_agent","stage":"agent_stopped","message":"补充证据查找没有新增进展，已停止这一步","status":"rejected","latencyMs":12}\n\n',
       'event: result\ndata: {}\n\n',
     ].join(''), { headers: { 'Content-Type': 'text/event-stream' } })))
     const stages: string[] = []
@@ -79,8 +79,8 @@ describe('streamStructuredAnswer', () => {
     })
 
     expect(stages).toEqual([
-      'correcting_answer:running',
-      'evidence_search_stalled:rejected',
+      'repairing_terminal:running',
+      'agent_stopped:rejected',
     ])
   })
 

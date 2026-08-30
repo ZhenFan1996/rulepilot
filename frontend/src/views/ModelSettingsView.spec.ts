@@ -92,7 +92,7 @@ describe('ModelSettingsView', () => {
     expect(wrapper.text()).toContain('Qwen')
     expect(wrapper.text()).toContain('生成每一章时')
     expect(wrapper.text()).toContain('完整候选、准确错误、JSON 合同和允许身份')
-    expect(wrapper.text()).toContain('只有相同候选与错误再次出现才是无进展')
+    expect(wrapper.text()).toContain('只有相同候选与错误再次出现、无进展或资源停止')
     expect(wrapper.text()).toContain('服务端白名单')
     expect(wrapper.get('input[autocomplete="new-password"]').attributes('type')).toBe('password')
     expect(wrapper.text()).not.toContain('secret')

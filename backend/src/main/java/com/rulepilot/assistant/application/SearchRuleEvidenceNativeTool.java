@@ -44,7 +44,7 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
                 "cursor": {"description": "Opaque nextCursor from the preceding observation for this exact search, or null for the first page.", "type": ["string", "null"], "format": "uuid"}
               },
               "required": ["query", "limit", "sectionTypes", "includeAdjacentContext"],
-              "additionalProperties": false
+              "additionalProperties": true
             }
             """;
 
@@ -285,7 +285,7 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
     private SearchArguments parse(String argumentsJson) {
         try {
             return objectMapper.readerFor(SearchArguments.class)
-                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .readValue(argumentsJson);
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException("search arguments JSON could not be decoded", exception);

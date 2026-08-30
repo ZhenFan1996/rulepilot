@@ -7,6 +7,7 @@ import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonModeNav from '@/components/LessonModeNav.vue'
+import PlayerFailureDetails from '@/components/PlayerFailureDetails.vue'
 import {
   answerFailureRecoveryFor,
   answerFailureRecoveryForHttpStatus,
@@ -17,6 +18,7 @@ import {
 import { groundedLearningPrompt } from '@/lib/groundedLearningPrompt'
 import { useLocale } from '@/lib/locale'
 import { publicLessonTitle } from '@/lib/lessonPresentation'
+import { answerFailureDescriptor } from '@/lib/playerFailureSemantics'
 import { publicCoverUrl } from '@/lib/publicCover'
 
 interface VisualFocus {
@@ -57,12 +59,13 @@ interface PublicLessonResponse {
   lesson: { id: string; status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'; sections: LessonSection[] }
   contentLanguage?: 'zh-CN' | 'en'
   localizationStatus?: 'NOT_PREPARED' | 'PENDING' | 'RUNNING' | 'READY' | 'FAILED'
+  unresolvedTopics?: string[]
 }
 
 interface RuleCitation { heading: string; pageFrom: number; pageTo: number }
 interface PublicAnswer {
   answer: {
-    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_UNAVAILABLE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT' | 'VERSION_CONFLICT'
+    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'RETRIEVAL_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT' | 'VERSION_CONFLICT'
     shortVerdict: string
     explanation: string | null
     citations: RuleCitation[]
@@ -157,13 +160,20 @@ const englishGuideFailed = computed(() => englishGuidePending.value && publicLes
 const publicAnswerRetryGuidance = computed(() => publicAnswerFailureRecovery.value
   ? answerFailureRetrySuitability(publicAnswerFailureRecovery.value, locale.value)
   : '')
+const publicRequestFailureDetails = computed(() => publicAnswerFailureRecovery.value
+  ? answerFailureDescriptor(
+      publicAnswerFailureRecovery.value.code,
+      publicAnswerFailureRecovery.value.canRetryUnchanged,
+      locale.value,
+    )
+  : null)
 const failedPublicQuestionIsUnchanged = computed(() => !!failedPublicQuestionFingerprint.value
   && failedPublicQuestionFingerprint.value === questionFingerprint(publicQuestion.value))
 const publicAnswerContextMustBeRestored = computed(() =>
   publicAnswerFailureRecovery.value?.code === 'answer_context_invalid')
 const publicAnswerNeedsNewContext = computed(() => publicAnswerContextMustBeRestored.value
   || publicAnswerFailureRecovery.value?.code === 'public_lesson_unavailable')
-const failedPublicQuestionRequiresEdit = computed(() => publicAnswerFailureRecovery.value?.canRetryUnchanged === false
+const failedPublicQuestionRequiresEdit = computed(() => publicRequestFailureDetails.value?.category === 'repair-required'
   && failedPublicQuestionIsUnchanged.value)
 const publicAnswerSubmissionBlocked = computed(() => publicAnswerNeedsNewContext.value
   || failedPublicQuestionRequiresEdit.value)
@@ -485,7 +495,7 @@ function isSituationCheck(value: unknown) {
 function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status'] {
   return value === 'ANSWERED' || value === 'ANSWERED_WITH_WARNING'
     || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
-    || value === 'MODEL_UNAVAILABLE' || value === 'INVALID_MODEL_OUTPUT'
+    || value === 'RETRIEVAL_UNAVAILABLE' || value === 'MODEL_UNAVAILABLE' || value === 'INVALID_MODEL_OUTPUT'
     || value === 'MODEL_TIMEOUT' || value === 'VERSION_CONFLICT'
 }
 
@@ -670,6 +680,14 @@ function publicRecoveryCopy(turn: PublicAnswerTurn) {
       action: english ? 'Add detail and retry' : '补充条件后重试',
     }
   }
+  if (turn.answer.answer.status === 'RETRIEVAL_UNAVAILABLE') {
+    return {
+      message: english
+        ? 'The question was not rejected and the answer model was not called. Retry the same question unchanged after rule search recovers.'
+        : '问题本身没有被拒绝，答疑模型也尚未调用；规则检索恢复后可以原样重试同一个问题。',
+      action: english ? 'Reuse the same question' : '保留原问题',
+    }
+  }
   if (turn.answer.answer.status === 'MODEL_UNAVAILABLE') {
     return {
       message: english
@@ -689,9 +707,9 @@ function publicRecoveryCopy(turn: PublicAnswerTurn) {
   if (turn.answer.answer.status === 'INVALID_MODEL_OUTPUT') {
     return {
       message: english
-        ? 'The generated answer failed its structure or citation contract. Do not retry unchanged immediately; review or rephrase the question first.'
-        : '生成的回答未通过结构或引用契约；不建议立即原样重试，请先检查或改写问题。',
-      action: english ? 'Review or rephrase' : '检查或改写问题',
+        ? 'The typed answer stopped at the internal correction boundary. The question itself was not rejected and can be retried unchanged.'
+        : '结构化回答停在内部修正边界；问题本身没有被拒绝，可以原样启动新任务。',
+      action: english ? 'Retry the same question' : '原样重试问题',
     }
   }
   return {
@@ -700,6 +718,15 @@ function publicRecoveryCopy(turn: PublicAnswerTurn) {
       : '问题仍保留在这里；可以先检查或修改，再重新尝试。',
     action: english ? 'Review and try again' : '检查后重试',
   }
+}
+
+function terminalPublicFailureDetails(turn: PublicAnswerTurn) {
+  const status = turn.answer.answer.status
+  const canRetry = status === 'MODEL_UNAVAILABLE'
+    || status === 'MODEL_TIMEOUT'
+    || status === 'RETRIEVAL_UNAVAILABLE'
+    || status === 'INVALID_MODEL_OUTPUT'
+  return answerFailureDescriptor(status, canRetry, locale.value)
 }
 
 async function submitPublicQuestion() {
@@ -1028,6 +1055,13 @@ onUnmounted(() => {
             :role="publicAnswerError ? 'alert' : 'status'"
           >
             <p>{{ publicAnswerError || publicAnswerNotice }}</p>
+            <PlayerFailureDetails
+              v-if="publicAnswerError && publicRequestFailureDetails"
+              class="mt-3"
+              :category="publicRequestFailureDetails.category"
+              :owner="publicRequestFailureDetails.owner"
+              :code="publicRequestFailureDetails.code"
+            />
             <p
               v-if="publicAnswerFailureRecovery"
               data-testid="public-answer-failure-retry-guidance"
@@ -1122,6 +1156,13 @@ onUnmounted(() => {
                   <p v-else-if="turn.answer.answer.status === 'CLARIFICATION_REQUIRED'" class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ turn.answer.answer.clarification || t('public.answer.clarify') }}</p>
                   <div v-if="index === publicAnswerTurns.length - 1 && !publishesConclusion(turn.answer.answer.status)" class="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 text-sm leading-6 text-amber-950">
                     <p v-if="publicRecoveryCopy(turn).message">{{ publicRecoveryCopy(turn).message }}</p>
+                    <PlayerFailureDetails
+                      v-if="turn.answer.answer.status !== 'CLARIFICATION_REQUIRED'"
+                      class="mt-3"
+                      :category="terminalPublicFailureDetails(turn).category"
+                      :owner="terminalPublicFailureDetails(turn).owner"
+                      :code="terminalPublicFailureDetails(turn).code"
+                    />
                     <button type="button" :disabled="publicAnswerLoading" :class="publicRecoveryCopy(turn).message ? 'mt-3' : ''" class="min-h-11 rounded-xl border border-amber-400 bg-paper px-4 font-semibold disabled:opacity-40" @click="preparePublicAnswerReply(turn)">{{ publicRecoveryCopy(turn).action }}</button>
                   </div>
                   <ul v-if="turn.answer.answer.exceptions.length" class="mt-4 list-disc stack-y-xs pl-5 text-sm leading-6 text-ink/65"><li v-for="exception in turn.answer.answer.exceptions" :key="exception">{{ exception }}</li></ul>
@@ -1170,6 +1211,16 @@ onUnmounted(() => {
             </div>
           </form>
         </section>
+
+        <aside
+          v-if="!questionMode && publicLesson.unresolvedTopics?.length"
+          data-testid="public-lesson-unresolved-topics"
+          class="mx-auto mt-6 max-w-4xl rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-6 text-amber-950"
+        >
+          <p class="font-semibold">{{ locale === 'en' ? 'Locally unavailable topics' : '局部未完成主题' }}</p>
+          <p class="mt-1 text-xs">{{ locale === 'en' ? 'Published chapters remain available. These topics were not published because their evidence boundary did not pass.' : '已发布章节继续可用；以下主题因证据边界未通过而没有发布。' }}</p>
+          <ul class="mt-2 list-disc pl-5"><li v-for="topic in publicLesson.unresolvedTopics" :key="topic">{{ topic }}</li></ul>
+        </aside>
 
         <LessonChapterList
           v-else

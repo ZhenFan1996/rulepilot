@@ -4,15 +4,11 @@ import java.util.List;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 
-/** Lets the model decide how this particular game should be taught before retrieval begins. */
+/** Lets one Agent read rule pages, publish chapter plans, and decide when its plan is complete. */
 public interface TeachingOutlineModel {
 
     OutlineDraft organize(OutlineRequest request);
 
-    /**
-     * Gives an adapter an audited budget reservation for each real provider call in a compound planning graph.
-     * Simple implementations remain one-call models through this default boundary.
-     */
     default OutlineDraft organize(OutlineRequest request, ModelCallExecutor calls) {
         return calls.invoke(
                 new ModelCall(
@@ -31,10 +27,7 @@ public interface TeachingOutlineModel {
         static ModelCallExecutor direct() {
             return new ModelCallExecutor() {
                 @Override
-                public <T> T invoke(
-                        ModelCall call,
-                        Supplier<T> invocation,
-                        ToIntFunction<T> outputTokens) {
+                public <T> T invoke(ModelCall call, Supplier<T> invocation, ToIntFunction<T> outputTokens) {
                     return invocation.get();
                 }
             };
@@ -55,23 +48,14 @@ public interface TeachingOutlineModel {
         return Math.max(1, value == null ? 1 : (value.toString().length() + 3) / 4);
     }
 
-    /**
-     * Marks a provider or structured-output failure at the model adapter boundary. Application services may recover
-     * from this failure only when an independently complete source ledger is already available.
-     */
     final class OutlineGenerationException extends RuntimeException {
-
         public OutlineGenerationException(String message, Throwable cause) {
             super(message, cause);
         }
     }
 
-    /**
-     * The immutable source ledger cannot fit the bounded hierarchical planning contract. This is known before any
-     * provider call and therefore must not be treated as a transient model or structured-output failure.
-     */
+    /** A hard provider-capacity boundary, distinct from an Agent deciding that it has enough evidence. */
     final class OutlineCapacityExceededException extends RuntimeException {
-
         public OutlineCapacityExceededException(String message) {
             super(message);
         }
@@ -83,165 +67,44 @@ public interface TeachingOutlineModel {
             String learningGoal,
             String modelConfigurationOwner) {
         public OutlineRequest {
-            learningGoal = normalizeOptional(learningGoal);
             if (pages == null || pages.isEmpty() || pageImages == null) {
                 throw new IllegalArgumentException("teaching outline request is invalid");
             }
             pages = List.copyOf(pages);
             pageImages = List.copyOf(pageImages);
-            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
-                    ? null
-                    : modelConfigurationOwner.strip();
+            learningGoal = optional(learningGoal);
+            modelConfigurationOwner = optional(modelConfigurationOwner);
         }
 
-        public String learningGoalForPrompt() {
-            return learningGoal == null ? "NO_ADDITIONAL_GOAL" : learningGoal;
-        }
-
-        private static String normalizeOptional(String value) {
-            if (value == null || value.isBlank()) return null;
-            return value.strip();
-        }
-
-        public OutlineRequest(
-                List<PageInput> pages,
-                List<PageImageInput> pageImages,
-                String modelConfigurationOwner) {
+        public OutlineRequest(List<PageInput> pages, List<PageImageInput> pageImages, String modelConfigurationOwner) {
             this(pages, pageImages, null, modelConfigurationOwner);
         }
 
-        public OutlineRequest(
-                List<PageInput> pages,
-                List<PageImageInput> pageImages) {
+        public OutlineRequest(List<PageInput> pages, List<PageImageInput> pageImages) {
             this(pages, pageImages, null, null);
         }
 
         public OutlineRequest(List<PageInput> pages) {
             this(pages, List.of(), null, null);
         }
+
+        public String learningGoalForPrompt() {
+            return learningGoal == null ? "NO_ADDITIONAL_GOAL" : learningGoal;
+        }
     }
 
-    record PageInput(
-            int pageNumber,
-            String text,
-            List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
-            List<String> sourceRuleGroupIdentifiers,
-            boolean sourceRuleGroupInventoryComplete,
-            List<VisualRulebookPageCatalogModel.RuleGroupFact> sourceRuleGroupFacts,
-            PageLedgerState pageLedgerState) {
+    /** Full text is revealed only after a read action; availability is an observation, never a coverage verdict. */
+    record PageInput(int pageNumber, String text, boolean available) {
         public PageInput {
-            if (pageNumber < 1 || text == null || text.isBlank() || sourceDependencies == null
-                    || sourceRuleGroupIdentifiers == null
-                    || sourceRuleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank())
-                    || sourceRuleGroupFacts == null
-                    || sourceRuleGroupFacts.stream().anyMatch(java.util.Objects::isNull)
-                    || pageLedgerState == null) {
+            if (pageNumber < 1 || text == null || text.isBlank()) {
                 throw new IllegalArgumentException("rulebook page input is invalid");
             }
-            sourceDependencies = sourceDependencies.stream().distinct().toList();
-            sourceRuleGroupIdentifiers = sourceRuleGroupIdentifiers.stream().map(String::strip).distinct().toList();
-            sourceRuleGroupFacts = sourceRuleGroupFacts.stream().distinct().toList();
-            if (sourceRuleGroupInventoryComplete
-                    && !VisualSourceRuleGroupLedger.hasExactFactBindings(
-                            sourceRuleGroupIdentifiers, sourceRuleGroupFacts)) {
-                throw new IllegalArgumentException("complete page input requires typed rule-group facts");
-            }
-            switch (pageLedgerState) {
-                case VISUAL_EXACT_COMPLETE -> {
-                    if (!sourceRuleGroupInventoryComplete) {
-                        throw new IllegalArgumentException("exact visual page ledger must be complete");
-                    }
-                }
-                case VISUAL_PARTIAL -> {
-                    if (sourceRuleGroupInventoryComplete) {
-                        throw new IllegalArgumentException("partial visual page ledger cannot be complete");
-                    }
-                    if (!VisualSourceRuleGroupLedger.hasExactFactBindings(
-                            sourceRuleGroupIdentifiers, sourceRuleGroupFacts)) {
-                        throw new IllegalArgumentException(
-                                "partial visual page ledger requires exact typed rule-group facts");
-                    }
-                }
-                case VISUAL_EXPLICITLY_UNAVAILABLE -> {
-                    if (sourceRuleGroupInventoryComplete
-                            || !sourceDependencies.isEmpty()
-                            || !sourceRuleGroupIdentifiers.isEmpty()
-                            || !sourceRuleGroupFacts.isEmpty()) {
-                        throw new IllegalArgumentException("unavailable rulebook page cannot carry source claims");
-                    }
-                }
-                case LEGACY_TEXT -> {
-                    // Legacy text inputs intentionally retain their existing source-contract behavior.
-                }
-            }
-        }
-
-        public PageInput(
-                int pageNumber,
-                String text,
-                List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
-                List<String> sourceRuleGroupIdentifiers,
-                boolean sourceRuleGroupInventoryComplete,
-                List<VisualRulebookPageCatalogModel.RuleGroupFact> sourceRuleGroupFacts) {
-            this(
-                    pageNumber,
-                    text,
-                    sourceDependencies,
-                    sourceRuleGroupIdentifiers,
-                    sourceRuleGroupInventoryComplete,
-                    sourceRuleGroupFacts,
-                    PageLedgerState.LEGACY_TEXT);
-        }
-
-        public PageInput(
-                int pageNumber,
-                String text,
-                List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
-                List<String> sourceRuleGroupIdentifiers,
-                boolean sourceRuleGroupInventoryComplete) {
-            this(
-                    pageNumber,
-                    text,
-                    sourceDependencies,
-                    sourceRuleGroupIdentifiers,
-                    sourceRuleGroupInventoryComplete,
-                    List.of(),
-                    PageLedgerState.LEGACY_TEXT);
-        }
-
-        public PageInput(
-                int pageNumber,
-                String text,
-                List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies) {
-            this(
-                    pageNumber,
-                    text,
-                    sourceDependencies,
-                    List.of(),
-                    false,
-                    List.of(),
-                    PageLedgerState.LEGACY_TEXT);
+            text = text.strip();
         }
 
         public PageInput(int pageNumber, String text) {
-            this(
-                    pageNumber,
-                    text,
-                    List.of(),
-                    List.of(),
-                    false,
-                    List.of(),
-                    PageLedgerState.LEGACY_TEXT);
+            this(pageNumber, text, true);
         }
-    }
-
-    /** Typed provenance for the page ledger; planning must never infer this state from prompt prose. */
-    enum PageLedgerState {
-        LEGACY_TEXT,
-        VISUAL_EXACT_COMPLETE,
-        VISUAL_PARTIAL,
-        VISUAL_EXPLICITLY_UNAVAILABLE
     }
 
     record PageImageInput(int pageNumber, String mediaType, byte[] content) {
@@ -263,215 +126,65 @@ public interface TeachingOutlineModel {
             String gameTitle,
             String premise,
             List<TopicDraft> topics,
-            List<SourceCoverageSlotDraft> sourceCoverageSlots,
-            boolean sourceCoverageInventoryComplete,
-            WholeGameUnderstandingDraft wholeGameUnderstanding) {
-
+            List<TopicDependencyDraft> topicDependencies,
+            List<String> unresolvedTopics) {
         public OutlineDraft {
-            if (gameTitle == null || gameTitle.isBlank()
-                    || premise == null || premise.isBlank()) {
+            if (gameTitle == null || gameTitle.isBlank() || premise == null || premise.isBlank()) {
                 throw new IllegalArgumentException("teaching outline identity is invalid");
             }
-            if (sourceCoverageSlots != null && sourceCoverageSlots.stream().anyMatch(java.util.Objects::isNull)) {
-                throw new IllegalArgumentException("teaching source coverage inventory is invalid");
+            if (topics == null || topics.stream().anyMatch(java.util.Objects::isNull)
+                    || topicDependencies == null || topicDependencies.stream().anyMatch(java.util.Objects::isNull)
+                    || unresolvedTopics == null
+                    || unresolvedTopics.stream().anyMatch(topic -> topic == null || topic.isBlank())) {
+                throw new IllegalArgumentException("teaching outline is invalid");
             }
-            topics = topics == null ? List.of() : List.copyOf(topics);
-            sourceCoverageSlots = sourceCoverageSlots == null ? List.of() : List.copyOf(sourceCoverageSlots);
-            wholeGameUnderstanding = wholeGameUnderstanding == null
-                    ? new WholeGameUnderstandingDraft(premise, List.of(), List.of())
-                    : wholeGameUnderstanding;
-        }
-
-        public OutlineDraft(
-                String gameTitle,
-                String premise,
-                List<TopicDraft> topics,
-                List<SourceCoverageSlotDraft> sourceCoverageSlots,
-                boolean sourceCoverageInventoryComplete) {
-            this(gameTitle, premise, topics, sourceCoverageSlots, sourceCoverageInventoryComplete, null);
+            gameTitle = gameTitle.strip();
+            premise = premise.strip();
+            topics = List.copyOf(topics);
+            topicDependencies = List.copyOf(topicDependencies);
+            unresolvedTopics = unresolvedTopics.stream().map(String::strip).distinct().toList();
         }
 
         public OutlineDraft(String gameTitle, String premise, List<TopicDraft> topics) {
-            this(gameTitle, premise, topics, List.of(), false);
+            this(gameTitle, premise, topics, List.of(), List.of());
         }
     }
 
-    /** The shared, source-bound mental model that must exist before chapter generation can fan out. */
-    record WholeGameUnderstandingDraft(
-            String summary,
-            List<GlobalConceptDraft> concepts,
-            List<TopicDependencyDraft> topicDependencies) {
-        public WholeGameUnderstandingDraft {
-            if (summary == null || summary.isBlank()
-                    || concepts == null || concepts.stream().anyMatch(java.util.Objects::isNull)
-                    || topicDependencies == null
-                    || topicDependencies.stream().anyMatch(java.util.Objects::isNull)) {
-                throw new IllegalArgumentException("whole-game teaching understanding is invalid");
-            }
-            concepts = List.copyOf(concepts);
-            topicDependencies = List.copyOf(topicDependencies);
-        }
-    }
-
-    /** One Agent-chosen global concept; labels and dimensions come from the active rulebook, not a fixed checklist. */
-    record GlobalConceptDraft(
-            String conceptId,
-            String label,
-            String explanation,
-            List<String> sourceIdentifiers,
-            List<Integer> sourcePageNumbers,
-            List<String> relatedTopicKeys,
-            List<String> prerequisiteConceptIds) {
-        public GlobalConceptDraft {
-            if (conceptId == null || conceptId.isBlank()
-                    || label == null || label.isBlank()
-                    || explanation == null || explanation.isBlank()
-                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty()
-                    || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
-                            || identifier.isBlank())
-                    || sourcePageNumbers == null || sourcePageNumbers.isEmpty()
-                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
-                    || relatedTopicKeys == null
-                    || relatedTopicKeys.stream().anyMatch(topic -> topic == null || topic.isBlank())
-                    || prerequisiteConceptIds == null
-                    || prerequisiteConceptIds.stream().anyMatch(concept -> concept == null
-                            || concept.isBlank())) {
-                throw new IllegalArgumentException("whole-game teaching concept is invalid");
-            }
-            sourceIdentifiers = sourceIdentifiers.stream().distinct().toList();
-            sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
-            relatedTopicKeys = relatedTopicKeys.stream().distinct().toList();
-            prerequisiteConceptIds = prerequisiteConceptIds.stream().distinct().toList();
-        }
-    }
-
-    /** A pedagogical ordering decision made after the Agent has understood the whole active rulebook. */
     record TopicDependencyDraft(String prerequisiteTopicKey, String dependentTopicKey, String reason) {
         public TopicDependencyDraft {
             if (prerequisiteTopicKey == null || prerequisiteTopicKey.isBlank()
                     || dependentTopicKey == null || dependentTopicKey.isBlank()
                     || reason == null || reason.isBlank()) {
-                throw new IllegalArgumentException("whole-game topic dependency is invalid");
+                throw new IllegalArgumentException("teaching topic dependency is invalid");
             }
+            prerequisiteTopicKey = prerequisiteTopicKey.strip();
+            dependentTopicKey = dependentTopicKey.strip();
+            reason = reason.strip();
         }
-    }
-
-    /** One independently auditable obligation from the active rulebook, before chapter prose is generated. */
-    record SourceCoverageSlotDraft(
-            String slotId,
-            SourceCoverageRole role,
-            String sourceIdentifier,
-            List<Integer> sourcePageNumbers,
-            String ownerTopicKey,
-            String teachingUnitId,
-            SourceCoverageAvailability availability) {
-        public SourceCoverageSlotDraft {
-            teachingUnitId = teachingUnitId == null || teachingUnitId.isBlank() ? slotId : teachingUnitId;
-            if (slotId == null || slotId.isBlank())
-                throw new IllegalArgumentException("teaching source slotId is invalid");
-            if (role == null) throw new IllegalArgumentException("teaching source slot role is missing");
-            if (sourceIdentifier == null || sourceIdentifier.isBlank()
-                    || sourceIdentifier.codePoints().anyMatch(Character::isISOControl))
-                throw new IllegalArgumentException("teaching source slot identifier is invalid");
-            if (sourcePageNumbers == null
-                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1))
-                throw new IllegalArgumentException("teaching source slot pages are invalid");
-            if (ownerTopicKey == null || ownerTopicKey.isBlank())
-                throw new IllegalArgumentException("teaching source slot owner is invalid");
-            if (teachingUnitId == null || teachingUnitId.isBlank())
-                throw new IllegalArgumentException("teaching source slot teachingUnitId is invalid");
-            if (availability == null)
-                throw new IllegalArgumentException("teaching source slot availability is missing");
-            sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
-            if (availability != SourceCoverageAvailability.UNRESOLVED && sourcePageNumbers.isEmpty()) {
-                throw new IllegalArgumentException("sourced teaching coverage slots require a source page");
-            }
-        }
-
-        /**
-         * Compatibility constructor for source ledgers created before teaching units were explicit. Each old slot is
-         * treated as one independently planned unit; new model output may deliberately group closely coupled slots by
-         * returning the same {@code teachingUnitId}.
-         */
-        public SourceCoverageSlotDraft(
-                String slotId,
-                SourceCoverageRole role,
-                String sourceIdentifier,
-                List<Integer> sourcePageNumbers,
-                String ownerTopicKey,
-                SourceCoverageAvailability availability) {
-            this(slotId, role, sourceIdentifier, sourcePageNumbers, ownerTopicKey, slotId, availability);
-        }
-    }
-
-    public enum SourceCoverageRole {
-        SETUP,
-        CORE_LOOP,
-        LEGAL_ACTION,
-        ENDING,
-        SCORING,
-        NECESSARY_EXCEPTION,
-        SUPPORTING_RULE
-    }
-
-    public enum SourceCoverageAvailability {
-        SOURCED,
-        MISSING_EXTERNAL_SOURCE,
-        UNRESOLVED
     }
 
     record TopicDraft(
             String key,
             String title,
             String objective,
-            boolean required,
             boolean visualEvidenceRecommended,
-            List<String> retrievalQueries,
-            List<String> coverageTags,
             List<Integer> sourcePageNumbers) {
         public TopicDraft {
-            if (key == null || key.isBlank()) {
-                throw new IllegalArgumentException("teaching outline topic key must be non-blank lowercase kebab-case");
+            if (key == null || !key.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || title == null || title.isBlank()
+                    || objective == null || objective.isBlank()
+                    || sourcePageNumbers == null
+                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
+                throw new IllegalArgumentException("teaching outline topic is invalid");
             }
-            if (!key.matches("[a-z0-9]+(?:-[a-z0-9]+)*")) {
-                throw new IllegalArgumentException(
-                        "teaching outline topic key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$; rejected key=" + key);
-            }
-            if (title == null || title.isBlank()) {
-                throw new IllegalArgumentException("teaching outline topic title must be non-blank");
-            }
-            if (objective == null || objective.isBlank()) {
-                throw new IllegalArgumentException("teaching outline topic objective must be non-blank");
-            }
-            if (retrievalQueries != null && retrievalQueries.stream()
-                    .anyMatch(query -> query == null || query.isBlank())) {
-                throw new IllegalArgumentException(
-                        "teaching outline topic retrievalQueries must contain only non-blank strings");
-            }
-            if (coverageTags != null && coverageTags.stream()
-                    .anyMatch(tag -> tag == null || tag.isBlank())) {
-                throw new IllegalArgumentException(
-                        "teaching outline topic coverageTags must contain only non-blank strings");
-            }
-            if (sourcePageNumbers != null && sourcePageNumbers.stream()
-                    .anyMatch(pageNumber -> pageNumber == null || pageNumber < 1)) {
-                throw new IllegalArgumentException(
-                        "teaching outline topic sourcePageNumbers must contain only positive page identities");
-            }
-            retrievalQueries = retrievalQueries == null ? List.of() : List.copyOf(retrievalQueries);
-            coverageTags = coverageTags == null ? List.of() : List.copyOf(coverageTags);
-            sourcePageNumbers = sourcePageNumbers == null ? List.of() : sourcePageNumbers.stream().distinct().toList();
+            key = key.strip();
+            title = title.strip();
+            objective = objective.strip();
+            sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
         }
+    }
 
-        public TopicDraft(
-                String key,
-                String title,
-                String objective,
-                boolean required,
-                boolean visualEvidenceRecommended,
-                List<String> retrievalQueries,
-                List<String> coverageTags) {
-            this(key, title, objective, required, visualEvidenceRecommended, retrievalQueries, coverageTags, List.of());
-        }
+    private static String optional(String value) {
+        return value == null || value.isBlank() ? null : value.strip();
     }
 }

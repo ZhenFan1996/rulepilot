@@ -44,10 +44,10 @@ public class SpringAiNativeToolModel implements NativeToolModel {
         ToolCallingChatOptions.Builder<?> optionsBuilder;
         if (chatModel.getDefaultOptions() instanceof OpenAiChatOptions openAiDefaults) {
             OpenAiChatOptions.Builder openAiOptions = openAiDefaults.mutate();
-            // The application loop observes and validates one action result before the
-            // model chooses the next action. Parallel provider calls bypass that ReAct
-            // dependency and can leave later calls based on stale evidence.
-            openAiOptions.parallelToolCalls(false);
+            boolean qwen = "qwen".equals(models.providerFor(modelRole, request.scope().ownerUsername()));
+            // Qwen may propose independent read-only calls together. The application executes and validates the
+            // complete compatible batch, returns every observation, then asks for exactly one next decision.
+            openAiOptions.parallelToolCalls(qwen);
             if (callbacks.isEmpty()) {
                 // A final synthesis turn follows completed tool acquisition. Some
                 // OpenAI-compatible providers otherwise keep emitting a tool name
@@ -57,7 +57,7 @@ public class SpringAiNativeToolModel implements NativeToolModel {
             }
             if (models.usesDeepSeekNonThinkingGeneration(modelRole, request.scope().ownerUsername())) {
                 openAiOptions.extraBody(Map.of("thinking", Map.of("type", "disabled")));
-            } else if ("qwen".equals(models.providerFor(modelRole, request.scope().ownerUsername()))) {
+            } else if (qwen) {
                 openAiOptions.extraBody(Map.of("enable_thinking", false));
             }
             optionsBuilder = openAiOptions;

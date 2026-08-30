@@ -19,6 +19,10 @@ public enum AssistantRunState {
     DEGRADED;
 
     public boolean terminal() {
-        return this == INSUFFICIENT_EVIDENCE || this == COMPLETED || this == FAILED || this == DEGRADED;
+        return this == NEED_CLARIFICATION
+                || this == INSUFFICIENT_EVIDENCE
+                || this == COMPLETED
+                || this == FAILED
+                || this == DEGRADED;
     }
 }

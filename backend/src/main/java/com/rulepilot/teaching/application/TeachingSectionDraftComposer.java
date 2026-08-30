@@ -57,44 +57,14 @@ final class TeachingSectionDraftComposer {
             List<PriorSectionContext> priorSections,
             List<RuleEvidence> evidence,
             UUID assistantRunId,
-            int sectionIndex,
-            boolean includeVisualEvidence) {
+            int sectionIndex) {
         TeachingLessonModel.SectionRequest request = requestFactory.create(
                 plan,
                 planned,
                 priorSections,
-                evidence,
-                includeVisualEvidence,
-                model.supportsVisualEvidence(plan.createdBy()));
-        if (!request.pageImages().isEmpty()) {
-            log.info(
-                    "Teaching topic {} selected visual evidence pages {}",
-                    planned.topicKey(),
-                    request.pageImages().stream()
-                            .map(TeachingLessonModel.PageImageInput::pageNumber)
-                            .toList());
-        }
-        try {
-            return composeUntilAccepted(
-                    plan, planned, evidence, request, assistantRunId, sectionIndex, "CITED_DRAFT_ACCEPTED");
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
-        } catch (RuntimeException visualFailure) {
-            if (!canFallbackToCitedText(request, evidence)) throw visualFailure;
-            log.warn(
-                    "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
-                    planned.topicKey(),
-                    visualFailure.getMessage());
-            recordVisualTextFallback(assistantRunId, planned);
-            return composeUntilAccepted(
-                    plan,
-                    planned,
-                    evidence,
-                    withoutPageImages(request),
-                    assistantRunId,
-                    sectionIndex,
-                    "TEXT_FALLBACK_ACCEPTED");
-        }
+                evidence);
+        return composeUntilAccepted(
+                plan, planned, evidence, request, assistantRunId, sectionIndex, "CITED_DRAFT_ACCEPTED");
     }
 
     private TeachingSectionDraftCandidate composeUntilAccepted(
@@ -114,7 +84,11 @@ final class TeachingSectionDraftComposer {
                 candidate = invokeAgentTurn(runId, planned, request, latestRejection, observationIndex);
             } catch (InvalidOutputException invalidOutput) {
                 CandidateRejection rejection = model.rejectionObservation(
-                        request, invalidOutput.rejectedCandidate(), invalidOutput.validationError());
+                        request,
+                        invalidOutput.rejectedCandidate(),
+                        invalidOutput.code(),
+                        invalidOutput.path(),
+                        invalidOutput.reason());
                 latestRejection = acceptProgressOrFail(
                         runId,
                         planned,
@@ -140,7 +114,12 @@ final class TeachingSectionDraftComposer {
                         ? validationFailure.getClass().getName()
                         : validationFailure.getMessage();
                 CandidateRejection rejection =
-                        model.rejectionObservation(request, candidate, exactError);
+                        model.rejectionObservation(
+                                request,
+                                candidate,
+                                "PUBLICATION_BOUNDARY_REJECTED",
+                                "$",
+                                exactError);
                 latestRejection = acceptProgressOrFail(
                         runId,
                         planned,
@@ -211,29 +190,6 @@ final class TeachingSectionDraftComposer {
         return invocation.draft();
     }
 
-    private boolean canFallbackToCitedText(
-            TeachingLessonModel.SectionRequest request, List<RuleEvidence> evidence) {
-        return !request.pageImages().isEmpty()
-                && evidence.stream().anyMatch(source -> source.contentKind() == RuleEvidence.ContentKind.CANONICAL_TEXT
-                        || source.contentKind() == RuleEvidence.ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS);
-    }
-
-    private TeachingLessonModel.SectionRequest withoutPageImages(TeachingLessonModel.SectionRequest request) {
-        return new TeachingLessonModel.SectionRequest(
-                request.topicKey(),
-                request.title(),
-                request.objective(),
-                request.coverageTags(),
-                request.priorSections(),
-                request.evidence(),
-                List.of(),
-                request.requiredRuleIntents(),
-                request.teachingUnits(),
-                request.modelConfigurationOwner(),
-                request.chapterScope(),
-                request.wholeGameContext());
-    }
-
     private void recordValidation(
             UUID runId,
             TeachingPlan.PlannedSection section,
@@ -248,28 +204,15 @@ final class TeachingSectionDraftComposer {
                 "Teaching draft " + (outcome == ActivityOutcome.SUCCEEDED ? "accepted: " : "rejected: ") + category);
     }
 
-    private void recordVisualTextFallback(UUID runId, TeachingPlan.PlannedSection section) {
-        invocations.record(
-                runId,
-                ActivityType.VALIDATION,
-                "fallbackVisualTeachingSection|" + section.position(),
-                ActivityOutcome.SUCCEEDED,
-                "Visual composition unavailable; continuing with cited text");
-    }
-
     private String profiledSummary(String summary, InputTokenProfile profile) {
-        return "%s [p=%s;f=%d;o=%d;r=%d;e=%d;s=%d;c=%d;v=%d;x=%d]"
+        return "%s [p=%s;contract=%d;evidence=%d;continuity=%d;revision=%d]"
                 .formatted(
                         summary,
                         profile.providerId(),
-                        profile.fixedContractTokens(),
-                        profile.objectiveTokens(),
-                        profile.requiredRuleTokens(),
+                        profile.contractTokens(),
                         profile.evidenceTokens(),
-                        profile.chapterScopeTokens(),
                         profile.continuityTokens(),
-                        profile.revisionTokens(),
-                        profile.otherRequestTokens());
+                        profile.revisionTokens());
     }
 
     private int outputTokens(TeachingLessonModel.SectionRequest request, ModelInvocation invocation) {

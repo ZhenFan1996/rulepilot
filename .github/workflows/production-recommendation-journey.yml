@@ -323,8 +323,9 @@ jobs:
           case "$runner_path_file" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
           reset_runner_command_file() {
             local target=$1
-            /usr/bin/rm -f -- "$target"
-            /usr/bin/install -m 600 /dev/null "$target"
+            test -f "$target" && test ! -L "$target"
+            /usr/bin/truncate -s 0 -- "$target"
+            /usr/bin/chmod 600 -- "$target"
           }
           cleanup_credentials() {
             /usr/bin/rm -f -- "$credential_file"
@@ -346,12 +347,6 @@ jobs:
 
           mkdir -p "$artifact_dir"
           chmod 700 "$artifact_dir"
-          jq -n \
-            --arg testedSha "$RULEPILOT_RECOMMENDATION_TESTED_SHA" \
-            --arg activeReleaseId "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
-            '{generatedAt:(now | todate),completed:false,stage:"preflight",testedSha:$testedSha,activeReleaseId:$activeReleaseId}' \
-            > "$raw_report"
-
           node_binary=$(command -v node)
           case "$node_binary" in /usr/bin/node|/usr/local/bin/node) ;; *) exit 1 ;; esac
           cd "$workspace"
@@ -404,7 +399,6 @@ jobs:
           RULEPILOT_RECOMMENDATION_MAXIMUM_DURATION_MINUTES: ${{ inputs.maximum_duration_minutes }}
           RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY: ${{ inputs.maximum_complexity }}
           RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE: ${{ inputs.expected_game_type }}
-          RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: ${{ inputs.expected_title_term }}
           RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER: ${{ inputs.expected_provider }}
           RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: ${{ inputs.expected_model }}
         run: |
@@ -425,6 +419,7 @@ jobs:
             mkdir -m 700 "$artifact_dir"
           fi
           chmod 700 "$artifact_dir"
+
           temporary_report=
           sanitization_complete=false
           cleanup_untrusted_reports() {
@@ -445,6 +440,7 @@ jobs:
           expected_game_type="$RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE"
           expected_provider="$RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER"
           expected_model="$RULEPILOT_RECOMMENDATION_EXPECTED_MODEL"
+
           [[ "$tested_sha" =~ ^[0-9a-f]{40}$ ]]
           if [[ "$active_release_id" != not-observed ]]; then
             [[ "$active_release_id" =~ ^${tested_sha}-[0-9]+-[0-9]+$ ]]
@@ -452,34 +448,32 @@ jobs:
           [[ "$requested_card_count" =~ ^[0-9]+$ ]]
           [[ "$expected_player_count" =~ ^[0-9]+$ ]]
           [[ "$maximum_duration_minutes" =~ ^[0-9]+$ ]]
-          [[ "$maximum_complexity" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]
-          (( requested_card_count >= 1 && requested_card_count <= 10 ))
-          (( expected_player_count >= 1 && expected_player_count <= 20 ))
-          (( maximum_duration_minutes >= 1 && maximum_duration_minutes <= 1440 ))
-          jq --exit-status --null-input --arg value "$maximum_complexity" \
-            '($value | tonumber) > 0 and ($value | tonumber) <= 5' >/dev/null
+          [[ "$maximum_complexity" =~ ^[0-9]+([.][0-9]+)?$ ]]
+          (( requested_card_count >= 1 && requested_card_count <= 20 ))
+          (( expected_player_count >= 1 && expected_player_count <= 100 ))
+          (( maximum_duration_minutes >= 1 && maximum_duration_minutes <= 10080 ))
+          jq --exit-status -n --arg value "$maximum_complexity" \
+            '$value | tonumber | . > 0 and . <= 5' > /dev/null
           case "$expected_game_type" in
             abstract|customizable|children|family|party|strategy|thematic|war|expansion) ;;
-            *) echo "Invalid expected BGG game type" >&2; exit 1 ;;
+            *) exit 1 ;;
           esac
-          [[ "$expected_provider" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]]
-          [[ "$expected_model" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]]
-          normalized_expected_title_term=$(/usr/bin/python3 -c \
-            'import os, unicodedata; print(unicodedata.normalize("NFKC", os.environ["RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM"]).strip().lower(), end="")')
-          expected_title_term_sha256=$(printf '%s' "$normalized_expected_title_term" \
-            | sha256sum | awk '{print $1}')
+          [[ "$expected_provider" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$ ]]
+          [[ "$expected_model" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$ ]]
 
-          if [[ ! -e "$raw_report" ]]; then
-            jq -n \
-              --arg testedSha "$tested_sha" \
-              --arg activeReleaseId "$active_release_id" \
-              '{generatedAt:(now | todate),completed:false,stage:"preflight-failed",
-                testedSha:$testedSha,activeReleaseId:$activeReleaseId}' \
-              > "$raw_report"
+          raw_available=false
+          if [[ -f "$raw_report" && ! -L "$raw_report" ]]; then
+            raw_size=$(wc -c < "$raw_report" | tr -d '[:space:]')
+            if [[ "$raw_size" =~ ^[0-9]+$ ]] && (( raw_size <= 1048576 )) \
+                && jq --exit-status 'type == "object"' "$raw_report" > /dev/null 2>&1; then
+              raw_available=true
+            fi
           fi
-          test -f "$raw_report" && test ! -L "$raw_report"
-          raw_report_size=$(wc -c < "$raw_report" | tr -d ' ')
-          (( raw_report_size > 0 && raw_report_size <= 1048576 ))
+          if [[ "$raw_available" != true ]]; then
+            rm -f "$raw_report"
+            printf 'null\n' > "$raw_report"
+            chmod 600 "$raw_report"
+          fi
 
           jq --exit-status --compact-output \
             --arg testedSha "$tested_sha" \
@@ -487,595 +481,398 @@ jobs:
             --arg expectedProvider "$expected_provider" \
             --arg expectedModel "$expected_model" \
             --arg expectedGameType "$expected_game_type" \
-            --arg expectedTitleTermSha256 "$expected_title_term_sha256" \
             --argjson requestedCardCount "$requested_card_count" \
             --argjson expectedPlayerCount "$expected_player_count" \
             --argjson maximumDurationMinutes "$maximum_duration_minutes" \
             --argjson maximumComplexity "$maximum_complexity" '
-            def is_boolean: type == "boolean";
-            def is_boolean_or_null: . == null or is_boolean;
-            def is_finite_number:
-              type == "number" and ((. - .) == 0);
-            def is_integer_between($minimum; $maximum):
-              is_finite_number and floor == . and . >= $minimum and . <= $maximum;
-            def is_integer_or_null($minimum; $maximum):
-              . == null or is_integer_between($minimum; $maximum);
-            def is_non_negative_integer:
-              is_finite_number and floor == . and . >= 0;
-            def is_positive_integer:
-              is_non_negative_integer and . >= 1;
-            def is_non_negative_integer_or_null:
-              . == null or is_non_negative_integer;
-            def is_number_or_null($minimum; $maximum):
-              . == null or (is_finite_number and . >= $minimum and . <= $maximum);
-            def is_enum_or_null($values):
-              . as $value
-              | $value == null
-                or (($value | type) == "string" and ($values | index($value)) != null);
-            def is_uuid_or_null:
-              . == null
-                or (type == "string"
-                  and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"));
-            def is_sha256_or_null:
-              . == null or (type == "string" and test("^[0-9a-f]{64}$"));
-            def is_generated_at:
-              type == "string"
-                and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$");
-            def is_model_or_null($provider; $model):
-              if . == null then true
-              elif type != "object" then false
-              else (keys | sort) == ["model", "provider"]
-                and .provider == $provider
-                and .model == $model
-              end;
-            def is_content_digest_or_null:
-              if . == null then true
-              elif type != "object" then false
-              else (keys | sort) == [
-                  "assistantMessageCharacterCount",
-                  "assistantMessageSha256",
-                  "cardReplyPartCount",
-                  "cardReplyPartsCharacterCount",
-                  "cardReplyPartsSha256"
-                ]
-                and (.assistantMessageSha256 | is_sha256_or_null) and .assistantMessageSha256 != null
-                and (.cardReplyPartsSha256 | is_sha256_or_null) and .cardReplyPartsSha256 != null
-                and (.assistantMessageCharacterCount | is_integer_between(0; 10000000))
-                and (.cardReplyPartsCharacterCount | is_integer_between(0; 10000000))
-                and (.cardReplyPartCount | is_integer_between(0; 10000))
-              end;
-            def is_integer_array($minimum; $maximum; $maximum_length):
-              type == "array"
-                and length <= $maximum_length
-                and all(.[]; is_integer_between($minimum; $maximum));
-            def is_duration_array:
-              type == "array"
-                and all(.[]; is_integer_between(0; 3600000));
-            def is_progress_stage_or_null:
-              is_enum_or_null(["understanding_request", "selecting_tools", "searching_bgg_catalog",
-                "reading_game_details", "discovering_candidates", "verifying_bgg_candidates",
-                "researching_game_fit", "composing_response"]);
-            def is_progress_phase_or_null:
-              is_enum_or_null(["started", "completed", "retrying", "failed"]);
-            def is_progress_action_or_null:
-              is_enum_or_null(["understand_request", "choose_next_action", "reply_to_user", "ask_user",
-                "resolve_bgg_game", "inspect_candidate_titles", "browse_bgg_catalog",
-                "discover_public_candidates", "lookup_bgg_games", "research_game_fit",
-                "compare_candidates", "report_no_match", "recommend_games"]);
-            def has_keys($required):
-              . as $object
-              | all($required[]; . as $key | $object | has($key));
-            def is_safe_official_mutation_path:
-              type == "string"
-                and test("^(POST|PUT|PATCH|DELETE) /api/v1/documents/official-imports(/[0-9a-f-]+/teaching-ensure-current)?$");
-            def completed_recommendation_acceptance($raw):
-              $raw.publicReleaseId == $activeReleaseId
-                and $raw.publicReleaseSha == $testedSha
-                and $raw.publicReleaseNoStore == true
-                and $raw.routeStayedOnDiscover == true
-                and $raw.recommendationRequestMessageMatched == true
-                and $raw.recommendationProfileHardConstraintsMatched == true
-                and $raw.recommendationCardsHardConstraintsMatched == true
-                and $raw.recommendationFitClaimsHardConstraintsMatched == true
-                and $raw.recommendationComplexityHardConstraintsMatched == true
-                and $raw.recommendationGameTypeHardConstraintsMatched == true
-                and $raw.recommendationEvidenceBoundReplyParts == true
-                and $raw.recommendationPersistedCardCount == $requestedCardCount
-                and $raw.recommendationShortfallCount == 0
-                and $raw.recommendationOutcome == "recommendations"
-                and $raw.recommendationTerminalCategory == "RECOMMENDATIONS"
-                and $raw.recommendationTerminalObserved == true
-                and $raw.recommendationClickCaptured == true
-                and ($raw.recommendationFirstProgressMs | is_integer_between(0; 3000))
-                and $raw.recommendationSseTerminalCategory == "RESULT"
-                and ($raw.recommendationSseTerminalMs | is_integer_between(0; 3600000))
-                and ($raw.recommendationSseResultMs | is_integer_between(0; 3600000))
-                and $raw.recommendationSseErrorCode == null
-                and $raw.recommendationSseFailureBoundary == null
-                and $raw.recommendationSseFailureReason == null
-                and ($raw.recommendationPersistedTerminalMs | is_integer_between(0; 3600000))
-                and ($raw.recommendationRenderedSlateMs | is_integer_between(0; 20000))
-                and ($raw.recommendationElapsedMs | is_integer_between(0; 20000))
-                and $raw.recommendationSloMet == true
-                and $raw.recommendationObservationWindowMs == 155000
-                and $raw.recommendationCanaryFailureClass == null
-                and $raw.recommendationLastSessionProcessing == false
-                and $raw.recommendationStreamProbeFailed == false
-                and ($raw.recommendationPublishedBggIds | length) == $requestedCardCount
-                and (($raw.recommendationPublishedBggIds | unique | length) == $requestedCardCount)
-                and ($raw.recommendationAssistantReplyCharacterCount | is_integer_between(80; 10000000))
-                and ($raw.recommendationRenderedReplyCharacterCount | is_integer_between(80; 10000000))
-                and ($raw.recommendationCardReplyPartCount | is_integer_between($requestedCardCount; 10000))
-                and $raw.recommendationUsableCardCount == $requestedCardCount
-                and $raw.recommendationUsableReplyPartCount == $raw.recommendationCardReplyPartCount
-                and $raw.recommendationAssistantReplyUsable == true
-                and $raw.recommendationAllCardsUsable == true
-                and $raw.recommendationAllReplyPartsUsable == true
-                and $raw.recommendationSseContentDigest != null
-                and $raw.recommendationPersistedContentDigest != null
-                and $raw.recommendationRenderedContentDigest != null
-                and $raw.recommendationSsePersistedContentConsistent == true
-                and $raw.recommendationPersistedDomContentConsistent == true
-                and ($raw.recommendationCompletedWork | length) >= 1
-                and $raw.recommendationModelBeforeRequest != null
-                and $raw.recommendationModelAfterRequest != null
-                and $raw.recommendationModelProvider == $expectedProvider
-                and $raw.recommendationModelName == $expectedModel
-                and ($raw.recommendationModelCalls | is_positive_integer)
-                and ($raw.recommendationModelCallElapsedMs | length) == $raw.recommendationModelCalls
-                and ($raw.recommendationAgentElapsedMs | is_integer_between(0; 3600000))
-                and ($raw.recommendationCatalogCalls | is_positive_integer)
-                and ($raw.recommendationWebResearchCalls | is_non_negative_integer)
-                and $raw.recommendationFailureBoundary == null
-                and $raw.recommendationFailureReason == null
-                and ($raw.handoffSelectedBggId | is_integer_between(1; 1000000000))
-                and $raw.handoffActionClicked == true
-                and $raw.handoffSurfaceVisible == true
-                and $raw.handoffImportRequestedBggId == $raw.handoffSelectedBggId
-                and ($raw.handoffImportResponseStatus | is_integer_between(200; 299))
-                and $raw.handoffImportResponseOk == true
-                and $raw.handoffImportResponseBggId == $raw.handoffSelectedBggId
-                and $raw.handoffImportedGameId != null
-                and $raw.handoffImportedEditionId != null
-                and $raw.handoffEditionBelongsToImportedGame == true
-                and ($raw.handoffImportElapsedMs | is_integer_between(0; 3600000))
-                and $raw.handoffTerminalVisible == true
-                and ($raw.handoffElapsedMs | is_integer_between(0; 3600000))
-                and $raw.handoffRulebookImportStarted == false
-                and (if $raw.handoffRestoredExistingJourney then
-                    $raw.handoffTerminalCategory == "RESTORED_EXISTING"
-                      and $raw.handoffRestoredImportJobId != null
-                      and $raw.handoffRestoredDocumentVersionId != null
-                      and $raw.handoffRestoredPreparationRunId != null
-                      and $raw.handoffFreshnessRequestPreparationRunMatched == true
-                      and $raw.handoffFreshnessResponseStatus == 202
-                      and $raw.handoffFreshnessResponseIdentityMatched == true
-                      and $raw.handoffFreshnessResponseEligible == true
-                      and ($raw.handoffOfficialMutationAttemptedPaths | length) == 1
-                      and ($raw.handoffOfficialMutationAttemptedPaths[0]
-                        | test("^POST /api/v1/documents/official-imports/[0-9a-f-]+/teaching-ensure-current$"))
-                      and $raw.handoffOfficialMutationBlocked == false
-                      and $raw.handoffStoppedAtDiscoveryBoundary == false
-                  else
-                    ($raw.handoffTerminalCategory == "REVIEW" or $raw.handoffTerminalCategory == "UNAVAILABLE")
-                      and $raw.handoffDiscoveryRequestedEditionId == $raw.handoffImportedEditionId
-                      and ($raw.handoffDiscoveryResponseStatus | is_integer_between(200; 299))
-                      and $raw.handoffDiscoveryResponseOk == true
-                      and $raw.handoffDiscoveryIdentityEditionId == $raw.handoffImportedEditionId
-                      and $raw.handoffDiscoveryIdentityMatched == true
-                      and (if $raw.handoffTerminalCategory == "REVIEW" then
-                          $raw.handoffDiscoveryConfigured == true
-                            and ($raw.handoffDiscoveryCandidateCount | is_integer_between(1; 10000))
-                            and ($raw.handoffImportableCandidateCount | is_integer_between(1; 10000))
-                            and $raw.handoffImportableCandidateFound == true
-                            and $raw.handoffDiscoveryCandidateIdentitySha256 != null
-                            and $raw.handoffRenderedCandidateIdentitySha256
-                              == $raw.handoffDiscoveryCandidateIdentitySha256
-                            and $raw.handoffCandidateIdentityOrderConsistent == true
-                        else
-                          $raw.handoffDiscoveryCandidateCount == 0
-                            and $raw.handoffImportableCandidateCount == 0
-                            and $raw.handoffImportableCandidateFound == false
-                        end)
-                      and ($raw.handoffOfficialMutationAttemptedPaths | length) == 0
-                      and $raw.handoffOfficialMutationBlocked == false
-                      and $raw.handoffStoppedAtDiscoveryBoundary == true
-                  end)
-                and $raw.rawModelOutputCaptured == false;
-            def preflight_report($raw): {
-              reportSchemaVersion: 1,
-              generatedAt: $raw.generatedAt,
-              completed: false,
-              stage: "preflight-failed",
-              testedSha: $testedSha,
-              activeReleaseSha: $testedSha,
-              activeReleaseId: $activeReleaseId,
-              recommendationRequestedCardCount: $requestedCardCount,
-              recommendationExpectedPlayerCount: $expectedPlayerCount,
-              recommendationMaximumDurationMinutes: $maximumDurationMinutes,
-              recommendationMaximumComplexity: $maximumComplexity,
-              recommendationExpectedGameType: $expectedGameType,
-              recommendationProfileHardConstraintsMatched: null,
-              recommendationCardsHardConstraintsMatched: null,
-              recommendationFitClaimsHardConstraintsMatched: null,
-              recommendationComplexityHardConstraintsMatched: null,
-              recommendationGameTypeHardConstraintsMatched: null,
-              recommendationExpectedModel: {provider: $expectedProvider, model: $expectedModel},
-              recommendationModelCalls: null,
-              recommendationModelCallElapsedMs: [],
-              handoffTerminalCategory: "NOT_OBSERVED",
-              handoffRestoredExistingJourney: false,
-              handoffRestoredImportJobId: null,
-              handoffRestoredDocumentVersionId: null,
-              handoffRestoredPreparationRunId: null,
-              rawModelOutputCaptured: false
-            };
-            . as $raw
-            | if ($raw.stage == "preflight" or $raw.stage == "preflight-failed") then
-                if (($raw | type) == "object"
-                  and ($raw.generatedAt | is_generated_at)
-                  and $raw.completed == false
-                  and $raw.testedSha == $testedSha
-                  and $raw.activeReleaseId == $activeReleaseId)
-                then preflight_report($raw)
-                else error("invalid preflight recommendation report")
-                end
-              else
-                if (($raw | type) == "object"
-                  and ($raw | has_keys([
-                    "generatedAt", "completed", "stage", "testedSha", "activeReleaseSha", "activeReleaseId",
-                    "publicReleaseId", "publicReleaseSha", "publicReleaseNoStore", "routeStayedOnDiscover",
-                    "recommendationRequestedCardCount", "recommendationExpectedPlayerCount",
-                    "recommendationMaximumDurationMinutes", "recommendationMaximumComplexity",
-                    "recommendationExpectedGameType", "recommendationRequestMessageMatched",
-                    "recommendationProfileHardConstraintsMatched", "recommendationCardsHardConstraintsMatched",
-                    "recommendationFitClaimsHardConstraintsMatched",
-                    "recommendationComplexityHardConstraintsMatched",
-                    "recommendationGameTypeHardConstraintsMatched", "recommendationEvidenceBoundReplyParts",
-                    "recommendationPersistedCardCount", "recommendationShortfallCount", "recommendationOutcome",
-                    "recommendationTerminalCategory", "recommendationTerminalObserved", "recommendationClickCaptured",
-                    "recommendationFirstProgressMs", "recommendationSseTerminalCategory",
-                    "recommendationSseTerminalMs", "recommendationSseResultMs", "recommendationSseErrorCode",
-                    "recommendationSseFailureBoundary", "recommendationSseFailureReason",
-                    "recommendationPersistedTerminalMs",
-                    "recommendationRenderedSlateMs", "recommendationElapsedMs", "recommendationSloMet",
-                    "recommendationObservationWindowMs", "recommendationCanaryFailureClass",
-                    "recommendationLastSessionProcessing", "recommendationProgressEvents",
-                    "recommendationLastProgressStage", "recommendationLastProgressPhase",
-                    "recommendationLastProgressAction", "recommendationLastProgressServerElapsedMs",
-                    "recommendationLastProgressBrowserReceivedMs", "recommendationStreamProbeFailed",
-                    "recommendationPublishedBggIds", "recommendationAssistantReplyCharacterCount",
-                    "recommendationRenderedReplyCharacterCount", "recommendationCardReplyPartCount",
-                    "recommendationUsableCardCount", "recommendationUsableReplyPartCount",
-                    "recommendationAssistantReplyUsable", "recommendationAllCardsUsable",
-                    "recommendationAllReplyPartsUsable", "recommendationSseContentDigest",
-                    "recommendationPersistedContentDigest", "recommendationRenderedContentDigest",
-                    "recommendationSsePersistedContentConsistent", "recommendationPersistedDomContentConsistent",
-                    "recommendationCompletedWork", "recommendationExpectedModel",
-                    "recommendationModelBeforeRequest", "recommendationModelAfterRequest",
-                    "recommendationModelProvider", "recommendationModelName", "recommendationModelCalls",
-                    "recommendationModelCallElapsedMs", "recommendationAgentElapsedMs",
-                    "recommendationModelElapsedShare", "recommendationCatalogCalls",
-                    "recommendationWebResearchCalls", "recommendationFailureBoundary",
-                    "recommendationFailureReason",
-                    "expectedRecommendationTitleTermSha256", "handoffSelectedBggId", "handoffActionClicked",
-                    "handoffSurfaceVisible", "handoffImportRequestedBggId", "handoffImportResponseStatus",
-                    "handoffImportResponseOk", "handoffImportResponseBggId", "handoffImportedGameId",
-                    "handoffImportedEditionId", "handoffEditionBelongsToImportedGame", "handoffImportElapsedMs",
-                    "handoffDiscoveryRequestedEditionId", "handoffDiscoveryResponseStatus",
-                    "handoffDiscoveryResponseOk", "handoffDiscoveryIdentityEditionId",
-                    "handoffDiscoveryIdentityMatched", "handoffDiscoveryConfigured",
-                    "handoffDiscoveryCandidateCount", "handoffImportableCandidateCount",
-                    "handoffImportableCandidateFound", "handoffDiscoveryCandidateIdentitySha256",
-                    "handoffRenderedCandidateIdentitySha256", "handoffCandidateIdentityOrderConsistent",
-                    "handoffDiscoveryElapsedMs", "handoffTerminalCategory", "handoffTerminalVisible",
-                    "handoffElapsedMs", "handoffRulebookImportStarted", "handoffRestoredExistingJourney",
-                    "handoffRestoredImportJobId", "handoffRestoredDocumentVersionId",
-                    "handoffRestoredPreparationRunId", "handoffFreshnessRequestPreparationRunMatched",
-                    "handoffFreshnessResponseStatus", "handoffFreshnessResponseIdentityMatched",
-                    "handoffFreshnessResponseEligible", "handoffOfficialMutationAttemptedPaths",
-                    "handoffOfficialMutationBlocked", "handoffStoppedAtDiscoveryBoundary", "rawModelOutputCaptured"
-                  ]))
-                  and $activeReleaseId != "not-observed"
-                  and ($raw.generatedAt | is_generated_at)
-                  and ($raw.completed | is_boolean)
-                  and ($raw.stage | IN("login", "recommendation", "recommendation-stream-error",
-                    "player-visible-slate", "recommendation-to-rulebook-handoff", "completed"))
-                  and (($raw.completed and $raw.stage == "completed")
-                    or (($raw.completed | not) and $raw.stage != "completed"))
-                  and $raw.testedSha == $testedSha
-                  and $raw.activeReleaseSha == $testedSha
-                  and $raw.activeReleaseId == $activeReleaseId
-                  and ($raw.publicReleaseId == null or $raw.publicReleaseId == $activeReleaseId)
-                  and ($raw.publicReleaseSha == null or $raw.publicReleaseSha == $testedSha)
-                  and (($raw.publicReleaseId == null) == ($raw.publicReleaseSha == null))
-                  and ($raw.publicReleaseNoStore | is_boolean_or_null)
-                  and ($raw.routeStayedOnDiscover | is_boolean)
-                  and $raw.recommendationRequestedCardCount == $requestedCardCount
-                  and $raw.recommendationExpectedPlayerCount == $expectedPlayerCount
-                  and $raw.recommendationMaximumDurationMinutes == $maximumDurationMinutes
-                  and $raw.recommendationMaximumComplexity == $maximumComplexity
-                  and $raw.recommendationExpectedGameType == $expectedGameType
-                  and ($raw.recommendationRequestMessageMatched | is_boolean)
-                  and ($raw.recommendationProfileHardConstraintsMatched | is_boolean_or_null)
-                  and ($raw.recommendationCardsHardConstraintsMatched | is_boolean_or_null)
-                  and ($raw.recommendationFitClaimsHardConstraintsMatched | is_boolean_or_null)
-                  and ($raw.recommendationComplexityHardConstraintsMatched | is_boolean_or_null)
-                  and ($raw.recommendationGameTypeHardConstraintsMatched | is_boolean_or_null)
-                  and ($raw.recommendationEvidenceBoundReplyParts | is_boolean_or_null)
-                  and ($raw.recommendationPersistedCardCount | is_integer_or_null(0; 10))
-                  and ($raw.recommendationShortfallCount | is_integer_or_null(0; 10))
-                  and ($raw.recommendationOutcome
-                    | is_enum_or_null(["conversation", "needs_clarification", "recommendations", "no_match", "unavailable"]))
-                  and ($raw.recommendationTerminalCategory
-                    | IN("NOT_OBSERVED", "RECOMMENDATIONS", "NON_RECOMMENDATION", "TERMINAL_EVIDENCE_GAP",
-                      "LIFECYCLE_DEADLINE", "SESSION_READ_FAILURE", "STREAM_ERROR"))
-                  and ($raw.recommendationTerminalObserved | is_boolean)
-                  and ($raw.recommendationClickCaptured | is_boolean)
-                  and ($raw.recommendationFirstProgressMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationSseTerminalCategory | IN("NOT_OBSERVED", "RESULT", "ERROR"))
-                  and ($raw.recommendationSseTerminalMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationSseResultMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationSseErrorCode
-                    | is_enum_or_null(["recommendation_unavailable", "not_found", "revision_conflict",
-                      "turn_id_reused", "turn_in_progress", "concurrent_turn",
-                      "invalid_stream_error", "unknown_stream_error"]))
-                  and ($raw.recommendationSseFailureBoundary
-                    | is_enum_or_null(["time_budget", "model_response", "service_configuration",
-                      "action_budget", "publication_boundary", "service_failure"]))
-                  and ($raw.recommendationSseFailureReason
-                    | is_enum_or_null(["time_limit", "resource_budget_exhausted", "model_not_configured",
-                      "provider_protocol_invalid", "provider_output_truncated", "empty_model_response",
-                      "repeated_incompatible_actions", "repeated_invalid_action", "publication_rejected",
-                      "provider_call_failed", "service_failure"]))
-                  and ($raw.recommendationPersistedTerminalMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationRenderedSlateMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationElapsedMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationSloMet | is_boolean_or_null)
-                  and $raw.recommendationObservationWindowMs == 155000
-                  and ($raw.recommendationCanaryFailureClass
-                    | is_enum_or_null(["interaction_slo", "product_terminal", "terminal_evidence_gap",
-                      "lifecycle_deadline", "observer_failure"]))
-                  and ($raw.recommendationLastSessionProcessing | is_boolean_or_null)
-                  and (($raw.recommendationProgressEvents | type) == "array"
-                    and ($raw.recommendationProgressEvents | length) <= 100)
-                  and ($raw.recommendationLastProgressStage | is_progress_stage_or_null)
-                  and ($raw.recommendationLastProgressPhase | is_progress_phase_or_null)
-                  and ($raw.recommendationLastProgressAction | is_progress_action_or_null)
-                  and ($raw.recommendationLastProgressServerElapsedMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationLastProgressBrowserReceivedMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationStreamProbeFailed | is_boolean)
-                  and ($raw.recommendationPublishedBggIds | is_integer_array(1; 1000000000; 10))
-                  and ($raw.recommendationAssistantReplyCharacterCount | is_integer_or_null(0; 10000000))
-                  and ($raw.recommendationRenderedReplyCharacterCount | is_integer_or_null(0; 10000000))
-                  and ($raw.recommendationCardReplyPartCount | is_integer_or_null(0; 10000))
-                  and ($raw.recommendationUsableCardCount | is_integer_between(0; 10000))
-                  and ($raw.recommendationUsableReplyPartCount | is_integer_between(0; 10000))
-                  and ($raw.recommendationAssistantReplyUsable | is_boolean)
-                  and ($raw.recommendationAllCardsUsable | is_boolean)
-                  and ($raw.recommendationAllReplyPartsUsable | is_boolean)
-                  and ($raw.recommendationSseContentDigest | is_content_digest_or_null)
-                  and ($raw.recommendationPersistedContentDigest | is_content_digest_or_null)
-                  and ($raw.recommendationRenderedContentDigest | is_content_digest_or_null)
-                  and ($raw.recommendationSsePersistedContentConsistent | is_boolean_or_null)
-                  and ($raw.recommendationPersistedDomContentConsistent | is_boolean_or_null)
-                  and (($raw.recommendationCompletedWork | type) == "array"
-                    and ($raw.recommendationCompletedWork | length) <= 64
-                    and all($raw.recommendationCompletedWork[]; type == "string" and length <= 128))
-                  and ($raw.recommendationExpectedModel | is_model_or_null($expectedProvider; $expectedModel))
-                  and $raw.recommendationExpectedModel != null
-                  and ($raw.recommendationModelBeforeRequest | is_model_or_null($expectedProvider; $expectedModel))
-                  and ($raw.recommendationModelAfterRequest | is_model_or_null($expectedProvider; $expectedModel))
-                  and ($raw.recommendationModelProvider == null
-                    or $raw.recommendationModelProvider == $expectedProvider)
-                  and ($raw.recommendationModelName == null or $raw.recommendationModelName == $expectedModel)
-                  and ($raw.recommendationModelCalls | is_non_negative_integer_or_null)
-                  and ($raw.recommendationModelCallElapsedMs | is_duration_array)
-                  and (($raw.recommendationModelCalls == null
-                      and ($raw.recommendationModelCallElapsedMs | length) == 0)
-                    or ($raw.recommendationModelCalls != null
-                      and ($raw.recommendationModelCallElapsedMs | length) == $raw.recommendationModelCalls))
-                  and ($raw.recommendationAgentElapsedMs | is_integer_or_null(0; 3600000))
-                  and ($raw.recommendationModelElapsedShare | is_number_or_null(0; 1000))
-                  and ($raw.recommendationCatalogCalls | is_non_negative_integer_or_null)
-                  and ($raw.recommendationWebResearchCalls | is_non_negative_integer_or_null)
-                  and ($raw.recommendationFailureBoundary
-                    | is_enum_or_null(["time_budget", "model_response", "service_configuration",
-                      "action_budget", "publication_boundary", "service_failure"]))
-                  and ($raw.recommendationFailureReason
-                    | is_enum_or_null(["time_limit", "resource_budget_exhausted", "model_not_configured",
-                      "provider_protocol_invalid", "provider_output_truncated", "empty_model_response",
-                      "repeated_incompatible_actions", "repeated_invalid_action", "publication_rejected",
-                      "provider_call_failed", "service_failure"]))
-                  and $raw.expectedRecommendationTitleTermSha256 == $expectedTitleTermSha256
-                  and ($raw.handoffSelectedBggId | is_integer_or_null(1; 1000000000))
-                  and ($raw.handoffActionClicked | is_boolean)
-                  and ($raw.handoffSurfaceVisible | is_boolean)
-                  and ($raw.handoffImportRequestedBggId | is_integer_or_null(1; 1000000000))
-                  and ($raw.handoffImportResponseStatus | is_integer_or_null(100; 599))
-                  and ($raw.handoffImportResponseOk | is_boolean_or_null)
-                  and ($raw.handoffImportResponseBggId | is_integer_or_null(1; 1000000000))
-                  and ($raw.handoffImportedGameId | is_uuid_or_null)
-                  and ($raw.handoffImportedEditionId | is_uuid_or_null)
-                  and ($raw.handoffEditionBelongsToImportedGame | is_boolean_or_null)
-                  and ($raw.handoffImportElapsedMs | is_integer_or_null(0; 3600000))
-                  and ($raw.handoffDiscoveryRequestedEditionId | is_uuid_or_null)
-                  and ($raw.handoffDiscoveryResponseStatus | is_integer_or_null(100; 599))
-                  and ($raw.handoffDiscoveryResponseOk | is_boolean_or_null)
-                  and ($raw.handoffDiscoveryIdentityEditionId | is_uuid_or_null)
-                  and ($raw.handoffDiscoveryIdentityMatched | is_boolean_or_null)
-                  and ($raw.handoffDiscoveryConfigured | is_boolean_or_null)
-                  and ($raw.handoffDiscoveryCandidateCount | is_integer_or_null(0; 10000))
-                  and ($raw.handoffImportableCandidateCount | is_integer_or_null(0; 10000))
-                  and ($raw.handoffImportableCandidateFound | is_boolean_or_null)
-                  and ($raw.handoffDiscoveryCandidateIdentitySha256 | is_sha256_or_null)
-                  and ($raw.handoffRenderedCandidateIdentitySha256 | is_sha256_or_null)
-                  and ($raw.handoffCandidateIdentityOrderConsistent | is_boolean_or_null)
-                  and ($raw.handoffDiscoveryElapsedMs | is_integer_or_null(0; 3600000))
-                  and ($raw.handoffTerminalCategory
-                    | IN("NOT_OBSERVED", "RESTORED_EXISTING", "REVIEW", "NO_IMPORTABLE_SOURCE",
-                      "UNAVAILABLE", "ERROR", "LOGIN_REQUIRED"))
-                  and ($raw.handoffTerminalVisible | is_boolean)
-                  and ($raw.handoffElapsedMs | is_integer_or_null(0; 3600000))
-                  and ($raw.handoffRulebookImportStarted | is_boolean)
-                  and ($raw.handoffRestoredExistingJourney | is_boolean)
-                  and ($raw.handoffRestoredImportJobId | is_uuid_or_null)
-                  and ($raw.handoffRestoredDocumentVersionId | is_uuid_or_null)
-                  and ($raw.handoffRestoredPreparationRunId | is_uuid_or_null)
-                  and ($raw.handoffFreshnessRequestPreparationRunMatched | is_boolean_or_null)
-                  and ($raw.handoffFreshnessResponseStatus | is_integer_or_null(100; 599))
-                  and ($raw.handoffFreshnessResponseIdentityMatched | is_boolean_or_null)
-                  and ($raw.handoffFreshnessResponseEligible | is_boolean_or_null)
-                  and (if $raw.handoffRestoredExistingJourney then
-                      $raw.handoffTerminalCategory == "RESTORED_EXISTING"
-                        and $raw.handoffRestoredImportJobId != null
-                    else
-                      $raw.handoffTerminalCategory != "RESTORED_EXISTING"
-                        and $raw.handoffRestoredImportJobId == null
-                        and $raw.handoffRestoredDocumentVersionId == null
-                        and $raw.handoffRestoredPreparationRunId == null
-                        and $raw.handoffFreshnessRequestPreparationRunMatched == null
-                        and $raw.handoffFreshnessResponseStatus == null
-                        and $raw.handoffFreshnessResponseIdentityMatched == null
-                        and $raw.handoffFreshnessResponseEligible == null
-                    end)
-                  and (($raw.handoffOfficialMutationAttemptedPaths | type) == "array"
-                    and ($raw.handoffOfficialMutationAttemptedPaths | length) <= 16
-                    and all($raw.handoffOfficialMutationAttemptedPaths[]; is_safe_official_mutation_path))
-                  and ($raw.handoffOfficialMutationBlocked | is_boolean)
-                  and ($raw.handoffStoppedAtDiscoveryBoundary | is_boolean)
+              def is_finite_number:
+                type == "number" and ((. - .) == 0);
+              def is_integer($minimum; $maximum):
+                is_finite_number and . == floor and . >= $minimum and . <= $maximum;
+              def is_integer_or_null($minimum; $maximum):
+                . == null or is_integer($minimum; $maximum);
+              def is_boolean_or_null:
+                . == null or type == "boolean";
+              def is_sha256:
+                type == "string" and test("^[0-9a-f]{64}$");
+              def is_sha256_or_null:
+                . == null or is_sha256;
+              def is_uuid:
+                type == "string"
+                  and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+              def is_uuid_or_null:
+                . == null or is_uuid;
+              def is_safe_text:
+                type == "string" and length >= 1 and length <= 128
+                  and test("^[A-Za-z0-9_./: -]+$");
+              def is_safe_text_or_null:
+                . == null or is_safe_text;
+              def is_outcome_or_null:
+                . == null or IN("conversation", "needs_clarification", "recommendations",
+                  "no_match", "unavailable");
+              def is_failure_or_null:
+                . == null or (
+                  type == "object"
+                  and (.classification
+                    | IN("product_terminal", "terminal_evidence_gap",
+                      "lifecycle_deadline", "observer_failure"))
+                  and (.boundary == null or (.boundary
+                    | IN("time_budget", "model_response", "service_configuration",
+                      "action_budget", "publication_boundary", "service_failure")))
+                  and (.reason == null or (.reason
+                    | IN("time_limit", "model_not_configured", "resource_budget_exhausted",
+                      "provider_call_failed", "provider_protocol_invalid",
+                      "provider_output_truncated", "empty_model_response",
+                      "repeated_incompatible_actions", "repeated_invalid_action",
+                      "publication_rejected", "service_failure")))
+                  and (.code | is_safe_text_or_null)
+                );
+              def is_release_or_null:
+                . == null or (
+                  type == "object"
+                  and (.releaseId | type) == "string"
+                  and (.releaseId | test("^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$"))
+                  and (.commitSha | type) == "string"
+                  and (.commitSha | test("^[0-9a-f]{40}$"))
+                  and (.noStore | type) == "boolean"
+                );
+              def is_model_or_null:
+                . == null or (
+                  type == "object"
+                  and (.provider | is_safe_text)
+                  and (.model | is_safe_text)
+                );
+              def is_card:
+                type == "object"
+                  and (.bggId | is_integer(1; 1000000000))
+                  and (.nameSha256 | is_sha256)
+                  and (.originalNameSha256 | is_sha256)
+                  and (.replyPartsSha256 | is_sha256);
+              def is_safe_text_array($maximum):
+                type == "array" and length <= $maximum and all(.[]; is_safe_text);
+              def is_report_shape:
+                type == "object"
+                  and .reportSchemaVersion == 2
+                  and (.generatedAt | type) == "string"
+                  and (.generatedAt | length) <= 64
+                  and (.completed | type) == "boolean"
+                  and (.stage | is_safe_text)
+                  and (.failedStage | is_safe_text_or_null)
+                  and (.fatalFailure | is_failure_or_null)
+                  and .rawModelOutputCaptured == false
+                  and (.deployment | type) == "object"
+                  and (.deployment.testedSha | type) == "string"
+                  and (.deployment.activeReleaseId | type) == "string"
+                  and (.deployment.before | is_release_or_null)
+                  and (.deployment.after | is_release_or_null)
+                  and (.deployment.exactAndStable | is_boolean_or_null)
+                  and (.model | type) == "object"
+                  and (.model.expected | is_model_or_null)
+                  and .model.expected != null
+                  and (.model.before | is_model_or_null)
+                  and (.model.after | is_model_or_null)
+                  and (.model.stable | is_boolean_or_null)
+                  and (.naturalReply | type) == "object"
+                  and (.naturalReply.promptSha256 | is_sha256)
+                  and (.naturalReply.requestMatched | type) == "boolean"
+                  and (.naturalReply.outcome | is_outcome_or_null)
+                  and (.naturalReply.assistantMessageSha256 | is_sha256_or_null)
+                  and (.naturalReply.noExternalWork | is_boolean_or_null)
+                  and (.naturalReply.persistedMatched | is_boolean_or_null)
+                  and (.naturalReply.domMatched | is_boolean_or_null)
+                  and (.naturalReply.failure | is_failure_or_null)
+                  and (.recommendation | type) == "object"
+                  and (.recommendation.promptSha256 | is_sha256)
+                  and (.recommendation.requestedCardCount | is_integer_or_null(1; 20))
+                  and (.recommendation.expectedPlayerCount | is_integer_or_null(1; 100))
+                  and (.recommendation.maximumDurationMinutes | is_integer_or_null(1; 10080))
+                  and (.recommendation.maximumComplexity == null
+                    or (.recommendation.maximumComplexity | is_finite_number)
+                      and .recommendation.maximumComplexity > 0
+                      and .recommendation.maximumComplexity <= 5)
+                  and (.recommendation.expectedGameType == null
+                    or (.recommendation.expectedGameType
+                      | IN("abstract", "customizable", "children", "family", "party",
+                        "strategy", "thematic", "war", "expansion")))
+                  and (.recommendation.requestMatched | type) == "boolean"
+                  and (.recommendation.outcome | is_outcome_or_null)
+                  and (.recommendation.assistantMessageSha256 | is_sha256_or_null)
+                  and (.recommendation.cards | type) == "array"
+                  and (.recommendation.cards | length) <= 20
+                  and all(.recommendation.cards[]; is_card)
+                  and (.recommendation.shortfallCount | is_integer_or_null(0; 20))
+                  and (.recommendation.publicationErrors | is_safe_text_array(64))
+                  and (.recommendation.persistedMatched | is_boolean_or_null)
+                  and (.recommendation.domMatched | is_boolean_or_null)
+                  and (.recommendation.failure | is_failure_or_null)
+                  and (.handoff | type) == "object"
+                  and (.handoff.selectedBggId | is_integer_or_null(1; 1000000000))
+                  and (.handoff.actionClicked | type) == "boolean"
+                  and (.handoff.importResponseStatus | is_integer_or_null(100; 599))
+                  and (.handoff.importedBggId | is_integer_or_null(1; 1000000000))
+                  and (.handoff.importedGameId | is_uuid_or_null)
+                  and (.handoff.importedEditionId | is_uuid_or_null)
+                  and (.handoff.editionBelongsToGame | is_boolean_or_null)
+                  and (.handoff.existingJobId | is_uuid_or_null)
+                  and (.handoff.discoveryEditionMatched | is_boolean_or_null)
+                  and (.handoff.sourceCount | is_integer_or_null(0; 10000))
+                  and (.handoff.terminal
+                    | IN("NOT_OBSERVED", "SOURCE_REVIEW", "SOURCE_UNAVAILABLE",
+                      "RULEBOOK_READABLE", "LESSON_READABLE", "EXPLICIT_FAILURE"))
+                  and (.handoff.surfaceState | is_safe_text_or_null)
+                  and (.handoff.canReadRulebook | type) == "boolean"
+                  and (.handoff.canReadLesson | type) == "boolean"
+                  and (.handoff.failureClassification | is_safe_text_or_null)
+                  and (.handoff.blockedMutationPaths | is_safe_text_array(16));
+              def exact_release($release):
+                $release != null
+                  and $release.releaseId == $activeReleaseId
+                  and $release.commitSha == $testedSha
+                  and $release.noStore == true;
+              def exact_model($model):
+                $model != null
+                  and $model.provider == $expectedProvider
+                  and $model.model == $expectedModel;
+              def accepted_handoff($handoff; $selectedBggId):
+                $handoff.selectedBggId == $selectedBggId
+                  and $handoff.actionClicked == true
+                  and ($handoff.importResponseStatus
+                    | is_integer(200; 299))
+                  and $handoff.importedBggId == $selectedBggId
+                  and ($handoff.importedGameId | is_uuid)
+                  and ($handoff.importedEditionId | is_uuid)
+                  and $handoff.editionBelongsToGame == true
+                  and $handoff.failureClassification == null
+                  and ($handoff.blockedMutationPaths | length) == 0
+                  and (
+                    if $handoff.terminal == "SOURCE_REVIEW" then
+                      $handoff.discoveryEditionMatched == true
+                    elif $handoff.terminal == "SOURCE_UNAVAILABLE" then
+                      $handoff.discoveryEditionMatched == true
+                    elif $handoff.terminal == "RULEBOOK_READABLE" then
+                      ($handoff.existingJobId | is_uuid)
+                    elif $handoff.terminal == "LESSON_READABLE" then
+                      ($handoff.existingJobId | is_uuid)
+                    else false
+                    end
+                  );
+              def completed_acceptance($raw):
+                $raw.reportSchemaVersion == 2
+                  and $raw.completed == true
+                  and $raw.stage == "completed"
+                  and $raw.failedStage == null
+                  and $raw.fatalFailure == null
                   and $raw.rawModelOutputCaptured == false
-                  and (($raw.completed | not) or completed_recommendation_acceptance($raw)))
-                then {
-                  reportSchemaVersion: 1,
-                  generatedAt: $raw.generatedAt,
-                  completed: $raw.completed,
-                  stage: $raw.stage,
-                  testedSha: $testedSha,
-                  activeReleaseSha: $testedSha,
-                  activeReleaseId: $activeReleaseId,
-                  publicReleaseId: $raw.publicReleaseId,
-                  publicReleaseSha: $raw.publicReleaseSha,
-                  publicReleaseNoStore: $raw.publicReleaseNoStore,
-                  routeStayedOnDiscover: $raw.routeStayedOnDiscover,
-                  recommendationRequestedCardCount: $requestedCardCount,
-                  recommendationExpectedPlayerCount: $expectedPlayerCount,
-                  recommendationMaximumDurationMinutes: $maximumDurationMinutes,
-                  recommendationMaximumComplexity: $maximumComplexity,
-                  recommendationExpectedGameType: $expectedGameType,
-                  recommendationRequestMessageMatched: $raw.recommendationRequestMessageMatched,
-                  recommendationProfileHardConstraintsMatched: $raw.recommendationProfileHardConstraintsMatched,
-                  recommendationCardsHardConstraintsMatched: $raw.recommendationCardsHardConstraintsMatched,
-                  recommendationFitClaimsHardConstraintsMatched: $raw.recommendationFitClaimsHardConstraintsMatched,
-                  recommendationComplexityHardConstraintsMatched: $raw.recommendationComplexityHardConstraintsMatched,
-                  recommendationGameTypeHardConstraintsMatched: $raw.recommendationGameTypeHardConstraintsMatched,
-                  recommendationEvidenceBoundReplyParts: $raw.recommendationEvidenceBoundReplyParts,
-                  recommendationPersistedCardCount: $raw.recommendationPersistedCardCount,
-                  recommendationShortfallCount: $raw.recommendationShortfallCount,
-                  recommendationOutcome: $raw.recommendationOutcome,
-                  recommendationTerminalCategory: $raw.recommendationTerminalCategory,
-                  recommendationTerminalObserved: $raw.recommendationTerminalObserved,
-                  recommendationClickCaptured: $raw.recommendationClickCaptured,
-                  recommendationFirstProgressMs: $raw.recommendationFirstProgressMs,
-                  recommendationSseTerminalCategory: $raw.recommendationSseTerminalCategory,
-                  recommendationSseTerminalMs: $raw.recommendationSseTerminalMs,
-                  recommendationSseResultMs: $raw.recommendationSseResultMs,
-                  recommendationSseErrorCode: $raw.recommendationSseErrorCode,
-                  recommendationSseFailureBoundary: $raw.recommendationSseFailureBoundary,
-                  recommendationSseFailureReason: $raw.recommendationSseFailureReason,
-                  recommendationPersistedTerminalMs: $raw.recommendationPersistedTerminalMs,
-                  recommendationRenderedSlateMs: $raw.recommendationRenderedSlateMs,
-                  recommendationElapsedMs: $raw.recommendationElapsedMs,
-                  recommendationSloMet: $raw.recommendationSloMet,
-                  recommendationObservationWindowMs: $raw.recommendationObservationWindowMs,
-                  recommendationCanaryFailureClass: $raw.recommendationCanaryFailureClass,
-                  recommendationLastSessionProcessing: $raw.recommendationLastSessionProcessing,
-                  recommendationProgressEventCount: ($raw.recommendationProgressEvents | length),
-                  recommendationLastProgressStage: $raw.recommendationLastProgressStage,
-                  recommendationLastProgressPhase: $raw.recommendationLastProgressPhase,
-                  recommendationLastProgressAction: $raw.recommendationLastProgressAction,
-                  recommendationLastProgressServerElapsedMs: $raw.recommendationLastProgressServerElapsedMs,
-                  recommendationLastProgressBrowserReceivedMs:
-                    $raw.recommendationLastProgressBrowserReceivedMs,
-                  recommendationStreamProbeFailed: $raw.recommendationStreamProbeFailed,
-                  recommendationPublishedBggIds: $raw.recommendationPublishedBggIds,
-                  recommendationAssistantReplyCharacterCount: $raw.recommendationAssistantReplyCharacterCount,
-                  recommendationRenderedReplyCharacterCount: $raw.recommendationRenderedReplyCharacterCount,
-                  recommendationCardReplyPartCount: $raw.recommendationCardReplyPartCount,
-                  recommendationUsableCardCount: $raw.recommendationUsableCardCount,
-                  recommendationUsableReplyPartCount: $raw.recommendationUsableReplyPartCount,
-                  recommendationAssistantReplyUsable: $raw.recommendationAssistantReplyUsable,
-                  recommendationAllCardsUsable: $raw.recommendationAllCardsUsable,
-                  recommendationAllReplyPartsUsable: $raw.recommendationAllReplyPartsUsable,
-                  recommendationSseContentDigest: $raw.recommendationSseContentDigest,
-                  recommendationPersistedContentDigest: $raw.recommendationPersistedContentDigest,
-                  recommendationRenderedContentDigest: $raw.recommendationRenderedContentDigest,
-                  recommendationSsePersistedContentConsistent: $raw.recommendationSsePersistedContentConsistent,
-                  recommendationPersistedDomContentConsistent: $raw.recommendationPersistedDomContentConsistent,
-                  recommendationCompletedWorkCount: ($raw.recommendationCompletedWork | length),
-                  recommendationExpectedModel: {provider: $expectedProvider, model: $expectedModel},
-                  recommendationModelBeforeRequest: (if $raw.recommendationModelBeforeRequest == null then null
-                    else {provider: $expectedProvider, model: $expectedModel} end),
-                  recommendationModelAfterRequest: (if $raw.recommendationModelAfterRequest == null then null
-                    else {provider: $expectedProvider, model: $expectedModel} end),
-                  recommendationModelProvider: (if $raw.recommendationModelProvider == null then null
-                    else $expectedProvider end),
-                  recommendationModelName: (if $raw.recommendationModelName == null then null else $expectedModel end),
-                  recommendationModelCalls: $raw.recommendationModelCalls,
-                  recommendationModelCallElapsedMs: $raw.recommendationModelCallElapsedMs,
-                  recommendationAgentElapsedMs: $raw.recommendationAgentElapsedMs,
-                  recommendationModelElapsedShare: $raw.recommendationModelElapsedShare,
-                  recommendationCatalogCalls: $raw.recommendationCatalogCalls,
-                  recommendationWebResearchCalls: $raw.recommendationWebResearchCalls,
-                  recommendationFailureBoundary: $raw.recommendationFailureBoundary,
-                  recommendationFailureReason: $raw.recommendationFailureReason,
-                  expectedRecommendationTitleTermSha256: $expectedTitleTermSha256,
-                  handoffSelectedBggId: $raw.handoffSelectedBggId,
-                  handoffActionClicked: $raw.handoffActionClicked,
-                  handoffSurfaceVisible: $raw.handoffSurfaceVisible,
-                  handoffImportRequestedBggId: $raw.handoffImportRequestedBggId,
-                  handoffImportResponseStatus: $raw.handoffImportResponseStatus,
-                  handoffImportResponseOk: $raw.handoffImportResponseOk,
-                  handoffImportResponseBggId: $raw.handoffImportResponseBggId,
-                  handoffImportedGameId: $raw.handoffImportedGameId,
-                  handoffImportedEditionId: $raw.handoffImportedEditionId,
-                  handoffEditionBelongsToImportedGame: $raw.handoffEditionBelongsToImportedGame,
-                  handoffImportElapsedMs: $raw.handoffImportElapsedMs,
-                  handoffDiscoveryRequestedEditionId: $raw.handoffDiscoveryRequestedEditionId,
-                  handoffDiscoveryResponseStatus: $raw.handoffDiscoveryResponseStatus,
-                  handoffDiscoveryResponseOk: $raw.handoffDiscoveryResponseOk,
-                  handoffDiscoveryIdentityEditionId: $raw.handoffDiscoveryIdentityEditionId,
-                  handoffDiscoveryIdentityMatched: $raw.handoffDiscoveryIdentityMatched,
-                  handoffDiscoveryConfigured: $raw.handoffDiscoveryConfigured,
-                  handoffDiscoveryCandidateCount: $raw.handoffDiscoveryCandidateCount,
-                  handoffImportableCandidateCount: $raw.handoffImportableCandidateCount,
-                  handoffImportableCandidateFound: $raw.handoffImportableCandidateFound,
-                  handoffDiscoveryCandidateIdentitySha256: $raw.handoffDiscoveryCandidateIdentitySha256,
-                  handoffRenderedCandidateIdentitySha256: $raw.handoffRenderedCandidateIdentitySha256,
-                  handoffCandidateIdentityOrderConsistent: $raw.handoffCandidateIdentityOrderConsistent,
-                  handoffDiscoveryElapsedMs: $raw.handoffDiscoveryElapsedMs,
-                  handoffTerminalCategory: $raw.handoffTerminalCategory,
-                  handoffTerminalVisible: $raw.handoffTerminalVisible,
-                  handoffElapsedMs: $raw.handoffElapsedMs,
-                  handoffRulebookImportStarted: $raw.handoffRulebookImportStarted,
-                  handoffRestoredExistingJourney: $raw.handoffRestoredExistingJourney,
-                  handoffRestoredImportJobId: $raw.handoffRestoredImportJobId,
-                  handoffRestoredDocumentVersionId: $raw.handoffRestoredDocumentVersionId,
-                  handoffRestoredPreparationRunId: $raw.handoffRestoredPreparationRunId,
-                  handoffFreshnessRequestPreparationRunMatched:
-                    $raw.handoffFreshnessRequestPreparationRunMatched,
-                  handoffFreshnessResponseStatus: $raw.handoffFreshnessResponseStatus,
-                  handoffFreshnessResponseIdentityMatched: $raw.handoffFreshnessResponseIdentityMatched,
-                  handoffFreshnessResponseEligible: $raw.handoffFreshnessResponseEligible,
-                  handoffOfficialMutationAttemptCount: ($raw.handoffOfficialMutationAttemptedPaths | length),
-                  handoffOfficialMutationBlocked: $raw.handoffOfficialMutationBlocked,
-                  handoffStoppedAtDiscoveryBoundary: $raw.handoffStoppedAtDiscoveryBoundary,
-                  rawModelOutputCaptured: false
-                }
-                else error("invalid production recommendation report")
-                end
+                  and $raw.deployment.testedSha == $testedSha
+                  and $raw.deployment.activeReleaseId == $activeReleaseId
+                  and exact_release($raw.deployment.before)
+                  and exact_release($raw.deployment.after)
+                  and $raw.deployment.exactAndStable == true
+                  and exact_model($raw.model.expected)
+                  and exact_model($raw.model.before)
+                  and exact_model($raw.model.after)
+                  and $raw.model.stable == true
+                  and $raw.naturalReply.requestMatched == true
+                  and $raw.naturalReply.outcome == "conversation"
+                  and ($raw.naturalReply.promptSha256 | is_sha256)
+                  and ($raw.naturalReply.assistantMessageSha256 | is_sha256)
+                  and $raw.naturalReply.noExternalWork == true
+                  and $raw.naturalReply.persistedMatched == true
+                  and $raw.naturalReply.domMatched == true
+                  and $raw.naturalReply.failure == null
+                  and $raw.recommendation.requestedCardCount == $requestedCardCount
+                  and $raw.recommendation.expectedPlayerCount == $expectedPlayerCount
+                  and $raw.recommendation.maximumDurationMinutes == $maximumDurationMinutes
+                  and $raw.recommendation.maximumComplexity == $maximumComplexity
+                  and $raw.recommendation.expectedGameType == $expectedGameType
+                  and $raw.recommendation.requestMatched == true
+                  and $raw.recommendation.outcome == "recommendations"
+                  and ($raw.recommendation.promptSha256 | is_sha256)
+                  and ($raw.recommendation.assistantMessageSha256 | is_sha256)
+                  and ($raw.recommendation.cards | length) >= 1
+                  and ($raw.recommendation.cards | length) <= $requestedCardCount
+                  and all($raw.recommendation.cards[]; is_card)
+                  and ([ $raw.recommendation.cards[].bggId ] | unique | length)
+                    == ($raw.recommendation.cards | length)
+                  and $raw.recommendation.shortfallCount
+                    == ($requestedCardCount - ($raw.recommendation.cards | length))
+                  and ($raw.recommendation.publicationErrors | length) == 0
+                  and $raw.recommendation.persistedMatched == true
+                  and $raw.recommendation.domMatched == true
+                  and $raw.recommendation.failure == null
+                  and accepted_handoff(
+                    $raw.handoff;
+                    $raw.recommendation.cards[0].bggId
+                  );
+              def fallback_report($code):
+                {
+                  reportSchemaVersion: 2,
+                  generatedAt: (now | todateiso8601),
+                  completed: false,
+                  stage: "preflight-failed",
+                  failedStage: "preflight",
+                  fatalFailure: {
+                    classification: "observer_failure",
+                    boundary: null,
+                    reason: null,
+                    code: $code
+                  },
+                  rawModelOutputCaptured: false,
+                  deployment: {
+                    testedSha: $testedSha,
+                    activeReleaseId: $activeReleaseId,
+                    before: null,
+                    after: null,
+                    exactAndStable: null
+                  },
+                  model: {
+                    expected: {provider: $expectedProvider, model: $expectedModel},
+                    before: null,
+                    after: null,
+                    stable: null
+                  },
+                  naturalReply: {
+                    promptSha256: null,
+                    requestMatched: false,
+                    outcome: null,
+                    assistantMessageSha256: null,
+                    noExternalWork: null,
+                    persistedMatched: null,
+                    domMatched: null,
+                    failure: null
+                  },
+                  recommendation: {
+                    promptSha256: null,
+                    requestedCardCount: $requestedCardCount,
+                    expectedPlayerCount: $expectedPlayerCount,
+                    maximumDurationMinutes: $maximumDurationMinutes,
+                    maximumComplexity: $maximumComplexity,
+                    expectedGameType: $expectedGameType,
+                    requestMatched: false,
+                    outcome: null,
+                    assistantMessageSha256: null,
+                    cards: [],
+                    shortfallCount: null,
+                    publicationErrors: [],
+                    persistedMatched: null,
+                    domMatched: null,
+                    failure: null
+                  },
+                  handoff: {
+                    selectedBggId: null,
+                    actionClicked: false,
+                    importResponseStatus: null,
+                    importedBggId: null,
+                    importedGameId: null,
+                    importedEditionId: null,
+                    editionBelongsToGame: null,
+                    existingJobId: null,
+                    discoveryEditionMatched: null,
+                    sourceCount: null,
+                    terminal: "NOT_OBSERVED",
+                    surfaceState: null,
+                    canReadRulebook: false,
+                    canReadLesson: false,
+                    failureClassification: null,
+                    blockedMutationPaths: []
+                  }
+                };
+              if is_report_shape then
+                completed_acceptance(.) as $accepted
+                | {
+                    reportSchemaVersion: 2,
+                    generatedAt: .generatedAt,
+                    completed: $accepted,
+                    stage: (
+                      if $accepted then "completed"
+                      elif .completed then "failed-acceptance"
+                      else .stage
+                      end
+                    ),
+                    failedStage: (
+                      if $accepted then null
+                      elif .failedStage != null then .failedStage
+                      else .stage
+                      end
+                    ),
+                    fatalFailure: (
+                      if $accepted then null
+                      elif .fatalFailure != null then .fatalFailure
+                      else {
+                        classification: "observer_failure",
+                        boundary: null,
+                        reason: null,
+                        code: "acceptance_contract_failed"
+                      }
+                      end
+                    ),
+                    rawModelOutputCaptured: false,
+                    deployment: {
+                      testedSha: $testedSha,
+                      activeReleaseId: $activeReleaseId,
+                      before: .deployment.before,
+                      after: .deployment.after,
+                      exactAndStable: .deployment.exactAndStable
+                    },
+                    model: {
+                      expected: {provider: $expectedProvider, model: $expectedModel},
+                      before: .model.before,
+                      after: .model.after,
+                      stable: .model.stable
+                    },
+                    naturalReply: {
+                      promptSha256: .naturalReply.promptSha256,
+                      requestMatched: .naturalReply.requestMatched,
+                      outcome: .naturalReply.outcome,
+                      assistantMessageSha256: .naturalReply.assistantMessageSha256,
+                      noExternalWork: .naturalReply.noExternalWork,
+                      persistedMatched: .naturalReply.persistedMatched,
+                      domMatched: .naturalReply.domMatched,
+                      failure: .naturalReply.failure
+                    },
+                    recommendation: {
+                      promptSha256: .recommendation.promptSha256,
+                      requestedCardCount: $requestedCardCount,
+                      expectedPlayerCount: $expectedPlayerCount,
+                      maximumDurationMinutes: $maximumDurationMinutes,
+                      maximumComplexity: $maximumComplexity,
+                      expectedGameType: $expectedGameType,
+                      requestMatched: .recommendation.requestMatched,
+                      outcome: .recommendation.outcome,
+                      assistantMessageSha256: .recommendation.assistantMessageSha256,
+                      cards: [.recommendation.cards[] | {
+                        bggId, nameSha256, originalNameSha256, replyPartsSha256
+                      }],
+                      shortfallCount: .recommendation.shortfallCount,
+                      publicationErrors: .recommendation.publicationErrors,
+                      persistedMatched: .recommendation.persistedMatched,
+                      domMatched: .recommendation.domMatched,
+                      failure: .recommendation.failure
+                    },
+                    handoff: {
+                      selectedBggId: .handoff.selectedBggId,
+                      actionClicked: .handoff.actionClicked,
+                      importResponseStatus: .handoff.importResponseStatus,
+                      importedBggId: .handoff.importedBggId,
+                      importedGameId: .handoff.importedGameId,
+                      importedEditionId: .handoff.importedEditionId,
+                      editionBelongsToGame: .handoff.editionBelongsToGame,
+                      existingJobId: .handoff.existingJobId,
+                      discoveryEditionMatched: .handoff.discoveryEditionMatched,
+                      sourceCount: .handoff.sourceCount,
+                      terminal: .handoff.terminal,
+                      surfaceState: .handoff.surfaceState,
+                      canReadRulebook: .handoff.canReadRulebook,
+                      canReadLesson: .handoff.canReadLesson,
+                      failureClassification: .handoff.failureClassification,
+                      blockedMutationPaths: .handoff.blockedMutationPaths
+                    }
+                  }
+              else
+                fallback_report("missing_or_invalid_raw_report")
               end
-          ' "$raw_report" > "$temporary_report"
+            ' "$raw_report" > "$temporary_report"
+
           chmod 600 "$temporary_report"
           mv "$temporary_report" "$sanitized_report"
           rm -f "$raw_report"
@@ -1104,16 +901,95 @@ jobs:
           GITHUB_PATH: /dev/null
           LD_PRELOAD: ''
           PATH: /usr/bin:/bin
+          RULEPILOT_RECOMMENDATION_TESTED_SHA: ${{ inputs.tested_sha }}
+          RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID: ${{ steps.production_identity.outputs.active_release_id }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: ${{ inputs.requested_card_count }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER: ${{ inputs.expected_provider }}
+          RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: ${{ inputs.expected_model }}
         run: |
           set -Eeuo pipefail
           report="$RUNNER_TEMP/production-recommendation-journey/journey.json"
           test -f "$report" && test ! -L "$report"
-          jq --exit-status '
-            .completed == true
-              and .stage == "completed"
-              and .recommendationOutcome == "recommendations"
-              and .recommendationSloMet == true
-              and (.handoffTerminalCategory == "RESTORED_EXISTING"
-                or .handoffTerminalCategory == "REVIEW"
-                or .handoffTerminalCategory == "UNAVAILABLE")
-          ' "$report" > /dev/null
+          jq --exit-status \
+            --arg testedSha "$RULEPILOT_RECOMMENDATION_TESTED_SHA" \
+            --arg activeReleaseId "$RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID" \
+            --arg expectedProvider "$RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER" \
+            --arg expectedModel "$RULEPILOT_RECOMMENDATION_EXPECTED_MODEL" \
+            --argjson requestedCardCount "$RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT" '
+              def is_sha256:
+                type == "string" and test("^[0-9a-f]{64}$");
+              def is_uuid:
+                type == "string"
+                  and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+              def exact_release:
+                .releaseId == $activeReleaseId
+                  and .commitSha == $testedSha
+                  and .noStore == true;
+              def exact_model:
+                .provider == $expectedProvider and .model == $expectedModel;
+              .reportSchemaVersion == 2
+                and .completed == true
+                and .stage == "completed"
+                and .failedStage == null
+                and .fatalFailure == null
+                and .rawModelOutputCaptured == false
+                and .deployment.testedSha == $testedSha
+                and .deployment.activeReleaseId == $activeReleaseId
+                and (.deployment.before | exact_release)
+                and (.deployment.after | exact_release)
+                and .deployment.exactAndStable == true
+                and (.model.expected | exact_model)
+                and (.model.before | exact_model)
+                and (.model.after | exact_model)
+                and .model.stable == true
+                and .naturalReply.requestMatched == true
+                and .naturalReply.outcome == "conversation"
+                and (.naturalReply.promptSha256 | is_sha256)
+                and (.naturalReply.assistantMessageSha256 | is_sha256)
+                and .naturalReply.noExternalWork == true
+                and .naturalReply.persistedMatched == true
+                and .naturalReply.domMatched == true
+                and .naturalReply.failure == null
+                and .recommendation.requestedCardCount == $requestedCardCount
+                and .recommendation.requestMatched == true
+                and .recommendation.outcome == "recommendations"
+                and (.recommendation.promptSha256 | is_sha256)
+                and (.recommendation.assistantMessageSha256 | is_sha256)
+                and (.recommendation.cards | length) >= 1
+                and (.recommendation.cards | length) <= $requestedCardCount
+                and all(.recommendation.cards[];
+                  (.bggId | type) == "number"
+                    and (.nameSha256 | is_sha256)
+                    and (.originalNameSha256 | is_sha256)
+                    and (.replyPartsSha256 | is_sha256))
+                and ([.recommendation.cards[].bggId] | unique | length)
+                  == (.recommendation.cards | length)
+                and .recommendation.shortfallCount
+                  == ($requestedCardCount - (.recommendation.cards | length))
+                and (.recommendation.publicationErrors | length) == 0
+                and .recommendation.persistedMatched == true
+                and .recommendation.domMatched == true
+                and .recommendation.failure == null
+                and .handoff.selectedBggId == .recommendation.cards[0].bggId
+                and .handoff.actionClicked == true
+                and .handoff.importResponseStatus >= 200
+                and .handoff.importResponseStatus < 300
+                and .handoff.importedBggId == .handoff.selectedBggId
+                and (.handoff.importedGameId | is_uuid)
+                and (.handoff.importedEditionId | is_uuid)
+                and .handoff.editionBelongsToGame == true
+                and .handoff.failureClassification == null
+                and (.handoff.blockedMutationPaths | length) == 0
+                and (
+                  if .handoff.terminal == "SOURCE_REVIEW" then
+                    .handoff.discoveryEditionMatched == true
+                  elif .handoff.terminal == "SOURCE_UNAVAILABLE" then
+                    .handoff.discoveryEditionMatched == true
+                  elif .handoff.terminal == "RULEBOOK_READABLE" then
+                    (.handoff.existingJobId | is_uuid)
+                  elif .handoff.terminal == "LESSON_READABLE" then
+                    (.handoff.existingJobId | is_uuid)
+                  else false
+                  end
+                )
+            ' "$report" > /dev/null

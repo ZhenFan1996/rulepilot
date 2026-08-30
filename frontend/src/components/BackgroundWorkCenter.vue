@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import PlayerFailureDetails from '@/components/PlayerFailureDetails.vue'
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
@@ -34,6 +35,7 @@ import {
 import { mergeDocumentProgress } from '@/lib/documentProgress'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import { teachingFailureOwner, type PlayerFailureDescriptor } from '@/lib/playerFailureSemantics'
 import { playerJourneyRunIsTerminal, typedFailurePolicy } from '@/lib/playerJourney'
 import {
   playerWorkStatus,
@@ -77,6 +79,7 @@ interface WorkItem {
   progress: number | null
   target: { name: string; query?: Record<string, string> }
   updatedAt?: string
+  failure?: PlayerFailureDescriptor | null
 }
 
 const { locale } = useLocale()
@@ -127,7 +130,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   rulebookFailed: '规则书读取失败，讲解无法开始',
   waitingForTeaching: '规则书已保存，读取完成后会自动开始讲解', launchingTeaching: '规则书已就绪，正在启动讲解任务',
   teachingLaunched: '规则书已保存，讲解任务已交给后台',
-  preparationReceived: '正在等待讲解 worker；普通任务最多排队 2 分钟，图片规则书最多 30 分钟，超时可重试', preparationReading: '正在确认规则书可以用于讲解',
+  preparationReceived: '正在等待讲解 worker；排队状态和停止原因以后端实时记录为准', preparationReading: '正在确认规则书可以用于讲解',
   preparationPlanning: '正在整理讲解结构', preparationFailed: '讲解准备已经停止，请在讲解中心查看失败原因',
   preparationRetryable: '讲解准备没有完成，可在讲解中心手动重试',
   teachingPlanningEvidence: '正在确定各章节需要核对的规则', teachingRetrieving: '正在查找各章节需要的规则依据',
@@ -158,7 +161,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   rulebookFailed: 'Rulebook reading failed, so the guide could not start',
   waitingForTeaching: 'Rulebook saved; the guide will start automatically when reading completes', launchingTeaching: 'Rulebook ready; starting the guide task',
   teachingLaunched: 'Rulebook saved; guide work was handed to the background',
-  preparationReceived: 'Waiting for a guide worker: up to 2 minutes ordinarily or 30 minutes for image rulebooks; a timeout is retryable', preparationReading: 'Confirming that the rulebook is ready for a guide',
+  preparationReceived: 'Waiting for a guide worker; queue state and stop reason come from the live backend record', preparationReading: 'Confirming that the rulebook is ready for a guide',
   preparationPlanning: 'Organizing the guide structure', preparationFailed: 'Guide preparation stopped; open the guide center for the failure reason',
   preparationRetryable: 'Guide preparation did not finish; retry it manually from the guide center',
   teachingPlanningEvidence: 'Deciding which rules each section must verify', teachingRetrieving: 'Finding rule evidence for each section',
@@ -341,6 +344,32 @@ function latestPreparationDetail(runId: string | null | undefined, fallbackState
     ?? preparationStage(fallbackState)
 }
 
+function typedRunFailure(code: string): PlayerFailureDescriptor {
+  const policy = typedFailurePolicy(code, 'GENERATE_LESSON', false)
+  return { category: policy.failureClassification, owner: teachingFailureOwner(code, locale.value), code }
+}
+
+function latestActivityFailure(run: TeachingRunProgress | undefined): PlayerFailureDescriptor | null {
+  const activity = [...(run?.activities ?? [])]
+    .reverse()
+    .find(entry => entry.outcome === 'FAILED' || entry.outcome === 'REJECTED')
+  if (!activity) return null
+  const operation = activity.operation
+  const category = operation.startsWith('enrichTeachingSectionVisual|')
+    || operation.startsWith('publishTeachingSection|')
+    ? 'local-degradation'
+    : operation.startsWith('validateTeachingOutlineAction|')
+      || operation.startsWith('advanceTeachingOutlineAgent|')
+      ? 'internal-correction'
+      : 'retry-preserved'
+  const owner = operation.startsWith('enrichTeachingSectionVisual|')
+    ? locale.value === 'en' ? 'Visual enrichment' : '配图处理'
+    : operation.startsWith('publishTeachingSection|')
+      ? locale.value === 'en' ? 'Chapter publication' : '章节发布'
+      : locale.value === 'en' ? 'Guide Agent' : '讲解 Agent'
+  return { category, owner, code: `${operation} · ${activity.summary}` }
+}
+
 function latestTeachingDetail(item: BackgroundTeachingItem) {
   const run = teachingRunDetails.value[item.runId]
   const plan = teachingPlanDetails.value[item.planId] ?? { sections: [] }
@@ -455,6 +484,9 @@ const workItems = computed<WorkItem[]>(() => {
         : job.sourceDomain
       const state = importState(job, documentFailed)
       const retryableTeaching = importTeachingRetryable(job)
+      const failureCode = job.errorCode
+        ?? job.teachingErrorCode
+        ?? (documentFailed ? 'DOCUMENT_PROCESSING_FAILED' : null)
       return {
         id: `import:${job.id}`, kind: job.teachingHandoffState === 'FAILED' ? 'lesson' : 'download', title: job.title,
         status: importPlayerStatus(job, document?.latestVersion.status, state),
@@ -465,6 +497,7 @@ const workItems = computed<WorkItem[]>(() => {
           ? { name: 'lessons' }
           : { name: 'teach', query: { importJob: job.id } },
         updatedAt: job.updatedAt,
+        failure: state === 'failed' && failureCode ? typedRunFailure(failureCode) : null,
       }
     })
   const importVersionIds = new Set(imports.value
@@ -493,11 +526,13 @@ const workItems = computed<WorkItem[]>(() => {
     status: workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
     detail: latestTeachingDetail(item), context: teachingProgressContext(item),
     state: 'active', progress: null, target: { name: 'lessons' },
+    failure: latestActivityFailure(teachingRunDetails.value[item.runId]),
   }))
   const finishedTeachingItems = completedTeaching.value
     .filter(item => !dismissedTeachingRunIds.value.has(item.runId))
     .map((item): WorkItem => {
       const presentation = finishedTeachingPresentation(item)
+      const errorCode = item.lastErrorCode ?? item.terminalState ?? null
       return {
         id: `teaching-finished:${item.runId}`, kind: 'lesson', title: item.gameTitle,
         status: presentation.status,
@@ -505,6 +540,7 @@ const workItems = computed<WorkItem[]>(() => {
         state: presentation.state,
         progress: presentation.progress,
         target: { name: 'lessons' },
+        failure: presentation.state === 'failed' && errorCode ? typedRunFailure(errorCode) : null,
       }
     })
   const preparationTransitionItems = preparationTeachingTransitions.value.map((transition): WorkItem => ({
@@ -524,6 +560,7 @@ const workItems = computed<WorkItem[]>(() => {
     if (!runId || !runState || runState === 'COMPLETED') return []
     if (dismissedImportIds.value.has(job.id) && playerJourneyRunIsTerminal(runState)) return []
     const failed = playerJourneyRunIsTerminal(runState)
+    const failureCode = preparationRunDetails.value[runId]?.run.lastErrorCode ?? (failed ? runState : null)
     return [{
       id: `teaching-preparation:${runId}`,
       kind: 'lesson',
@@ -539,6 +576,7 @@ const workItems = computed<WorkItem[]>(() => {
       progress: null,
       target: { name: 'lessons' },
       updatedAt: job.updatedAt,
+      failure: failureCode ? typedRunFailure(failureCode) : latestActivityFailure(preparationRunDetails.value[runId]),
     }]
   })
   const uploadedTeachingItems = uploadedTeachingHandoffs.value
@@ -554,6 +592,11 @@ const workItems = computed<WorkItem[]>(() => {
       const documentSnapshot = documentProgress.value[handoff.documentVersionId]
       const documentFailed = documentStatus === 'FAILED'
       const failed = uploadedTeachingHandoffFailed(handoff)
+      const failureCode = handoff.errorCode
+        ?? (handoff.preparationRunId
+          ? preparationRunDetails.value[handoff.preparationRunId]?.run.lastErrorCode
+          : null)
+        ?? (documentFailed ? 'DOCUMENT_PROCESSING_FAILED' : null)
       const detail = documentFailed || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
         ? copy.value.rulebookFailed
         : failed
@@ -586,6 +629,11 @@ const workItems = computed<WorkItem[]>(() => {
         progress: handoff.state === 'WAITING_FOR_DOCUMENT' ? documentSnapshot?.percentage ?? null : null,
         target: { name: handoff.state === 'WAITING_FOR_DOCUMENT' || documentFailed ? 'teach' : 'lessons' },
         updatedAt: handoff.updatedAt,
+        failure: failed && failureCode
+          ? typedRunFailure(failureCode)
+          : latestActivityFailure(handoff.preparationRunId
+            ? preparationRunDetails.value[handoff.preparationRunId]
+            : undefined),
       }
     })
   return [
@@ -1402,6 +1450,13 @@ function safelyStore(key: string, value: unknown) {
                   />
                   <p v-if="item.detail" class="mt-1 text-xs leading-5 text-ink/50">{{ item.detail }}</p>
                   <p v-if="item.context" class="mt-1 text-xs text-ink/45">{{ item.context }}</p>
+                  <PlayerFailureDetails
+                    v-if="item.failure"
+                    class="mt-3"
+                    :category="item.failure.category"
+                    :owner="item.failure.owner"
+                    :code="item.failure.code"
+                  />
                   <div v-if="item.progress !== null" class="mt-3 h-1.5 overflow-hidden rounded-full bg-ink/10" :aria-label="`${item.progress}%`">
                     <div class="h-full rounded-full bg-copper transition-[width]" :style="{ width: `${item.progress}%` }" />
                   </div>

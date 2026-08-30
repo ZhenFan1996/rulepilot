@@ -236,9 +236,7 @@ public class PublicLessonQuestionService {
     }
 
     private void validate(QuestionRequest request) {
-        if (request == null || request.question() == null || request.question().isBlank()
-                || request.question().strip().length() > 800
-                || request.previousQuestion() != null && request.previousQuestion().strip().length() > 800) {
+        if (request == null || request.question() == null || request.question().isBlank()) {
             throw new IllegalArgumentException("public lesson question is invalid");
         }
     }

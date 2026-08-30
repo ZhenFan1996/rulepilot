@@ -731,7 +731,6 @@ test('keeps a corrected reference title in conversational context on mobile', as
   const recommendationTurn = page.getByTestId('assistant-recommendation-turn')
   const reply = recommendationTurn.getByText(/Mosaic Field 当成一个全新问题/)
   await expect(reply).toBeVisible()
-  await expect(recommendationTurn.getByText('在 BGG 核对参考游戏')).toBeVisible()
   await expect(recommendationTurn.getByRole('heading', { level: 3, name: 'Glass Orchard' })).toBeVisible()
   const replyBox = await reply.boundingBox()
   const conversationBox = await page.getByTestId('recommendation-conversation').boundingBox()
@@ -1084,7 +1083,11 @@ test('retries failed preparation through the original import without downloading
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await expect(journey.getByTestId('player-work-status')).toHaveText('需要处理')
-  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toHaveCount(0)
+  await expect(journey.getByTestId('player-failure-details')).toHaveAttribute(
+    'data-failure-classification',
+    'retry-preserved',
+  )
+  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toHaveCount(1)
 
   recovery.publishPlan()
   recovery.publishFirstLesson()

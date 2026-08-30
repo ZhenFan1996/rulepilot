@@ -95,9 +95,9 @@ function parseProgress(value: unknown): RecommendationProgressUpdate | null {
   ])
   const phases = new Set(['started', 'completed', 'retrying', 'failed'])
   const actions = new Set([
-    'understand_request', 'choose_next_action', 'reply_to_user', 'ask_user',
-    'resolve_bgg_game', 'inspect_candidate_titles', 'browse_bgg_catalog', 'discover_public_candidates',
-    'lookup_bgg_games', 'research_game_fit', 'compare_candidates', 'report_no_match', 'recommend_games',
+    'understand_request', 'observe_and_decide', 'reply_to_user', 'ask_user',
+    'search_bgg_catalog', 'discover_public_relationship', 'research_game_fit',
+    'compare_candidates', 'recommend_games',
   ])
   if (typeof stage !== 'string' || !stages.has(stage)) return null
   const phase = candidate.phase === undefined ? 'started' : candidate.phase

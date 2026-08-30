@@ -1,7 +1,6 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.eq;
@@ -533,9 +532,12 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
-    void rejectsAnOversizedAnonymousQuestionBeforeCallingTheModel() {
-        assertThatThrownBy(() -> service.answer(UUID.randomUUID(), new PublicLessonQuestionService.QuestionRequest("x".repeat(801), null)))
-                .isInstanceOf(IllegalArgumentException.class);
+    void doesNotTreatAUsefulLongQuestionAsInvalidInput() {
+        assertThat(service.answer(
+                        UUID.randomUUID(),
+                        new PublicLessonQuestionService.QuestionRequest("x".repeat(1_200), null)))
+                .isEmpty();
+        verifyNoInteractions(answers);
     }
 
     private PublicLessonReader.PublicLesson publicLesson(UUID planId, UUID versionId, UUID chunk) {

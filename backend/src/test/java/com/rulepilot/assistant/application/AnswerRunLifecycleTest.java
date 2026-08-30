@@ -39,21 +39,16 @@ class AnswerRunLifecycleTest {
         RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
 
         RunSnapshot completed = lifecycle.finish(
-                received, answered(), AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING);
+                received, answered(), AnswerRunProgressPolicy.ExecutionPhase.AGENT_RUNNING);
 
         assertThat(runs.postWorkAdvances()).extracting(Advance::nextState).containsExactly(
-                AssistantRunState.QUESTION_UNDERSTANDING,
-                AssistantRunState.RETRIEVAL_PLANNING,
-                AssistantRunState.RETRIEVING,
-                AssistantRunState.VERIFYING_EVIDENCE,
                 AssistantRunState.ANSWER_COMPOSITION,
-                AssistantRunState.CRITIQUING,
                 AssistantRunState.COMPLETED);
         assertThat(runs.postWorkAdvances()).extracting(Advance::expectedRevision)
-                .containsExactly(1L, 2L, 3L, 4L, 5L, 6L, 7L);
+                .containsExactly(1L, 2L);
         assertThat(runs.advances()).isEmpty();
         assertThat(completed.state()).isEqualTo(AssistantRunState.COMPLETED);
-        assertThat(completed.revision()).isEqualTo(8);
+        assertThat(completed.revision()).isEqualTo(3);
     }
 
     @Test
@@ -64,20 +59,20 @@ class AnswerRunLifecycleTest {
         IllegalArgumentException workflowFailure = new IllegalArgumentException("answer workflow failed");
 
         lifecycle.fail(
-                run(AssistantRunState.RETRIEVING, 4),
-                AnswerRunProgressPolicy.ExecutionPhase.RETRIEVING,
+                run(AssistantRunState.ANSWER_COMPOSITION, 2),
+                AnswerRunProgressPolicy.ExecutionPhase.AGENT_RUNNING,
                 "ANSWER_FAILED",
                 "Answer workflow failed safely",
                 workflowFailure);
         lifecycle.fail(
-                run(AssistantRunState.COMPLETED, 8),
-                AnswerRunProgressPolicy.ExecutionPhase.CRITIQUING,
+                run(AssistantRunState.COMPLETED, 3),
+                AnswerRunProgressPolicy.ExecutionPhase.AGENT_RUNNING,
                 "ANSWER_FAILED",
                 "Already terminal",
                 workflowFailure);
 
         assertThat(runs.failures()).containsExactly(new Failure(
-                "ANSWER_FAILED", "Answer workflow failed safely during RETRIEVING", 4));
+                "ANSWER_FAILED", "Answer workflow failed safely during AGENT_RUNNING", 2));
         assertThat(workflowFailure.getSuppressed())
                 .singleElement()
                 .satisfies(trackingFailure -> assertThat(trackingFailure).hasMessage("run storage unavailable"));

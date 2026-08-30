@@ -52,10 +52,10 @@ public record StructuredRuleAnswer(
         scopeResolutions = scopeResolutions == null ? List.of() : List.copyOf(scopeResolutions);
         conceptComparisons = conceptComparisons == null ? List.of() : List.copyOf(conceptComparisons);
         ruleOptions = ruleOptions == null ? List.of() : List.copyOf(ruleOptions);
-        if (status.publishesConclusion() && citations.isEmpty()) {
-            throw new IllegalArgumentException("answered rule response requires citations");
+        if (status.publishesConclusion() && citations.isEmpty() && answerBasis != null) {
+            throw new IllegalArgumentException("an uncited conversational response cannot claim a rule basis");
         }
-        answerBasis = status.publishesConclusion()
+        answerBasis = status.publishesConclusion() && !citations.isEmpty()
                 ? answerBasis == null ? AnswerBasis.DIRECT_RULE : answerBasis
                 : null;
         if (!status.publishesConclusion() && status != AnswerStatus.INSUFFICIENT_EVIDENCE && !citations.isEmpty()) {

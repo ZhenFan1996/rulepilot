@@ -2,13 +2,11 @@ type StreamEvent = { event: string; data: string }
 
 export interface AnswerStreamActivity {
   sequence: number
-  actor: 'answer_agent' | 'rulebook_search' | 'rulebook_reader' | 'answer_reviewer' | 'answer_validator' | 'rulebook_tool'
-  stage: 'searching_evidence' | 'checking_exceptions' | 'expanding_context' | 'reading_pages'
-    | 'composing_answer' | 'reviewing_support' | 'validating_citations' | 'correcting_answer'
-    | 'evidence_search_stalled' | 'checking_rule_details'
+  actor: 'answer_agent' | 'rulebook_tool'
+  stage: 'model_decision' | 'read_tool' | 'tool_observation' | 'repairing_action'
+    | 'repairing_terminal' | 'publication_boundary' | 'agent_stopped'
   message: string
   status: 'running' | 'succeeded' | 'failed' | 'rejected'
-  nextAction: string
   latencyMs: number
 }
 
@@ -123,18 +121,15 @@ export async function streamStructuredAnswer(
 function parseActivity(value: unknown): AnswerStreamActivity | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const item = value as Record<string, unknown>
-  const actors = new Set(['answer_agent', 'rulebook_search', 'rulebook_reader', 'answer_reviewer', 'answer_validator', 'rulebook_tool'])
+  const actors = new Set(['answer_agent', 'rulebook_tool'])
   const stages = new Set([
-    'searching_evidence',
-    'checking_exceptions',
-    'expanding_context',
-    'reading_pages',
-    'composing_answer',
-    'reviewing_support',
-    'validating_citations',
-    'correcting_answer',
-    'evidence_search_stalled',
-    'checking_rule_details',
+    'model_decision',
+    'read_tool',
+    'tool_observation',
+    'repairing_action',
+    'repairing_terminal',
+    'publication_boundary',
+    'agent_stopped',
   ])
   const statuses = new Set(['running', 'succeeded', 'failed', 'rejected'])
   if (!Number.isSafeInteger(item.sequence) || (item.sequence as number) <= 0
@@ -142,7 +137,6 @@ function parseActivity(value: unknown): AnswerStreamActivity | null {
     || typeof item.stage !== 'string' || !stages.has(item.stage)
     || typeof item.message !== 'string' || !item.message.trim()
     || typeof item.status !== 'string' || !statuses.has(item.status)
-    || typeof item.nextAction !== 'string' || !item.nextAction.trim()
     || !Number.isSafeInteger(item.latencyMs) || (item.latencyMs as number) < 0) return null
   return item as unknown as AnswerStreamActivity
 }

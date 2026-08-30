@@ -322,6 +322,7 @@ public class BggRecommendationAgentController {
             int webResearchCalls,
             String failureBoundary,
             String failureReason,
+            String failureDetailCode,
             UserModelResponse userModel,
             List<ResearchSourceResponse> researchSources,
             List<String> completedWork,
@@ -356,6 +357,9 @@ public class BggRecommendationAgentController {
                     response.harness().webResearchCalls(),
                     publicFailureBoundary(response),
                     publicFailureReason(response),
+                    response.outcome() == BoardGameRecommendationAgent.Outcome.UNAVAILABLE
+                            ? response.harness().failureDetailCode()
+                            : null,
                     UserModelResponse.from(response.userModel()),
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
                     publicCompletedWork(response.harness().actions()),
@@ -377,7 +381,7 @@ public class BggRecommendationAgentController {
                 case MODEL_NOT_CONFIGURED -> "service_configuration";
                 case PROVIDER_PROTOCOL_INVALID, PROVIDER_OUTPUT_TRUNCATED, EMPTY_MODEL_RESPONSE ->
                     "model_response";
-                case REPEATED_INCOMPATIBLE_ACTIONS, REPEATED_INVALID_ACTION -> "action_budget";
+                case REPEATED_INCOMPATIBLE_ACTIONS, REPEATED_INVALID_ACTION -> "model_response";
                 case PUBLICATION_REJECTED -> "publication_boundary";
                 case PROVIDER_CALL_FAILED, SERVICE_FAILURE -> "service_failure";
             };
@@ -394,14 +398,10 @@ public class BggRecommendationAgentController {
         private static List<String> publicCompletedWork(List<String> actions) {
             return actions.stream()
                     .map(action -> switch (action) {
-                        case "RESOLVE_BGG_REFERENCE" -> "resolve_bgg_game";
-                        case "SEARCH_BGG_CATALOG" -> "browse_bgg_catalog";
-                        case "SEARCH_BGG_BY_NAME" -> "inspect_candidate_titles";
-                        case "LOOKUP_BGG_CANDIDATES", "LOOKUP_BGG_GAME" -> "lookup_bgg_games";
-                        case "DISCOVER_CANDIDATES" -> "discover_public_candidates";
-                        case "RESEARCH_GAME_FIT", "RESEARCH_GAME_QUESTION" -> "research_game_fit";
+                        case "SEARCH_BGG_CATALOG" -> "search_bgg_catalog";
+                        case "DISCOVER_PUBLIC_RELATIONSHIP" -> "discover_public_relationship";
+                        case "RESEARCH_GAME_FIT" -> "research_game_fit";
                         case "COMPARE_CANDIDATES" -> "compare_candidates";
-                        case "REPORT_NO_MATCH" -> "report_no_match";
                         case "RECOMMEND_GAMES" -> "recommend_games";
                         default -> null;
                     })
@@ -460,7 +460,8 @@ public class BggRecommendationAgentController {
             String outcome,
             String assistantMessage,
             String failureBoundary,
-            String failureReason) {
+            String failureReason,
+            String failureDetailCode) {
         static RecommendationTurnResultResponse from(SessionSnapshot snapshot) {
             if (snapshot.lastClientTurnId() == null
                     || snapshot.lastResponseLocale() == null
@@ -474,7 +475,8 @@ public class BggRecommendationAgentController {
                     response.outcome().name().toLowerCase(Locale.ROOT),
                     response.assistantMessage(),
                     RecommendationConversationResponse.publicFailureBoundary(response),
-                    RecommendationConversationResponse.publicFailureReason(response));
+                    RecommendationConversationResponse.publicFailureReason(response),
+                    response.harness().failureDetailCode());
         }
     }
 

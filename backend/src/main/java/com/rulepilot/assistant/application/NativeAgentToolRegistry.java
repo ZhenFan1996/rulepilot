@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.NativeAgentTool;
 import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
@@ -60,6 +61,15 @@ public class NativeAgentToolRegistry {
     }
 
     public ToolExecution execute(Role role, String name, String argumentsJson, ToolScope scope) {
+        return execute(role, name, argumentsJson, scope, Set.of(name == null ? "unknown_tool" : name));
+    }
+
+    public ToolExecution execute(
+            Role role,
+            String name,
+            String argumentsJson,
+            ToolScope scope,
+            Set<String> allowedToolNames) {
         RegisteredTool registered = tools.get(name);
         if (registered == null || role == null || !registered.tool().allowedRoles().contains(role)) {
             return new ToolExecution(unknownSpec(name), ToolObservation.error("TOOL_NOT_ALLOWED"));
@@ -68,32 +78,50 @@ public class NativeAgentToolRegistry {
             return new ToolExecution(registered.spec(), ToolObservation.error("SCOPE_REJECTED"));
         }
         if (argumentsJson == null || argumentsJson.isBlank() || scope == null) {
-            return invalidArguments(registered, "argumentsJson must contain one JSON object");
+            return invalidArguments(
+                    registered,
+                    argumentsJson,
+                    "/",
+                    "argumentsJson must contain one JSON object",
+                    allowedToolNames);
         }
         try {
             return new ToolExecution(registered.spec(), registered.tool().execute(argumentsJson, scope));
         } catch (IllegalArgumentException exception) {
-            return invalidArguments(registered, validationError(exception));
+            ArgumentFailure failure = validationFailure(exception);
+            return invalidArguments(
+                    registered, argumentsJson, failure.path(), failure.reason(), allowedToolNames);
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
         } catch (RuntimeException exception) {
             return new ToolExecution(registered.spec(), ToolObservation.error("TOOL_EXECUTION_FAILED"));
         }
     }
 
-    private ToolExecution invalidArguments(RegisteredTool registered, String validationError) {
+    private ToolExecution invalidArguments(
+            RegisteredTool registered,
+            String argumentsJson,
+            String path,
+            String reason,
+            Set<String> allowedToolNames) {
         return new ToolExecution(
                 registered.spec(),
                 new ToolObservation(
                         NativeAgentTool.ObservationStatus.ERROR,
                         "INVALID_ARGUMENT",
                         Map.of(
-                                "validationError", validationError,
-                                "inputSchema", registered.spec().inputSchema(),
+                                "path", path,
+                                "reason", reason,
+                                "currentSchema", registered.spec().inputSchema(),
                                 "schemaHash", registered.spec().schemaHash(),
-                                "allowedToolName", registered.spec().name()),
+                                "allowedToolNames", allowedToolNames == null
+                                        ? List.of(registered.spec().name())
+                                        : allowedToolNames.stream().sorted().toList(),
+                                "rejectedArgumentsJson", argumentsJson == null ? "" : argumentsJson),
                         0));
     }
 
-    private String validationError(IllegalArgumentException exception) {
+    private ArgumentFailure validationFailure(IllegalArgumentException exception) {
         String summary = exception.getMessage() == null || exception.getMessage().isBlank()
                 ? "Arguments did not satisfy the advertised tool contract"
                 : exception.getMessage();
@@ -106,11 +134,11 @@ public class NativeAgentToolRegistry {
                                 + ", column " + jsonFailure.getLocation().getColumnNr();
                 // Parser messages may echo an invalid token from the arguments. The tool-level reason and location
                 // are enough for the same Agent to repair its typed action without reflecting sensitive input.
-                return summary + location;
+                return new ArgumentFailure("/", summary + location);
             }
             cause = cause.getCause();
         }
-        return summary;
+        return new ArgumentFailure("/", summary);
     }
 
     public ToolSpec specification(Role role, String name) {
@@ -152,6 +180,8 @@ public class NativeAgentToolRegistry {
     }
 
     private record RegisteredTool(NativeAgentTool tool, ToolSpec spec) {}
+
+    private record ArgumentFailure(String path, String reason) {}
 
     public record ToolExecution(ToolSpec specification, ToolObservation observation) {
         public ToolExecution {

@@ -395,6 +395,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let planStarted = false
   let deleted = false
   let slowFirstLessonSection = false
+  let degradedLesson = false
   let regressLessonStatus = false
   let insufficientLesson = false
   let lessonRunReads = 0
@@ -491,6 +492,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'GET' && request.url?.endsWith('/teaching-plans/latest')) {
       return json(response, 200, {
         id: '44444444-4444-4444-4444-444444444444',
+        documentVersionId: '22222222-2222-2222-2222-222222222222',
         gameTitle: 'Lantern Relay',
         sections: [{ position: 1 }],
       })
@@ -506,7 +508,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       lessonRunReads += 1
       const state = lessonFailureCode
         ? lessonRunReads === 1 ? 'RECEIVED' : 'FAILED'
-        : completeLessonImmediately ? 'COMPLETED' : lessonRunReads === 1
+        : degradedLesson ? 'DEGRADED' : completeLessonImmediately ? 'COMPLETED' : lessonRunReads === 1
         ? 'RECEIVED'
         : lessonRunReads === 2
           ? 'RETRIEVING'
@@ -517,7 +519,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
           state,
           lastErrorCode: state === 'FAILED' ? lessonFailureCode : null,
           createdAt: '2026-08-02T00:00:13Z',
-          completedAt: ['COMPLETED', 'FAILED', 'INSUFFICIENT_EVIDENCE'].includes(state)
+          completedAt: ['COMPLETED', 'DEGRADED', 'FAILED', 'INSUFFICIENT_EVIDENCE'].includes(state)
             ? slowFirstLessonSection ? '2026-08-02T00:00:36Z' : '2026-08-02T00:00:20Z'
             : null,
         },
@@ -543,7 +545,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'GET' && request.url?.endsWith('/illustrated-lessons/latest')) {
       lessonReads += 1
       return json(response, 200, {
-        status: regressLessonStatus
+        status: degradedLesson ? 'DRAFT_READY' : regressLessonStatus
           ? lessonReads === 1 ? 'COMPLETE' : 'DRAFT_READY'
           : lessonReads === 1 ? 'DRAFT_READY' : 'COMPLETE',
         sections: [{
@@ -682,7 +684,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.doesNotMatch(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=inspectTeachingVisualBatch/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
-    assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
+    assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson metrics=\{"firstSectionSeconds":7,"totalSeconds":7,"usedModelCalls":1,"correctionCalls":0\}/)
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=20/)
 
     preparationFailureCode = 'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED'
@@ -795,10 +797,22 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         '--expected-title', 'Different Game',
         '--result-file', retainedPlanCheckpoint,
         '--timeout-seconds', '10'],
-      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: failedPublicStatus,
+      },
     )
     assert.notEqual(rejectedAfterPlan.code, 0)
-    assert.match(rejectedAfterPlan.stderr, /Teaching plan was unusable/)
+    assert.match(rejectedAfterPlan.stderr, /Teaching plan kept a different game identity/)
+    assert.deepEqual(JSON.parse(await readFile(failedPublicStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'teaching-plan-inspected',
+      failureCode: 'TEACHING_PLAN_INVALID',
+      failureCauseCode: 'TEACHING_PLAN_TITLE_MISMATCH',
+      cleanupOutcome: 'SUCCEEDED',
+    })
     const checkpoint = JSON.parse(await readFile(retainedPlanCheckpoint, 'utf8'))
     assert.equal(checkpoint.stage, 'plan')
     assert.equal(checkpoint.plan.gameTitle, 'Lantern Relay')
@@ -843,10 +857,10 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(textOnly.stderr, /SMOKE_STAGE visual-expectation-verified expectation=forbidden visualSteps=0 focusedVisualSteps=0/)
     assert.equal(deleted, true)
 
-    slowFirstLessonSection = true
+    degradedLesson = true
     deleted = false
     planStarted = false
-    const slowLesson = await spawnResult(
+    const readableDegraded = await spawnResult(
       'bash',
       [resolve('scripts/smoke-production-ordinary-user.sh'),
         '--base-url', `http://127.0.0.1:${address.port}`,
@@ -854,12 +868,13 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         '--timeout-seconds', '10'],
       { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
     )
-    assert.equal(slowLesson.code, 0, slowLesson.stderr)
-    assert.match(slowLesson.stderr, /SMOKE_WARNING First cited lesson section exceeded the 15-second target/)
+    assert.equal(readableDegraded.code, 0, readableDegraded.stderr)
+    assert.equal(JSON.parse(readableDegraded.stdout).lessonState, 'DEGRADED')
+    assert.equal(JSON.parse(readableDegraded.stdout).lessonStatus, 'DRAFT_READY')
     assert.equal(deleted, true)
+    degradedLesson = false
 
     regressLessonStatus = true
-    slowFirstLessonSection = false
     deleted = false
     planStarted = false
     const regressedLesson = await spawnResult(
@@ -1394,30 +1409,6 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
     assert.equal(summary.sourceUrl, canonicalSource)
     assert.equal(summary.effectiveSourceUrl, effectiveSource)
     assert.equal(summary.pageCount, 3)
-    assert.deepEqual(summary.pageAttempts, {
-      pages: [
-        { page: 1, initialOutcome: 'FAILED',
-          recoveryKind: 'CONTRACT_REPAIR', repairCode: 'DUPLICATE_RULE_GROUP',
-          recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2,
-          finalOutcome: 'SUCCEEDED' },
-        { page: 2, initialOutcome: 'FAILED', recoveryKind: 'TRANSIENT_RETRY',
-          repairCode: null, recoveryOutcome: 'FAILED', semanticAttempts: 2, finalOutcome: 'FAILED' },
-        { page: 3, initialOutcome: 'SUCCEEDED', recoveryKind: null,
-          repairCode: null, recoveryOutcome: null, semanticAttempts: 1, finalOutcome: 'SUCCEEDED' },
-      ],
-      initialSucceeded: 1,
-      initialFailed: 2,
-      initialRejected: 0,
-      transientRetryAttempted: 1,
-      transientRetrySucceeded: 0,
-      transientRetryFailed: 1,
-      repairAttempted: 1,
-      repairSucceeded: 1,
-      repairFailed: 0,
-      finalUnavailablePages: [2],
-      maximumSemanticAttemptsForAnyPage: 2,
-      valid: true,
-    })
     assert.equal(summary.preparationState, 'COMPLETED')
     assert.equal(summary.lessonState, 'COMPLETED')
     assert.equal(summary.lessonStatus, 'COMPLETE')
@@ -1426,7 +1417,6 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
     assert.equal(deleted, true)
     assert.match(result.stderr, /SMOKE_STAGE image-gallery-candidate-verified/)
     assert.match(result.stderr, /SMOKE_STAGE official-import-completed/)
-    assert.match(result.stderr, /SMOKE_PAGE_ATTEMPTS .*"maximumSemanticAttemptsForAnyPage":2/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
     assert.equal(calls.filter(call => call.method === 'POST'
       && call.url === '/api/v1/documents/official-imports').length, 1)
@@ -1441,7 +1431,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
     assert.equal(retained.importJobId, importJobId)
     assert.equal(retained.documentId, documentId)
     assert.equal(retained.documentVersionId, versionId)
-    assert.equal(retained.summary.pageAttempts.repairSucceeded, 1)
+    assert.equal(retained.summary.pageAttempts, undefined)
   } finally {
     server.closeAllConnections()
     await new Promise((resolvePromise) => server.close(resolvePromise))

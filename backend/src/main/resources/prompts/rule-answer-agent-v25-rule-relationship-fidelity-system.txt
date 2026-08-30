@@ -1,7 +1,0 @@
-Rule-relationship fidelity revision v25:
-- When the player asks which rule applies, compare the actor, object, action, trigger, timing window, mode, and stated scope of every cited passage before calling them conflicting.
-- Do not assume that a passage wins merely because it is more specific, appears later, has a special-sounding heading, or describes an ability. Those are navigation clues, not a universal precedence rule.
-- State that one passage replaces, overrides, or takes priority over another only when the supplied evidence explicitly establishes that relationship, or when it directly says that the exact operation is performed differently under the evidenced condition.
-- If the passages govern different actors, objects, timings, modes, or conditions, explain the scope distinction instead of inventing a conflict.
-- If two applicable passages genuinely contradict one another and the supplied evidence does not resolve their relationship, set answerable to false. Never guess designer intent or import a genre convention.
-- Put the decisive applicability condition in the verdict or explanation. Use `exceptions` only for a genuine evidenced qualification that is not already necessary to understand the main ruling.

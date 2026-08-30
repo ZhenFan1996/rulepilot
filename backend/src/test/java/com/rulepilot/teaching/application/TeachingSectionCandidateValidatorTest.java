@@ -6,14 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
-import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
-import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
@@ -22,276 +19,58 @@ import org.junit.jupiter.api.Test;
 
 class TeachingSectionCandidateValidatorTest {
 
-    private final TeachingSectionCandidateValidator validator =
-            new TeachingSectionCandidateValidator(new PolicyEvidenceVerifier());
-
     @Test
-    void preservesVisualIntentButLeavesPixelGeometryToThePostPublicationLocator() {
+    void publishesExactNaturalTextWhenEveryCitationBelongsToTheRequest() {
         UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
+        UUID citation = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
-                chunkId,
-                versionId,
-                "SETUP",
-                "Central board",
-                "Place the central board in the middle of the table before the first turn.",
-                4,
-                4);
-        TeachingPlan plan = plan(versionId);
-        TeachingPlan.PlannedSection planned = plan.sections().getFirst();
+                citation, versionId, "RULE", "Repair", "Spend an action to repair a damaged system.", 8, 8);
+        SectionRequest request = new SectionRequest(
+                "repair",
+                "Repair systems",
+                "Explain repairs.",
+                List.of(),
+                List.of(new EvidenceInput(citation, "RULE", "Repair", evidence.excerpt(), 8, 8)));
+        String naturalText = "系统受损时，你可以花一次行动修复它；若眼下更需要火力，也可以稍后再处理。";
         SectionDraft draft = new SectionDraft(
-                "摆好中央展示区",
-                VisualKind.TABLE_LAYOUT,
-                "先在图中找到主棋盘。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "放置主棋盘",
-                        TeachingMove.VISUAL,
-                        "在图中找到主棋盘，再把它放在桌面中央。",
-                        List.of(chunkId))));
+                "修复系统",
+                List.of(new StepDraft("选择时机", TeachingMove.DO, naturalText, List.of(citation))));
 
-        var section = validator.validate(
-                plan, planned, List.of(evidence), request(chunkId), draft, EvidenceStatus.CITED_DRAFT);
+        var published = new TeachingSectionCandidateValidator(new PolicyEvidenceVerifier()).validate(
+                plan(versionId), planned(), List.of(evidence), request, draft, EvidenceStatus.CITED_DRAFT);
 
-        assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
-        assertThat(section.visualSourcePages()).containsExactly(4);
-        assertThat(section.visualSourceChunkIds()).containsExactly(chunkId);
-        assertThat(section.steps()).singleElement().satisfies(step -> {
-            assertThat(step.sourcePages()).containsExactly(4);
-            assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
-            assertThat(step.visualFocus()).isNull();
-        });
+        assertThat(published.title()).isEqualTo("修复系统");
+        assertThat(published.steps().getFirst().text()).isEqualTo(naturalText);
+        assertThat(published.steps().getFirst().sourceChunkIds()).containsExactly(citation);
     }
 
     @Test
-    void rejectsAPlayerFacingStepWithoutItsOwnCitation() {
+    void rejectsACitationThatWasRetrievedButNotGrantedToThisModelRequest() {
         UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = textEvidence(chunkId, versionId);
-        TeachingPlan plan = plan(versionId);
+        UUID allowed = UUID.randomUUID();
+        UUID outside = UUID.randomUUID();
+        RuleEvidence allowedEvidence = new RuleEvidence(
+                allowed, versionId, "RULE", "Turn", "Take one action.", 4, 4);
+        RuleEvidence outsideEvidence = new RuleEvidence(
+                outside, versionId, "RULE", "Secret", "Unrelated rule.", 12, 12);
+        SectionRequest request = new SectionRequest(
+                "turn",
+                "Turn",
+                "Take a turn.",
+                List.of(),
+                List.of(new EvidenceInput(allowed, "RULE", "Turn", allowedEvidence.excerpt(), 4, 4)));
         SectionDraft draft = new SectionDraft(
-                "从公共区域开始",
-                VisualKind.FLOW_DIAGRAM,
-                "先准备公共区域，再开始行动。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "执行行动",
-                        TeachingMove.DO,
-                        "选择一项可用行动，结算完成后把回合交给下一位玩家。",
-                        List.of())));
+                "Turn",
+                List.of(new StepDraft("Act", TeachingMove.DO, "Use unrelated evidence.", List.of(outside))));
 
-        assertThatThrownBy(() -> validator.validate(
-                        plan,
-                        plan.sections().getFirst(),
-                        List.of(evidence),
-                        textRequest(chunkId),
+        assertThatThrownBy(() -> new TeachingSectionCandidateValidator(new PolicyEvidenceVerifier()).validate(
+                        plan(versionId),
+                        planned(),
+                        List.of(allowedEvidence, outsideEvidence),
+                        request,
                         draft,
                         EvidenceStatus.CITED_DRAFT))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("CLAIM_WITHOUT_CITATION");
-    }
-
-    @Test
-    void rejectsACitationThatWasNotIncludedInTheAllowedEvidence() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        UUID unknownChunkId = UUID.randomUUID();
-        RuleEvidence evidence = textEvidence(chunkId, versionId);
-        SectionDraft draft = new SectionDraft(
-                "从公共区域开始",
-                VisualKind.FLOW_DIAGRAM,
-                "先准备公共区域，再开始行动。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "执行行动",
-                        TeachingMove.DO,
-                        "选择一项可用行动，结算完成后把回合交给下一位玩家。",
-                        List.of(unknownChunkId))));
-
-        TeachingPlan plan = plan(versionId);
-        assertThatThrownBy(() -> validator.validate(
-                        plan,
-                        plan.sections().getFirst(),
-                        List.of(evidence),
-                        textRequest(chunkId),
-                        draft,
-                        EvidenceStatus.CITED_DRAFT))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("CITATION_OUTSIDE_EVIDENCE");
-    }
-
-    @Test
-    void rejectsEvidenceFromAnotherDocumentVersionEvenWhenTheCitationIdIsAllowed() {
-        UUID planVersionId = UUID.randomUUID();
-        UUID otherVersionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = textEvidence(chunkId, otherVersionId);
-        SectionDraft draft = new SectionDraft(
-                "从公共区域开始",
-                VisualKind.FLOW_DIAGRAM,
-                "先准备公共区域，再开始行动。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "执行行动",
-                        TeachingMove.DO,
-                        "选择一项可用行动，结算完成后把回合交给下一位玩家。",
-                        List.of(chunkId))));
-        TeachingPlan plan = plan(planVersionId);
-
-        assertThatThrownBy(() -> validator.validate(
-                        plan,
-                        plan.sections().getFirst(),
-                        List.of(evidence),
-                        textRequest(chunkId),
-                        draft,
-                        EvidenceStatus.CITED_DRAFT))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("VERSION_MISMATCH");
-    }
-
-    @Test
-    void preservesACompleteNaturalSectionExactlyAfterDeterministicValidation() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = textEvidence(chunkId, versionId);
-        SectionDraft draft = new SectionDraft(
-                "先摆好，再轮流行动",
-                VisualKind.FLOW_DIAGRAM,
-                "把公共区域放在所有人都方便操作的位置，然后按顺序开始。",
-                List.of(chunkId),
-                List.of(
-                        new StepDraft(
-                                "摆好公共区域",
-                                TeachingMove.DO,
-                                "把公共区域放在桌面中央，并让每位玩家拿好自己的组件。",
-                                List.of(chunkId)),
-                        new StepDraft(
-                                "完成你的回合",
-                                TeachingMove.FLOW,
-                                "轮到你时选择一项可用行动，完整结算后再把回合交给下一位玩家。",
-                                List.of(chunkId)),
-                        new StepDraft(
-                                "检查是否结束",
-                                TeachingMove.CHECK,
-                                "每轮结束时检查规则书所列的结束条件；尚未满足就继续下一轮。",
-                                List.of(chunkId))));
-        TeachingPlan plan = plan(versionId);
-
-        var section = validator.validate(
-                plan,
-                plan.sections().getFirst(),
-                List.of(evidence),
-                textRequest(chunkId),
-                draft,
-                EvidenceStatus.CITED_DRAFT);
-
-        assertThat(section.title()).isEqualTo(draft.title());
-        assertThat(section.visualCaption()).isEqualTo(draft.visualCaption());
-        assertThat(section.steps())
-                .extracting(step -> step.heading() + "\n" + step.text())
-                .containsExactlyElementsOf(draft.steps().stream()
-                        .map(step -> step.heading() + "\n" + step.text())
-                        .toList());
-        assertThat(section.steps()).allSatisfy(step -> {
-            assertThat(step.sourceChunkIds()).containsExactly(chunkId);
-            assertThat(step.sourcePages()).containsExactly(4);
-        });
-    }
-
-    @Test
-    void preservesEveryAcceptedProseByteInsteadOfTrimmingOrRewritingIt() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = textEvidence(chunkId, versionId);
-        String title = " 先摆好，再开始 ";
-        String caption = "先确认公共区域。\n再按顺序行动。 ";
-        String heading = " 完成当前回合 ";
-        String text = "轮到你时选择可用行动；完整结算后，\n再把回合交给下一位玩家。 ";
-        SectionDraft draft = new SectionDraft(
-                title,
-                VisualKind.FLOW_DIAGRAM,
-                caption,
-                List.of(chunkId),
-                List.of(new StepDraft(heading, TeachingMove.FLOW, text, List.of(chunkId))));
-        TeachingPlan plan = plan(versionId);
-
-        var section = validator.validate(
-                plan,
-                plan.sections().getFirst(),
-                List.of(evidence),
-                textRequest(chunkId),
-                draft,
-                EvidenceStatus.CITED_DRAFT);
-
-        assertThat(section.title()).isEqualTo(title);
-        assertThat(section.visualCaption()).isEqualTo(caption);
-        assertThat(section.steps().getFirst().heading()).isEqualTo(heading);
-        assertThat(section.steps().getFirst().text()).isEqualTo(text);
-    }
-
-    @Test
-    void doesNotPretendThatNumberMatchingProvesOrDisprovesRuleMeaning() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = new RuleEvidence(
-                chunkId,
-                versionId,
-                "SCORING",
-                "Resource award",
-                "Gain 1 resource when the condition is met.",
-                8,
-                8);
-        TeachingPlan plan = scoringPlan(versionId);
-        String caption = "按证据结算；原文中的 [bonus]、🎯 与 E1 都可能是合法规则标记。";
-        String text = "满足条件时获得2个资源；这里的数量语义留给生成 Agent 与真实评测，不由字符串比对裁决。";
-        SectionDraft draft = new SectionDraft(
-                "结算资源",
-                VisualKind.REFERENCE_CARD,
-                caption,
-                List.of(chunkId),
-                List.of(new StepDraft("执行结算", TeachingMove.DO, text, List.of(chunkId))));
-
-        var section = validator.validate(
-                plan,
-                plan.sections().getFirst(),
-                List.of(evidence),
-                scoringRequest(chunkId),
-                draft,
-                EvidenceStatus.CITED_DRAFT);
-
-        assertThat(section.visualCaption()).isEqualTo(caption);
-        assertThat(section.steps().getFirst().text()).isEqualTo(text);
-    }
-
-    @Test
-    void preservesARichCaptionBeyondTheHistoricalDisplayPreference() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = textEvidence(chunkId, versionId);
-        String caption = "把本章所有有来源的限制、顺序和例外放在同一张文字参考卡中；"
-                + "先完成当前行动，再检查触发条件，然后按证据所列的顺序处理结果。".repeat(10);
-        SectionDraft draft = new SectionDraft(
-                "完整参考卡",
-                VisualKind.REFERENCE_CARD,
-                caption,
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "执行行动",
-                        TeachingMove.DO,
-                        "选择一项可用行动，完整结算后把回合交给下一位玩家。",
-                        List.of(chunkId))));
-        TeachingPlan plan = plan(versionId);
-
-        var section = validator.validate(
-                plan,
-                plan.sections().getFirst(),
-                List.of(evidence),
-                textRequest(chunkId),
-                draft,
-                EvidenceStatus.CITED_DRAFT);
-
-        assertThat(caption.length()).isGreaterThan(240);
-        assertThat(section.visualCaption()).isEqualTo(caption);
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private TeachingPlan plan(UUID versionId) {
@@ -299,128 +78,15 @@ class TeachingSectionCandidateValidatorTest {
                 UUID.randomUUID(),
                 versionId,
                 "Game",
-                "Premise",
-                List.of(new TeachingPlan.PlannedSection(
-                        1,
-                        "setup",
-                        "开局准备",
-                        "Explain how to place the central board before the first turn.",
-                        true,
-                        true,
-                        List.of("central board setup"),
-                        List.of("setup"))),
-                "player",
-                Instant.now());
+                "Learn.",
+                List.of(planned()),
+                "owner",
+                Instant.EPOCH);
     }
 
-    private TeachingPlan scoringPlan(UUID versionId) {
-        return new TeachingPlan(
-                UUID.randomUUID(),
-                versionId,
-                "Game",
-                "Premise",
-                List.of(new TeachingPlan.PlannedSection(
-                        1,
-                        "resource-resolution",
-                        "结算资源",
-                        "Teach the source-grounded resource resolution.",
-                        true,
-                        false,
-                        List.of("resource award"),
-                        List.of("scoring"))),
-                "player",
-                Instant.now());
-    }
-
-    private SectionRequest request(UUID chunkId) {
-        return new SectionRequest(
-                "setup",
-                "开局准备",
-                "Explain how to place the central board before the first turn.",
-                List.of("setup"),
-                List.of(),
-                List.of(new EvidenceInput(
-                        chunkId,
-                        "SETUP",
-                        "Central board",
-                        "Place the central board in the middle of the table before the first turn.",
-                        4,
-                        4)),
-                List.of(new PageImageInput(4, "image/jpeg", new byte[] {1}, 1_000, 1_000)),
-                List.of("central board setup"),
-                "player",
-                "完整章节分工");
-    }
-
-    private SectionRequest textRequest(UUID chunkId) {
-        return new SectionRequest(
-                "setup",
-                "开局准备",
-                "Explain setup, turn flow, and when play continues.",
-                List.of("setup"),
-                List.of(),
-                List.of(new EvidenceInput(
-                        chunkId,
-                        "SETUP",
-                        "Setup and turns",
-                        "Place the shared area in reach. Each player takes their components. On your turn, choose an available action and resolve it before play passes. At the end of a round, check the stated end condition; otherwise begin another round.",
-                        4,
-                        4)),
-                List.of(),
-                List.of("setup and turn flow"),
-                "player",
-                "完整章节分工");
-    }
-
-    private SectionRequest scoringRequest(UUID chunkId) {
-        return new SectionRequest(
-                "resource-resolution",
-                "结算资源",
-                "Teach the source-grounded resource resolution.",
-                List.of("scoring"),
-                List.of(),
-                List.of(new EvidenceInput(
-                        chunkId,
-                        "SCORING",
-                        "Resource award",
-                        "Gain 1 resource when the condition is met.",
-                        8,
-                        8)),
-                List.of(),
-                List.of("resource award"),
-                "player",
-                "完整章节分工");
-    }
-
-    private SectionRequest unitRequest(UUID chunkId, List<TeachingUnitInput> units) {
-        return new SectionRequest(
-                "setup",
-                "开局准备",
-                "Explain the Agent-planned units in a source-grounded order.",
-                List.of("setup"),
-                List.of(),
-                List.of(new EvidenceInput(
-                        chunkId,
-                        "SETUP",
-                        "Setup and turns",
-                        "Place the shared area in reach. Each player takes their components. On your turn, choose an available action and resolve it before play passes. At the end of a round, check the stated end condition; otherwise begin another round.",
-                        4,
-                        4)),
-                List.of(),
-                List.of("Agent-planned units"),
-                units,
-                "player",
-                "完整章节分工");
-    }
-
-    private RuleEvidence textEvidence(UUID chunkId, UUID versionId) {
-        return new RuleEvidence(
-                chunkId,
-                versionId,
-                "SETUP",
-                "Setup and turns",
-                "Place the shared area in reach. Each player takes their components. On your turn, choose an available action and resolve it before play passes. At the end of a round, check the stated end condition; otherwise begin another round.",
-                4,
-                4);
+    private TeachingPlan.PlannedSection planned() {
+        return new TeachingPlan.PlannedSection(
+                1, "repair", "Repair", "Explain repairs.", true, false,
+                List.of("repair"), List.of(), List.of(8));
     }
 }

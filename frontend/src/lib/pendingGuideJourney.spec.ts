@@ -80,13 +80,13 @@ describe('buildPendingGuideJourneys', () => {
     expect(journeys).toEqual([expect.objectContaining({
       title: '花砖物语', phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
       errorCode: 'TEACHING_PREPARATION_FAILED',
-      failureClassification: 'preserved-stop', failureRecovery: 'retry-step',
+      failureClassification: 'retry-preserved', failureRecovery: 'retry-step',
     })])
   })
 
   it.each([
-    ['TEACHING_PREPARATION_INVALID_PLAN', 'external-repair', 'manual-repair'],
-    ['INSUFFICIENT_EVIDENCE', 'preserved-stop', null],
+    ['TEACHING_PREPARATION_INVALID_PLAN', 'internal-correction', null],
+    ['INSUFFICIENT_EVIDENCE', 'repair-required', 'manual-repair'],
   ] as const)('does not offer a blind preparation retry for %s', (
     errorCode,
     failureClassification,
@@ -120,7 +120,7 @@ describe('buildPendingGuideJourneys', () => {
 
     expect(journeys).toEqual([expect.objectContaining({
       errorCode: 'TEACHING_PREPARATION_QUEUE_TIMEOUT',
-      failureClassification: 'preserved-stop',
+      failureClassification: 'retry-preserved',
       failureRecovery: 'retry-step',
       retryAction: 'PREPARE_TEACHING',
     })])
@@ -151,13 +151,13 @@ describe('buildPendingGuideJourneys', () => {
     }], [])
 
     expect(official).toEqual([expect.objectContaining({
-      retryAction: null, state: 'failed', failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+      retryAction: null, state: 'failed', failureClassification: 'repair-required', failureRecovery: 'manual-repair',
     })])
     expect(uploaded).toEqual([expect.objectContaining({
-      retryAction: null, state: 'failed', failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+      retryAction: null, state: 'failed', failureClassification: 'repair-required', failureRecovery: 'manual-repair',
     })])
     expect(direct).toEqual([expect.objectContaining({
-      retryAction: null, state: 'failed', failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+      retryAction: null, state: 'failed', failureClassification: 'repair-required', failureRecovery: 'manual-repair',
     })])
   })
 

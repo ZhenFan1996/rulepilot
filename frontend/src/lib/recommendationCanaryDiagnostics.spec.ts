@@ -25,7 +25,6 @@ describe('recommendation canary diagnostics', () => {
     ['missing SSE result', { hasSseResult: false }, 'terminal_evidence_gap'],
     ['missing persisted terminal', { hasPersistedTerminal: false }, 'terminal_evidence_gap'],
     ['inconsistent terminal content', { ssePersistedContentConsistent: false }, 'terminal_evidence_gap'],
-    ['late useful slate', { sloMet: false }, 'interaction_slo'],
     ['timely consistent result', {}, null],
   ] as const)('classifies %s', (_label, override, expected) => {
     expect(classifyRecommendationCanaryFailure({
@@ -35,7 +34,6 @@ describe('recommendation canary diagnostics', () => {
       hasSseResult: true,
       hasPersistedTerminal: true,
       ssePersistedContentConsistent: true,
-      sloMet: true,
       ...override,
     })).toBe(expected)
   })

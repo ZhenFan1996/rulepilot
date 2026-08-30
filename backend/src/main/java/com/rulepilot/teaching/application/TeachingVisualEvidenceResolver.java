@@ -47,12 +47,13 @@ final class TeachingVisualEvidenceResolver {
             List<RuleEvidence> retrieved,
             UUID assistantRunId) {
         if (!requiresPageRead(plan, planned, retrieved)) return Resolution.unread(retrieved);
-        Set<Integer> requestedPages = Set.copyOf(planned.sourcePageNumbers());
+        List<Integer> retrievablePages = retrievableSourcePages(planned);
+        Set<Integer> requestedPages = Set.copyOf(retrievablePages);
         ensurePageFacts(plan, requestedPages, assistantRunId);
-        boolean completeFacts = hasCompleteFacts(plan.documentVersionId(), requestedPages);
+        boolean usableFacts = hasUsableFacts(plan.documentVersionId(), requestedPages);
         Map<UUID, RuleEvidence> pageEvidenceById = new LinkedHashMap<>();
         mergePageEvidence(pageEvidenceById, matchingPageEvidence(plan.documentVersionId(), requestedPages, retrieved));
-        List<Set<Integer>> batches = pageReadBatches(planned.sourcePageNumbers());
+        List<Set<Integer>> batches = pageReadBatches(retrievablePages);
         int toolCalls = 0;
         boolean completeRead = true;
         for (Set<Integer> batch : batches) {
@@ -64,10 +65,10 @@ final class TeachingVisualEvidenceResolver {
                         batchOperationName(
                                 operationName("readRuleEvidencePages", planned.position()), toolCalls, batches.size()),
                         batch.size(),
-                        completeFacts
+                        usableFacts
                                 ? "Planner-selected durable page evidence retrieved"
                                 : "Planner-selected visual rulebook pages retrieved",
-                        () -> tools.readRuleEvidencePages(plan.documentVersionId(), batch, !completeFacts),
+                        () -> tools.readRuleEvidencePages(plan.documentVersionId(), batch, !usableFacts),
                         this::evidenceTokens);
                 if (CanonicalPageObservation.complete(
                                 assistantRunId, plan.documentVersionId(), batch, batchEvidence)
@@ -91,14 +92,14 @@ final class TeachingVisualEvidenceResolver {
                 ? CanonicalPageObservation.complete(
                         assistantRunId,
                         plan.documentVersionId(),
-                        Set.copyOf(planned.sourcePageNumbers()),
+                        requestedPages,
                         pageEvidence)
                 : Optional.empty();
         if (canonical.isPresent()) {
             log.info(
                     "Teaching topic {} is bound to visual source pages {}",
                     planned.topicKey(),
-                    planned.sourcePageNumbers());
+                    retrievablePages);
             List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), pageEvidence);
             return new Resolution(enriched, canonical, toolCalls);
         }
@@ -111,7 +112,7 @@ final class TeachingVisualEvidenceResolver {
             pageEvidence.stream()
                     .filter(source -> plan.documentVersionId().equals(source.documentVersionId()))
                     .filter(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
-                            .anyMatch(planned.sourcePageNumbers()::contains))
+                            .anyMatch(retrievablePages::contains))
                     .forEach(source -> mergePageEvidence(retained, List.of(source)));
             List<RuleEvidence> partial = List.copyOf(retained.values());
             List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), partial);
@@ -124,15 +125,22 @@ final class TeachingVisualEvidenceResolver {
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             List<RuleEvidence> retrieved) {
-        if (plan == null || planned == null || retrieved == null || planned.sourcePageNumbers().isEmpty()) {
+        if (plan == null || planned == null || retrieved == null || retrievableSourcePages(planned).isEmpty()) {
             return false;
         }
-        return TeachingVisualEvidenceSelector.hasVisualPageEvidence(retrieved);
+        // A planner-owned page binding is already the exact retrieval instruction. It must not depend on a lossy
+        // semantic search first returning a visual placeholder; image-only and OCR-poor rulebooks often cannot do so.
+        return !planned.sourcePageNumbers().isEmpty()
+                || retrieved.stream().anyMatch(TeachingVisualEvidenceResolver::isVisualPageEvidence);
     }
 
     static int maximumPageReadToolCalls(TeachingPlan.PlannedSection planned) {
         if (planned == null) return 0;
-        return pageReadBatches(planned.sourcePageNumbers()).size();
+        return pageReadBatches(retrievableSourcePages(planned)).size();
+    }
+
+    private static List<Integer> retrievableSourcePages(TeachingPlan.PlannedSection planned) {
+        return planned.sourcePageNumbers();
     }
 
     static List<Set<Integer>> pageReadBatches(List<Integer> pageNumbers) {
@@ -275,12 +283,12 @@ final class TeachingVisualEvidenceResolver {
         }
     }
 
-    private boolean hasCompleteFacts(UUID documentVersionId, Set<Integer> requestedPages) {
-        Set<Integer> completePages = visualFacts.find(documentVersionId, requestedPages).stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
+    private boolean hasUsableFacts(UUID documentVersionId, Set<Integer> requestedPages) {
+        Set<Integer> observedPages = visualFacts.find(documentVersionId, requestedPages).stream()
+                .filter(VisualRulebookCatalogPolicy::hasReusablePageObservation)
                 .map(VisualRulebookPageFacts.PageFact::pageNumber)
                 .collect(Collectors.toSet());
-        return completePages.containsAll(requestedPages);
+        return observedPages.containsAll(requestedPages);
     }
 
     private static List<RuleEvidence> matchingPageEvidence(
@@ -309,7 +317,7 @@ final class TeachingVisualEvidenceResolver {
                 .collect(Collectors.toUnmodifiableSet());
         if (pages.isEmpty()) return evidence;
         Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
+                .filter(VisualRulebookCatalogPolicy::hasReusablePageObservation)
                 .collect(Collectors.toUnmodifiableMap(
                         VisualRulebookPageFacts.PageFact::pageNumber,
                         VisualRulebookPageFacts.PageFact::factualSummary,
@@ -318,7 +326,7 @@ final class TeachingVisualEvidenceResolver {
         return evidence.stream()
                 .map(source -> {
                     String facts = source.pageFrom() == source.pageTo() ? factsByPage.get(source.pageFrom()) : null;
-                    if (facts == null || !TeachingVisualEvidenceSelector.isVisualPageEvidence(source)) return source;
+                    if (facts == null || !isVisualPageEvidence(source)) return source;
                     return new RuleEvidence(
                             source.chunkId(),
                             source.documentVersionId(),
@@ -335,6 +343,10 @@ final class TeachingVisualEvidenceResolver {
 
     private int evidenceTokens(List<RuleEvidence> evidence) {
         return evidence.stream().mapToInt(source -> estimateTokens(source.excerpt())).sum();
+    }
+
+    private static boolean isVisualPageEvidence(RuleEvidence evidence) {
+        return evidence.contentKind() == RuleEvidence.ContentKind.VISUAL_PLACEHOLDER;
     }
 
     private int estimateTokens(String value) {

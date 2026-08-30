@@ -93,6 +93,11 @@ describe('playerAnswerContract', () => {
       status: 'MODEL_UNAVAILABLE',
       recovery: { ...insufficient.recovery!, canRetryUnchanged: true },
     })).not.toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
+      ...insufficient,
+      status: 'RETRIEVAL_UNAVAILABLE',
+      recovery: { ...insufficient.recovery!, canRetryUnchanged: true },
+    })).not.toBeNull()
   })
 
   it('does not reinterpret valid published prose with a browser-side keyword blacklist', () => {

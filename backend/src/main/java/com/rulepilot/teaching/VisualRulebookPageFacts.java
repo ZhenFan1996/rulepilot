@@ -1,6 +1,5 @@
 package com.rulepilot.teaching;
 
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import java.util.List;
 import java.util.Set;
@@ -48,26 +47,9 @@ public interface VisualRulebookPageFacts {
             List<String> keywords,
             List<VisualAnchor> visualAnchors,
             int schemaVersion,
-            List<SourceDependency> sourceDependencies,
-            List<String> ruleGroupIdentifiers,
-            boolean ruleGroupInventoryComplete,
             List<RuleGroupFact> ruleGroupFacts) {
 
-        // Schema 26 preserves dense-page tile facts and binds each visible list/grid identifier to its own rule.
-        // Schema 27 verifies ambiguous cell pictograms against labeled reference artwork from the active document.
-        // Schema 28 retains shared rules alongside independently bound cells on dense catalog pages.
-        // Schema 29 rebuilds page ledgers with numerical aggregation owners, multipliers, and worked formulas intact.
-        // Schema 30 retains every independently inventoried visual rule group for source-coverage review.
-        // Schema 31 persists explicitly named external-source dependencies separately from executable page rules.
-        // Schema 32 persists the complete page-owned gameplay rule-group inventory used by teaching coverage gates.
-        // Schema 33 rejects summaries that would lose a bound rule-group fact at the durable 4,000-character edge.
-        // Schema 34 embeds validated, page- and rule-group-bound quantity observations in the factual ledger while
-        // preserving their original short source spans and refusing unsafe arithmetic.
-        // Schema 35 gives every visual rule group a page-local structural identity. Visible headings remain labels,
-        // so one heading can legitimately own several distinct list items without invalidating the whole page.
-        // Schema 36 persists the model's typed ruleGroups objects. Coverage no longer reconstructs identifiers and
-        // facts by splitting the natural-language factual summary.
-        public static final int CURRENT_SCHEMA_VERSION = 36;
+        public static final int CURRENT_SCHEMA_VERSION = 37;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(
@@ -77,9 +59,6 @@ public interface VisualRulebookPageFacts {
                     keywords,
                     List.of(),
                     CURRENT_SCHEMA_VERSION,
-                    List.of(),
-                    List.of(),
-                    false,
                     List.of());
         }
 
@@ -96,9 +75,6 @@ public interface VisualRulebookPageFacts {
                     keywords,
                     visualAnchors,
                     CURRENT_SCHEMA_VERSION,
-                    List.of(),
-                    List.of(),
-                    false,
                     List.of());
         }
 
@@ -116,27 +92,19 @@ public interface VisualRulebookPageFacts {
                     keywords,
                     visualAnchors,
                     schemaVersion,
-                    List.of(),
-                    List.of(),
-                    false,
                     List.of());
         }
 
         public PageFact {
             if (pageNumber < 1 || printedTerms == null || printedTerms.isBlank() || factualSummary == null
-                    || factualSummary.isBlank() || keywords == null || keywords.isEmpty() || visualAnchors == null
-                    || sourceDependencies == null) {
+                    || factualSummary.isBlank() || keywords == null || visualAnchors == null
+                    || ruleGroupFacts == null) {
                 throw new IllegalArgumentException("visual page fact is invalid");
             }
             if (keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank())
                     || visualAnchors.stream().anyMatch(java.util.Objects::isNull)
-                    || sourceDependencies.stream().anyMatch(java.util.Objects::isNull)
-                    || ruleGroupIdentifiers == null
-                    || ruleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank())
-                    || ruleGroupFacts == null
                     || ruleGroupFacts.stream().anyMatch(java.util.Objects::isNull)) {
-                throw new IllegalArgumentException("visual page fact is too large");
+                throw new IllegalArgumentException("visual page fact contains an invalid item");
             }
             if (schemaVersion < 1 || schemaVersion > CURRENT_SCHEMA_VERSION) {
                 throw new IllegalArgumentException("visual page fact schema version is invalid");
@@ -145,18 +113,7 @@ public interface VisualRulebookPageFacts {
             factualSummary = factualSummary.strip();
             keywords = keywords.stream().map(String::strip).distinct().toList();
             visualAnchors = visualAnchors.stream().distinct().toList();
-            sourceDependencies = sourceDependencies.stream().distinct().toList();
-            ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
             ruleGroupFacts = ruleGroupFacts.stream().distinct().toList();
-            // Historical rows must remain deserializable so the cataloger can identify and rebuild them. Schema 36
-            // is the first schema that persisted typed rule-group facts; an older completeness flag described the
-            // old prose ledger and must never be promoted to current completeness by this constructor.
-            if (schemaVersion == CURRENT_SCHEMA_VERSION
-                    && ruleGroupInventoryComplete
-                    && !VisualSourceRuleGroupLedger.hasExactFactBindings(ruleGroupIdentifiers, ruleGroupFacts)) {
-                throw new IllegalArgumentException(
-                        "complete rule-group inventory requires one exact non-empty fact per identifier");
-            }
         }
 
         public String evidenceText() {

@@ -25,7 +25,7 @@ public class ReadVisualPageFactsNativeTool implements NativeAgentTool {
                 "pageNumber": {"type": "integer", "description": "The exact page carried by that evidence handle, never a guessed locator.", "minimum": 1}
               },
               "required": ["evidenceId", "pageNumber"],
-              "additionalProperties": false
+              "additionalProperties": true
             }
             """;
 
@@ -83,7 +83,7 @@ public class ReadVisualPageFactsNativeTool implements NativeAgentTool {
     private Arguments parse(String json) {
         try {
             return objectMapper.readerFor(Arguments.class)
-                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .readValue(json);
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException("visual fact arguments JSON could not be decoded", exception);

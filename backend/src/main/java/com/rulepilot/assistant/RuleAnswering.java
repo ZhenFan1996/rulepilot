@@ -432,8 +432,7 @@ public interface RuleAnswering {
 
     record Calculation(String expression, String result) {
         public Calculation {
-            if (expression == null || expression.isBlank() || expression.length() > 160
-                    || result == null || result.isBlank() || result.length() > 80) {
+            if (expression == null || expression.isBlank() || result == null || result.isBlank()) {
                 throw new IllegalArgumentException("public rule calculation is invalid");
             }
             expression = expression.strip();

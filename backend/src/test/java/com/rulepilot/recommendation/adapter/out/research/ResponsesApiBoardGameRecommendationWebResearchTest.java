@@ -129,7 +129,9 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                     """,
                     "record_game_fit_research",
                     """
-                    {"games":[{"bggId":10,"observations":[{"text":"The publisher describes a short guided teach.","sourceIndexes":[1,15]}]}]}
+                    {"games":[{"bggId":10,"providerNote":"additive","observations":[
+                      {"text":"The publisher describes a short guided teach.","sourceIndexes":[1,15],"confidence":"reported"}
+                    ]}],"providerMeta":"additive"}
                     """));
         });
         server.start();
@@ -174,7 +176,8 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             JsonNode functionTool = sent.path("tools").get(1);
             assertThat(functionTool.path("type").asText()).isEqualTo("function");
             assertThat(functionTool.path("name").asText()).isEqualTo("record_game_fit_research");
-            assertThat(functionTool.path("parameters").path("additionalProperties").asBoolean()).isFalse();
+            assertThat(functionTool.path("parameters").has("additionalProperties")).isFalse();
+            assertThat(functionTool.toString()).doesNotContain("additionalProperties");
             assertThat(functionTool.path("parameters").path("properties").path("games").has("maxItems"))
                     .isFalse();
             JsonNode observationSchema = functionTool.path("parameters")
@@ -753,7 +756,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
     }
 
     @Test
-    void rejectsTheRemovedRelationshipEnvelopeEvenWhenPublicContextIsValid() throws Exception {
+    void ignoresRemovedAdditiveRelationshipEnvelopeAndKeepsValidPublicContext() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/v1/responses", exchange -> respond(exchange, """
                 {
@@ -786,9 +789,11 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                     "en",
                     com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryGoal.IDENTITY_ONLY);
 
-            assertThat(adapter.discover(request)).isEmpty();
-            org.mockito.Mockito.verify(values, org.mockito.Mockito.never())
-                    .set(anyString(), anyString(), any(Duration.class));
+            var discovery = adapter.discover(request).orElseThrow();
+            assertThat(discovery.candidates()).isEmpty();
+            assertThat(discovery.publicContext())
+                    .extracting(value -> value.subject() + ":" + value.relation() + ":" + value.object())
+                    .containsExactly("Ada Vale:designs:board games");
         } finally {
             server.stop(0);
         }

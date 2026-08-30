@@ -101,7 +101,7 @@ class TeachingTerminalRecoveryTest {
     }
 
     @Test
-    void exhaustsAPermanentlyFailingIntentAndReleasesItsCapacity() {
+    void keepsATransientlyFailingIntentUntilTheTerminalWriteSettles() {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         List<Runnable> callbacks = new ArrayList<>();
@@ -117,20 +117,20 @@ class TeachingTerminalRecoveryTest {
                 Duration.ofNanos(1));
         AtomicInteger attempts = new AtomicInteger();
 
-        recovery.register(UUID.randomUUID(), () -> {
-            attempts.incrementAndGet();
-            return TeachingTerminalRecordResult.RETRYABLE;
-        });
-        for (int index = 0; index < TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS; index++) {
+        recovery.register(UUID.randomUUID(), () -> attempts.incrementAndGet() == 41
+                ? TeachingTerminalRecordResult.SETTLED
+                : TeachingTerminalRecordResult.RETRYABLE);
+        for (int index = 0; index < 41; index++) {
             callbacks.get(index).run();
         }
 
-        assertThat(attempts).hasValue(TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS);
+        assertThat(attempts).hasValue(41);
         assertThat(recovery.pendingCount()).isZero();
-        assertThat(metrics.counter("rulepilot.teaching.terminal.recovery.exhausted").count()).isEqualTo(1);
         assertThat(metrics.counter("rulepilot.teaching.terminal.recovery.retryable").count())
-                .isEqualTo(TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS);
-        verify(scheduler, times(TeachingTerminalRecovery.MAX_RECOVERY_ATTEMPTS))
+                .isEqualTo(40);
+        assertThat(metrics.counter("rulepilot.teaching.terminal.recovery.settled").count())
+                .isEqualTo(1);
+        verify(scheduler, times(41))
                 .schedule(any(Runnable.class), any(Instant.class));
     }
 

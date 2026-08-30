@@ -125,7 +125,7 @@ describe('teaching progress', () => {
       .toBe('The cited page evidence did not pass source or rulebook-version validation.')
   })
 
-  it('uses the latest publication outcome when one bounded retry succeeds', () => {
+  it('uses the latest publication outcome when a newer attempt succeeds', () => {
     const snapshot = run('run-recovered', [
       activity(1, 'publishTeachingSection|1', 'REJECTED', 'Teaching section withheld: BASE_DRAFT_WITHHELD'),
       activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
@@ -264,14 +264,14 @@ describe('teaching progress', () => {
     ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      '图像规则页第 7 / 16 页的第 1 个完整候选未通过JSON 语法校验；完整结果、具体错误、格式要求和可用页码已交回同一个模型，只要返回内容仍在变化且本轮还有文字预算和有效工作时间，就会继续修正',
+      '图像规则页第 7 / 16 页的第 1 个完整候选未通过JSON 语法校验；完整结果、具体错误、格式要求和可用页码已交回同一个 Agent，并要求返回完整替代结果',
       '图像规则页第 8 / 16 页的第 2 个完整候选已通过校验，正在保存结构化规则组',
       '图像规则页第 8 / 16 页的规则组已经保存',
       '模型服务没有完成图像规则页第 9 / 16 页的第 2 个完整候选；这不是格式校验失败，仅本页暂不可用',
       '图像规则页第 10 / 16 页的第 3 个完整候选与此前已经拒绝的一份完整结果完全相同；为避免重复消耗，本页因无进展停止，其他成功页面继续保留',
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
-      'candidate 1 for visual rulebook page 7 of 16 did not pass JSON syntax validation; its complete JSON, exact error, original contract, and allowed page IDs returned to the same Agent, which may continue while the observation changes and run resources remain',
+      'candidate 1 for visual rulebook page 7 of 16 did not pass JSON syntax validation; its complete JSON, exact error, original contract, and allowed page IDs returned to the same Agent for a complete replacement',
       'candidate 2 for visual rulebook page 8 of 16 passed validation; saving its typed rule groups now',
       'Saved the typed rule groups for visual rulebook page 8 of 16',
       'The provider did not complete candidate 2 for visual rulebook page 9 of 16; this is a transport failure, not a JSON correction, and only this page is unavailable',
@@ -289,7 +289,7 @@ describe('teaching progress', () => {
     ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      expect.stringContaining('完整结果、具体错误、格式要求和可用页码已交回同一个模型'),
+      expect.stringContaining('完整结果、具体错误、格式要求和可用页码已交回同一个 Agent'),
       '图像规则页第 8 / 16 页的第 2 个完整候选已通过校验，正在保存结构化规则组',
       '图像规则页第 8 / 16 页的规则组已经保存',
       expect.stringContaining('这不是格式校验失败'),
@@ -482,7 +482,7 @@ describe('teaching progress', () => {
       'The selected candidate or evidence binding was outside the offered scope; the complete candidate, exact error, JSON contract, and allowed identities returned to the same visual Agent. It may produce another complete candidate while the observation changes and resources remain.',
       'The returned selection structure did not pass validation; the complete candidate, exact error, JSON contract, and allowed identities returned to the same visual Agent. It may produce another complete candidate while the observation changes and resources remain.',
       'The selected candidate or evidence binding was outside the offered scope; the visual Agent repeated the same complete candidate and exact error, so this batch stopped for no progress. Only this optional visual is omitted and the cited text remains readable.',
-      'chapter 1 “完成开局设置”\'s bounded visual selection is unavailable; only the visual is omitted and its cited text remains readable',
+      'chapter 1 “完成开局设置”\'s visual is unavailable; only the visual is omitted and its cited text remains readable',
     ])
   })
 
@@ -505,12 +505,11 @@ describe('teaching progress', () => {
   })
 
   it.each([
-    ['AGENT_TIMEOUT', '本轮在有限恢复后到达总时限'],
-    ['AGENT_MODEL_BUDGET', '这是一条历史任务：它曾被现已取消的调用次数上限停止'],
-    ['TEACHING_COMPLETION_FAILED', '讲解在有限持久化恢复后仍无法标记完成'],
+    ['AGENT_TIMEOUT', '本轮到达后端记录的截止时间'],
+    ['TEACHING_COMPLETION_FAILED', '讲解无法标记为完成'],
     ['APPLICATION_RESTARTED', '服务重启后无法安全续跑本轮任务'],
-    ['TEACHING_QUEUE_FULL', '服务未能调度下一个有限工作单元'],
-    ['TEACHING_WORKFLOW_FAILED', '讲解服务或持久化步骤在有限恢复后仍失败'],
+    ['TEACHING_QUEUE_FULL', '服务未能调度下一个工作单元'],
+    ['TEACHING_WORKFLOW_FAILED', '讲解服务或持久化步骤失败'],
   ])('explains authoritative whole-run stop %s without calling a local visual omission fatal', (errorCode, expected) => {
     const failed = run('run-failed', [])
     failed.run.state = 'FAILED'
@@ -525,7 +524,7 @@ describe('teaching progress', () => {
     failed.run.state = 'FAILED'
     failed.run.lastErrorCode = 'TEACHING_PREPARATION_QUEUE_TIMEOUT'
 
-    expect(teachingRunStopReasonText(failed)).toContain('限定排队时间')
+    expect(teachingRunStopReasonText(failed)).toContain('后端队列截止')
     expect(teachingRunStopReasonText(failed)).toContain('模型工作尚未开始')
     expect(teachingRunStopReasonText(failed, 'en')).toContain('No model work started')
   })
@@ -535,7 +534,7 @@ describe('teaching progress', () => {
     failed.run.state = 'FAILED'
     failed.run.lastErrorCode = 'TEACHING_QUEUE_TIMEOUT'
 
-    expect(teachingRunStopReasonText(failed)).toContain('限定排队时间')
+    expect(teachingRunStopReasonText(failed)).toContain('后端队列截止')
     expect(teachingRunStopReasonText(failed)).toContain('模型工作尚未开始')
     expect(teachingRunStopReasonText(failed, 'en')).toContain('No model work started')
   })

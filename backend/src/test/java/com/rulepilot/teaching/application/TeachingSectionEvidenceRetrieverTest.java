@@ -46,7 +46,7 @@ class TeachingSectionEvidenceRetrieverTest {
                 calls.getAndIncrement() == 0 ? List.of(first) : List.of(conflicting));
 
         TeachingSectionEvidenceRetriever.Result result = retriever.retrieve(
-                plan, plan.sections().getFirst(), UUID.randomUUID(), 3, false);
+                plan, plan.sections().getFirst(), UUID.randomUUID(), false);
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.EMPTY);
         assertThat(result.evidence()).isEmpty();
@@ -64,7 +64,7 @@ class TeachingSectionEvidenceRetrieverTest {
         });
 
         TeachingSectionEvidenceRetriever.Result result = retriever.retrieve(
-                plan, plan.sections().getFirst(), UUID.randomUUID(), 3, false);
+                plan, plan.sections().getFirst(), UUID.randomUUID(), false);
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.INVALID);
         assertThat(result.evidence()).isEmpty();
@@ -72,7 +72,7 @@ class TeachingSectionEvidenceRetrieverTest {
     }
 
     @Test
-    void countsAFailedVisualPageReadWithoutClaimingExactPageProvenance() {
+    void keepsAFailedExactPageReadLocalWithoutFallingBackToLossySearch() {
         TeachingPlan visualPlan = new TeachingPlan(
                 UUID.randomUUID(),
                 documentVersionId,
@@ -114,11 +114,11 @@ class TeachingSectionEvidenceRetrieverTest {
         };
 
         var result = retriever(tools).retrieve(
-                visualPlan, visualPlan.sections().getFirst(), UUID.randomUUID(), 3, true);
+                visualPlan, visualPlan.sections().getFirst(), UUID.randomUUID(), true);
 
-        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
-        assertThat(result.evidence()).containsExactly(placeholder);
-        assertThat(result.toolCalls()).isEqualTo(2);
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.EMPTY);
+        assertThat(result.evidence()).isEmpty();
+        assertThat(result.toolCalls()).isEqualTo(1);
         assertThat(result.canonicalPageObservation()).isEmpty();
     }
 

@@ -1,6 +1,7 @@
 import { computed, getCurrentScope, onScopeDispose, ref } from 'vue'
 
 import type { AppLocale } from '@/lib/locale'
+import { answerFailureDescriptor } from '@/lib/playerFailureSemantics'
 import {
   answerAgentTrace,
   streamedAnswerTraceItem,
@@ -462,7 +463,7 @@ export function answerFailureRecoveryFor(
     if (failure === 'timeout') {
       return {
         code: 'answer_timeout',
-        message: 'This answer attempt timed out and stopped before publishing a result. You can retry the same question unchanged; if it times out again, narrow the question.',
+        message: 'This answer attempt timed out and stopped before publishing a result. The question and completed context remain available for an unchanged retry.',
         actionLabel: 'Retry this question',
         draft: '',
         canRetryUnchanged: true,
@@ -480,27 +481,27 @@ export function answerFailureRecoveryFor(
     if (failure === 'invalid-result') {
       return {
         code: 'answer_result_invalid',
-        message: 'The returned answer did not pass the completeness check, so it was not shown. Keep the question, but review its context or wording before trying again.',
-        actionLabel: 'Review the question',
+        message: 'The returned answer did not pass the response contract, so it was not shown. This is an internal correction failure; the question itself was not rejected.',
+        actionLabel: 'Retry the same question',
         draft: '',
-        canRetryUnchanged: false,
+        canRetryUnchanged: true,
       }
     }
     if (failure === 'cancelled') {
       return {
         code: 'answer_cancelled',
-        message: 'Stopped waiting. This unfinished result will not replace the current page. Edit or review the question before sending a new request.',
-        actionLabel: 'Review the question',
+        message: 'Stopped waiting. This unfinished result will not replace the current page; the question remains available for a fresh attempt.',
+        actionLabel: 'Retry the same question',
         draft: '',
-        canRetryUnchanged: false,
+        canRetryUnchanged: true,
       }
     }
     return {
-      code: 'answer_request_failed',
-      message: "I couldn't send this question. It is still here; check the connection, session, and rulebook context before sending it again.",
-      actionLabel: 'Check the answer context',
+      code: 'answer_transport_failed',
+      message: "I couldn't send this question because the request transport did not complete. The question remains available for an unchanged retry.",
+      actionLabel: 'Retry the same question',
       draft: '',
-      canRetryUnchanged: false,
+      canRetryUnchanged: true,
     }
   }
   if (failure === 'context') {
@@ -524,7 +525,7 @@ export function answerFailureRecoveryFor(
   if (failure === 'timeout') {
     return {
       code: 'answer_timeout',
-      message: '本轮答疑已超时停止，没有发布未完成结果。可以原样重试同一个问题；如果再次超时，请缩小问题范围。',
+      message: '本轮答疑已超时停止，没有发布未完成结果；问题和已完成上下文都保留，可以原样发起新任务。',
       actionLabel: '重试这个问题',
       draft: '',
       canRetryUnchanged: true,
@@ -542,27 +543,27 @@ export function answerFailureRecoveryFor(
   if (failure === 'invalid-result') {
     return {
       code: 'answer_result_invalid',
-      message: '返回的答案没有通过完整性检查，因此未显示。问题仍保留；请先检查上下文或调整问法，再重新发送。',
-      actionLabel: '检查问题',
+      message: '返回的答案没有通过响应合同，因此未显示。这是内部修正失败，问题本身没有被拒绝。',
+      actionLabel: '原样重试问题',
       draft: '',
-      canRetryUnchanged: false,
+      canRetryUnchanged: true,
     }
   }
   if (failure === 'cancelled') {
     return {
       code: 'answer_cancelled',
-      message: '已停止等待；这次未完成的结果不会替换当前页面。请先检查或修改问题，再发起新的请求。',
-      actionLabel: '检查问题',
+      message: '已停止等待；这次未完成的结果不会替换当前页面，原问题仍可用于发起新任务。',
+      actionLabel: '原样重试问题',
       draft: '',
-      canRetryUnchanged: false,
+      canRetryUnchanged: true,
     }
   }
   return {
-    code: 'answer_request_failed',
-    message: '这次没有成功发送问题。问题仍保留；请先检查网络、会话和规则书上下文，再重新发送。',
-    actionLabel: '检查答疑上下文',
+    code: 'answer_transport_failed',
+    message: '这次请求传输没有完成。问题仍保留，可以原样发起新任务。',
+    actionLabel: '原样重试问题',
     draft: '',
-    canRetryUnchanged: false,
+    canRetryUnchanged: true,
   }
 }
 
@@ -571,34 +572,24 @@ export function answerFailureRetrySuitability(
   locale: AppLocale,
 ) {
   const english = locale === 'en'
-  if (recovery.code === 'answer_context_invalid') {
+  const category = answerFailureDescriptor(
+    recovery.code,
+    recovery.canRetryUnchanged,
+    locale,
+  ).category
+  if (category === 'repair-required') {
     return english
-      ? 'Editing the question cannot repair this stale answer context. Refresh or reopen the rulebook or session before sending any question.'
-      : '修改问题不能修复已经失效的答疑上下文；请先刷新或重新打开规则书、恢复会话，再发送问题。'
+      ? 'Repair the reported context, source, identity, or authorization boundary before sending this request again.'
+      : '请先修复上面报告的上下文、来源、身份或认证边界，再重新发送。'
   }
-  if (!recovery.canRetryUnchanged) {
+  if (category === 'internal-correction') {
     return english
-      ? 'Resolve the issue above or revise the question before sending it again; do not immediately retry it unchanged.'
-      : '请先按上面的提示排除问题或调整问法，不要立即原样重试。'
-  }
-  if (recovery.code === 'answer_service_unavailable') {
-    return english
-      ? 'After the service recovers, you can retry the same question unchanged.'
-      : '服务恢复后，可以原样重试同一个问题。'
-  }
-  if (recovery.code === 'answer_timeout') {
-    return english
-      ? 'This run has stopped. You can retry the same question unchanged; if it times out again, narrow its scope.'
-      : '本轮已经停止，可以原样重试同一个问题；如果再次超时，请缩小问题范围。'
-  }
-  if (recovery.code === 'answer_rate_limited') {
-    return english
-      ? 'Wait for the request limit to clear, then retry the same question unchanged.'
-      : '请等待限流解除，再原样重试同一个问题。'
+      ? 'The question was not rejected. Internal JSON correction stopped before publication; a fresh attempt can reuse it unchanged.'
+      : '问题没有被拒绝；内部 JSON 修正未能发布结果，可以保留原问题启动新任务。'
   }
   return english
-    ? 'After the temporary boundary clears, you can retry the same question unchanged.'
-    : '暂时边界解除后，可以原样重试同一个问题。'
+    ? 'The question and completed context are preserved and can be retried unchanged after the temporary boundary clears.'
+    : '问题和已完成上下文都已保留；暂时边界解除后可以原样重试。'
 }
 
 

@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 class TeachingRunWorkloadPolicyTest {
 
-    private final TeachingRunWorkloadPolicy policy = new TeachingRunWorkloadPolicy(3);
+    private final TeachingRunWorkloadPolicy policy = new TeachingRunWorkloadPolicy();
 
     @Test
     void sizesAdmissionFromTheOrdinaryOneCandidatePerSectionPath() {

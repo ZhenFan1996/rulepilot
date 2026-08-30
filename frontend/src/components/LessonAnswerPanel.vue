@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 
 import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
+import PlayerFailureDetails from '@/components/PlayerFailureDetails.vue'
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { useLocale } from '@/lib/locale'
@@ -15,6 +16,7 @@ import {
   type StructuredRuleAnswer,
 } from '@/composables/useLessonAnswers'
 import type { AnswerAgentTraceItem } from '@/lib/answerAgentTrace'
+import { answerFailureDescriptor } from '@/lib/playerFailureSemantics'
 
 const props = withDefaults(defineProps<{
   question: string
@@ -100,7 +102,14 @@ const failedQuestionIsUnchanged = computed(() => !!failedQuestionFingerprint.val
   && failedQuestionFingerprint.value === questionFingerprint(props.question))
 const answerContextMustBeRestored = computed(() =>
   props.answerFailureRecovery?.code === 'answer_context_invalid')
-const failedQuestionRequiresEdit = computed(() => props.answerFailureRecovery?.canRetryUnchanged === false
+const answerRequestFailureDetails = computed(() => props.answerFailureRecovery
+  ? answerFailureDescriptor(
+      props.answerFailureRecovery.code,
+      props.answerFailureRecovery.canRetryUnchanged,
+      locale.value,
+    )
+  : null)
+const failedQuestionRequiresEdit = computed(() => answerRequestFailureDetails.value?.category === 'repair-required'
   && failedQuestionIsUnchanged.value)
 const answerSubmissionBlocked = computed(() => answerContextMustBeRestored.value
   || failedQuestionRequiresEdit.value)
@@ -304,6 +313,7 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
     ANSWERED_WITH_WARNING: '',
     CLARIFICATION_REQUIRED: '',
     INSUFFICIENT_EVIDENCE: t('lesson.answer.failure.insufficient'),
+    RETRIEVAL_UNAVAILABLE: t('lesson.answer.failure.retrievalUnavailable'),
     MODEL_UNAVAILABLE: t('lesson.answer.failure.unavailable'),
     MODEL_TIMEOUT: t('public.answer.timeout'),
     INVALID_MODEL_OUTPUT: t('lesson.answer.failure.invalid'),
@@ -313,14 +323,24 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
 
 function retrySuitabilityMessage(answer: StructuredRuleAnswer) {
   if (!answer.recovery) return ''
-  if (answer.language === 'en') {
-    return answer.recovery.canRetryUnchanged
-      ? 'It is appropriate to retry the same question unchanged.'
-      : 'Do not retry unchanged immediately; review or rephrase the question first.'
+  const descriptor = answerFailureDescriptor(answer.status, answer.recovery.canRetryUnchanged, answer.language)
+  if (descriptor.category === 'internal-correction') {
+    return answer.language === 'en'
+      ? 'The question was not rejected; retrying the same question starts a fresh Agent run.'
+      : '问题没有被拒绝；原样重试会启动新的 Agent 任务。'
   }
-  return answer.recovery.canRetryUnchanged
-    ? '可以原样重试同一个问题。'
-    : '不建议立即原样重试；请先检查或改写问题。'
+  if (descriptor.category === 'repair-required') {
+    return answer.language === 'en'
+      ? 'Repair the reported context, source, identity, authorization, or citation boundary before retrying.'
+      : '请先修复报告的上下文、来源、身份、认证或引用边界，再重新发送。'
+  }
+  return answer.language === 'en'
+    ? 'Progress is preserved; the same question can start a fresh attempt.'
+    : '进度已保留；可以用同一个问题启动新任务。'
+}
+
+function terminalAnswerFailureDetails(answer: StructuredRuleAnswer) {
+  return answerFailureDescriptor(answer.status, answer.recovery?.canRetryUnchanged ?? null, answer.language)
 }
 
 function publishesConclusion(status: StructuredRuleAnswer['status']) {
@@ -582,6 +602,13 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               class="text-sm font-semibold"
             />
             <p class="mt-1 text-xs leading-5">{{ answerError }}</p>
+            <PlayerFailureDetails
+              v-if="answerRequestFailureDetails"
+              class="mt-3"
+              :category="answerRequestFailureDetails.category"
+              :owner="answerRequestFailureDetails.owner"
+              :code="answerRequestFailureDetails.code"
+            />
             <p
               v-if="answerFailureRecovery"
               data-testid="answer-failure-retry-guidance"
@@ -637,7 +664,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
             <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-ink/60" :aria-label="t('lesson.answer.agentTrace')">
               <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
                 <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
-                <span><strong v-if="item.actor" class="font-semibold text-ink/55">{{ item.actor }} · </strong>{{ item.label }}<small v-if="item.status === 'running' && item.nextAction" class="mt-0.5 block text-[0.6875rem] text-ink/40">{{ item.nextAction }}</small></span>
+                <span><strong v-if="item.actor" class="font-semibold text-ink/55">{{ item.actor }} · </strong>{{ item.label }}</span>
               </li>
             </ol>
             <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ t('lesson.answer.waitingForTrace') }}</p>
@@ -658,7 +685,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
             <ol class="mt-3 stack-y-sm">
               <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
                 <span :class="item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
-                <span><strong v-if="item.actor" class="font-semibold">{{ item.actor }} · </strong>{{ item.label }}<small v-if="item.nextAction" class="mt-0.5 block text-[0.6875rem] text-ink/40">{{ item.nextAction }}</small></span>
+                <span><strong v-if="item.actor" class="font-semibold">{{ item.actor }} · </strong>{{ item.label }}</span>
               </li>
             </ol>
           </details>
@@ -675,6 +702,13 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
 
               <div v-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
                 <p>{{ answer.recovery?.message || answer.clarification || answerFailureMessage(answer.status) }}</p>
+                <PlayerFailureDetails
+                  v-if="answer.status !== 'CLARIFICATION_REQUIRED'"
+                  class="mt-3"
+                  :category="terminalAnswerFailureDetails(answer).category"
+                  :owner="terminalAnswerFailureDetails(answer).owner"
+                  :code="terminalAnswerFailureDetails(answer).code"
+                />
                 <p v-if="answer.recovery" class="mt-2 font-semibold" :data-retry-unchanged="answer.recovery.canRetryUnchanged">
                   {{ retrySuitabilityMessage(answer) }}
                 </p>

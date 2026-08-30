@@ -138,8 +138,9 @@ export type PlayerJourneyRetryAction =
 
 export type PlayerJourneyFailureClassification =
   | 'local-degradation'
-  | 'preserved-stop'
-  | 'external-repair'
+  | 'retry-preserved'
+  | 'repair-required'
+  | 'internal-correction'
 
 export type PlayerJourneyFailureRecovery =
   | 'retry-step'
@@ -194,10 +195,9 @@ const LOCAL_DEGRADATION_CODES = new Set([
   'REVIEW_UNAVAILABLE',
   'VISUAL_ENRICHMENT_FAILED',
   'LOCALIZATION_FAILED',
-])
-
-const PRESERVED_WITHOUT_RETRY_CODES = new Set([
-  'INSUFFICIENT_EVIDENCE',
+  'CHAPTER_LOCALLY_UNAVAILABLE',
+  'NO_VALID_BASE_EVIDENCE',
+  'BASE_EVIDENCE_IDENTITY_INVALID',
 ])
 
 const RESTART_FROM_COMPLETED_CODES = new Set([
@@ -208,12 +208,8 @@ const RESTART_FROM_COMPLETED_CODES = new Set([
   'AGENT_TOKEN_BUDGET',
   'AGENT_TIMEOUT',
   'APPLICATION_RESTARTED',
-  'TEACHING_PLAN_RETRIEVAL_FAILED',
-  'TEACHING_EVIDENCE_RETRIEVAL_FAILED',
   'TEACHING_MODEL_PROVIDER_FAILED',
-  'TEACHING_PERSISTENCE_FAILED',
   'TEACHING_CONTINUATION_FAILED',
-  'TEACHING_COMPLETION_FAILED',
   // Older runs used one generic code for all of these boundaries. A fresh run is still safe because published
   // chapters are immutable progress inputs, so legacy history must not strand the player in manual repair.
   'TEACHING_WORKFLOW_FAILED',
@@ -221,9 +217,7 @@ const RESTART_FROM_COMPLETED_CODES = new Set([
 
 const SAFE_RETRY_CODES = new Set([
   'RULEBOOK_DISCOVERY_FAILED',
-  'SOURCE_UNAVAILABLE',
   'IMPORT_QUEUE_FULL',
-  'DOCUMENT_PROCESSING_FAILED',
   'TEACHING_PREPARATION_FAILED',
   'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED',
   'TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED',
@@ -239,12 +233,23 @@ const SAFE_RETRY_CODES = new Set([
   'TEACHING_CONTINUATION_ADMISSION_FAILED',
 ])
 
-const EXTERNAL_REPAIR_CODES = new Set([
-  'INVALID_PDF_SOURCE',
-  'SOURCE_BROWSER_REQUIRED',
+const INTERNAL_CORRECTION_CODES = new Set([
   'TEACHING_PLAN_INVALID',
   'TEACHING_PREPARATION_INVALID_PLAN',
+  'INVALID_MODEL_OUTPUT',
+])
+
+const REPAIR_REQUIRED_CODES = new Set([
+  'INSUFFICIENT_EVIDENCE',
+  'INVALID_PDF_SOURCE',
+  'SOURCE_UNAVAILABLE',
+  'SOURCE_BROWSER_REQUIRED',
+  'DOCUMENT_PROCESSING_FAILED',
   'TEACHING_PREPARATION_STORAGE_FAILED',
+  'TEACHING_PLAN_RETRIEVAL_FAILED',
+  'TEACHING_EVIDENCE_RETRIEVAL_FAILED',
+  'TEACHING_PERSISTENCE_FAILED',
+  'TEACHING_COMPLETION_FAILED',
   'TEACHING_HANDOFF_INVALID',
 ])
 
@@ -516,7 +521,7 @@ function importFailurePolicy(job: PlayerJourneyImportJob): PlayerJourneyFailureP
   return {
     errorCode,
     retryAction: null,
-    failureClassification: 'external-repair',
+    failureClassification: 'repair-required',
     failureRecovery: canChooseSource ? 'choose-source' : 'manual-repair',
   }
 }
@@ -542,14 +547,25 @@ export function typedFailurePolicy(
       failureRecovery: null,
     }
   }
-  if (PRESERVED_WITHOUT_RETRY_CODES.has(errorCode)) {
-    return preservedFailure(errorCode, null, null)
-  }
-  if (EXTERNAL_REPAIR_CODES.has(errorCode)) {
+  const normalized = errorCode.toUpperCase()
+  if (INTERNAL_CORRECTION_CODES.has(errorCode)
+    || normalized.includes('PROTOCOL')
+    || normalized.includes('SCHEMA')
+    || normalized.includes('REPEATED_INVALID')) {
     return {
       errorCode,
       retryAction: null,
-      failureClassification: 'external-repair',
+      failureClassification: 'internal-correction',
+      failureRecovery: null,
+    }
+  }
+  if (REPAIR_REQUIRED_CODES.has(errorCode)
+    || ['AUTH', 'INPUT', 'SOURCE', 'OWNERSHIP', 'VERSION', 'PERSISTENCE', 'STORAGE', 'IDENTITY', 'CITATION']
+      .some(marker => normalized.includes(marker))) {
+    return {
+      errorCode,
+      retryAction: null,
+      failureClassification: 'repair-required',
       failureRecovery: 'manual-repair',
     }
   }
@@ -562,7 +578,7 @@ export function typedFailurePolicy(
   return {
     errorCode,
     retryAction: null,
-    failureClassification: 'external-repair',
+    failureClassification: 'repair-required',
     failureRecovery: 'manual-repair',
   }
 }
@@ -575,7 +591,7 @@ function preservedFailure(
   return {
     errorCode,
     retryAction,
-    failureClassification: 'preserved-stop',
+    failureClassification: 'retry-preserved',
     failureRecovery,
   }
 }
@@ -591,7 +607,16 @@ export function playerJourneyFailurePresentation(
       title: english ? 'Only local content is unavailable' : '只有局部内容不可用',
       detail: english
         ? 'Only the affected page, chapter, or visual is unavailable. Other confirmed pages and published chapters remain; the whole guide does not need to be regenerated.'
-        : '只有对应页面、章节或配图不可用；其他已确认页面和已发布章节仍然保留，不需要重新生成整份讲解。',
+        : '只影响对应页面、章节或配图；其他已确认页面和已发布章节仍然保留，不需要重新生成整份讲解。',
+      actionLabel: null,
+    }
+  }
+  if (policy.failureClassification === 'internal-correction') {
+    return {
+      title: english ? 'Internal typed-result correction stopped' : '内部结构化结果修正已停止',
+      detail: english
+        ? 'This is not a player-input rejection. The same Agent receives the complete candidate and validation record and must return a complete replacement; exact repetition, no progress, or a resource stop can end that step.'
+        : '这不是玩家输入被拒绝。同一个 Agent 会收到完整候选与校验记录，并必须返回完整替代结果；完全重复、无进展或资源停止会结束这一步。',
       actionLabel: null,
     }
   }
@@ -622,7 +647,7 @@ export function playerJourneyFailurePresentation(
       actionLabel: null,
     }
   }
-  if (policy.failureClassification === 'external-repair') {
+  if (policy.failureClassification === 'repair-required') {
     return {
       title: english ? 'Repair is required before continuing' : '需要先修复后再继续',
       detail: english
@@ -632,11 +657,11 @@ export function playerJourneyFailurePresentation(
     }
   }
   return {
-    title: english ? 'The run stopped with verified work preserved' : '本轮已停止，已核验内容保留',
+    title: english ? 'Retry unchanged; verified work preserved' : '可原样重试，已核验内容保留',
     detail: english
-      ? 'The available evidence was not enough to publish more guidance. Retrying unchanged will not add evidence; provide a better source or more specific input before continuing.'
-      : '现有依据不足以发布更多讲解；原样重试不会增加依据，请补充更合适的来源或更具体的信息后再继续。',
-    actionLabel: null,
+      ? 'The stopped attempt did not discard confirmed work. The same input can start a fresh task and reuse that durable progress.'
+      : '停止的任务没有丢弃已确认内容；可以用相同输入启动新任务并复用持久化进度。',
+    actionLabel: english ? 'Retry unchanged' : '原样重试',
   }
 }
 

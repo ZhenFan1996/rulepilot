@@ -7,6 +7,7 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
+import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
@@ -20,11 +21,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -33,14 +39,13 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v60-deterministic-publication";
+    static final String GENERATOR_VERSION = "teaching-agent-v61-local-observations";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionEvidenceRetriever evidenceRetriever;
-    private final TeachingEvidenceRefiner evidenceRefiner;
     private final TeachingSectionDraftComposer sectionDraftComposer;
     private final TeachingBaseSectionPublicationPolicy basePublication =
             new TeachingBaseSectionPublicationPolicy();
@@ -55,9 +60,6 @@ public class GroundedTeachingAgent {
             EvidenceVerifier evidenceVerifier,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
-            @Value("${rulepilot.teaching.base-max-retrieval-queries-per-section:3}")
-                    int baseMaxRetrievalQueriesPerSection,
-            TeachingEvidenceRefiner evidenceRefiner,
             VisualRulebookCataloger visualCataloger,
             VisualLessonEnricher visualEnricher) {
         this.tools = tools;
@@ -67,10 +69,9 @@ public class GroundedTeachingAgent {
                 tools, invocations, visualFacts, visualCataloger);
         this.evidenceRetriever = new TeachingSectionEvidenceRetriever(
                 tools, evidenceVerifier, invocations, visualEvidenceResolver);
-        this.evidenceRefiner = evidenceRefiner;
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
                 model, evidenceVerifier, invocations, visualFacts);
-        this.workloadPolicy = new TeachingRunWorkloadPolicy(Math.max(1, baseMaxRetrievalQueriesPerSection));
+        this.workloadPolicy = new TeachingRunWorkloadPolicy();
         this.visualEnricher = visualEnricher;
     }
 
@@ -80,8 +81,6 @@ public class GroundedTeachingAgent {
             EvidenceVerifier evidenceVerifier,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
-            int baseMaxRetrievalQueriesPerSection,
-            TeachingEvidenceRefiner evidenceRefiner,
             VisualRulebookCataloger visualCataloger) {
         this(
                 tools,
@@ -89,14 +88,12 @@ public class GroundedTeachingAgent {
                 evidenceVerifier,
                 invocations,
                 visualFacts,
-                baseMaxRetrievalQueriesPerSection,
-                evidenceRefiner,
                 visualCataloger,
                 null);
     }
 
     /**
-     * Publishes the cited text lesson incrementally before optional visual enrichment begins.
+     * Publishes each cited text section and assembles its optional visual evidence before moving to the next section.
      * Image-only rulebooks still use their cited pages as primary evidence instead of guessing
      * from placeholder text.
      */
@@ -127,47 +124,20 @@ public class GroundedTeachingAgent {
             IllustratedLesson previousLesson,
             Consumer<IllustratedLesson> progressPublisher) {
         if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
-        TeachingWholeGameUnderstandingPolicy.validateBeforeChapterGeneration(plan);
-        if (TeachingWholeGameUnderstandingPolicy.requiresValidatedContext(plan)) {
-            invocations.record(
-                    assistantRunId,
-                    ActivityType.VALIDATION,
-                    "validateWholeGameTeachingContext",
-                    ActivityOutcome.SUCCEEDED,
-                    "Source-bound whole-game understanding completed before chapter generation");
-        }
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
         Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
-        int queriesPerTopic = baseQueryBudget();
-        List<LessonSection> sections = new ArrayList<>();
-        for (TeachingPlan.PlannedSection planned : plan.sections()) {
-            SectionOutcome outcome = baseSection(
-                    plan,
-                    planned,
-                    lessonAssembly.continuityContext(sections),
-                    reusable,
-                    assistantRunId,
-                    queriesPerTopic);
-            outcome = publishValidatedSectionThenEnrich(
-                    plan,
-                    outcome,
-                    sections,
-                    assistantRunId,
-                    lessonId,
-                    createdAt,
-                    progressPublisher);
-            if (outcome.section().evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE) break;
-        }
-
-        return new BaseLessonContinuation(
+        BaseLessonContinuation continuation = new BaseLessonContinuation(
                 plan,
                 assistantRunId,
                 lessonId,
                 createdAt,
                 reusable,
-                queriesPerTopic,
-                sections);
+                new ArrayList<>(),
+                AsyncContextPropagation.executorService(Executors.newVirtualThreadPerTaskExecutor()));
+        scheduleSections(continuation);
+        settleNextPublishedSection(continuation, progressPublisher);
+        return continuation;
     }
 
     IllustratedLesson continueBase(
@@ -190,26 +160,9 @@ public class GroundedTeachingAgent {
         UUID assistantRunId = continuation.assistantRunId;
         UUID lessonId = continuation.lessonId;
         Instant createdAt = continuation.createdAt;
-        Map<String, LessonSection> reusable = continuation.reusableSections;
-        int queriesPerTopic = continuation.queriesPerTopic;
         List<LessonSection> sections = continuation.sections;
         if (continuation.hasRemainingWork()) {
-            TeachingPlan.PlannedSection planned = plan.sections().get(sections.size());
-            SectionOutcome outcome = baseSection(
-                    plan,
-                    planned,
-                    lessonAssembly.continuityContext(sections),
-                    reusable,
-                    assistantRunId,
-                    queriesPerTopic);
-            outcome = publishValidatedSectionThenEnrich(
-                    plan,
-                    outcome,
-                    sections,
-                    assistantRunId,
-                    lessonId,
-                    createdAt,
-                    progressPublisher);
+            settleNextPublishedSection(continuation, progressPublisher);
             if (continuation.hasRemainingWork()) {
                 return new BaseWorkUnitResult(lesson(lessonId, plan, sections, createdAt), false);
             }
@@ -223,8 +176,10 @@ public class GroundedTeachingAgent {
         private final UUID lessonId;
         private final Instant createdAt;
         private final Map<String, LessonSection> reusableSections;
-        private final int queriesPerTopic;
         private final List<LessonSection> sections;
+        private final ExecutorService sectionTasks;
+        private final BlockingQueue<SettledSection> settledSections = new LinkedBlockingQueue<>();
+        private int unsettledSections;
 
         private BaseLessonContinuation(
                 TeachingPlan plan,
@@ -232,21 +187,26 @@ public class GroundedTeachingAgent {
                 UUID lessonId,
                 Instant createdAt,
                 Map<String, LessonSection> reusableSections,
-                int queriesPerTopic,
-                List<LessonSection> sections) {
+                List<LessonSection> sections,
+                ExecutorService sectionTasks) {
             this.plan = plan;
             this.assistantRunId = assistantRunId;
             this.lessonId = lessonId;
             this.createdAt = createdAt;
             this.reusableSections = reusableSections;
-            this.queriesPerTopic = queriesPerTopic;
             this.sections = sections;
+            this.sectionTasks = sectionTasks;
         }
 
         boolean hasRemainingWork() {
-            return sections.size() < plan.sections().size();
+            return unsettledSections > 0;
         }
     }
+
+    private record SettledSection(
+            TeachingPlan.PlannedSection planned,
+            SectionOutcome outcome,
+            Throwable failure) {}
 
     record BaseWorkUnitResult(IllustratedLesson lesson, boolean complete) {
         BaseWorkUnitResult {
@@ -254,25 +214,137 @@ public class GroundedTeachingAgent {
         }
     }
 
+    private void scheduleSections(BaseLessonContinuation continuation) {
+        Map<String, CompletableFuture<SectionOutcome>> byTopic = new java.util.LinkedHashMap<>();
+        Map<String, List<String>> prerequisites = new java.util.LinkedHashMap<>();
+        continuation.plan.wholeGameContext().topicDependencies().forEach(dependency -> prerequisites
+                .computeIfAbsent(dependency.dependentTopicKey(), ignored -> new ArrayList<>())
+                .add(dependency.prerequisiteTopicKey()));
+        continuation.unsettledSections = continuation.plan.sections().size();
+        for (TeachingPlan.PlannedSection planned : continuation.plan.sections()) {
+            List<String> prerequisiteTopics = List.copyOf(
+                    prerequisites.getOrDefault(planned.topicKey(), List.of()));
+            List<CompletableFuture<SectionOutcome>> requiredFutures = prerequisiteTopics.stream()
+                    .map(byTopic::get)
+                    .toList();
+            if (requiredFutures.contains(null)) {
+                throw new IllegalArgumentException("teaching chapter dependency must reference an earlier chapter");
+            }
+            CompletableFuture<Void> ready = CompletableFuture.allOf(
+                    requiredFutures.toArray(CompletableFuture[]::new));
+            CompletableFuture<SectionOutcome> future = ready.thenApplyAsync(ignored -> {
+                try {
+                    List<LessonSection> prerequisiteSections = requiredFutures.stream()
+                            .map(CompletableFuture::join)
+                            .map(SectionOutcome::section)
+                            .filter(java.util.Objects::nonNull)
+                            .sorted(java.util.Comparator.comparingInt(LessonSection::position))
+                            .toList();
+                    SectionOutcome outcome = baseSection(
+                            continuation.plan,
+                            planned,
+                            lessonAssembly.continuityContext(prerequisiteSections),
+                            continuation.reusableSections,
+                            continuation.assistantRunId);
+                    if (outcome.section() == null) return outcome;
+                    LessonSection enriched = enrichValidatedSection(
+                            continuation.plan,
+                            planned,
+                            outcome.section(),
+                            prerequisiteSections,
+                            continuation.assistantRunId);
+                    return outcome.withSection(enriched);
+                } catch (AgentExecutionStoppedException hardStop) {
+                    throw hardStop;
+                } catch (RuntimeException localFailure) {
+                    log.warn(
+                            "Teaching chapter {} became locally unavailable; independent chapters continue: {}",
+                            planned.topicKey(),
+                            localFailure.getMessage());
+                    return new SectionOutcome(
+                            planned,
+                            null,
+                            ActivityOutcome.REJECTED,
+                            "CHAPTER_LOCALLY_UNAVAILABLE");
+                }
+            }, continuation.sectionTasks);
+            future.whenComplete((outcome, failure) -> continuation.settledSections.add(
+                    new SettledSection(planned, outcome, failure)));
+            byTopic.put(planned.topicKey(), future);
+        }
+        if (continuation.unsettledSections == 0) continuation.sectionTasks.shutdown();
+    }
+
+    /** Settles local failures as observations and publishes one fully prepared chapter snapshot at most. */
+    private void settleNextPublishedSection(
+            BaseLessonContinuation continuation,
+            Consumer<IllustratedLesson> progressPublisher) {
+        while (continuation.unsettledSections > 0) {
+            SettledSection settled;
+            try {
+                settled = continuation.settledSections.take();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("teaching chapter settlement was interrupted", interrupted);
+            }
+            continuation.unsettledSections--;
+            if (continuation.unsettledSections == 0) continuation.sectionTasks.shutdown();
+            if (settled.failure() != null) {
+                RuntimeException failure = propagateSectionFailure(settled.failure());
+                if (failure instanceof AgentExecutionStoppedException) {
+                    continuation.sectionTasks.shutdownNow();
+                    throw failure;
+                }
+                log.warn(
+                        "Teaching chapter {} failed outside its local task boundary; independent chapters continue: {}",
+                        settled.planned().topicKey(),
+                        failure.getMessage());
+                recordPublication(
+                        continuation.assistantRunId,
+                        settled.planned(),
+                        ActivityOutcome.REJECTED,
+                        "CHAPTER_LOCALLY_UNAVAILABLE");
+                continue;
+            }
+            SectionOutcome outcome = settled.outcome();
+            recordPublication(
+                    continuation.assistantRunId,
+                    outcome.planned(),
+                    outcome.publicationOutcome(),
+                    outcome.publicationCategory());
+            if (outcome.section() == null) continue;
+            continuation.sections.add(outcome.section());
+            continuation.sections.sort(java.util.Comparator.comparingInt(LessonSection::position));
+            publishProgress(
+                    progressPublisher,
+                    continuation.lessonId,
+                    continuation.plan,
+                    continuation.sections,
+                    continuation.createdAt);
+            return;
+        }
+    }
+
+    private RuntimeException propagateSectionFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current instanceof CompletionException && current.getCause() != null) current = current.getCause();
+        if (current instanceof RuntimeException runtime) return runtime;
+        return new IllegalStateException("teaching chapter task failed", current);
+    }
+
     private SectionOutcome baseSection(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             List<PriorSectionContext> priorSections,
             Map<String, LessonSection> reusableSections,
-            UUID assistantRunId,
-            int queriesPerTopic) {
+            UUID assistantRunId) {
         return generateSection(
                 plan,
                 planned,
                 priorSections,
                 reusableSections,
                 assistantRunId,
-                queriesPerTopic,
                 planned.position() - 1);
-    }
-
-    private int baseQueryBudget() {
-        return workloadPolicy.maxRetrievalQueriesPerSection();
     }
 
     private SectionOutcome generateSection(
@@ -281,7 +353,6 @@ public class GroundedTeachingAgent {
             List<PriorSectionContext> priorSections,
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
-            int queryBudget,
             int sectionIndex) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
@@ -289,19 +360,7 @@ public class GroundedTeachingAgent {
                     planned, reusable, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
         }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
-                plan, planned, assistantRunId, queryBudget, true);
-        if (evidenceRefiner != null) {
-            try {
-                resolution = evidenceRefiner.refine(plan, planned, assistantRunId, resolution);
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException optionalRefinementFailure) {
-                log.warn(
-                        "Optional teaching evidence refinement failed for topic {}; retaining verified base evidence: {}",
-                        planned.topicKey(),
-                        optionalRefinementFailure.getMessage());
-            }
-        }
+                plan, planned, assistantRunId, true);
         return composeResolvedSection(
                 plan,
                 planned,
@@ -321,7 +380,7 @@ public class GroundedTeachingAgent {
         if (!resolution.verified()) {
             return new SectionOutcome(
                     planned,
-                    lessonAssembly.insufficient(planned),
+                    null,
                     ActivityOutcome.REJECTED,
                     resolution.state() == TeachingSectionEvidenceRetriever.State.EMPTY
                             ? "NO_VALID_BASE_EVIDENCE"
@@ -334,8 +393,7 @@ public class GroundedTeachingAgent {
                     priorSections,
                     resolution.evidence(),
                     assistantRunId,
-                    sectionIndex,
-                    false);
+                    sectionIndex);
             LessonSection published = basePublication.publish(composed);
             return new SectionOutcome(
                     planned, published, ActivityOutcome.SUCCEEDED, "SUPPORTED_SECTION_PUBLISHED");
@@ -345,7 +403,7 @@ public class GroundedTeachingAgent {
             log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
             return new SectionOutcome(
                     planned,
-                    lessonAssembly.insufficient(planned),
+                    null,
                     ActivityOutcome.REJECTED,
                     "BASE_DRAFT_WITHHELD");
         }
@@ -366,37 +424,6 @@ public class GroundedTeachingAgent {
             List<LessonSection> sections,
             Instant createdAt) {
         progressPublisher.accept(lessonAssembly.snapshot(lessonId, plan, sections, GENERATOR_VERSION, createdAt));
-    }
-
-    private SectionOutcome publishValidatedSectionThenEnrich(
-            TeachingPlan plan,
-            SectionOutcome outcome,
-            List<LessonSection> sections,
-            UUID assistantRunId,
-            UUID lessonId,
-            Instant createdAt,
-            Consumer<IllustratedLesson> progressPublisher) {
-        int sectionIndex = sections.size();
-        LessonSection citedText = outcome.section();
-        sections.add(citedText);
-        publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-        recordPublication(
-                assistantRunId,
-                outcome.planned(),
-                outcome.publicationOutcome(),
-                outcome.publicationCategory());
-
-        LessonSection enriched = enrichValidatedSection(
-                plan,
-                outcome.planned(),
-                citedText,
-                List.copyOf(sections.subList(0, sectionIndex)),
-                assistantRunId);
-        if (!enriched.equals(citedText)) {
-            sections.set(sectionIndex, enriched);
-            publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-        }
-        return outcome.withSection(enriched);
     }
 
     private LessonSection enrichValidatedSection(
