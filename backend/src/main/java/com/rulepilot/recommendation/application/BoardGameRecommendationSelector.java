@@ -8,9 +8,6 @@ import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -49,38 +46,6 @@ class BoardGameRecommendationSelector {
         return fitAssessments(game, profile, false).stream()
                 .filter(FitAssessment::hardGate)
                 .allMatch(assessment -> assessment.claim().relation() == CandidateClaim.Relation.SATISFIED);
-    }
-
-    List<RecommendedGame> present(
-            List<Game> selected,
-            RecommendationProfile profile,
-            boolean chinese) {
-        return selected.stream()
-                .map(game -> present(game, profile, chinese))
-                .toList();
-    }
-
-    private RecommendedGame present(
-            Game game,
-            RecommendationProfile profile,
-            boolean chinese) {
-        List<CandidateClaim> claims = fitClaims(game, profile, chinese);
-        List<String> matches = claims.stream()
-                .filter(claim -> claim.relation() == CandidateClaim.Relation.SATISFIED)
-                .map(CandidateClaim::text)
-                .toList();
-        List<String> tradeoffs = claims.stream()
-                .filter(claim -> claim.relation() == CandidateClaim.Relation.CONFLICT
-                        || claim.relation() == CandidateClaim.Relation.UNKNOWN)
-                .map(CandidateClaim::text)
-                .toList();
-        List<RecommendationReason> reasons = claims.stream()
-                .map(claim -> new RecommendationReason(
-                        ReasonKind.BGG_FACT,
-                        claim.text(),
-                        claim.sourceIndexes()))
-                .toList();
-        return new RecommendedGame(game, matches, tradeoffs, reasons, claims, List.of());
     }
 
     Candidate researchCandidate(Game game) {

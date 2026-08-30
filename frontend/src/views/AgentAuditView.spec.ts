@@ -16,7 +16,7 @@ describe('AgentAuditView', () => {
       if (path.includes(`/api/admin/assistant-runs/${runId}/audit`)) {
         return Response.json({
           run: { id: runId, mode: 'QUESTION_ANSWER', subjectId: runId, ownerUsername: 'player', state: 'COMPLETED', createdAt: '2026-08-03T00:00:00Z', updatedAt: '2026-08-03T00:00:01Z', lastErrorCode: null },
-          budget: { maxTokens: 24000, usedToolCalls: 2, usedModelCalls: 2, usedTokens: 500, deadlineAt: '2026-08-03T00:02:00Z' },
+          budget: { maxTokens: 24000, usedToolCalls: 2, usedModelCalls: 2, usedTokens: 500, tokenLimitEnforced: true, deadlineAt: '2026-08-03T00:02:00Z' },
           steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'COMPLETED', summary: 'Answer published', occurredAt: '2026-08-03T00:00:01Z' }],
           activities: [{ sequence: 1, type: 'TOOL', operation: 'nativeTool|read_rule_pages|safehash', outcome: 'SUCCEEDED', estimatedInputTokens: 10, estimatedOutputTokens: 20, latencyMs: 12, summary: 'code=PAGE_EVIDENCE_FOUND evidenceCount=2', occurredAt: '2026-08-03T00:00:00Z' }],
         })
@@ -32,9 +32,39 @@ describe('AgentAuditView', () => {
 
     expect(wrapper.text()).toContain('nativeTool|read_rule_pages|safehash')
     expect(wrapper.text()).toContain('工具调用2')
+    expect(wrapper.text()).toContain('令牌用量 / 硬上限')
     expect(wrapper.text()).toContain('500 / 24000')
     expect(wrapper.text()).toContain('不会保存或展示隐藏思维链')
     expect(fetch).toHaveBeenCalledWith(`/api/admin/assistant-runs/${runId}/audit`, { credentials: 'include' })
+  })
+
+  it('labels a teaching token threshold as observational instead of a failed hard budget', async () => {
+    const runId = '33333333-3333-4333-8333-333333333333'
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Response.json({ username: 'admin', roles: ['ADMIN'] })
+      if (path.includes('/api/v1/assistant-runs/active')) return Response.json([])
+      if (path.includes(`/api/admin/assistant-runs/${runId}/audit`)) {
+        return Response.json({
+          run: { id: runId, mode: 'TEACHING', subjectId: runId, ownerUsername: 'player', state: 'RUNNING', createdAt: '2026-08-03T00:00:00Z', updatedAt: '2026-08-03T00:01:00Z', lastErrorCode: null },
+          budget: { maxTokens: 300000, usedToolCalls: 9, usedModelCalls: 12, usedTokens: 350000, tokenLimitEnforced: false, deadlineAt: '2026-08-03T00:10:00Z' },
+          steps: [],
+          activities: [],
+        })
+      }
+      return Response.json({})
+    }))
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/agent-audit', component: AgentAuditView }] })
+    await router.push(`/admin/agent-audit?runId=${runId}`)
+    await router.isReady()
+    const wrapper = mount(AgentAuditView, { global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } } })
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('观测阈值'))
+
+    expect(wrapper.text()).toContain('已用 350000；观测阈值 300000')
+    expect(wrapper.text()).toContain('超过这个阈值不会据此终止运行')
+    expect(wrapper.text()).not.toContain('硬上限')
+    expect(wrapper.text()).not.toContain('350000 / 300000')
   })
 
   it('explains that authentication is required instead of reporting a generic outage', async () => {

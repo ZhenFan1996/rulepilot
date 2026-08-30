@@ -30,10 +30,8 @@ final class RecommendationAgentState {
     final Map<Integer, Game> verified = new LinkedHashMap<>();
     final Set<Integer> freshVerifiedIds = new LinkedHashSet<>();
     final Set<Integer> comparisonSubjectIds = new LinkedHashSet<>();
-    final Set<Integer> finalResponseGameIds = new LinkedHashSet<>();
     final Set<String> finalResponseEvidenceIds = new LinkedHashSet<>();
     final Set<String> finalResponsePublicEvidenceIds = new LinkedHashSet<>();
-    final Map<String, Object> finalResponseDecisionFacts = new LinkedHashMap<>();
     final Map<String, PublicContextEvidence> publicContextEvidence = new LinkedHashMap<>();
     final List<String> actions = new ArrayList<>();
     PublicationSeed pendingPublicationSeed;
@@ -93,6 +91,7 @@ final class RecommendationAgentState {
     synchronized void beginCatalogSearch(CatalogSearch search) {
         activeSearch = search;
         pendingPublicationSeed = null;
+        comparison = null;
     }
 
     synchronized void completeCatalogSearch(int catalogSourceCount, List<Game> games) {

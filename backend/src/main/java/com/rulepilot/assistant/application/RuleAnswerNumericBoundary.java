@@ -1,28 +1,20 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.NativeToolAgent.TerminalValidation;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-/** Deterministic publication boundary for hard numeric facts in player prose. */
+/** Deterministic publication boundary for typed hard numeric facts. */
 final class RuleAnswerNumericBoundary {
-
-    private static final Pattern NUMERIC_LITERAL =
-            Pattern.compile("[-+]?\\p{Nd}+(?:[.,]\\p{Nd}+)?(?:%|％)?");
 
     private RuleAnswerNumericBoundary() {}
 
     static TerminalValidation validate(
-            String playerProse,
             List<NumericClaim> claims,
             List<String> citationIds,
             Map<String, ObservedEvidence> observed,
             Set<String> allowedIds) {
-        Map<String, NumericClaim> claimsByValue = new LinkedHashMap<>();
         for (int index = 0; index < claims.size(); index++) {
             NumericClaim claim = claims.get(index);
             if (!citationIds.contains(claim.evidenceId())) {
@@ -32,25 +24,49 @@ final class RuleAnswerNumericBoundary {
                         allowedIds);
             }
             ObservedEvidence source = observed.get(claim.evidenceId());
-            if (source == null || !source.excerpt().contains(claim.value())) {
+            if (source == null || !containsExactNumericLiteral(source.excerpt(), claim.value())) {
                 return rejected(
                         "NUMERIC_VALUE_UNSUPPORTED", "/numericClaims/" + index + "/value",
                         "The exact numeric literal is absent from its cited canonical page observation.", allowedIds);
             }
-            claimsByValue.putIfAbsent(claim.value(), claim);
-        }
-        Matcher numbers = NUMERIC_LITERAL.matcher(playerProse);
-        while (numbers.find()) {
-            String literal = numbers.group();
-            if (!claimsByValue.containsKey(literal)) {
-                return rejected(
-                        "NUMERIC_CLAIM_UNDECLARED", "/numericClaims",
-                        "Every numeric literal in player-facing rule prose must be declared with its evidence identity; "
-                                + "missing literal: " + literal,
-                        allowedIds);
-            }
         }
         return TerminalValidation.accepted();
+    }
+
+    private static boolean containsExactNumericLiteral(String excerpt, String literal) {
+        if (excerpt == null || literal == null || literal.isBlank()) return false;
+        int from = 0;
+        while (from <= excerpt.length() - literal.length()) {
+            int start = excerpt.indexOf(literal, from);
+            if (start < 0) return false;
+            int end = start + literal.length();
+            if (hasNumericBoundary(excerpt, start, end, literal)) return true;
+            from = start + 1;
+        }
+        return false;
+    }
+
+    private static boolean hasNumericBoundary(String excerpt, int start, int end, String literal) {
+        if (start > 0 && Character.isDigit(excerpt.charAt(start - 1))) return false;
+        if (end < excerpt.length() && Character.isDigit(excerpt.charAt(end))) return false;
+        if (Character.isDigit(literal.charAt(0)) && start > 0 && isSign(excerpt.charAt(start - 1))) return false;
+        if (start > 1 && isDecimalSeparator(excerpt.charAt(start - 1))
+                && Character.isDigit(excerpt.charAt(start - 2))) {
+            return false;
+        }
+        if (end + 1 < excerpt.length() && isDecimalSeparator(excerpt.charAt(end))
+                && Character.isDigit(excerpt.charAt(end + 1))) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isDecimalSeparator(char value) {
+        return value == '.' || value == ',';
+    }
+
+    private static boolean isSign(char value) {
+        return value == '+' || value == '-' || value == '\u2212';
     }
 
     private static TerminalValidation rejected(

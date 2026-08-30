@@ -324,7 +324,7 @@ final class VisualLessonStepLocator {
                 throw new AgentExecutionStoppedException(
                         AgentExecutionStoppedException.StopReason.CANCELLED);
             }
-            if (budget.usedTokens() >= budget.maxTokens()) {
+            if (budget.tokenLimitEnforced() && budget.usedTokens() >= budget.maxTokens()) {
                 throw new AgentExecutionStoppedException(
                         AgentExecutionStoppedException.StopReason.TOKEN_BUDGET);
             }

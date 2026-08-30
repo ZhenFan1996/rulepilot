@@ -759,13 +759,13 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       },
     )
     assert.notEqual(ungroundedAnswer.code, 0)
-    assert.match(ungroundedAnswer.stderr, /Rule answer did not publish a conclusion with page evidence and aligned source references/)
+    assert.match(ungroundedAnswer.stderr, /Rule answer published no exact-page citation/)
     assert.deepEqual(JSON.parse(await readFile(failedPublicStatus, 'utf8')), {
       outcome: 'FAILED',
       exitCode: 1,
       lastCompletedStage: 'lesson-verified',
       failureCode: 'ANSWER_EVIDENCE_INVALID',
-      failureCauseCode: null,
+      failureCauseCode: 'ANSWER_CITATIONS_MISSING',
       cleanupOutcome: 'SUCCEEDED',
     })
     assert.equal(deleted, true)
@@ -783,7 +783,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
     )
     assert.notEqual(unboundAnswer.code, 0)
-    assert.match(unboundAnswer.stderr, /Rule answer did not publish a conclusion with page evidence and aligned source references/)
+    assert.match(unboundAnswer.stderr, /Rule answer citation identities did not align with the published citations/)
     assert.equal(deleted, true)
     answerReferencesAlign = true
 

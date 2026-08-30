@@ -24,6 +24,7 @@ const props = defineProps<{
   progressWidth: string
   remainingTime: string
   activities: LessonGenerationActivity[]
+  terminalIssues: LessonGenerationActivity[]
   refreshFailed: boolean
   finishedMessage: string
   finishedStatus: PlayerWorkStatus | null
@@ -85,5 +86,16 @@ const workStatus = computed(() => guideWorkStatus(
       class="text-sm font-semibold"
     />
     <p class="mt-0.5 text-xs leading-5">{{ finishedMessage }}</p>
+    <ol
+      v-if="terminalIssues.length"
+      data-testid="lesson-generation-terminal-issues"
+      class="mx-auto mt-2 grid max-w-4xl gap-1.5 border-t border-current/10 pt-2 text-left"
+      :aria-label="t('lesson.generation.activitiesAria')"
+    >
+      <li v-for="issue in terminalIssues" :key="issue.sequence" class="flex items-start gap-2 text-xs leading-5">
+        <span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-amber-600" aria-hidden="true" />
+        <span>{{ issue.text }}</span>
+      </li>
+    </ol>
   </div>
 </template>

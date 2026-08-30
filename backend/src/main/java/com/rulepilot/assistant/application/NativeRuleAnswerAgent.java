@@ -56,7 +56,7 @@ public class NativeRuleAnswerAgent {
               "properties": {
                 "kind": {"type": "string", "enum": ["CHAT", "RULE_ANSWER", "CLARIFICATION"]},
                 "shortVerdict": {"type": "string"},
-                "explanation": {"type": "string"},
+                "explanation": {"type": "string", "description": "For RULE_ANSWER, a non-blank player-facing explanation grounded in the cited rule text. CHAT and CLARIFICATION may leave this empty."},
                 "clarification": {"type": ["string", "null"]},
                 "citationIds": {
                   "type": "array",
@@ -181,6 +181,11 @@ public class NativeRuleAnswerAgent {
             }
             return TerminalValidation.accepted();
         }
+        if (candidate.explanation.isBlank()) {
+            return rejected(
+                    "RULE_EXPLANATION_REQUIRED", "/explanation",
+                    "A rule answer must explain the cited rule in player-facing language.", allowedIds);
+        }
         if (candidate.citationIds.isEmpty()) {
             return rejected(
                     "CITATION_REQUIRED", "/citationIds",
@@ -203,7 +208,6 @@ public class NativeRuleAnswerAgent {
         TerminalValidation identity = validateCanonicalIdentity(candidate, context, allowedEvidence, allowedIds);
         if (identity != null) return identity;
         return RuleAnswerNumericBoundary.validate(
-                candidate.playerProse(),
                 candidate.numericClaims,
                 candidate.citationIds,
                 allowedEvidence,
@@ -578,12 +582,7 @@ public class NativeRuleAnswerAgent {
             String clarification,
             List<String> citationIds,
             List<String> exceptions,
-            List<NumericClaim> numericClaims) {
-
-        String playerProse() {
-            return shortVerdict + "\n" + explanation + "\n" + String.join("\n", exceptions);
-        }
-    }
+            List<NumericClaim> numericClaims) {}
 
     private static final class CandidateFailure extends RuntimeException {
         private final String code;

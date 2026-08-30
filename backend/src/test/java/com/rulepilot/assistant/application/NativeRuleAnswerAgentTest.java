@@ -120,7 +120,35 @@ class NativeRuleAnswerAgentTest {
     }
 
     @Test
-    void rejectsAnUndeclaredOrUnsupportedHardNumberWithoutRewritingProse() {
+    void rejectsAnEmptyRuleExplanationButStillAllowsACompactChatTurn() {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidenceHit evidence = new RuleEvidenceHit(
+                evidenceId, versionId, "RULES", "Movement", "Move one space.", 4, 4, 1.0);
+        NativeRuleAnswerAgent answers = answers(
+                new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
+
+        TerminalValidation rule = answers.validateTerminal(
+                """
+                {"kind":"RULE_ANSWER","shortVerdict":"Move.","explanation":"",
+                 "citationIds":["%s"]}
+                """.formatted(evidenceId),
+                List.of(exactRead(evidenceId, evidence.excerpt(), 4)),
+                new QuestionContext(versionId));
+        TerminalValidation chat = answers.validateTerminal(
+                """
+                {"kind":"CHAT","shortVerdict":"Hello!","explanation":""}
+                """,
+                List.of(),
+                new QuestionContext(versionId));
+
+        assertThat(rule.valid()).isFalse();
+        assertThat(rule.code()).isEqualTo("RULE_EXPLANATION_REQUIRED");
+        assertThat(rule.path()).isEqualTo("/explanation");
+        assertThat(chat.valid()).isTrue();
+    }
+
+    @Test
+    void rejectsATypedHardNumberAbsentFromItsCitedEvidence() {
         UUID evidenceId = UUID.randomUUID();
         RuleEvidenceHit evidence = new RuleEvidenceHit(
                 evidenceId, versionId, "LIMIT", "Hand limit", "Keep at most 4 cards.", 9, 9, 1.0);
@@ -137,6 +165,43 @@ class NativeRuleAnswerAgentTest {
         assertThat(result.valid()).isFalse();
         assertThat(result.code()).isEqualTo("NUMERIC_VALUE_UNSUPPORTED");
         assertThat(result.path()).isEqualTo("/numericClaims/0/value");
+    }
+
+    @Test
+    void validatesTypedNumericClaimsWithoutInterpretingPresentationDigitsAsRuleFacts() {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidenceHit evidence = new RuleEvidenceHit(
+                evidenceId, versionId, "LIMIT", "Hand limit", "Keep at most 4 cards.", 9, 9, 1.0);
+        NativeRuleAnswerAgent answers = answers(
+                new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
+        String candidate = """
+                {"kind":"RULE_ANSWER","shortVerdict":"1. Keep at most 4 cards.","explanation":"That is the limit.",
+                 "citationIds":["%s"],"numericClaims":[{"value":"4","evidenceId":"%s"}]}
+                """.formatted(evidenceId, evidenceId);
+
+        TerminalValidation result = answers.validateTerminal(
+                candidate, List.of(exactRead(evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId));
+
+        assertThat(result.valid()).isTrue();
+    }
+
+    @Test
+    void rejectsANumericClaimThatOnlyAppearsInsideAnotherNumber() {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidenceHit evidence = new RuleEvidenceHit(
+                evidenceId, versionId, "LIMIT", "Track limit", "Advance to space 15.", 9, 9, 1.0);
+        NativeRuleAnswerAgent answers = answers(
+                new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
+        String candidate = """
+                {"kind":"RULE_ANSWER","shortVerdict":"Advance 5 spaces.","explanation":"Use the cited limit.",
+                 "citationIds":["%s"],"numericClaims":[{"value":"5","evidenceId":"%s"}]}
+                """.formatted(evidenceId, evidenceId);
+
+        TerminalValidation result = answers.validateTerminal(
+                candidate, List.of(exactRead(evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId));
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.code()).isEqualTo("NUMERIC_VALUE_UNSUPPORTED");
     }
 
     private NativeRuleAnswerAgent answers(NativeToolAgent agent, RuleEvidenceLookup lookup) {

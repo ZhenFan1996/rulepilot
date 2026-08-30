@@ -241,9 +241,12 @@ describe('LessonVisualEvidence', () => {
     expect(fetchMock.mock.calls.every(([url]) => url === '/crop/6')).toBe(true)
   })
 
-  it('classifies a network failure without retrying or hiding the published lesson text', async () => {
+  it('classifies a network failure without automatic retry and offers one page-scoped manual retry', async () => {
     const fetchMock = vi.mocked(fetch)
-    fetchMock.mockReset().mockRejectedValue(new TypeError('network unavailable'))
+    fetchMock
+      .mockReset()
+      .mockRejectedValueOnce(new TypeError('network unavailable'))
+      .mockResolvedValueOnce(imageResponse())
 
     const wrapper = mountEvidence()
     await flushPromises()
@@ -252,6 +255,15 @@ describe('LessonVisualEvidence', () => {
     expect(wrapper.get('[data-testid="lesson-visual-detail-failure"]').text()).toContain('局部图在传输或服务响应时失败')
     expect(wrapper.text()).toContain('只省略此图，已发布的带引用正文保留')
     expect(wrapper.findAll('a[href="/page/6"]')).not.toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('[data-testid="lesson-visual-detail-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.every(([url]) => url === '/crop/6')).toBe(true)
+    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src'))
+      .toMatch(/^data:image\/jpeg;base64,/)
   })
 
   it('classifies a browser read failure after a successful response without retrying', async () => {

@@ -27,7 +27,7 @@ public class BoardGameRecommendationAgent {
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String RECOMMEND_TOOL = "recommend_games";
     static final String COMPARE_TOOL = "compare_candidates";
-    static final String PROMPT_VERSION = "recommendation-agent-v90-single-search-contract";
+    static final String PROMPT_VERSION = "recommendation-agent-v91-model-authored-publication";
 
     private final RecommendationReActLoop loop;
 
@@ -579,38 +579,11 @@ public class BoardGameRecommendationAgent {
 
     public record RecommendedGame(
             Game game,
-            List<String> matches,
-            List<String> tradeoffs,
-            List<RecommendationReason> reasons,
             List<CandidateClaim> claims,
             List<RecommendationReplyPart> replyParts) {
-
-        public RecommendedGame(Game game, List<String> matches, List<String> tradeoffs) {
-            this(game, matches, tradeoffs, List.of(), List.of(), List.of());
-        }
-
-        public RecommendedGame(
-                Game game,
-                List<String> matches,
-                List<String> tradeoffs,
-                List<RecommendationReason> reasons) {
-            this(game, matches, tradeoffs, reasons, List.of(), List.of());
-        }
-
-        public RecommendedGame(
-                Game game,
-                List<String> matches,
-                List<String> tradeoffs,
-                List<RecommendationReason> reasons,
-                List<CandidateClaim> claims) {
-            this(game, matches, tradeoffs, reasons, claims, List.of());
-        }
-
         public RecommendedGame {
-            matches = List.copyOf(matches);
-            tradeoffs = List.copyOf(tradeoffs);
-            reasons = List.copyOf(reasons);
-            claims = List.copyOf(claims);
+            Objects.requireNonNull(game, "recommended game is required");
+            claims = claims == null ? List.of() : List.copyOf(claims);
             replyParts = replyParts == null ? List.of() : List.copyOf(replyParts);
         }
     }
@@ -668,18 +641,6 @@ public class BoardGameRecommendationAgent {
         public boolean known() {
             return observation != null;
         }
-    }
-
-    public record RecommendationReason(ReasonKind kind, String text, List<Integer> sourceIndexes) {
-        public RecommendationReason {
-            sourceIndexes = List.copyOf(sourceIndexes);
-        }
-    }
-
-    public enum ReasonKind {
-        BGG_FACT,
-        PREFERENCE_INFERENCE,
-        WEB_RESEARCH
     }
 
     public enum Outcome {

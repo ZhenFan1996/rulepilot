@@ -55,7 +55,7 @@ public class AssistantRunService implements AssistantRuns {
         this.repository = repository;
         this.execution = execution;
         this.answerLimits = new BudgetLimits(maxTokens, timeout);
-        this.teachingLimits = new BudgetLimits(teachingMaxTokens, teachingTimeout);
+        this.teachingLimits = BudgetLimits.observationalTokens(teachingMaxTokens, teachingTimeout);
         if (teachingModelCallCapacityBaseline < 1) {
             throw new IllegalArgumentException("teaching model-call capacity baseline must be positive");
         }
@@ -73,7 +73,8 @@ public class AssistantRunService implements AssistantRuns {
                     "teaching maximum workload tokens must be positive and no lower than the teaching token budget");
         }
         this.teachingMaxWorkloadTokens = teachingMaxWorkloadTokens;
-        this.visualEnrichmentLimits = new BudgetLimits(visualEnrichmentMaxTokens, visualEnrichmentTimeout);
+        this.visualEnrichmentLimits =
+                BudgetLimits.observationalTokens(visualEnrichmentMaxTokens, visualEnrichmentTimeout);
     }
 
     @Override
@@ -413,7 +414,8 @@ public class AssistantRunService implements AssistantRuns {
         }
         return new BudgetLimits(
                 workloadAwareTeachingTokens(configured, workloadDemand),
-                workloadAwareTeachingTimeout(configured, workloadDemand));
+                workloadAwareTeachingTimeout(configured, workloadDemand),
+                configured.tokenLimitEnforced());
     }
 
     private int workloadAwareTeachingTokens(BudgetLimits configured, WorkloadDemand workloadDemand) {

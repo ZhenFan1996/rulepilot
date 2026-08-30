@@ -157,6 +157,7 @@ const {
   generationProgressWidth,
   generationRemainingTime,
   recentGenerationActivities,
+  terminalGenerationIssues,
 } = useLessonGenerationPresentation({
   plan,
   lesson,
@@ -809,6 +810,7 @@ onUnmounted(() => {
         :progress-width="generationProgressWidth"
         :remaining-time="generationRemainingTime"
         :activities="recentGenerationActivities"
+        :terminal-issues="terminalGenerationIssues"
         :refresh-failed="Boolean(generationRefreshError) && !generationIdentityBlocked"
         :finished-message="generationTerminalPresentation?.message ?? ''"
         :finished-status="generationTerminalPresentation?.workStatus ?? null"

@@ -31,10 +31,10 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Int
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReplyPart;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationShortfall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionSnapshot;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.TurnResult;
@@ -398,7 +398,7 @@ class BggRecommendationAgentControllerTest {
                 null,
                 10,
                 1,
-                List.of(new RecommendedGame(game, List.of("已核验"), List.of())));
+                List.of(new RecommendedGame(game, List.of(), List.of())));
         ConversationResponse unavailable = unavailable(FailureReason.PROVIDER_CALL_FAILED);
         ConversationState state = new ConversationState(
                 RecommendationProfile.empty(),
@@ -590,6 +590,36 @@ class BggRecommendationAgentControllerTest {
                 List.of("Animals: Birds"),
                 List.of("Elizabeth Hargrave"),
                 List.of("Stonemaier Games"));
+        CandidateObservation playerCount = new CandidateObservation(
+                "bgg-266192-playerCount",
+                266192,
+                CandidateObservation.Kind.STRUCTURED_METADATA,
+                "playerCount",
+                "1..5",
+                List.of());
+        CandidateObservation mechanics = new CandidateObservation(
+                "bgg-266192-mechanics",
+                266192,
+                CandidateObservation.Kind.TAXONOMY,
+                "mechanics",
+                "Card Drafting",
+                List.of());
+        CandidateClaim fit = new CandidateClaim(
+                266192,
+                "playerCount",
+                CandidateClaim.Type.CONSTRAINT_FIT,
+                ConstraintRange.Strength.HARD,
+                CandidateClaim.Relation.SATISFIED,
+                "候选人数 1–5 人与硬条件 4 人：满足。",
+                List.of(playerCount));
+        CandidateClaim whyFit = new CandidateClaim(
+                266192,
+                "whyFit",
+                CandidateClaim.Type.PREFERENCE_INFERENCE,
+                null,
+                CandidateClaim.Relation.OBSERVED,
+                "模型原文保留 Animals 与 Card Drafting；它支持 4 人且标注 40–70 分钟。",
+                List.of(playerCount, mechanics));
         when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenReturn(new ConversationResponse(
                 Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
@@ -600,31 +630,8 @@ class BggRecommendationAgentControllerTest {
                 20,
                 List.of(new RecommendedGame(
                         new Game(ranked, details),
-                        List.of("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：Animals、Card Drafting"),
-                        List.of("Card Drafting 这里只是模型原文中的术语，不应在 DTO 层被字符串改写。"),
-                        List.of(
-                                new RecommendationReason(
-                                        ReasonKind.PREFERENCE_INFERENCE,
-                                        "模型原文保留 Animals 与 Card Drafting；它支持 4 人且标注 40–70 分钟。",
-                                        List.of()),
-                                new RecommendationReason(
-                                        ReasonKind.BGG_FACT,
-                                        "BGG 机制/类型标签：Animals、Card Drafting",
-                                        List.of())),
-                        List.of(new CandidateClaim(
-                                266192,
-                                "playerCount",
-                                CandidateClaim.Type.CONSTRAINT_FIT,
-                                ConstraintRange.Strength.HARD,
-                                CandidateClaim.Relation.SATISFIED,
-                                "候选人数 1–5 人与硬条件 4 人：满足。",
-                                List.of(new CandidateObservation(
-                                        "bgg-266192-playerCount",
-                                        266192,
-                                        CandidateObservation.Kind.STRUCTURED_METADATA,
-                                        "playerCount",
-                                        "1..5",
-                                        List.of()))))))));
+                        List.of(fit),
+                        List.of(new RecommendationReplyPart(ReplyPartRole.WHY_FIT, whyFit))))));
         when(presentation.localizeTaxonomy(List.of("Animals"), List.of("Card Drafting"), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(
                         Map.of("Animals", "动物"), Map.of("Card Drafting", "卡牌轮抽")));
@@ -655,19 +662,11 @@ class BggRecommendationAgentControllerTest {
             assertThat(game.game().families()).containsExactly("Animals: Birds");
             assertThat(game.game().designers()).containsExactly("Elizabeth Hargrave");
             assertThat(game.game().publishers()).containsExactly("Stonemaier Games");
-            assertThat(game.matches())
-                    .containsExactly("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽");
-            assertThat(game.reasons()).first().satisfies(reason -> {
-                assertThat(reason.kind()).isEqualTo("preference_inference");
-                assertThat(reason.text()).isEqualTo(
+            assertThat(game.replyParts()).singleElement().satisfies(part -> {
+                assertThat(part.role()).isEqualTo("why_fit");
+                assertThat(part.text()).isEqualTo(
                         "模型原文保留 Animals 与 Card Drafting；它支持 4 人且标注 40–70 分钟。");
             });
-            assertThat(game.reasons()).last().satisfies(reason -> {
-                assertThat(reason.kind()).isEqualTo("bgg_fact");
-                assertThat(reason.text()).isEqualTo("BGG 机制/类型标签：动物、卡牌轮抽");
-            });
-            assertThat(game.tradeoffs())
-                    .containsExactly("Card Drafting 这里只是模型原文中的术语，不应在 DTO 层被字符串改写。");
             assertThat(game.fitClaims()).singleElement().satisfies(claim -> {
                 assertThat(claim.subject()).isEqualTo("playerCount");
                 assertThat(claim.strength()).isEqualTo("hard");

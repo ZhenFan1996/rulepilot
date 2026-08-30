@@ -43,7 +43,7 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
                 "includeAdjacentContext": {"type": "boolean", "description": "Request bounded neighboring chunks only when a condition, exception, or list continuation may cross a chunk boundary."},
                 "cursor": {"description": "Opaque nextCursor from the preceding observation for this exact search, or null for the first page.", "type": ["string", "null"], "format": "uuid"}
               },
-              "required": ["query", "limit", "sectionTypes", "includeAdjacentContext"],
+              "required": ["query", "limit"],
               "additionalProperties": true
             }
             """;
@@ -85,7 +85,7 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
 
     @Override
     public String schemaVersion() {
-        return "3";
+        return "4";
     }
 
     @Override
@@ -102,14 +102,8 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
         if (arguments.limit() == null || arguments.limit() < 1) {
             throw new IllegalArgumentException("limit must be a positive requested candidate count");
         }
-        if (arguments.sectionTypes() == null) {
-            throw new IllegalArgumentException("sectionTypes must be an array; use an empty array for no filter");
-        }
         if (arguments.sectionTypes().stream().anyMatch(java.util.Objects::isNull)) {
             throw new IllegalArgumentException("sectionTypes must not contain null identities");
-        }
-        if (arguments.includeAdjacentContext() == null) {
-            throw new IllegalArgumentException("includeAdjacentContext must be a boolean");
         }
         Set<String> sectionTypes = new LinkedHashSet<>(arguments.sectionTypes());
         if (sectionTypes.size() != arguments.sectionTypes().size()) {
@@ -313,5 +307,10 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
             List<String> sectionTypes,
             String currentSectionType,
             Boolean includeAdjacentContext,
-            String cursor) {}
+            String cursor) {
+        private SearchArguments {
+            sectionTypes = sectionTypes == null ? List.of() : List.copyOf(sectionTypes);
+            includeAdjacentContext = Boolean.TRUE.equals(includeAdjacentContext);
+        }
+    }
 }

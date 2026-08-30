@@ -27,14 +27,19 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     public void initialize(UUID runId, BudgetLimits limits, Instant startedAt) {
         entityManager.createNativeQuery("""
                         insert into assistant_run_budget (
-                            assistant_run_id, max_steps, max_tool_calls, max_model_calls, max_tokens, deadline_at
-                        ) values (:runId, :maxSteps, :maxTools, :maxModels, :maxTokens, :deadline)
+                            assistant_run_id, max_steps, max_tool_calls, max_model_calls, max_tokens,
+                            token_limit_enforced, deadline_at
+                        ) values (
+                            :runId, :maxSteps, :maxTools, :maxModels, :maxTokens,
+                            :tokenLimitEnforced, :deadline
+                        )
                         """)
                 .setParameter("runId", runId)
                 .setParameter("maxSteps", limits.maxSteps())
                 .setParameter("maxTools", limits.maxToolCalls())
                 .setParameter("maxModels", Integer.MAX_VALUE)
                 .setParameter("maxTokens", limits.maxTokens())
+                .setParameter("tokenLimitEnforced", limits.tokenLimitEnforced())
                 .setParameter("deadline", startedAt.plus(limits.timeout()))
                 .executeUpdate();
     }
@@ -186,7 +191,8 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
         int models = Math.addExact(
                 budget.usedModelCalls, type == ActivityType.MODEL || type == ActivityType.CRITIC ? 1 : 0);
         if (tools > budget.maxToolCalls) throw new AgentExecutionStoppedException(StopReason.TOOL_BUDGET);
-        if ((long) budget.usedTokens + estimatedInputTokens > budget.maxTokens) {
+        if (budget.tokenLimitEnforced
+                && (long) budget.usedTokens + estimatedInputTokens > budget.maxTokens) {
             throw new AgentExecutionStoppedException(StopReason.TOKEN_BUDGET);
         }
         entityManager.createNativeQuery("""
@@ -220,7 +226,9 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
         validateCompletion(reservation, outcome, estimatedOutputTokens, latencyMs, summary);
         BudgetRow budget = lockBudget(reservation.runId());
         StopReason stopReason = stopped(budget, Instant.now());
-        if (stopReason == null && (long) budget.usedTokens + estimatedOutputTokens > budget.maxTokens) {
+        if (stopReason == null
+                && budget.tokenLimitEnforced
+                && (long) budget.usedTokens + estimatedOutputTokens > budget.maxTokens) {
             stopReason = StopReason.TOKEN_BUDGET;
         }
         ActivityOutcome recordedOutcome = stopReason == null ? outcome : ActivityOutcome.REJECTED;
@@ -398,14 +406,14 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     public BudgetSnapshot budget(UUID runId) {
         Object[] row = (Object[]) entityManager.createNativeQuery("""
                         select max_tokens, used_tool_calls, used_model_calls, used_tokens,
-                               deadline_at, cancellation_requested_at
+                               deadline_at, cancellation_requested_at, token_limit_enforced
                         from assistant_run_budget where assistant_run_id = :runId
                         """)
                 .setParameter("runId", runId)
                 .getSingleResult();
         return new BudgetSnapshot(
                 number(row[0]), number(row[1]), number(row[2]), number(row[3]),
-                (Instant) row[4], (Instant) row[5]);
+                (Instant) row[4], (Instant) row[5], (Boolean) row[6]);
     }
 
     @Override
@@ -437,20 +445,22 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
         Object[] row = (Object[]) entityManager.createNativeQuery("""
                         select max_steps, max_tool_calls, max_tokens,
                                used_tool_calls, used_model_calls, used_tokens, deadline_at,
-                               cancellation_requested_at, activated_at, activation_id
+                               cancellation_requested_at, activated_at, activation_id, token_limit_enforced
                         from assistant_run_budget where assistant_run_id = :runId for update
                         """)
                 .setParameter("runId", runId)
                 .getSingleResult();
         return new BudgetRow(
                 number(row[0]), number(row[1]), number(row[2]), number(row[3]), number(row[4]), number(row[5]),
-                (Instant) row[6], (Instant) row[7], (Instant) row[8], (UUID) row[9]);
+                (Instant) row[6], (Instant) row[7], (Instant) row[8], (UUID) row[9], (Boolean) row[10]);
     }
 
     private StopReason stopped(BudgetRow budget, Instant now) {
         if (budget.cancellationRequestedAt != null) return StopReason.CANCELLED;
         if (!now.isBefore(budget.deadlineAt)) return StopReason.TIMEOUT;
-        if (budget.usedTokens >= budget.maxTokens) return StopReason.TOKEN_BUDGET;
+        if (budget.tokenLimitEnforced && budget.usedTokens >= budget.maxTokens) {
+            return StopReason.TOKEN_BUDGET;
+        }
         return null;
     }
 
@@ -487,5 +497,6 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     private record BudgetRow(
             int maxSteps, int maxToolCalls, int maxTokens,
             int usedToolCalls, int usedModelCalls, int usedTokens,
-            Instant deadlineAt, Instant cancellationRequestedAt, Instant activatedAt, UUID activationId) {}
+            Instant deadlineAt, Instant cancellationRequestedAt, Instant activatedAt, UUID activationId,
+            boolean tokenLimitEnforced) {}
 }

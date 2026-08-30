@@ -1,7 +1,6 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
@@ -44,11 +43,18 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void reportsTheExactInvalidFieldInsteadOfRequiringLegacyInventoryFields() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parse("""
-                {"pages":[{"pageNumber":2,"ruleGroups":[{"identifier":"turn"}]}]}
-                """))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("field must be non-blank text");
+    void discardsOnlyMalformedOptionalRuleGroupsAndKeepsReadablePageFacts() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parse("""
+                {"pages":[{"pageNumber":2,"printedTerms":["Turn order"],"ruleGroups":[
+                  {"identifier":"turn"},
+                  {"identifier":"action","fact":"Take one action."}
+                ]}]}
+                """);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.printedTerms()).isEqualTo("Turn order");
+            assertThat(page.ruleGroupFacts()).singleElement().satisfies(group ->
+                    assertThat(group.identifier()).isEqualTo("action"));
+        });
     }
 }

@@ -8,7 +8,7 @@ import { useLocale } from '@/lib/locale'
 interface RunAudit {
   run: { id: string; mode: string; subjectId: string; ownerUsername: string; state: string; createdAt: string; updatedAt: string; lastErrorCode: string | null }
   steps: Array<{ sequence: number; fromState: string; toState: string; summary: string; occurredAt: string }>
-  budget: { maxTokens: number; usedToolCalls: number; usedModelCalls: number; usedTokens: number; deadlineAt: string }
+  budget: { maxTokens: number; usedToolCalls: number; usedModelCalls: number; usedTokens: number; tokenLimitEnforced: boolean; deadlineAt: string }
   activities: Array<{ sequence: number; type: string; operation: string; outcome: string; estimatedInputTokens: number; estimatedOutputTokens: number; latencyMs: number; summary: string; occurredAt: string }>
 }
 
@@ -71,7 +71,14 @@ watch(() => route.query.runId, (value) => {
             <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.owner') }}</p><p class="mt-1 font-semibold">{{ audit.run.ownerUsername }}</p></div>
             <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.tools') }}</p><p class="mt-1 font-semibold">{{ audit.budget.usedToolCalls }}</p></div>
             <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.models') }}</p><p class="mt-1 font-semibold">{{ audit.budget.usedModelCalls }}</p></div>
-            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.tokens') }}</p><p class="mt-1 font-semibold">{{ audit.budget.usedTokens }} / {{ audit.budget.maxTokens }}</p></div>
+            <div class="rounded-2xl bg-paper p-4">
+              <p class="text-xs text-ink/45">{{ t(audit.budget.tokenLimitEnforced ? 'agentAudit.tokensHard' : 'agentAudit.tokensObserved') }}</p>
+              <p v-if="audit.budget.tokenLimitEnforced" class="mt-1 font-semibold">{{ audit.budget.usedTokens }} / {{ audit.budget.maxTokens }}</p>
+              <template v-else>
+                <p class="mt-1 font-semibold">{{ t('agentAudit.tokensObservedValue', { used: audit.budget.usedTokens, threshold: audit.budget.maxTokens }) }}</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('agentAudit.tokensObservedHint') }}</p>
+              </template>
+            </div>
             <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.deadline') }}</p><p class="mt-1 font-semibold">{{ audit.budget.deadlineAt }}</p></div>
           </section>
 

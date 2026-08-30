@@ -895,7 +895,7 @@ class RecommendationConversationCoordinatorTest {
                 null,
                 10,
                 1,
-                List.of(new RecommendedGame(game, List.of("已核验"), List.of())));
+                List.of(new RecommendedGame(game, List.of(), List.of())));
     }
 
     private Game verifiedGame() {

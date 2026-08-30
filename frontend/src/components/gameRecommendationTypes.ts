@@ -56,19 +56,10 @@ export type RecommendationGame = {
   bggUrl: string
 }
 
-export type RecommendationReason = {
-  kind: 'bgg_fact' | 'preference_inference' | 'web_research'
-  text: string
-  sourceIndexes: number[]
-}
-
 export type RecommendedGame = {
   game: RecommendationGame
-  matches: string[]
-  tradeoffs: string[]
-  reasons?: RecommendationReason[]
-  fitClaims?: CandidateFitClaim[]
-  replyParts?: RecommendationReplyPart[]
+  fitClaims: CandidateFitClaim[]
+  replyParts: RecommendationReplyPart[]
 }
 
 export type RecommendationReplyPart = {

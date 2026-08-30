@@ -34,13 +34,12 @@ describe('RecommendationGameCard', () => {
       props: {
         entry: {
           game,
-          matches: [],
-          tradeoffs: [],
           fitClaims: [
             { subject: 'playerCount', strength: 'hard', relation: 'satisfied', text: 'Candidate player range is inside the request.' },
             { subject: 'durationMinutes', strength: 'soft', relation: 'conflict', text: 'Candidate duration falls outside the preferred range.' },
             { subject: 'interaction', strength: 'hard', relation: 'unknown', text: 'Available facts do not establish the interaction style.' },
           ],
+          replyParts: [],
         },
         sources: [],
         loading: false,
@@ -60,40 +59,12 @@ describe('RecommendationGameCard', () => {
     expect(wrapper.emitted('select')).toEqual([[game]])
   })
 
-  it('does not turn legacy reasons, tradeoffs, or links into a tag wall', () => {
-    const wrapper = mount(RecommendationGameCard, {
-      props: {
-        entry: {
-          game,
-          matches: [],
-          reasons: [
-            { kind: 'bgg_fact', text: '**2–5 players** are listed.', sourceIndexes: [] },
-            { kind: 'preference_inference', text: 'Fits your *short setup* preference.', sourceIndexes: [] },
-          ],
-          tradeoffs: ['Read the [language note](https://example.test/language).', '[unsafe](javascript:alert(1))'],
-        },
-        sources: [],
-        loading: false,
-        responseLocale: 'en',
-      },
-    })
-
-    expect(wrapper.text()).toContain('2–5 players · 45–75 min · Weight 2.2')
-    expect(wrapper.text()).not.toContain('2–5 players are listed.')
-    expect(wrapper.text()).not.toContain('short setup')
-    expect(wrapper.text()).not.toContain('language note')
-    expect(wrapper.find('a').exists()).toBe(false)
-    expect(wrapper.find('strong').exists()).toBe(false)
-    expect(wrapper.find('em').exists()).toBe(false)
-  })
-
   it('lays out claim-scoped reasons and tradeoffs without exposing evidence identifiers', () => {
     const wrapper = mount(RecommendationGameCard, {
       props: {
         entry: {
           game,
-          matches: [],
-          tradeoffs: [],
+          fitClaims: [],
           replyParts: [
             {
               role: 'why_fit',
@@ -129,8 +100,7 @@ describe('RecommendationGameCard', () => {
       props: {
         entry: {
           game,
-          matches: [],
-          tradeoffs: [],
+          fitClaims: [],
           replyParts: [{
             role: 'verified_fact',
             claimType: 'taxonomy_classification',

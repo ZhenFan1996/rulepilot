@@ -294,7 +294,14 @@ async function mockPublicDiscovery(
         sourceCount: 179737, candidatesEvaluated: 6,
         userModel: { summary: '以 Mosaic Field 为参照，寻找机制相近的游戏。', hypotheses: [] },
         completedWork: ['resolve_bgg_game', 'inspect_candidate_titles', 'lookup_bgg_games', 'recommend_games'],
-        games: [{ game: similarToMosaicField, matches: ['同样包含轮抽与图案构筑'], tradeoffs: ['候选使用骰子，随机性更高'] }],
+        games: [{
+          game: similarToMosaicField,
+          fitClaims: [],
+          replyParts: [
+            { role: 'why_fit', claimType: 'taxonomy_classification', subject: 'mechanics', text: '同样包含轮抽与图案构筑', sourceIndexes: [] },
+            { role: 'tradeoff', claimType: 'taxonomy_classification', subject: 'mechanics', text: '候选使用骰子，随机性更高', sourceIndexes: [] },
+          ],
+        }],
       })
       return
     }
@@ -306,11 +313,15 @@ async function mockPublicDiscovery(
         userModel: { summary: '朋友聚会，可能重视参与感', hypotheses: [{ text: '可能不喜欢等待太久', confidence: 'medium', basedOn: '想热闹一点' }] },
         researchSources: [{ index: 1, title: 'Publisher guide', url: 'https://publisher.example/wingspan', domain: 'publisher.example' }],
         completedWork: ['lookup_bgg_games', 'research_game_fit', 'recommend_games'],
-        games: [{ game: catalog.games[0], matches: ['BGG 总榜第 34 名'], tradeoffs: [], reasons: [
-          { kind: 'bgg_fact', text: 'BGG 总榜第 34 名', sourceIndexes: [] },
-          { kind: 'preference_inference', text: '可能适合希望全桌持续参与的场景', sourceIndexes: [] },
-          { kind: 'web_research', text: '发行商资料提供了分步教学流程', sourceIndexes: [1] },
-        ] }],
+        games: [{
+          game: catalog.games[0],
+          fitClaims: [],
+          replyParts: [
+            { role: 'verified_fact', claimType: 'structured_fact', subject: 'overallRank', text: 'BGG 总榜第 34 名', sourceIndexes: [] },
+            { role: 'why_fit', claimType: 'preference_inference', subject: 'interaction', text: '可能适合希望全桌持续参与的场景', sourceIndexes: [] },
+            { role: 'verified_fact', claimType: 'attributed_experience', subject: 'teaching', text: '发行商资料提供了分步教学流程', sourceIndexes: [1] },
+          ],
+        }],
       })
       return
     }
@@ -324,7 +335,14 @@ async function mockPublicDiscovery(
       }, clarification: null,
       sourceCount: 179737, candidatesEvaluated: 20,
       completedWork: ['browse_bgg_catalog', 'lookup_bgg_games', 'recommend_games'],
-      games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
+      games: [{
+        game: catalog.games[0],
+        fitClaims: [
+          { subject: 'playerCount', strength: 'hard', relation: 'satisfied', text: '支持 4 人游玩' },
+          { subject: 'durationMinutes', strength: 'hard', relation: 'satisfied', text: '70 分钟，不超过你的时长上限' },
+        ],
+        replyParts: [],
+      }],
     })
   })
   await page.route('**/api/v1/bgg/catalog?*', async route => {
@@ -608,7 +626,14 @@ test('restores the server conversation and unsent draft after sign-in and browse
       conversationId, revision: 1, clientTurnId: request.clientTurnId, replayed: false, responseLocale: 'zh-CN',
       outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '服务端保存了完整对话和候选。',
       profile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
-      games: [{ game: catalog.games[0], matches: ['支持 3–4 人', '符合 120–180 分钟区间'], tradeoffs: [] }],
+      games: [{
+        game: catalog.games[0],
+        fitClaims: [
+          { subject: 'playerCount', strength: 'hard', relation: 'satisfied', text: '支持 3–4 人' },
+          { subject: 'durationMinutes', strength: 'hard', relation: 'satisfied', text: '符合 120–180 分钟区间' },
+        ],
+        replyParts: [],
+      }],
     }
     serverSession = {
       conversationId,

@@ -131,12 +131,27 @@ export function teachingActivityText(
     : locale === 'en' ? 'this part of the guide' : '当前内容'
   if (locale === 'en') {
     if (activity.operation.startsWith('readTeachingSourcePages')
-      || activity.operation.startsWith('readRuleEvidencePages')) return `Reading the cited rulebook pages for ${target}`
-    if (activity.operation.startsWith('searchRuleEvidence')) return `Finding rulebook support for ${target}`
-    if (activity.operation.startsWith('composeTeachingSection')) return `Writing ${target} from the rulebook`
-    if (activity.operation.startsWith('continueTeachingSectionAfterRejection')) return `The same section Agent is generating a complete replacement for ${target} from the exact validation feedback`
+      || activity.operation.startsWith('readRuleEvidencePages')) return activity.outcome === 'FAILED'
+      || activity.outcome === 'REJECTED'
+      ? `Reading the cited pages for ${target} did not finish; that chapter was not published and earlier chapters remain available`
+      : `Reading the cited rulebook pages for ${target}`
+    if (activity.operation.startsWith('searchRuleEvidence')) return activity.outcome === 'FAILED'
+      || activity.outcome === 'REJECTED'
+      ? `Finding rulebook support for ${target} did not finish; that chapter was not published and earlier chapters remain available`
+      : `Finding rulebook support for ${target}`
+    if (activity.operation.startsWith('composeTeachingSection')) return activity.outcome === 'FAILED'
+      || activity.outcome === 'REJECTED'
+      ? `Writing ${target} stopped before publication; earlier published chapters remain available`
+      : `Writing ${target} from the rulebook`
+    if (activity.operation.startsWith('continueTeachingSectionAfterRejection')) return activity.outcome === 'FAILED'
+      || activity.outcome === 'REJECTED'
+      ? `The complete replacement for ${target} did not finish; that chapter stopped locally and earlier chapters remain available`
+      : `The same section Agent is generating a complete replacement for ${target} from the exact validation feedback`
     if (activity.operation.startsWith('settleTeachingSectionNoProgress')) return `The section Agent returned the same invalid candidate again, so ${target} stopped locally; other published chapters remain available`
-    if (activity.operation.startsWith('confirmGeneratedClaims')) return `Checking each rule claim in ${target}`
+    if (activity.operation.startsWith('confirmGeneratedClaims')) return activity.outcome === 'FAILED'
+      || activity.outcome === 'REJECTED'
+      ? `Claim checks for ${target} did not finish; that chapter was not published and earlier chapters remain available`
+      : `Checking each rule claim in ${target}`
     if (activity.operation.startsWith('reviewGeneratedContent')) return `Reviewing rules and sources for ${target}`
     if (activity.operation.startsWith('reviewObjectiveCoverage')) return `Checking ${target} for missing key steps`
     if (activity.operation.startsWith('validateTeachingSection')) {
@@ -161,14 +176,28 @@ export function teachingActivityText(
     return 'Organising and reviewing the guide'
   }
   if (activity.operation.startsWith('readTeachingSourcePages')
-    || activity.operation.startsWith('readRuleEvidencePages')) return `正在读取${target}引用的规则书页面`
-  if (activity.operation.startsWith('searchRuleEvidence')) return `正在为${target}查找规则依据`
+    || activity.operation.startsWith('readRuleEvidencePages')) return activity.outcome === 'FAILED'
+    || activity.outcome === 'REJECTED'
+    ? `${target}的引用页读取未完成；该章没有发布，先前章节继续保留`
+    : `正在读取${target}引用的规则书页面`
+  if (activity.operation.startsWith('searchRuleEvidence')) return activity.outcome === 'FAILED'
+    || activity.outcome === 'REJECTED'
+    ? `${target}的规则依据查找未完成；该章没有发布，先前章节继续保留`
+    : `正在为${target}查找规则依据`
   if (activity.operation.startsWith('composeTeachingSection')) {
-    return `正在依据规则书编写${target}`
+    return activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
+      ? `${target}在正文发布前停止；先前已发布章节继续保留`
+      : `正在依据规则书编写${target}`
   }
-  if (activity.operation.startsWith('continueTeachingSectionAfterRejection')) return `同一章节 Agent 正在依据完整候选和准确校验原因，重新生成${target}`
+  if (activity.operation.startsWith('continueTeachingSectionAfterRejection')) return activity.outcome === 'FAILED'
+    || activity.outcome === 'REJECTED'
+    ? `${target}的完整替代结果未能生成完成；该章已局部停止，先前章节继续保留`
+    : `同一章节 Agent 正在依据完整候选和准确校验原因，重新生成${target}`
   if (activity.operation.startsWith('settleTeachingSectionNoProgress')) return `同一章节 Agent 连续返回完全相同的无效候选，${target}已局部停止；其他已发布章节仍然保留`
-  if (activity.operation.startsWith('confirmGeneratedClaims')) return `正在逐条复核${target}的规则陈述`
+  if (activity.operation.startsWith('confirmGeneratedClaims')) return activity.outcome === 'FAILED'
+    || activity.outcome === 'REJECTED'
+    ? `${target}的规则陈述复核未完成；该章没有发布，先前章节继续保留`
+    : `正在逐条复核${target}的规则陈述`
   if (activity.operation.startsWith('reviewGeneratedContent')) return `正在核对${target}的规则和出处`
   if (activity.operation.startsWith('reviewObjectiveCoverage')) return `正在检查${target}有没有漏讲关键步骤`
   if (activity.operation.startsWith('validateTeachingSection')) {
@@ -209,6 +238,49 @@ export function recentTeachingActivitySteps<TOutcome extends TeachingActivityDis
       outcome: activity.outcome,
       text: teachingActivityText(plan, activities, activity, locale),
     }))
+}
+
+/**
+ * Keeps only unresolved, player-visible local failures for a terminal teaching run. A later successful publication
+ * or visual settlement for the same chapter removes the earlier failed attempt instead of leaving a stale warning.
+ */
+export function terminalTeachingIssueSteps<TOutcome extends TeachingActivityDisplayOutcome>(
+  plan: TeachingProgressPlan,
+  activities: readonly TeachingActivitySummary<TOutcome>[],
+  locale: AppLocale = 'zh-CN',
+): PlayerFacingTeachingActivity<TOutcome>[] {
+  const latestByScope = new Map<string, TeachingActivitySummary<TOutcome>>()
+  for (const activity of activities) {
+    const scope = terminalTeachingIssueScope(activity.operation)
+    if (scope) latestByScope.set(scope, activity)
+  }
+  return [...latestByScope.values()]
+    .filter(activity => activity.outcome === 'FAILED'
+      || activity.outcome === 'REJECTED'
+      || activity.outcome === 'UNKNOWN')
+    .sort((left, right) => right.sequence - left.sequence)
+    .map(activity => ({
+      sequence: activity.sequence,
+      outcome: activity.outcome,
+      text: teachingActivityText(plan, activities, activity, locale),
+    }))
+}
+
+function terminalTeachingIssueScope(operation: string) {
+  const position = operationPosition(operation)
+  if (position === null) return null
+  if (operation.startsWith('settleVisualCandidateSelection|')
+    || operation.startsWith('enrichTeachingSectionVisual|')) return `visual:${position}`
+  if (operation.startsWith('readTeachingSourcePages|')
+    || operation.startsWith('readRuleEvidencePages|')
+    || operation.startsWith('searchRuleEvidence|')
+    || operation.startsWith('composeTeachingSection|')
+    || operation.startsWith('continueTeachingSectionAfterRejection|')
+    || operation.startsWith('settleTeachingSectionNoProgress|')
+    || operation.startsWith('confirmGeneratedClaims|')
+    || operation.startsWith('validateTeachingSection|')
+    || operation.startsWith('publishTeachingSection|')) return `chapter:${position}`
+  return null
 }
 
 /** Player-safe preparation events emitted before a chapter plan or teaching run exists. */

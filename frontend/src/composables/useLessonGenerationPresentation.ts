@@ -4,7 +4,9 @@ import { useLocale } from '@/lib/locale'
 import { teachingRunIsActive } from '@/lib/liveLesson'
 import {
   processedTeachingChapterCount,
+  recentTeachingActivitySteps,
   supportedTeachingChapterCount,
+  terminalTeachingIssueSteps,
   teachingActivityText,
   teachingElapsedLabel,
   teachingRemainingTimeText,
@@ -51,15 +53,12 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
   const generationRemainingTime = computed(() => options.plan.value
     ? teachingRemainingTimeText(options.plan.value, options.generationRun.value, options.now.value, locale.value)
     : '')
-  const recentGenerationActivities = computed(() => [...generationActivities.value]
-    .reverse()
-    .map((activity) => ({
-      sequence: activity.sequence,
-      outcome: activity.outcome,
-      text: options.plan.value
-        ? teachingActivityText(options.plan.value, generationActivities.value, activity, locale.value)
-        : t('lesson.generation.preparing'),
-    })))
+  const recentGenerationActivities = computed(() => options.plan.value
+    ? recentTeachingActivitySteps(options.plan.value, generationActivities.value, locale.value).reverse()
+    : [])
+  const terminalGenerationIssues = computed(() => options.plan.value
+    ? terminalTeachingIssueSteps(options.plan.value, generationActivities.value, locale.value)
+    : [])
 
   return {
     generationActive,
@@ -73,5 +72,6 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
     generationProgressWidth,
     generationRemainingTime,
     recentGenerationActivities,
+    terminalGenerationIssues,
   }
 }

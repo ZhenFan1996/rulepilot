@@ -197,6 +197,25 @@ class NativeReadToolsTest {
     }
 
     @Test
+    void searchDefaultsOptionalFiltersInsteadOfForcingARepairTurn() {
+        AssistantReadTools readTools = mock(AssistantReadTools.class);
+        SearchRuleEvidenceNativeTool tool = new SearchRuleEvidenceNativeTool(readTools, JsonMapper.builder().build());
+        ToolScope scope = scope();
+        when(readTools.searchRuleEvidencePage(any(), any(Integer.class), any(Integer.class), any()))
+                .thenReturn(new RuleEvidencePage(List.of(), false, 0));
+
+        var result = tool.execute("{\"query\":\"setup\",\"limit\":1}", scope);
+
+        ArgumentCaptor<AssistantReadTools.SearchRuleEvidence> request =
+                ArgumentCaptor.forClass(AssistantReadTools.SearchRuleEvidence.class);
+        verify(readTools).searchRuleEvidencePage(
+                request.capture(), any(Integer.class), any(Integer.class), any());
+        assertThat(request.getValue().sectionTypes()).isEmpty();
+        assertThat(request.getValue().includeAdjacentContext()).isFalse();
+        assertThat(result.code()).isEqualTo("NO_EVIDENCE");
+    }
+
+    @Test
     void searchPassesCompleteTypedQueryFiltersAndRequestedCandidateCount() throws Exception {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         SearchRuleEvidenceNativeTool tool = new SearchRuleEvidenceNativeTool(

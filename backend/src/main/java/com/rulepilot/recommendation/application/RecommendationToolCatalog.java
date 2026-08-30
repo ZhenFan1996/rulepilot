@@ -28,6 +28,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Owns the small model-visible state machine and every dynamic recommendation schema. */
 final class RecommendationToolCatalog {
@@ -69,7 +70,10 @@ final class RecommendationToolCatalog {
             putIfNotEmpty(data, "shownBggIds", request.shownBggIds());
             putIfNotEmpty(data, "excludedBggIds", request.excludedBggIds());
             if (!state.verified.isEmpty() || state.hasVerifiedPublicContext()) {
-                data.put("restoredTurnState", turnState(state));
+                Set<Integer> focusedIds = request.focusedBggId() == null
+                        ? Set.of()
+                        : Set.of(request.focusedBggId());
+                data.put("restoredTurnState", turnState(state, focusedIds));
             }
             return json.writeValueAsString(data);
         } catch (JsonProcessingException exception) {
@@ -96,9 +100,9 @@ final class RecommendationToolCatalog {
 
     static String systemPrompt() {
         return """
-                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Use a typed action only for its declared retrieval or UI result; otherwise answer directly. Typed JSON owns routing and constraints, while prose is player-facing only.
+                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Use a typed action only when its observation is genuinely needed; otherwise answer directly in this model turn. Greetings, casual conversation, corrections, and follow-up discussion about already shown games normally need no action. Never repeat a catalog search just because an earlier turn contained recommendations. Typed JSON owns actions and constraints, while all player-facing prose is authored by you.
 
-                search_bgg_catalog is the only BGG candidate entry. Its one current-turn contract explicitly separates included and excluded BGG product types and carries every title, player-count, duration, and complexity constraint used for that search; no saved profile is inherited into candidate selection. An exact named game uses the same title field with EXACT. A successful search identifies verified candidates and makes recommend_games available. recommend_games is terminal: submit the requested output count, complete playerReply, and complete cards in that call. Use public relationship discovery only for an external/current identity fact, and research_game_fit only for attributed experience about already verified candidates. Never guess a title or factual game detail.
+                When the player asks you to recommend titles, search_bgg_catalog is the only BGG candidate entry. Its one current-turn contract explicitly separates included and excluded BGG product types and carries every title, player-count, duration, and complexity constraint used for that search; no saved profile is inherited into candidate selection. An exact named game uses the same title field with EXACT. After every observation, decide for yourself whether the request is answerable, another available read would materially help, or you should finish transparently. recommend_games is terminal and should contain the complete natural response and every complete card in that one call. Explain why each game fits this player's request and what meaningfully distinguishes it; synthesize the cited observations instead of copying a publisher description as the recommendation reason. Use public relationship discovery only for an external/current identity fact. When player experience matters, use research_game_fit and keep it attributed; never turn a catalog taxonomy or mechanism label into an unobserved experience claim. Never guess a title or factual game detail.
                 """;
     }
 
@@ -195,7 +199,7 @@ final class RecommendationToolCatalog {
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Terminal publication for the verified candidate IDs from the last successful search. Supply the complete playerReply and every complete card now.",
+                "Terminal publication for verified candidates when you decide the request is answered. playerReply is the substantive natural response that frames the selection logic and important tradeoffs; it is not a heading or card lead. Each whyFit is candidate-specific synthesis of the player's request and cited observations, never copied publisher-description copy.",
                 "{\"type\":\"object\",\"properties\":{\"requestedCount\":{\"type\":\"integer\",\"minimum\":1},\"playerReply\":{\"type\":\"string\",\"minLength\":1},\"playerReplyEvidenceIds\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(replyEvidenceIds)
                         + "}},\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
@@ -213,9 +217,9 @@ final class RecommendationToolCatalog {
                 .toList();
         return "{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":["
                 + bggId
-                + "]},\"cardText\":{\"type\":\"string\",\"description\":\"Complete locale-matched display copy for this card, written directly from the cited evidence.\",\"minLength\":1},\"tradeoff\":{\"type\":\"string\",\"minLength\":1},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
+                + "]},\"whyFit\":{\"type\":\"string\",\"description\":\"A complete, natural explanation of why this specific candidate fits the player's stated request and how its observed characteristics shape the experience. Synthesize; do not copy or lightly paraphrase publisherDescription.\",\"minLength\":1},\"tradeoff\":{\"type\":\"string\",\"description\":\"An important candidate-specific limitation or uncertainty when one matters; omit it when there is no supported tradeoff.\",\"minLength\":1},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                 + jsonArray(evidenceIds)
-                + "}}},\"required\":[\"bggId\",\"cardText\",\"internalEvidenceIds\"]}";
+                + "}}},\"required\":[\"bggId\",\"whyFit\",\"internalEvidenceIds\"]}";
     }
 
     private ToolSpec comparisonAction(RecommendationAgentState state, List<Integer> comparableIds) {
@@ -225,26 +229,19 @@ final class RecommendationToolCatalog {
                 .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).values().stream())
                 .map(CandidateObservation::attribute)
                 .forEach(subjects::add);
-        List<String> evidenceIds = comparableIds.stream()
-                .map(state.verified::get)
-                .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).keySet().stream())
-                .distinct()
-                .toList();
         return new ToolSpec(
                 COMPARE_TOOL,
-                "Terminal structured comparison of at least two verified conversation candidates.",
+                "Read a structured comparison observation for at least two verified conversation candidates. This is not terminal: after observing it, decide again whether to recommend, read more, or answer naturally.",
                 "{\"type\":\"object\",\"properties\":{\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"uniqueItems\":true,\"items\":{\"type\":\"integer\",\"enum\":"
                         + comparableIds
                         + "}},\"subjects\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(List.copyOf(subjects))
-                        + "}},\"preferredBggId\":{\"anyOf\":[{\"type\":\"integer\",\"enum\":"
-                        + comparableIds
-                        + "},{\"type\":\"null\"}]},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
-                        + jsonArray(evidenceIds)
-                        + "}},\"playerReply\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\",\"internalEvidenceIds\",\"playerReply\"]}");
+                        + "}}},\"required\":[\"candidateBggIds\",\"subjects\"]}");
     }
 
-    private Map<String, Object> turnState(RecommendationAgentState state) {
+    private Map<String, Object> turnState(
+            RecommendationAgentState state,
+            Set<Integer> detailedGameIds) {
         Map<String, Object> memory = new LinkedHashMap<>();
         memory.put("observationLegend", Map.of(
                 "M", "verified BGG structured metadata or complete publisher description",
@@ -252,7 +249,9 @@ final class RecommendationToolCatalog {
                 "A", "attributed public report",
                 "R", "rulebook fact"));
         memory.put("verifiedGames", state.verifiedForAgent().stream()
-                .map(actionExecutor::gameObservation)
+                .map(game -> actionExecutor.gameObservation(
+                        game,
+                        detailedGameIds.contains(game.ranking().bggId())))
                 .toList());
         memory.put("recommendableBggIds", recommendableIds(state));
         if (state.pendingPublicationSeed != null) {
@@ -316,7 +315,10 @@ final class RecommendationToolCatalog {
                 throw new IllegalStateException("recommendation observation must be a JSON object");
             }
             object.set("availableCapabilities", json.valueToTree(availableCapabilities(state)));
-            object.set("turnState", json.valueToTree(turnState(state)));
+            Set<Integer> currentSearchIds = state.pendingPublicationSeed == null
+                    ? Set.of()
+                    : Set.copyOf(state.pendingPublicationSeed.candidateBggIds());
+            object.set("turnState", json.valueToTree(turnState(state, currentSearchIds)));
             return json.writeValueAsString(object);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation observation context could not be serialized", exception);

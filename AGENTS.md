@@ -59,11 +59,14 @@ the product must commit or fail them atomically.
 - A replay diagnoses a defect but may not add sample vocabulary, aliases, prompt clauses, schemas, expected answers, or
   special routes to production. Deterministic heuristics must express input-independent invariants.
 - Page images are first-class evidence. OCR is optional and fail-open for usable page evidence.
-- For durable asynchronous assistant runs, enforce persisted token and active-work deadlines, tool allow-lists,
-  cancellation, and genuine resource boundaries.
-  Step and tool-call safety ceilings must be derived from the persisted token envelope, never from a hand-written
-  workflow length; model-call counts remain observational. Never expose private reasoning, prompts, credentials, or
-  sensitive parameters. Real or paid models are opt-in and never run in normal CI.
+- For durable asynchronous assistant runs, persist token usage, active-work deadlines, tool allow-lists,
+  cancellation, and genuine resource boundaries. A workload-derived token estimate for incrementally published work
+  such as teaching is capacity telemetry, not a correctness or completion gate: exceeding it must not erase or stop
+  validated chapters, and a retry must reuse completed units while continuing missing ones. Hard provider context,
+  quota, deadline, cancellation, and admission boundaries may still localize or stop new work. Step and tool-call
+  safety ceilings must be derived from an enforced resource envelope, never from a hand-written workflow length;
+  model-call counts remain observational. Never expose private reasoning, prompts, credentials, or sensitive
+  parameters. Real or paid models are opt-in and never run in normal CI.
 - A synchronous adaptive ReAct loop whose external calls all share one measured wall-clock deadline may rely on that
   deadline, provider context/output limits, account quota, cancellation, typed tool bounds, and state-based
   no-progress detection. Do not add an unpersisted cumulative token ledger merely to manufacture step/tool ceilings;
@@ -75,8 +78,9 @@ the product must commit or fail them atomically.
   degradation. Persisted token, deadline, and derived step/tool-call budgets above remain resource controls, not
   workflow-completion criteria.
 - Structured-output validation is feedback to the same Agent, not permission for application-authored repair. On a
-  rejected candidate, return the complete candidate, exact validation error, original schema, and allowed identities;
-  let the Agent conditionally generate a new complete object. Do not crop, parse prose patches, splice fields, or
+  rejected candidate, preserve the complete candidate exactly once in the same conversation, then return the exact
+  validation error, original schema, and allowed identities; let the Agent conditionally generate a new complete
+  object. Do not duplicate the candidate in a correction message, crop it, parse prose patches, splice fields, or
   force a repair call when the first candidate is valid.
 
 ## Complexity and retirement

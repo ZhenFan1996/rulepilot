@@ -8,6 +8,7 @@ import {
   rejectedTeachingChapterCount,
   summarizeTeachingVisualPageRuleGroups,
   supportedTeachingChapterCount,
+  terminalTeachingIssueSteps,
   teachingActivityCursor,
   teachingActivityText,
   teachingChapterFailureText,
@@ -556,6 +557,31 @@ describe('teaching progress', () => {
 
     expect(teachingRunStopReasonText(cancelled)).toBe('本轮由用户取消；已经发布的章节仍然保留。')
     expect(teachingRunStopReasonText(cancelled, 'en')).toContain('player cancelled')
+  })
+
+  it('shows only unresolved terminal chapter and visual issues, not recovered attempts', () => {
+    const activities = [
+      activity(1, 'publishTeachingSection|1', 'REJECTED', 'Teaching section withheld: BASE_DRAFT_WITHHELD'),
+      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
+      activity(3, 'settleVisualCandidateSelection|2|1|UNSUPPORTED_SCOPE|no-progress', 'REJECTED'),
+      activity(4, 'enrichTeachingSectionVisual|2', 'REJECTED'),
+    ]
+
+    expect(terminalTeachingIssueSteps(plan, activities)).toEqual([
+      expect.objectContaining({
+        sequence: 4,
+        text: '第 2 章“走完第一轮”经过有限选择后仍没有可用配图；仅省略图片，已校验正文仍可阅读',
+      }),
+    ])
+  })
+
+  it('names the exact chapter stage when a terminal activity failed before publication', () => {
+    const failedComposition = activity(8, 'composeTeachingSection|2', 'FAILED')
+
+    expect(teachingActivityText(plan, [failedComposition], failedComposition))
+      .toBe('第 2 章“走完第一轮”在正文发布前停止；先前已发布章节继续保留')
+    expect(teachingActivityText(plan, [failedComposition], failedComposition, 'en'))
+      .toBe('Writing chapter 2 “走完第一轮” stopped before publication; earlier published chapters remain available')
   })
 
 })

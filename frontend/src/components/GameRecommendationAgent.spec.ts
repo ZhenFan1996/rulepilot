@@ -130,8 +130,7 @@ describe('GameRecommendationAgent', () => {
       }],
       games: [{
         game,
-        matches: [],
-        tradeoffs: [],
+        fitClaims: [],
         replyParts: [
           {
             role: 'verified_fact',

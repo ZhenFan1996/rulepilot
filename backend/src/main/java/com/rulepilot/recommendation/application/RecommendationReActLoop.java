@@ -648,7 +648,7 @@ final class RecommendationReActLoop {
                         state.elapsedMs(),
                         state.modelCallElapsedMs),
                 List.of(),
-                null,
+                state.comparison,
                 null);
         progress.complete();
         logRun(response);
