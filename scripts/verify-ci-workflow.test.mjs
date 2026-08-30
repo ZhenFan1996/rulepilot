@@ -2833,6 +2833,24 @@ test('ordinary-user production artifacts retain a bounded public status', () => 
   assert.match(productionOrdinaryUserWorkflow,
     /artifact_size > 0 && artifact_size <= 1048576/)
   assert.match(productionOrdinaryUserWorkflow, /exit "\$smoke_exit"/)
+  assert.match(productionOrdinaryUserWorkflow, /PUBLIC_RELEASE_UNAVAILABLE/)
+  assert.match(productionOrdinaryUserWorkflow, /PUBLIC_RELEASE_MISMATCH/)
+  assert.match(productionOrdinaryUserWorkflow, /for attempt in 1 2 3/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /if \(\( verification_status == 11 \)\); then\s+return 11/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /navigation_file="\$raw_dir\/navigation\.raw\.tsv"/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /--navigation-file "\$navigation_file"/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /install -m 0644 scripts\/smoke-production-http\.mjs/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /node "\$probe_dir\/smoke-production-http\.mjs"[\s\S]{0,180}?--max-filesize 26214400/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow, /\bcurl\b/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /--http-client "\$http_client"/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /\.navigation\.requestCount \| integer_between\(1; 100000\)/)
   assert.match(productionOrdinaryUserWorkflow,
     /\. \+ \{releaseId:\$releaseId,commitSha:\$commitSha\}/)
   assert.match(productionOrdinaryUserWorkflow, /sourceUrlSha256:/)
@@ -2894,19 +2912,33 @@ test('ordinary-user production probe isolates deployment authority from reposito
     /--base-url "\$RULEPILOT_PUBLIC_URL"[\s\S]{0,120}?--username "\$player_username"/)
   assert.match(smokeJob,
     /\.commitSha == \$tested_sha and \.releaseId == \$active_release_id/)
+  assert.match(smokeJob,
+    /release_snapshot=\$\("\$node_binary" "\$http_client"/)
+  assert.doesNotMatch(smokeJob, /release_snapshot=\$\(curl/)
   assert.ok((smokeJob.match(/verify_public_release/g) ?? []).length >= 3)
   assert.match(smokeJob,
     /deployment-guards\/active-transaction[\s\S]{0,180}?Production has an active deployment transaction/)
   assert.match(smokeJob,
     /\/usr\/bin\/env -i[\s\S]{0,180}?PATH=\/usr\/bin:\/bin[\s\S]{0,260}?\/bin\/bash "\$probe_dir\/smoke-production-ordinary-user\.sh"/)
   assert.match(smokeJob,
+    /RULEPILOT_SMOKE_NODE_BINARY="\$node_binary"/)
+  assert.match(smokeJob,
     /reset_runner_command_file "\$runner_env_file"[\s\S]{0,80}?reset_runner_command_file "\$runner_path_file"/)
   assert.match(smokeJob,
     /raw_dir="\$RUNNER_TEMP\/production-ordinary-user-smoke-raw"/)
   assert.match(smokeJob,
-    /if ! verify_public_release; then[\s\S]{0,220}?>> "\$raw_diagnostics"/)
+    /verify_public_release >> "\$raw_diagnostics" 2>&1 \|\| public_release_status=\$\?/)
   assert.doesNotMatch(smokeJob,
-    /if ! verify_public_release; then[\s\S]{0,220}?>> "\$artifact_dir\/diagnostics\.log"/)
+    /verify_public_release >> "\$artifact_dir\/diagnostics\.log"/)
+  const rawStatusInitialization = smokeJob.indexOf('printf \'%s\\n\' 1 > "$raw_exit"')
+  const firstPublicReleaseProbe = smokeJob.indexOf(
+    'verify_public_release >> "$raw_diagnostics" 2>&1',
+  )
+  assert.ok(rawStatusInitialization >= 0 && rawStatusInitialization < firstPublicReleaseProbe)
+  assert.match(smokeJob,
+    /if \(\( smoke_exit == 0 \)\); then[\s\S]{0,620}?smoke_exit=1\s+fi\s+fi/)
+  assert.doesNotMatch(smokeJob,
+    /fi\s+smoke_exit=1\s+fi\s+exit_tmp=/)
   assert.match(smokeJob,
     /rm -rf "\$raw_dir"[\s\S]{0,260}?test -f "\$artifact_dir\/summary\.json"/)
   assert.match(smokeJob, /id: cleanup_credentials/)
