@@ -305,11 +305,11 @@ class AssistantRunServiceTest {
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution, times(3)).initialize(any(), limits.capture(), any());
         assertThat(limits.getAllValues())
-                .extracting(BudgetLimits::maxTokens, BudgetLimits::timeout)
+                .extracting(BudgetLimits::maxTokens, BudgetLimits::timeout, BudgetLimits::tokenLimitEnforced)
                 .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple(300_000, Duration.ofMinutes(30)),
-                        org.assertj.core.groups.Tuple.tuple(600_000, Duration.ofMinutes(30)),
-                        org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2)));
+                        org.assertj.core.groups.Tuple.tuple(300_000, Duration.ofMinutes(30), false),
+                        org.assertj.core.groups.Tuple.tuple(600_000, Duration.ofMinutes(30), false),
+                        org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2), true));
     }
 
     @Test
@@ -328,6 +328,7 @@ class AssistantRunServiceTest {
         verify(execution).initialize(any(), limits.capture(), any());
         assertThat(limits.getValue().maxTokens()).isEqualTo(529_167);
         assertThat(limits.getValue().timeout()).isEqualTo(Duration.ofMinutes(52).plusSeconds(55));
+        assertThat(limits.getValue().tokenLimitEnforced()).isFalse();
     }
 
     @Test

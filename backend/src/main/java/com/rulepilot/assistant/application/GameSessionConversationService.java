@@ -46,7 +46,9 @@ public class GameSessionConversationService {
         if (history.isEmpty()) return Optional.empty();
         GameSessionConversationTurn turn = history.getLast();
         StructuredRuleAnswer answer = turn.answer();
-        if (!documentVersionId.equals(answer.documentVersionId()) || !answer.status().publishesConclusion()) {
+        if (!documentVersionId.equals(answer.documentVersionId())
+                || !answer.status().publishesConclusion()
+                || answer.answerBasis() == null) {
             return Optional.empty();
         }
         return Optional.of(new PriorTurnReference(

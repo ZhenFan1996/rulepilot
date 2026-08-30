@@ -568,9 +568,6 @@ public class BggRecommendationAgentController {
 
     record RecommendedGameResponse(
             CatalogGameResponse game,
-            List<String> matches,
-            List<String> tradeoffs,
-            List<RecommendationReasonResponse> reasons,
             List<CandidateFitClaimResponse> fitClaims,
             List<RecommendationReplyPartResponse> replyParts) {
         static RecommendedGameResponse from(
@@ -580,11 +577,6 @@ public class BggRecommendationAgentController {
                 BggRecommendationPresentation presentation) {
             return new RecommendedGameResponse(
                     CatalogGameResponse.from(game, taxonomy, locale, presentation),
-                    game.matches().stream().map(value -> localizeTaxonomyText(value, taxonomy)).toList(),
-                    game.tradeoffs(),
-                    game.reasons().stream()
-                            .map(reason -> RecommendationReasonResponse.from(reason, taxonomy))
-                            .toList(),
                     game.claims().stream()
                             .filter(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
                             .map(CandidateFitClaimResponse::from)
@@ -741,19 +733,6 @@ public class BggRecommendationAgentController {
             case "rulebookFact" -> chinese ? "规则书事实" : "Rulebook fact";
             default -> throw new IllegalArgumentException("unsupported comparison subject");
         };
-    }
-
-    record RecommendationReasonResponse(String kind, String text, List<Integer> sourceIndexes) {
-        static RecommendationReasonResponse from(
-                BoardGameRecommendationAgent.RecommendationReason reason,
-                LocalizedTaxonomy taxonomy) {
-            return new RecommendationReasonResponse(
-                    reason.kind().name().toLowerCase(Locale.ROOT),
-                    reason.kind() == BoardGameRecommendationAgent.ReasonKind.BGG_FACT
-                            ? localizeTaxonomyText(reason.text(), taxonomy)
-                            : reason.text(),
-                    reason.sourceIndexes());
-        }
     }
 
     record CatalogGameResponse(

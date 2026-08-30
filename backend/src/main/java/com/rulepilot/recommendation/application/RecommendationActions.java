@@ -110,7 +110,7 @@ final class RecommendationActions {
                 case SEARCH_TOOL -> search(arguments, state, request, progress);
                 case DISCOVER_TOOL -> discover(arguments, state, request, locale, progress);
                 case RESEARCH_TOOL -> research(arguments, state, locale, progress);
-                case COMPARE_TOOL -> compare(arguments, state, request, locale);
+                case COMPARE_TOOL -> compare(arguments, state, locale);
                 default -> rejectedContract(
                         state,
                         "TOOL_NOT_ALLOWED",
@@ -141,12 +141,10 @@ final class RecommendationActions {
     private ActionOutcome compare(
             JsonNode arguments,
             RecommendationAgentState state,
-            ConversationRequest request,
             String locale) {
         requireObject(
                 arguments,
-                Set.of("candidateBggIds", "subjects", "preferredBggId", "playerReply"));
-        String playerReply = playerReply(arguments);
+                Set.of("candidateBggIds", "subjects"));
         List<Integer> candidateIds = uniqueIds(arguments.path("candidateBggIds"), 2);
         List<Game> games = candidateIds.stream().map(state.verified::get).toList();
         if (games.stream().anyMatch(Objects::isNull)) {
@@ -156,10 +154,6 @@ final class RecommendationActions {
             throw new InvalidAction("COMPARISON_CANDIDATE_NOT_IN_CONVERSATION");
         }
         List<String> subjects = playerFacingStrings(arguments.path("subjects"), 1);
-        Integer preferredBggId = preferredComparisonId(arguments.path("preferredBggId"));
-        if (preferredBggId != null && !candidateIds.contains(preferredBggId)) {
-            throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
-        }
 
         Map<String, CandidateObservation> availableEvidence = games.stream()
                 .flatMap(game -> narrativeObservations(game, state.research).entrySet().stream())
@@ -168,6 +162,12 @@ final class RecommendationActions {
                         Map.Entry::getValue,
                         (first, ignored) -> first,
                         LinkedHashMap::new));
+        Set<String> availableSubjects = availableEvidence.values().stream()
+                .map(CandidateObservation::attribute)
+                .collect(java.util.stream.Collectors.toSet());
+        if (!availableSubjects.containsAll(subjects)) {
+            throw new InvalidAction("COMPARISON_SUBJECT_INVALID");
+        }
         List<ComparisonCandidate> candidates = games.stream()
                 .map(game -> new ComparisonCandidate(
                         game,
@@ -185,64 +185,34 @@ final class RecommendationActions {
                                                 .orElse(null)))
                                 .toList()))
                 .toList();
-        List<String> internalEvidenceIds = validateComparisonDecision(
-                arguments, subjects, preferredBggId, availableEvidence);
-        state.finalResponseEvidenceIds.addAll(internalEvidenceIds);
-        state.finalResponseDecisionFacts.put("preferredBggId", preferredBggId);
-        state.finalResponseDecisionFacts.put("comparisonSubjects", List.copyOf(subjects));
-        state.finalResponseGameIds.addAll(candidateIds);
         state.comparison = new CandidateComparison(candidates, axes);
         state.actions.add("COMPARE_CANDIDATES");
-        return ActionOutcome.terminal(response(
-                Outcome.CONVERSATION,
-                playerReply,
-                state,
-                locale,
-                null,
-                List.of()));
+        return ActionOutcome.observation(comparisonObservation(candidateIds, axes));
     }
 
-    private List<String> validateComparisonDecision(
-            JsonNode arguments,
-            List<String> subjects,
-            Integer preferredBggId,
-            Map<String, CandidateObservation> availableEvidence) {
-        if (!arguments.has("internalEvidenceIds")) {
-            throw new InvalidAction("COMPARISON_MESSAGE_INCOMPLETE");
-        }
-        List<String> internalEvidenceIds = strings(arguments.path("internalEvidenceIds"), 1);
-        List<CandidateObservation> messageEvidence = internalEvidenceIds.stream()
-                .map(availableEvidence::get)
-                .toList();
-        if (messageEvidence.stream().anyMatch(Objects::isNull)) {
-            throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_NOT_GROUNDED");
-        }
-        if (messageEvidence.stream().anyMatch(observation -> !subjects.contains(observation.attribute()))) {
-            throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES");
-        }
-        if (preferredBggId != null
-                && messageEvidence.stream().noneMatch(observation -> observation.bggId() == preferredBggId)) {
-            throw new InvalidAction("COMPARISON_PREFERENCE_EVIDENCE_MISSING");
-        }
-        return internalEvidenceIds;
-    }
-
-    private Integer preferredComparisonId(JsonNode node) {
-        if (node == null || node.isNull()) return null;
-        if (node.isIntegralNumber() && node.canConvertToInt()) {
-            int value = node.intValue();
-            if (value > 0) return value;
-        }
-        if (node.isTextual()) {
-            String value = node.textValue();
-            try {
-                int parsed = Integer.parseInt(value);
-                if (parsed > 0 && Integer.toString(parsed).equals(value)) return parsed;
-            } catch (NumberFormatException ignored) {
-                // A decimal string is a documented provider transport form, not free-form prose.
-            }
-        }
-        throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
+    private String comparisonObservation(List<Integer> candidateIds, List<ComparisonAxis> axes) {
+        List<Map<String, Object>> observedAxes = axes.stream().map(axis -> Map.<String, Object>of(
+                "subject", axis.subject(),
+                "cells", axis.cells().stream().map(cell -> {
+                    Map<String, Object> value = new LinkedHashMap<>();
+                    value.put("bggId", cell.bggId());
+                    CandidateObservation observation = cell.observation();
+                    if (observation == null) {
+                        value.put("status", "UNKNOWN");
+                    } else {
+                        value.put("status", "OBSERVED");
+                        value.put("evidenceId", observation.id());
+                        value.put("kind", observation.kind().name());
+                        value.put("value", observation.value());
+                    }
+                    return Map.copyOf(value);
+                }).toList())).toList();
+        return runtime.observation(Map.of(
+                "status", "SUCCESS",
+                "code", "COMPARISON_OBSERVED",
+                "candidateBggIds", candidateIds,
+                "axes", observedAxes,
+                "guidance", "Observe this comparison, then decide again whether to recommend, read more, or answer naturally."));
     }
 
     private ActionOutcome search(
@@ -282,7 +252,7 @@ final class RecommendationActions {
                         ? null
                         : ConstraintRange.hard(null, maxMinutes, evidenceText, evidenceTurn),
                 complexity,
-                BggGameType.ALL,
+                includeTypes.size() == 1 ? includeTypes.getFirst() : BggGameType.ALL,
                 BoardGameRecommendationAgent.InteractionPreference.ANY);
         CatalogSearch search = new CatalogSearch(
                 includeTypes,
@@ -399,7 +369,7 @@ final class RecommendationActions {
                 "guidance",
                 verifiedIds.isEmpty()
                         ? "No verified candidate matched this typed search contract. Finish transparently or submit a materially different current-turn search contract."
-                        : "These candidate IDs are verified. Call recommend_games now to terminate with the complete playerReply and complete cards.");
+                        : "These candidate IDs are verified. Decide whether they answer the request now, whether another available read would materially improve the answer, or whether to finish transparently. When ready, recommend_games publishes one complete terminal response.");
         if (!verifiedIds.isEmpty()) {
             observation.put(
                     "terminalAction",
@@ -591,6 +561,9 @@ final class RecommendationActions {
             completedPages++;
             Research added = result.result().orElse(Research.empty());
             added.games().stream().map(GameResearch::bggId).forEach(researchedIds::add);
+            if (!added.games().isEmpty() || !added.sources().isEmpty()) {
+                state.comparison = null;
+            }
             state.research = mergeResearch(state.research, added);
             boolean batchAvailable = result.status() != ToolStatus.ERROR
                     && result.status() != ToolStatus.UNAVAILABLE;
@@ -692,7 +665,7 @@ final class RecommendationActions {
             case "RECOMMENDATION_EVIDENCE_REQUIRED", "RECOMMENDATION_EVIDENCE_NOT_GROUNDED" ->
                 "Cite observation IDs owned by that same verified candidate.";
             case "RECOMMENDATION_REPLY_INVALID" ->
-                "Submit the complete locale-matched playerReply and cardText values.";
+                "Submit the complete locale-matched playerReply and whyFit values.";
             default -> "Correct the typed arguments using the current action schema and observations.";
         };
     }
@@ -739,7 +712,7 @@ final class RecommendationActions {
         return response;
     }
 
-    Map<String, Object> gameObservation(Game game) {
+    Map<String, Object> gameObservation(Game game, boolean includePublisherDescription) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("bggId", game.ranking().bggId());
         value.put("name", game.ranking().sourceName());
@@ -747,7 +720,10 @@ final class RecommendationActions {
         if (game.details() == null) return value;
         var details = game.details();
         putIfText(value, "officialChineseName", details.officialChineseName());
-        List<CandidateObservation> gameObservations = selector.observations(game);
+        List<CandidateObservation> gameObservations = selector.observations(game).stream()
+                .filter(observation -> includePublisherDescription
+                        || !"publisherDescription".equals(observation.attribute()))
+                .toList();
         Map<String, List<String>> observations = gameObservations.stream()
                 .collect(java.util.stream.Collectors.toMap(
                         CandidateObservation::id,

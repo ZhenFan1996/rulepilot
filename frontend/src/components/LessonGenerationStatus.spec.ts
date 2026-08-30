@@ -23,6 +23,7 @@ function mountStatus(overrides: Record<string, unknown> = {}) {
         { sequence: 3, outcome: 'RUNNING', text: '正在依据规则书编写“开始对局”' },
         { sequence: 2, outcome: 'SUCCEEDED', text: '“开局准备”已经完成核对' },
       ],
+      terminalIssues: [],
       refreshFailed: false,
       finishedMessage: '',
       finishedStatus: null,
@@ -139,5 +140,24 @@ describe('LessonGenerationStatus', () => {
     expect(status.text()).toBe('Cancelled')
     expect(status.attributes('data-player-work-outcome')).toBe('cancelled')
     expect(wrapper.text()).toContain('A readable chapter draft is preserved')
+  })
+
+  it('keeps the exact unresolved chapter or visual failure visible after the run stops', () => {
+    const wrapper = mountStatus({
+      active: false,
+      finishedMessage: '本轮已停止，已完成内容保留。',
+      finishedStatus: playerWorkStatus('FAILED', {
+        capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'failed',
+      }, 'zh-CN'),
+      terminalIssues: [{
+        sequence: 9,
+        outcome: 'REJECTED',
+        text: '第 2 章“计分”的可选配图不可用；仅省略图片，已校验正文仍可阅读',
+      }],
+    })
+
+    expect(wrapper.get('[data-testid="lesson-generation-terminal-issues"]').text())
+      .toContain('第 2 章“计分”的可选配图不可用')
+    expect(wrapper.text()).toContain('已校验正文仍可阅读')
   })
 })

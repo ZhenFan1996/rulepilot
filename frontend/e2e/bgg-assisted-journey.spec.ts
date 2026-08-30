@@ -171,15 +171,16 @@ test('keeps requested and displayed rulebook pages atomic across slow, failed, a
   await expect(pageStatus).toContainText('第 1 页已显示')
 
   await page.locator('button[data-page-number="2"]').click()
-  await expect(pageStatus).toContainText('正在加载第 2 页')
-  await expect(displayedImage).toHaveCount(0)
+  await expect(pageStatus).toContainText('正在加载第 2 页；第 1 页继续显示')
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
+  await expect(page.locator('button[data-page-number="1"]')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('button[data-page-number="2"]')).toHaveAttribute('aria-busy', 'true')
 
   await page.locator('button[data-page-number="3"]').click()
-  await expect(pageStatus).toContainText('正在加载第 3 页')
+  await expect(pageStatus).toContainText('正在加载第 3 页；第 1 页继续显示')
   releaseSecond()
-  await expect(pageStatus).toContainText('正在加载第 3 页')
-  await expect(displayedImage).toHaveCount(0)
+  await expect(pageStatus).toContainText('正在加载第 3 页；第 1 页继续显示')
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
 
   releaseThird()
   await expect(displayedImage).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/3/image')
@@ -187,13 +188,15 @@ test('keeps requested and displayed rulebook pages atomic across slow, failed, a
   await expect(page.locator('button[data-page-number="3"]')).toHaveAttribute('aria-current', 'page')
 
   await page.locator('button[data-page-number="4"]').click()
-  await expect(pageStatus).toContainText('第 4 页暂时无法显示')
+  await expect(pageStatus).toContainText('第 4 页在页面图像加载阶段失败')
+  await expect(pageStatus).toContainText('当前仍保留第 3 页，不会用失败结果替换')
   await expect(pageStatus).toHaveAttribute('role', 'alert')
-  await expect(displayedImage).toHaveCount(0)
-  await expect(page.getByRole('link', { name: '在新标签页打开原页' })).toHaveAttribute(
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 3 页')
+  await expect(page.locator('button[data-page-number="3"]')).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('link', { name: '在新标签页打开第 4 页' })).toHaveAttribute(
     'href', '/api/v1/document-versions/version-1/pages/4/image',
   )
-  await page.getByRole('button', { name: '重试这一页' }).click()
+  await page.getByRole('button', { name: '重试第 4 页' }).click()
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 4 页')
 
   await page.locator('button[data-page-number="4"]').focus()

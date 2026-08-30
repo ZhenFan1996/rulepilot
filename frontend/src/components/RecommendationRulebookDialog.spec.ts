@@ -68,14 +68,14 @@ describe('RecommendationRulebookDialog', () => {
 
     await wrapper.get('button[data-page-number="2"]').trigger('click')
     const lateSecondPage = wrapper.get('[data-testid="rulebook-page-loader"]')
-    expect(wrapper.find('[data-testid="rulebook-page-image"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 2 页')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 1 页')
+    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 2 页；第 1 页继续显示')
 
     await wrapper.get('button[data-page-number="3"]').trigger('click')
     const currentThirdPage = wrapper.get('[data-testid="rulebook-page-loader"]')
     await lateSecondPage.trigger('load')
-    expect(wrapper.find('[data-testid="rulebook-page-image"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 3 页')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 1 页')
+    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 3 页；第 1 页继续显示')
 
     await currentThirdPage.trigger('load')
     const displayed = wrapper.get('[data-testid="rulebook-page-image"]')

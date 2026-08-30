@@ -68,6 +68,10 @@ const detailFailureMessage = computed(() => {
   }
   return t('lesson.visualStoryboard.detail.failure.network')
 })
+const detailCanRetry = computed(() => detailFailure.value === 'NETWORK'
+  || detailFailure.value === 'RETRY_EXHAUSTED_CAPACITY'
+  || detailFailure.value === 'RETRY_EXHAUSTED_PAGE_IMAGE'
+  || detailFailure.value === 'RETRY_EXHAUSTED_UNKNOWN')
 let detailRequest = 0
 let detailRequestController: AbortController | null = null
 let detailObserver: IntersectionObserver | null = null
@@ -151,6 +155,11 @@ function loadPendingDetailImage() {
     .finally(() => {
       if (request === detailRequest) detailLoading.value = false
     })
+}
+
+function retryDetailImage() {
+  if (!detailCanRetry.value || !detailImageUrl.value) return
+  queueDetailImage(detailImageUrl.value)
 }
 
 async function fetchDetailImage(
@@ -353,6 +362,15 @@ function isReliableDetailViewport(focus: VisualFocus) {
           class="rounded-lg border border-dashed border-indigo/15 bg-canvas px-3 py-6 text-center"
         >
           <p class="text-xs leading-5 text-ink/60">{{ detailFailureMessage }}</p>
+          <button
+            v-if="detailCanRetry"
+            type="button"
+            data-testid="lesson-visual-detail-retry"
+            class="mt-3 min-h-10 rounded-lg border border-indigo/20 bg-paper px-4 text-xs font-semibold text-indigo"
+            @click="retryDetailImage"
+          >
+            {{ t('lesson.visualStoryboard.detail.failure.retryAction') }}
+          </button>
         </div>
       </li>
 

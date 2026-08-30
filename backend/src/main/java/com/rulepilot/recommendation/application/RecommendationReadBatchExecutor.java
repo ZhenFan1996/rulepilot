@@ -1,6 +1,7 @@
 package com.rulepilot.recommendation.application;
 
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DISCOVER_TOOL;
+import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.COMPARE_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.SEARCH_TOOL;
 
@@ -26,7 +27,7 @@ import java.util.concurrent.ExecutorService;
 /** Canonicalizes actions and rejects batches whose calls would compete for the one turn state. */
 final class RecommendationReadBatchExecutor {
 
-    private static final Set<String> READ_ACTIONS = Set.of(SEARCH_TOOL, DISCOVER_TOOL, RESEARCH_TOOL);
+    private static final Set<String> READ_ACTIONS = Set.of(SEARCH_TOOL, DISCOVER_TOOL, RESEARCH_TOOL, COMPARE_TOOL);
     private final ObjectMapper actionJson;
 
     RecommendationReadBatchExecutor(

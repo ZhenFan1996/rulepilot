@@ -35,37 +35,12 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
-    void preservesAgentSelectionOrderWhenNoProfileClaimsAreAvailable() {
-        Game second = game(2, 50, new BigDecimal("2.2"), List.of("Open Drafting"));
-        Game first = game(1, 45, new BigDecimal("2.0"), List.of("Pattern Building"));
-
-        var result = selector.present(
-                List.of(second, first),
-                RecommendationProfile.empty(),
-                true);
-
-        assertThat(result).extracting(value -> value.game().ranking().bggId()).containsExactly(2, 1);
-        assertThat(result).allSatisfy(game -> {
-            assertThat(game.matches()).isEmpty();
-            assertThat(game.tradeoffs()).isEmpty();
-            assertThat(game.reasons()).isEmpty();
-        });
-    }
-
-    @Test
     void retainsVerifiedTaxonomyAsRawCandidateObservationsWithoutInventingExperienceProse() {
         Game candidate = game(
                 1,
                 100,
                 new BigDecimal("3.0"),
                 List.of("Hand Management", "Network and Route Building"));
-        RecommendationProfile profile = new RecommendationProfile(
-                ConstraintRange.hardExact(4),
-                ConstraintRange.hardAtMost(120),
-                null,
-                BggGameType.ALL,
-                InteractionPreference.ANY);
-
         var observations = selector.observations(candidate);
 
         assertThat(observations)
@@ -75,15 +50,6 @@ class BoardGameRecommendationSelectorTest {
                     assertThat(observation.kind())
                             .isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.TAXONOMY);
                     assertThat(observation.value()).isEqualTo("Hand Management, Network and Route Building");
-                });
-        assertThat(selector.present(List.of(candidate), profile, true).getFirst())
-                .satisfies(result -> {
-                    assertThat(result.matches()).hasSize(2);
-                    assertThat(result.reasons()).hasSize(2);
-                    assertThat(result.tradeoffs()).isEmpty();
-                    assertThat(result.replyParts())
-                            .as("verified selector claims are facts, not model-authored card prose")
-                            .isEmpty();
                 });
     }
 
@@ -139,7 +105,7 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
-    void keepsTwoSidedHardRangesIntactAcrossEligibilityAndPlayerFacingReasons() {
+    void keepsTwoSidedHardRangesIntactAcrossEligibilityAndClaims() {
         RecommendationProfile profile = new RecommendationProfile(
                 ConstraintRange.hard(3, 4, "3–4 players", 1),
                 ConstraintRange.hard(120, 180, "120–180 minutes", 1),
@@ -161,21 +127,15 @@ class BoardGameRecommendationSelectorTest {
         assertThat(selector.eligible(missesOnePlayerCount, profile)).isFalse();
         assertThat(selector.eligible(tooLight, profile)).isFalse();
 
-        var presented = selector.present(List.of(exactFit), profile, true).getFirst();
-        assertThat(presented.matches()).hasSize(3);
-        assertThat(presented.tradeoffs()).isEmpty();
-        assertThat(presented.reasons()).hasSize(3);
-        assertThat(presented.replyParts())
-                .as("only the terminal recommend action may author player-facing card notes")
-                .isEmpty();
-        assertThat(presented.claims())
+        var claims = selector.fitClaims(exactFit, profile, true);
+        assertThat(claims)
                 .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
                 .extracting(CandidateClaim::relation)
                 .containsExactly(
                         CandidateClaim.Relation.SATISFIED,
                         CandidateClaim.Relation.SATISFIED,
                         CandidateClaim.Relation.SATISFIED);
-        assertThat(presented.claims()).allSatisfy(claim -> claim.evidence().forEach(observation ->
+        assertThat(claims).allSatisfy(claim -> claim.evidence().forEach(observation ->
                 assertThat(observation.bggId()).isEqualTo(10)));
     }
 
@@ -197,14 +157,7 @@ class BoardGameRecommendationSelectorTest {
         assertThat(selector.eligible(shortCandidate, profile))
                 .as("a soft preference is reported honestly but does not exclude the candidate")
                 .isTrue();
-        var presented = selector.present(List.of(shortCandidate), profile, false).getFirst();
-        assertThat(presented.matches()).isEmpty();
-        assertThat(presented.tradeoffs()).singleElement().isEqualTo(presented.claims().getFirst().text());
-        assertThat(presented.reasons()).hasSize(1);
-        assertThat(presented.replyParts())
-                .as("a deterministic constraint conflict remains a claim, not a drafted tradeoff")
-                .isEmpty();
-        assertThat(presented.claims()).singleElement().satisfies(claim -> {
+        assertThat(selector.fitClaims(shortCandidate, profile, false)).singleElement().satisfies(claim -> {
             assertThat(claim.subject()).isEqualTo("durationMinutes");
             assertThat(claim.strength()).isEqualTo(ConstraintRange.Strength.SOFT);
             assertThat(claim.relation()).isEqualTo(CandidateClaim.Relation.CONFLICT);

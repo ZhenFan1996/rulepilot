@@ -3,6 +3,7 @@ package com.rulepilot.recommendation.adapter.out.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
@@ -326,6 +327,55 @@ class PostgresRecommendationConversationStoreTest {
         assertThat(restored.activeClientTurnId()).isNull();
         assertThat(restored.activeClaimAttemptId()).isNull();
         assertThat(restored.updatedAt()).isEqualTo(startedAt.plusSeconds(2));
+    }
+
+    @Test
+    void restoresPersistedRecommendationsAfterLegacyProseProjectionsAreRetired() throws Exception {
+        UUID conversationId = UUID.randomUUID();
+        UUID clientTurnId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-15T08:00:00Z");
+        ConversationResponse currentResponse = response("A durable recommendation.");
+        ConversationState currentState = new ConversationState(
+                RecommendationProfile.empty(),
+                List.of(new DialogueMessage("assistant", "A durable recommendation.")),
+                List.of(),
+                List.of(301),
+                List.of(currentResponse.games().getFirst().game()),
+                new PublishedTurn(clientTurnId, "en", currentResponse));
+        ObjectMapper legacyJson = new ObjectMapper().findAndRegisterModules();
+        var legacyState = legacyJson.valueToTree(currentState);
+        var legacyResponse = legacyJson.valueToTree(currentResponse);
+        addRetiredProseFields((ObjectNode) legacyState.at("/latestPublishedTurn/response/games/0"));
+        addRetiredProseFields((ObjectNode) legacyResponse.at("/games/0"));
+        store.createNew(conversationId, "alice", state(List.of()), now);
+        jdbc.getJdbcTemplate().update(
+                """
+                update recommendation_conversation
+                set revision = 1,
+                    state_json = cast(? as jsonb),
+                    last_client_turn_id = ?,
+                    last_request_fingerprint = ?,
+                    last_response_json = cast(? as jsonb),
+                    last_response_locale = 'en'
+                where id = ?
+                """,
+                legacyJson.writeValueAsString(legacyState),
+                clientTurnId,
+                "d".repeat(64),
+                legacyJson.writeValueAsString(legacyResponse),
+                conversationId);
+
+        var restored = store.findOwned(conversationId, "alice").orElseThrow();
+
+        assertThat(restored.state().latestPublishedTurn().response().games()).singleElement()
+                .satisfies(game -> {
+                    assertThat(game.claims()).hasSize(1);
+                    assertThat(game.replyParts()).isEmpty();
+                });
+        assertThat(restored.lastResponse().games()).singleElement().satisfies(game -> {
+            assertThat(game.claims()).hasSize(1);
+            assertThat(game.replyParts()).isEmpty();
+        });
     }
 
     @Test
@@ -662,7 +712,16 @@ class PostgresRecommendationConversationStoreTest {
                 null,
                 10,
                 0,
-                List.of(new RecommendedGame(game, List.of(), List.of(), List.of(), List.of(claim))));
+                List.of(new RecommendedGame(game, List.of(claim), List.of())));
+    }
+
+    private static void addRetiredProseFields(ObjectNode game) {
+        game.putArray("matches").add("retired duplicate match prose");
+        game.putArray("tradeoffs").add("retired duplicate tradeoff prose");
+        game.putArray("reasons").addObject()
+                .put("kind", "BGG_FACT")
+                .put("text", "retired duplicate reason prose")
+                .putArray("sourceIndexes");
     }
 
     private static int legacyClaim(

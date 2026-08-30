@@ -21,7 +21,15 @@ public interface AgentExecutionControl {
         REJECTED
     }
 
-    record BudgetLimits(int maxTokens, Duration timeout) {
+    record BudgetLimits(int maxTokens, Duration timeout, boolean tokenLimitEnforced) {
+        public BudgetLimits(int maxTokens, Duration timeout) {
+            this(maxTokens, timeout, true);
+        }
+
+        public static BudgetLimits observationalTokens(int tokenObservationThreshold, Duration timeout) {
+            return new BudgetLimits(tokenObservationThreshold, timeout, false);
+        }
+
         public BudgetLimits {
             if (maxTokens < 1 || timeout == null || timeout.isZero() || timeout.isNegative()) {
                 throw new IllegalArgumentException("agent budget limits are invalid");
@@ -51,7 +59,25 @@ public interface AgentExecutionControl {
             int usedModelCalls,
             int usedTokens,
             Instant deadlineAt,
-            Instant cancellationRequestedAt) {}
+            Instant cancellationRequestedAt,
+            boolean tokenLimitEnforced) {
+        public BudgetSnapshot(
+                int maxTokens,
+                int usedToolCalls,
+                int usedModelCalls,
+                int usedTokens,
+                Instant deadlineAt,
+                Instant cancellationRequestedAt) {
+            this(
+                    maxTokens,
+                    usedToolCalls,
+                    usedModelCalls,
+                    usedTokens,
+                    deadlineAt,
+                    cancellationRequestedAt,
+                    true);
+        }
+    }
 
     record ActivitySnapshot(
             long sequence,
@@ -96,7 +122,7 @@ public interface AgentExecutionControl {
     /** Excludes time spent waiting between bounded teaching work units from the active-work deadline. */
     default void excludeQueueWait(UUID runId, Duration queueWait) {}
 
-    /** Allows post-work publication after timeout/token exhaustion, but never after owner cancellation won the lock. */
+    /** Allows post-work publication after resource exhaustion, but never after owner cancellation won the lock. */
     default void assertFinalizationAllowed(UUID runId) {}
 
     void assertStepAllowed(UUID runId, long nextStep);

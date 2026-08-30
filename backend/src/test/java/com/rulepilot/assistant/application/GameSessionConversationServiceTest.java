@@ -53,6 +53,29 @@ class GameSessionConversationServiceTest {
         assertThat(conversations.priorTurnReference(sessionId, "bob", versionId)).isEmpty();
     }
 
+    @Test
+    void doesNotMislabelAnUncitedChatTurnAsGroundedRuleContext() {
+        InMemoryTurns repository = new InMemoryTurns();
+        GameSessionConversationService conversations = new GameSessionConversationService(repository);
+        UUID sessionId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        StructuredRuleAnswer chat = new StructuredRuleAnswer(
+                versionId,
+                AnswerStatus.ANSWERED,
+                "你好！",
+                "",
+                List.of(),
+                List.of(),
+                AnswerConfidence.HIGH,
+                false,
+                null,
+                null,
+                null);
+        conversations.record(sessionId, "你好", chat, "alice");
+
+        assertThat(conversations.priorTurnReference(sessionId, "alice", versionId)).isEmpty();
+    }
+
     private StructuredRuleAnswer answer() {
         return answer(UUID.randomUUID());
     }

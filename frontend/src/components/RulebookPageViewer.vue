@@ -41,10 +41,12 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   image: (value: number) => `规则书第 ${value} 页`,
   extracted: (value: number) => `已识别 ${value} 个字符`,
   loading: (value: number) => `正在加载第 ${value} 页…`,
+  loadingWithPreserved: (value: number, preserved: number) => `正在加载第 ${value} 页；第 ${preserved} 页继续显示。`,
   displayed: (value: number) => `第 ${value} 页已显示`,
-  failed: (value: number) => `第 ${value} 页暂时无法显示。`,
-  retry: '重试这一页',
-  openOriginal: '在新标签页打开原页',
+  failed: (value: number, preserved: number | null) => `第 ${value} 页在页面图像加载阶段失败；浏览器没有得到可显示的图片。${preserved === null ? '规则书文字索引和其他页面不受影响。' : `当前仍保留第 ${preserved} 页，不会用失败结果替换。`}`,
+  next: (value: number) => `下一步：只重试第 ${value} 页；若再次失败，可在新标签页打开这一页核对。`,
+  retry: (value: number) => `重试第 ${value} 页`,
+  openOriginal: (value: number) => `在新标签页打开第 ${value} 页`,
   openingState: '正在打开',
   displayedState: '已显示',
   failedState: '加载失败',
@@ -54,10 +56,12 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   image: (value: number) => `Rulebook page ${value}`,
   extracted: (value: number) => `${value} characters indexed`,
   loading: (value: number) => `Loading page ${value}…`,
+  loadingWithPreserved: (value: number, preserved: number) => `Loading page ${value}; page ${preserved} remains displayed.`,
   displayed: (value: number) => `Page ${value} displayed`,
-  failed: (value: number) => `Page ${value} cannot be displayed right now.`,
-  retry: 'Retry this page',
-  openOriginal: 'Open original page in a new tab',
+  failed: (value: number, preserved: number | null) => `Page ${value} failed while loading its page image; the browser did not receive a displayable image. ${preserved === null ? 'The indexed rulebook text and other pages are unaffected.' : `Page ${preserved} remains displayed and is not replaced by this failure.`}`,
+  next: (value: number) => `Next: retry only page ${value}. If it fails again, open this page in a new tab to inspect it.`,
+  retry: (value: number) => `Retry page ${value}`,
+  openOriginal: (value: number) => `Open page ${value} in a new tab`,
   openingState: 'Opening',
   displayedState: 'Displayed',
   failedState: 'Failed to load',
@@ -101,7 +105,6 @@ function requestPage(pageNumber: number, scroll = true) {
     pageNumber,
     url: pageImageUrl(props.versionId, pageNumber),
   }
-  displayedImage.value = null
   failedRequestToken.value = null
   if (scroll) scrollToViewer()
 }
@@ -135,7 +138,6 @@ function commitDisplayedImage(event: Event) {
 function failRequestedImage(event: Event) {
   const current = requestFromImageEvent(event)
   if (!current) return
-  displayedImage.value = null
   failedRequestToken.value = current.token
 }
 
@@ -237,20 +239,28 @@ onBeforeUnmount(() => {
         :aria-busy="imageLoading ? 'true' : 'false'"
       >
         <img
-          v-if="requestedImage && !imageFailed"
+          v-if="displayedImage"
+          data-testid="rulebook-page-image"
+          :data-request-token="displayedImage.token"
+          :data-version-id="displayedImage.versionId"
+          :data-page-number="displayedImage.pageNumber"
+          :src="displayedImage.url"
+          :alt="copy.image(displayedImage.pageNumber)"
+          class="mx-auto h-auto w-auto max-w-full object-contain"
+          :class="dialogMode ? 'max-h-[calc(100vh-9rem)]' : 'max-h-[calc(100vh-8rem)]'"
+        >
+
+        <img
+          v-if="imageLoading && requestedImage"
           :key="requestedImage.token"
-          :data-testid="imageLoading ? 'rulebook-page-loader' : 'rulebook-page-image'"
+          data-testid="rulebook-page-loader"
           :data-request-token="requestedImage.token"
           :data-version-id="requestedImage.versionId"
           :data-page-number="requestedImage.pageNumber"
           :src="requestedImage.url"
-          :alt="imageLoading ? '' : copy.image(displayedImage?.pageNumber ?? requestedImage.pageNumber)"
-          :aria-hidden="imageLoading ? 'true' : undefined"
-          class="mx-auto h-auto w-auto max-w-full object-contain"
-          :class="[
-            dialogMode ? 'max-h-[calc(100vh-9rem)]' : 'max-h-[calc(100vh-8rem)]',
-            imageLoading ? 'invisible absolute inset-0' : '',
-          ]"
+          alt=""
+          aria-hidden="true"
+          class="invisible absolute inset-0 size-px"
           @load="commitDisplayedImage"
           @error="failRequestedImage"
         >
@@ -258,32 +268,37 @@ onBeforeUnmount(() => {
         <p
           v-if="imageLoading && requestedImage"
           data-testid="rulebook-page-status"
-          class="rounded-xl bg-canvas px-5 py-4 text-center text-sm font-semibold text-ink/60"
+          class="rounded-xl bg-canvas/95 px-5 py-4 text-center text-sm font-semibold text-ink/60"
+          :class="displayedImage ? 'absolute bottom-3 left-3 right-3 shadow-lg' : ''"
           role="status"
         >
-          {{ copy.loading(requestedImage.pageNumber) }}
+          {{ displayedImage
+            ? copy.loadingWithPreserved(requestedImage.pageNumber, displayedImage.pageNumber)
+            : copy.loading(requestedImage.pageNumber) }}
         </p>
 
         <div
           v-else-if="imageFailed && requestedImage"
           data-testid="rulebook-page-status"
-          class="max-w-lg rounded-xl border border-red-200 bg-red-50 px-5 py-5 text-center text-red-800"
+          class="max-w-lg rounded-xl border border-red-200 bg-red-50/95 px-5 py-5 text-center text-red-800"
+          :class="displayedImage ? 'absolute bottom-3 left-3 right-3 mx-auto shadow-lg' : ''"
           role="alert"
         >
-          <p class="font-semibold">{{ copy.failed(requestedImage.pageNumber) }}</p>
+          <p class="font-semibold">{{ copy.failed(requestedImage.pageNumber, displayedImage?.pageNumber ?? null) }}</p>
+          <p class="mt-2 text-xs leading-5">{{ copy.next(requestedImage.pageNumber) }}</p>
           <div class="mt-4 flex flex-col justify-center gap-2 sm:flex-row">
             <button type="button" class="min-h-11 rounded-lg bg-indigo px-5 text-sm font-semibold text-white" @click="retryPage">
-              {{ copy.retry }}
+              {{ copy.retry(requestedImage.pageNumber) }}
             </button>
             <a :href="requestedImage.url" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-red-300 bg-white px-5 text-sm font-semibold text-red-800">
-              {{ copy.openOriginal }}
+              {{ copy.openOriginal(requestedImage.pageNumber) }}
             </a>
           </div>
         </div>
       </div>
 
       <p
-        v-if="displayedImage"
+        v-if="displayedImage && !imageLoading && !imageFailed"
         data-testid="rulebook-page-status"
         class="mx-auto mt-3 max-w-5xl text-center text-xs text-ink/50"
         role="status"

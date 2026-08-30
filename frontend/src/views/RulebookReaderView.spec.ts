@@ -137,8 +137,8 @@ describe('RulebookReaderView', () => {
     expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 5 页')
 
     await wrapper.get('button[data-page-number="6"]').trigger('click')
-    expect(wrapper.find('[data-testid="rulebook-page-image"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 6 页')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 5 页')
+    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 6 页；第 5 页继续显示')
     expect(wrapper.get('button[data-page-number="6"]').attributes('aria-busy')).toBe('true')
     expect(wrapper.find('img[alt="规则书第 6 页"]').exists()).toBe(false)
 

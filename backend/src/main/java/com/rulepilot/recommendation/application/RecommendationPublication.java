@@ -12,8 +12,6 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Con
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.HarnessTrace;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReplyPart;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationShortfall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
@@ -33,7 +31,7 @@ final class RecommendationPublication {
     private static final Set<String> ROOT_FIELDS =
             Set.of("requestedCount", "playerReply", "playerReplyEvidenceIds", "selections");
     private static final Set<String> SELECTION_REQUIRED_FIELDS =
-            Set.of("bggId", "cardText", "internalEvidenceIds");
+            Set.of("bggId", "whyFit", "internalEvidenceIds");
 
     private final BoardGameRecommendationSelector selector;
     private final RecommendationEvidenceReview evidenceReview;
@@ -104,7 +102,7 @@ final class RecommendationPublication {
             Game game = validatedCandidate(state, pending, currentlyRecommendable, bggId, selectionPath + ".bggId");
             Map<String, CandidateObservation> availableEvidence =
                     observations.narrativeObservations(game, state.research);
-            String cardText = playerText(selection.path("cardText"), selectionPath + ".cardText");
+            String whyFit = playerText(selection.path("whyFit"), selectionPath + ".whyFit");
             String tradeoff = selection.has("tradeoff")
                     ? playerText(selection.path("tradeoff"), selectionPath + ".tradeoff")
                     : null;
@@ -113,7 +111,7 @@ final class RecommendationPublication {
                     selectionPath + ".internalEvidenceIds",
                     1,
                     availableEvidence.keySet());
-            candidates.add(new CandidateReplyDraft(bggId, cardText, tradeoff, evidenceIds));
+            candidates.add(new CandidateReplyDraft(bggId, whyFit, tradeoff, evidenceIds));
             selectedGames.add(game);
             selectedEvidenceIds.addAll(availableEvidence.keySet());
         }
@@ -146,7 +144,8 @@ final class RecommendationPublication {
                 .map(game -> projectModelReply(
                         game,
                         Objects.requireNonNull(draftsById.get(game.ranking().bggId())),
-                        state))
+                        state,
+                        locale))
                 .toList();
         state.actions.add("MODEL_AUTHORED_RECOMMENDATION");
         return response(
@@ -183,7 +182,7 @@ final class RecommendationPublication {
                 Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
                 assistantMessage,
-                state.profile,
+                state.selectionProfile(),
                 null,
                 state.sourceCount,
                 state.verified.size(),
@@ -201,9 +200,6 @@ final class RecommendationPublication {
                 state.comparison,
                 permit.shortfall());
 
-        state.finalResponseGameIds.addAll(permit.selectedGames().stream()
-                .map(game -> game.ranking().bggId())
-                .toList());
         state.finalResponseEvidenceIds.addAll(publishedEvidenceIds);
         state.actions.clear();
         state.actions.addAll(responseActions);
@@ -334,15 +330,16 @@ final class RecommendationPublication {
     private RecommendedGame projectModelReply(
             Game game,
             CandidateReplyDraft draft,
-            RecommendationAgentState state) {
+            RecommendationAgentState state,
+            String locale) {
         Map<String, CandidateObservation> available = observations.narrativeObservations(
                 game, state.research);
         List<RecommendationReplyPart> replyParts = new ArrayList<>();
         replyParts.add(replyPart(
                 game.ranking().bggId(),
                 ReplyPartRole.WHY_FIT,
-                "cardText",
-                draft.cardText(),
+                "whyFit",
+                draft.whyFit(),
                 draft.evidenceIds(),
                 available));
         if (draft.tradeoff() != null) {
@@ -354,24 +351,11 @@ final class RecommendationPublication {
                     draft.evidenceIds(),
                     available));
         }
-        List<String> matches = List.of(draft.cardText());
-        List<String> tradeoffs = draft.tradeoff() == null
-                ? List.of()
-                : List.of(draft.tradeoff());
-        List<RecommendationReason> reasons = replyParts.stream()
-                .map(RecommendationReplyPart::claim)
-                .map(claim -> new RecommendationReason(
-                        ReasonKind.PREFERENCE_INFERENCE,
-                        claim.text(),
-                        claim.sourceIndexes()))
-                .toList();
-        return new RecommendedGame(
+        List<CandidateClaim> fitClaims = selector.fitClaims(
                 game,
-                matches,
-                tradeoffs,
-                reasons,
-                replyParts.stream().map(RecommendationReplyPart::claim).toList(),
-                replyParts);
+                state.selectionProfile(),
+                runtime.chinese(locale));
+        return new RecommendedGame(game, fitClaims, replyParts);
     }
 
     private RecommendationReplyPart replyPart(
@@ -422,7 +406,7 @@ final class RecommendationPublication {
 
     private record CandidateReplyDraft(
             int bggId,
-            String cardText,
+            String whyFit,
             String tradeoff,
             List<String> evidenceIds) {
         CandidateReplyDraft {

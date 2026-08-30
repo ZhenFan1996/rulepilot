@@ -60,7 +60,7 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
 
 系统不再单独调用“下一步动作模型”，也不规定一次请求必须经过几次模型、几次工具、几次修正或几个固定阶段。普通问候和不需要资料的闲聊可以一次模型调用、零工具结束；需要资料时，模型可在首轮直接选择搜索。
 
-调用次数和延迟是审计事实，不是正确性合同。整轮只受真实资源边界控制：provider 上下文/输出、持久化 token 包络、active-work deadline、取消、账户额度、并发背压、安全尺寸和数据库查询能力。完全相同的已拒绝 action/observation 再次出现时，以 no-progress 停止，避免无意义循环；新的完整候选仍可继续修正。
+调用次数和延迟是审计事实，不是正确性合同。同步答疑保留持久化 hard token 包络；逐章发布的讲解把 workload token 阈值作为容量观测，不因估算阈值被跨过而停止或清除已发布章节。真实停止边界仍是 provider 上下文/输出与额度、active-work deadline、取消、并发准入、安全尺寸、数据库能力，以及明确启用的资源包络。完全相同的已拒绝 action/observation 再次出现时，以 no-progress 停止，避免无意义循环；新的完整候选仍可继续修正。
 
 自由文本只用于玩家展示，不参与意图、实体、偏好、数量、证据、工具或状态路由。应用不得从旧稿抽字段、套模板或拼接玩家回复。
 
@@ -76,7 +76,7 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
 
 搜索工具把肯定和排除条件分开表达；“不要扩展”不会再被保存成“偏好扩展”。候选选择只使用当前 turn 明确产生的 typed 约束，不把历史的错误 profile 隐式继承进本轮。请求数量由终态拥有，搜索池大小不再被误当成最终发布数量。
 
-发布边界只验证：BGG 身份、玩家明确的硬条件与排除项、候选和证据归属、完整终态结构。additive unknown JSON 字段被忽略。终态不合格时，完整原参数、`code/path/reason`、当前 schema、允许候选 ID 和每个候选的允许证据 ID 一起交回同一 Agent，由它返回一份完整替代结果。
+发布边界只验证：BGG 身份、玩家明确的硬条件与排除项、候选和证据归属、完整终态结构。additive unknown JSON 字段被忽略。终态不合格时，完整原参数只在前一条 assistant tool call 中保留一次；correction 只补充 `code/path/reason`、当前 schema、允许候选 ID 和每个候选的允许证据 ID，再由同一 Agent 返回一份完整替代结果。
 
 `NO_MATCH` 是有解释的成功结果；provider、协议、空响应、输出截断、deadline、取消、持久化或发布边界停止是 typed failure。失败 turn 不覆盖最近一次成功发布结果，也不把内部 checkpoint 冒充成玩家已收到的卡片。
 
@@ -102,7 +102,7 @@ Agent 每次都看到可用页、已读页原文、已发布章节、未读可�
 
 必要合同只有：动作类型和必需字段正确；页面、章节和依赖身份来自当前状态；章节至少引用一页已读证据。未读页、已读未引用页、未被终态确认的已发布章节和模型声明的缺口会进入 durable unresolved topics，而不是让可读计划整体失败。
 
-非法 JSON 或 action 会把完整候选、`code/path/reason/schema/allowedPageIds/allowedChapterIds` 交回同一 Agent。additive unknown 字段被接受；应用不 patch 字段，不从旧对象拼新对象。
+非法 JSON 或 action 的完整候选只在前一条 assistant message 中保留一次；correction 把 `code/path/reason/schema/allowedPageIds/allowedChapterIds` 交回同一 Agent。additive unknown 字段被接受；应用不复制候选、不 patch 字段，也不从旧对象拼新对象。
 
 ### 章节与配图
 
@@ -116,7 +116,7 @@ Agent 每次都看到可用页、已读页原文、已发布章节、未读可�
 
 生成主路径没有 critic 或 localizer 模型阶段。localization 只在玩家显式请求时作为发布后投影，失败不修改中文源课程；质量 evaluator 是只读管理报告，不阻止章节发布。
 
-只要有一个可读章节，结果就保留。缺章、不可读页、未引用页、unresolved topic 或局部图像失败使结果成为 `DRAFT_READY/DEGRADED`，而不是抹掉全部章节。只有来源整体不可用、零可发布章节、身份/版本/引用越界、不可恢复的持久化失败、全局取消或资源停止才结束整个 owner。
+只要有一个可读章节，结果就保留。缺章、不可读页、未引用页、unresolved topic 或局部图像失败使结果成为 `DRAFT_READY/DEGRADED`，而不是抹掉全部章节。只有来源整体不可用、零可发布章节、身份/版本/引用越界、不可恢复的持久化失败、provider/deadline、全局取消或明确启用的资源边界才结束整个 owner；讲解 workload token 观测阈值本身不再是停止原因。
 
 ## 答疑
 
@@ -139,7 +139,7 @@ NativeRuleAnswerAgent
 
 发布边界验证当前文档版本、精确页快照、引用身份和硬数字。硬数字由模型在 `numericClaims` 中逐 literal 指向一个已引用证据 ID；自然解释、结论、例外和澄清全部由模型生成并原样发布。
 
-非法工具参数或终态将完整原 payload、`code/path/reason/currentSchema`、允许工具名或 evidence IDs 返回同一 Agent。additive unknown 字段被忽略。应用不要求玩家因为 `INVALID_MODEL_OUTPUT` 改写问题，也不以本地模板修补答案。
+非法工具参数或终态的完整原 payload 只在前一条 assistant message 中保留一次；correction 将 `code/path/reason/currentSchema`、允许工具名或 evidence IDs 返回同一 Agent。additive unknown 字段被忽略。应用不要求玩家因为 `INVALID_MODEL_OUTPUT` 改写问题，也不以本地模板修补答案。
 
 ## 玩家可见的失败语义
 
@@ -171,11 +171,13 @@ PR CI 只运行可重复、无付费模型的确定性检查；真实模型 cana
 
 推荐 canary 与规则书→讲解→答疑 canary 分开运行。它们记录完整结果、模型/工具调用图、各段延迟、typed failure、部署 SHA 和清理结果，但不以固定模型调用数、固定页数、固定章节数或固定延迟充当产品正确性合同。sanitizer 删除凭据、模型私有 reasoning、用户上传和受版权保护的原始规则书内容；有 artifact 不等于旅程成功。
 
-2026-08-30/31 的 Qwen3.8 Flash 真实基线保存在仓库外 `.local/agent-evaluation`：
+2026-08-30/31 的 Qwen3.8 Flash 与 Qwen3.7 Plus 真实基线保存在仓库外 `.local/agent-evaluation`：
 
 - 推荐普通问候/非游戏闲聊/轻桌游闲聊均为一次模型、零工具；复杂推荐为模型自主搜索、研究后提交完整终态。
+- Qwen3.7 Plus 在复杂 Harbor 样例中自主执行目录搜索、非终态比较 observation、体验研究和最终发布；两张卡分别生成针对当前玩家条件的完整说明，普通问候仍为一次模型、零工具。
 - Q&A 普通问候为一次模型、零工具；SETI raw 轨迹自主并行读页并得到正确规则答案。一次新 endpoint 的终态合成独占约 60 秒后 provider failure，证明这是外部调用停止而不是本地固定流水线等待。
 - Captain is Dead 新讲解 Agent 自主完成 5 次读页、7 次章节发布和一次 complete，7/7 章发布、无 activity failure；具体未覆盖主题保留为 unresolved，未冒充完整课程。
+- Ark Nova 20 页长规则书 canary 用 15 次 outline 决策和 9 次章节模型调用发布 9/9 个有引用章节及 9 个递增进度快照，所有 56 条 activity 均无失败；5 个未覆盖主题诚实保留，所以结果为 `DRAFT_READY`。独立持久化控制测试证明讲解跨过观测阈值仍继续，而答疑 hard token 上限仍会停止。
 
 这些样本证明接线、合同和失败归属，不代表总体失败率或 provider SLO。
 
@@ -197,6 +199,7 @@ PR CI 只运行可重复、无付费模型的确定性检查；真实模型 cana
 
 - 外部模型、BGG 和官方来源仍受网络、限流、provider 协议和账户状态影响，因此玩家必须看到准确 owner 和停止原因。
 - 单次真实 canary 只能证明一个输入、一个模型版本和一个时间点，不能推导长期失败率。
+- 已发布章节能在新 attempt 中复用，但进程重启后尚不保证原 run 自动恢复执行；玩家显式重试会从缺失章节继续，而不是重新生成已支持章节。
 - 复杂跨页规则、版本冲突和视觉图表仍需要更多真实语料评测，但修复必须发生在最早的通用责任边界，不能把游戏名、页码或同义词写成 production special case。
 - 讲解 Activity API 尚未为每个局部降级单独暴露 `failureCode/failureOwner`；当前 UI 显示真实 `operation · summary` 和模块 owner，终态显示 typed `lastErrorCode` 与 `unresolvedTopics`，且不解析 summary 做业务路由。
 - 数据库中少数已退休字段仍作为存量 schema 兼容列存在；live domain 和 Agent 路径不读取其语义。只有在生产存量有证据为零并具备独立 migration 时才删除物理列。

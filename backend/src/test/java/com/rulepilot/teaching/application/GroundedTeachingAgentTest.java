@@ -92,6 +92,82 @@ class GroundedTeachingAgentTest {
                 });
     }
 
+    @Test
+    void aNewRunReusesPublishedChaptersAndComposesOnlyTheMissingWork() {
+        UUID versionId = UUID.randomUUID();
+        TeachingPlan resumablePlan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                null,
+                "Resumable lesson",
+                "Keep grounded chapters readable while the rest continues.",
+                new WholeGameContext(List.of(), List.of()),
+                List.of(section(1, "published"), section(2, "remaining")),
+                "player",
+                Instant.EPOCH);
+        AssistantReadTools tools = request -> List.of(evidence(versionId, request.query()));
+        RecordingInvocations firstInvocations = new RecordingInvocations();
+        TeachingLessonModel interruptedModel = request -> {
+            if (request.topicKey().equals("remaining")) {
+                throw new ProviderFailureException(new IllegalStateException("provider unavailable"));
+            }
+            return supportedDraft(request, "The already published rule remains readable.");
+        };
+        VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
+        GroundedTeachingAgent firstRun = new GroundedTeachingAgent(
+                tools,
+                interruptedModel,
+                new PolicyEvidenceVerifier(),
+                firstInvocations,
+                visualFacts,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, firstInvocations, visualFacts));
+
+        IllustratedLesson partial = firstRun.createBase(
+                resumablePlan, UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(partial.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(partial.sections())
+                .extracting(LessonSection::topicKey)
+                .containsExactly("published");
+
+        List<String> composedTopics = new CopyOnWriteArrayList<>();
+        TeachingLessonModel resumedModel = request -> {
+            composedTopics.add(request.topicKey());
+            return supportedDraft(request, "The remaining rule is now grounded.");
+        };
+        RecordingInvocations resumedInvocations = new RecordingInvocations();
+        GroundedTeachingAgent resumedRun = new GroundedTeachingAgent(
+                tools,
+                resumedModel,
+                new PolicyEvidenceVerifier(),
+                resumedInvocations,
+                visualFacts,
+                VisualRulebookCatalogerTestFixture.unavailable(tools, resumedInvocations, visualFacts));
+
+        IllustratedLesson completed = resumedRun.createBase(
+                resumablePlan, UUID.randomUUID(), partial, ignored -> {});
+
+        assertThat(completed.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(completed.sections())
+                .extracting(LessonSection::topicKey)
+                .containsExactly("published", "remaining");
+        assertThat(completed.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("The already published rule remains readable.");
+        assertThat(composedTopics).containsExactly("remaining");
+    }
+
+    private SectionDraft supportedDraft(
+            TeachingLessonModel.SectionRequest request, String text) {
+        UUID evidenceId = request.evidence().getFirst().chunkId();
+        return new SectionDraft(
+                "A grounded chapter",
+                List.of(new StepDraft(
+                        "Follow the cited rule",
+                        TeachingMove.DO,
+                        text,
+                        List.of(evidenceId))));
+    }
+
     private TeachingPlan plan(UUID versionId) {
         return new TeachingPlan(
                 UUID.randomUUID(),

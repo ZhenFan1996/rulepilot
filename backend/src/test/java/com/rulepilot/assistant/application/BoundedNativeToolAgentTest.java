@@ -115,15 +115,21 @@ class BoundedNativeToolAgentTest {
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.text()).isEqualTo(accepted);
         assertThat(model.requests).hasValue(2);
-        assertThat(model.conversations.get(1)).extracting(ConversationMessage::content)
-                .anySatisfy(content -> assertThat(content)
+        assertThat(model.conversations.get(1))
+                .anySatisfy(message -> assertThat(message)
+                        .returns(MessageRole.ASSISTANT, ConversationMessage::role)
+                        .returns(rejected, ConversationMessage::content));
+        assertThat(model.conversations.get(1))
+                .filteredOn(message -> message.role() == MessageRole.USER
+                        && message.content().contains("CITATION_NOT_OBSERVED"))
+                .singleElement()
+                .satisfies(message -> assertThat(message.content())
                         .contains(
-                                rejected,
-                                "CITATION_NOT_OBSERVED",
                                 "/citationIds/0",
                                 "identity is outside this run",
                                 "currentSchema",
-                                "evidence-1"));
+                                "evidence-1")
+                        .doesNotContain(rejected, "<rejected-candidate>"));
     }
 
     @Test

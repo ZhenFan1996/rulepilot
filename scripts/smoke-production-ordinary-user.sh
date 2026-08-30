@@ -379,6 +379,91 @@ record_failure_cause() {
 	chmod 600 "$run_failure_code_file"
 }
 
+validate_rule_answer_response() {
+	local response=${1:-}
+	local expected_language=${2:-}
+	local maximum_page=${3:-}
+	if ! jq -e '
+		type == "object"
+		and (.answer | type == "object")
+		and (.rulingReference | type == "object")
+	' >/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_RESPONSE_INVALID
+		echo "Rule answer response was not the expected JSON object" >&2
+		return 1
+	fi
+	if ! jq -e '.answer.status == "ANSWERED" or .answer.status == "ANSWERED_WITH_WARNING"' \
+		>/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_NOT_PUBLISHED
+		echo "Rule answer did not publish a conclusion" >&2
+		return 1
+	fi
+	if ! jq -e --arg language "$expected_language" '.answer.language == $language' \
+		>/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_LANGUAGE_MISMATCH
+		echo "Rule answer language did not match the request" >&2
+		return 1
+	fi
+	if ! jq -e '.answer.shortVerdict | type == "string" and length > 0' \
+		>/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_VERDICT_EMPTY
+		echo "Rule answer did not include a player-facing verdict" >&2
+		return 1
+	fi
+	if ! jq -e '.answer.explanation | type == "string" and length > 0' \
+		>/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_EXPLANATION_EMPTY
+		echo "Rule answer did not include a player-facing explanation" >&2
+		return 1
+	fi
+	if ! jq -e '(.answer.citations | type == "array") and (.answer.citations | length > 0)' \
+		>/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_CITATIONS_MISSING
+		echo "Rule answer published no exact-page citation" >&2
+		return 1
+	fi
+	if [ -n "$maximum_page" ]; then
+		if ! jq -e --argjson maximum "$maximum_page" '
+			all(.answer.citations[]; .pageFrom >= 1 and .pageTo >= .pageFrom and .pageTo <= $maximum)
+		' >/dev/null <<<"$response"; then
+			record_failure_cause ANSWER_PAGE_RANGE_INVALID
+			echo "Rule answer cited a page outside the imported document" >&2
+			return 1
+		fi
+	elif ! jq -e 'all(.answer.citations[]; .pageFrom >= 1 and .pageTo >= .pageFrom)' \
+		>/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_PAGE_RANGE_INVALID
+		echo "Rule answer cited an invalid page range" >&2
+		return 1
+	fi
+	if ! jq -e 'all(.answer.citations[]; .excerpt | type == "string" and length > 0)' \
+		>/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_CITATION_EXCERPT_EMPTY
+		echo "Rule answer citation did not include a readable excerpt" >&2
+		return 1
+	fi
+	if ! jq -e '.rulingReference.citationIds | type == "array"' >/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_SOURCE_REFERENCE_MISSING
+		echo "Rule answer did not expose its citation identity list" >&2
+		return 1
+	fi
+	if ! jq -e '
+		(.rulingReference.citationIds | length) == (.answer.citations | length)
+	' >/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_SOURCE_REFERENCE_COUNT_MISMATCH
+		echo "Rule answer citation identities did not align with the published citations" >&2
+		return 1
+	fi
+	if ! jq -e '
+		(.rulingReference.citationIds | unique | length) == (.rulingReference.citationIds | length)
+		and all(.rulingReference.citationIds[]; type == "string" and length > 0)
+	' >/dev/null <<<"$response"; then
+		record_failure_cause ANSWER_SOURCE_IDENTITY_INVALID
+		echo "Rule answer citation identities were empty or duplicated" >&2
+		return 1
+	fi
+}
+
 remaining_forward_seconds() {
 	local remaining=$((forward_deadline - SECONDS))
 	if [ "$remaining" -le 0 ]; then
@@ -1186,29 +1271,24 @@ run_official_image_gallery() {
 	log_stage "lesson-verified"
 	pending_failure_code=ANSWER_EVIDENCE_INVALID
 
-	refresh_csrf
+	if ! refresh_csrf; then
+		record_failure_cause ANSWER_REQUEST_FAILED
+		echo "Rule answer request could not refresh its authenticated form token" >&2
+		return 1
+	fi
 	answer_payload=$(jq -cn --arg question "$question" --arg language "$answer_language" \
 		'{question: $question, language: $language}')
-	answer_response=$(post_json "/api/v1/document-versions/$version_id/answers" "$answer_payload")
+	if ! answer_response=$(post_json "/api/v1/document-versions/$version_id/answers" "$answer_payload"); then
+		record_failure_cause ANSWER_REQUEST_FAILED
+		echo "Rule answer HTTP request failed" >&2
+		return 1
+	fi
+	if ! validate_rule_answer_response "$answer_response" "$answer_language" "$expected_page_count"; then
+		return 1
+	fi
 	answer_run_id=$(jq -r '.assistantRunId // "not-exposed"' <<<"$answer_response")
 	answer_status=$(jq -er '.answer.status' <<<"$answer_response")
 	answer_citation_count=$(jq -er '.answer.citations | length' <<<"$answer_response")
-	if ! jq -e --arg language "$answer_language" --argjson expected "$expected_page_count" '
-	        (.answer.status == "ANSWERED" or .answer.status == "ANSWERED_WITH_WARNING")
-	        and .answer.language == $language
-	        and (.answer.shortVerdict | length > 0)
-        and (.answer.explanation | length > 0)
-        and (.answer.citations | length > 0)
-        and all(.answer.citations[];
-	          .pageFrom >= 1 and .pageTo >= .pageFrom and .pageTo <= $expected
-	          and (.excerpt | length > 0))
-        and ((.rulingReference.citationIds | length) == (.answer.citations | length))
-        and ((.rulingReference.citationIds | unique | length) == (.rulingReference.citationIds | length))
-        and all(.rulingReference.citationIds[]; type == "string" and length > 0)
-    ' >/dev/null <<<"$answer_response"; then
-		echo "Rule answer did not publish a conclusion with page evidence and aligned source references" >&2
-		return 1
-	fi
 	log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
 	pending_failure_code=NAVIGATION_FAILED
 
@@ -1444,15 +1524,23 @@ log_stage "visual-expectation-verified expectation=$visual_expectation visualSte
 log_stage "lesson-verified"
 pending_failure_code=ANSWER_EVIDENCE_INVALID
 
-refresh_csrf
+if ! refresh_csrf; then
+	record_failure_cause ANSWER_REQUEST_FAILED
+	echo "Rule answer request could not refresh its authenticated form token" >&2
+	exit 1
+fi
 answer_payload=$(jq -cn --arg question "$question" --arg language "$answer_language" \
 	'{question: $question, language: $language}')
-answer_response=$(forward_curl --fail-with-body --silent --show-error \
-	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
-	--request POST --header "Content-Type: application/json" \
-	--header "$csrf_header: $csrf_token" \
-	--data "$answer_payload" \
-	"$base_url/api/v1/document-versions/$version_id/answers")
+if ! answer_response=$(forward_curl --fail-with-body --silent --show-error \
+		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+		--request POST --header "Content-Type: application/json" \
+		--header "$csrf_header: $csrf_token" \
+		--data "$answer_payload" \
+		"$base_url/api/v1/document-versions/$version_id/answers"); then
+	record_failure_cause ANSWER_REQUEST_FAILED
+	echo "Rule answer HTTP request failed" >&2
+	exit 1
+fi
 if [ -n "$result_file" ]; then
 	answer_checkpoint="${result_file}.answer.tmp"
 	jq --argjson answer "$answer_response" '.stage = "answer" | .answer = $answer' \
@@ -1460,25 +1548,12 @@ if [ -n "$result_file" ]; then
 	mv "$answer_checkpoint" "$result_file"
 	chmod 600 "$result_file"
 fi
+if ! validate_rule_answer_response "$answer_response" "$answer_language"; then
+	exit 1
+fi
 answer_run_id=$(jq -r '.assistantRunId // "not-exposed"' <<<"$answer_response")
 answer_status=$(jq -er '.answer.status' <<<"$answer_response")
 answer_citation_count=$(jq -er '.answer.citations | length' <<<"$answer_response")
-if ! jq -e '
-	(.answer.status == "ANSWERED" or .answer.status == "ANSWERED_WITH_WARNING")
-	and (.answer.shortVerdict | length > 0)
-	and (.answer.explanation | length > 0)
-	and (.answer.citations | length > 0)
-	and all(.answer.citations[];
-		.pageFrom >= 1
-		and .pageTo >= .pageFrom
-		and (.excerpt | length > 0))
-	and ((.rulingReference.citationIds | length) == (.answer.citations | length))
-	and ((.rulingReference.citationIds | unique | length) == (.rulingReference.citationIds | length))
-	and all(.rulingReference.citationIds[]; type == "string" and length > 0)
-' >/dev/null <<<"$answer_response"; then
-	echo "Rule answer did not publish a conclusion with page evidence and aligned source references" >&2
-	exit 1
-fi
 log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
 pending_failure_code=NAVIGATION_FAILED
 

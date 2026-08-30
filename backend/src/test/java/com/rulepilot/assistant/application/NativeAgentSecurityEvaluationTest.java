@@ -72,10 +72,15 @@ class NativeAgentSecurityEvaluationTest {
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.toolCalls()).isZero();
+        assertThat(model.conversations.get(1)).anySatisfy(message -> {
+            assertThat(message.role()).isEqualTo(NativeToolModel.MessageRole.ASSISTANT);
+            assertThat(message.toolCalls()).extracting(ModelToolCall::name).containsExactly("write_file");
+        });
         assertThat(model.conversations.get(1).stream()
                         .map(message -> message.content())
                         .collect(java.util.stream.Collectors.joining("\n")))
-                .contains("write_file", "TOOL_SCHEMA_STALE", "Allowed tool identities");
+                .contains("TOOL_SCHEMA_STALE", "Allowed tool identities")
+                .doesNotContain("<rejected-action>");
         verify(reads, never()).searchRuleEvidence(any());
     }
 

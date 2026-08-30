@@ -42,7 +42,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-    private static final String QWEN_TEACHING_STARTUP_MODEL = "qwen3-vl-flash";
     private static final String OUTPUT_SCHEMA = """
             {"pages":[{"pageNumber":1,"printedTerms":["visible term"],"keywords":[],
             "ruleGroups":[{"identifier":"visible label","fact":"faithful page-local fact",
@@ -105,7 +104,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         String provider = models.providerFor(Role.VISUAL, owner);
         return Optional.of(new ModelExecutionIdentity(
                 provider,
-                teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner))));
+                models.modelNameFor(Role.VISUAL, owner)));
     }
 
     private CatalogDraft requestAndValidate(
@@ -135,7 +134,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         String provider = models.providerFor(Role.VISUAL, owner);
         if ("qwen".equals(provider)) {
             prompt = prompt.options(OpenAiChatOptions.builder()
-                    .model(teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner)))
+                    .model(models.modelNameFor(Role.VISUAL, owner))
                     .temperature(0.0)
                     .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
                     .extraBody(Map.of("enable_thinking", false)));
@@ -250,18 +249,18 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private static List<RuleGroupFact> ruleGroups(JsonNode value, String path) {
         if (value == null || value.isNull()) return List.of();
         if (!value.isArray()) {
-            throw invalid(TeachingCatalogRepairCode.SCHEMA_MISMATCH, path, "ruleGroups must be an array", null);
+            return List.of();
         }
         List<RuleGroupFact> groups = new ArrayList<>();
         Set<String> observed = new LinkedHashSet<>();
         for (int index = 0; index < value.size(); index++) {
             JsonNode group = value.get(index);
-            String itemPath = path + "[" + index + "]";
             if (!group.isObject()) {
-                throw invalid(TeachingCatalogRepairCode.SCHEMA_MISMATCH, itemPath, "rule group must be an object", null);
+                continue;
             }
-            String identifier = requiredText(group.get("identifier"), itemPath + ".identifier");
-            String fact = requiredText(group.get("fact"), itemPath + ".fact");
+            String identifier = optionalText(group.get("identifier"));
+            String fact = optionalText(group.get("fact"));
+            if (identifier == null || fact == null) continue;
             String label = optionalText(group.get("label"));
             String identity = identifier + "\u0000" + fact;
             if (observed.add(identity)) {
@@ -269,14 +268,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             }
         }
         return List.copyOf(groups);
-    }
-
-    private static String requiredText(JsonNode value, String path) {
-        String text = optionalText(value);
-        if (text == null) {
-            throw invalid(TeachingCatalogRepairCode.SCHEMA_MISMATCH, path, "field must be non-blank text", null);
-        }
-        return text;
     }
 
     private static String optionalText(JsonNode value) {
@@ -354,10 +345,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         Throwable current = failure;
         while (current.getCause() != null) current = current.getCause();
         return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
-    }
-
-    static String teachingStartupModelName(String provider, String configuredModel) {
-        return "qwen".equals(provider) ? QWEN_TEACHING_STARTUP_MODEL : configuredModel;
     }
 
     private static final class CatalogValidationFailure extends RuntimeException {
