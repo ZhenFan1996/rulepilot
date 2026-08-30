@@ -509,9 +509,12 @@ public class NativeRuleAnswerAgent {
     }
 
     private AnswerStatus fallbackStatus(String reason) {
-        if ("MODEL_CAPABILITY_UNAVAILABLE".equals(reason)) return AnswerStatus.MODEL_UNAVAILABLE;
+        if (Set.of("MODEL_CAPABILITY_UNAVAILABLE", "MODEL_REQUEST_UNAVAILABLE").contains(reason)) {
+            return AnswerStatus.MODEL_UNAVAILABLE;
+        }
         if (Set.of(
                         "TIMEOUT",
+                        "MODEL_REQUEST_TIMEOUT",
                         "STEP_BUDGET",
                         "TOOL_BUDGET",
                         "MODEL_BUDGET",
@@ -529,8 +532,13 @@ public class NativeRuleAnswerAgent {
         if ("MODEL_CAPABILITY_UNAVAILABLE".equals(reason)) {
             return english ? "No answer model is currently available." : "当前没有可用的答疑模型。";
         }
+        if ("MODEL_REQUEST_UNAVAILABLE".equals(reason)) {
+            return english
+                    ? "The answer model or provider was temporarily unavailable for this request."
+                    : "本次请求的答疑模型或模型提供方暂时不可用。";
+        }
         return switch (reason) {
-            case "TIMEOUT" -> english
+            case "TIMEOUT", "MODEL_REQUEST_TIMEOUT" -> english
                     ? "This answer did not finish before the request deadline."
                     : "这次答疑未能在请求时限内完成。";
             case "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",

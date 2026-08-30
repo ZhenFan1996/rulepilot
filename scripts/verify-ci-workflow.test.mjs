@@ -2767,7 +2767,7 @@ test('ordinary-user production artifacts retain a bounded public status', () => 
   assert.match(productionOrdinaryUserWorkflow,
     /\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$/)
   assert.match(productionOrdinaryUserWorkflow,
-    /MODEL_CAPABILITY_UNAVAILABLE[\s\S]{0,600}?OBSERVATION_NO_PROGRESS/)
+    /MODEL_CAPABILITY_UNAVAILABLE[\s\S]{0,160}?MODEL_REQUEST_TIMEOUT[\s\S]{0,160}?MODEL_REQUEST_UNAVAILABLE[\s\S]{0,600}?OBSERVATION_NO_PROGRESS/)
   assert.ok(productionOrdinaryUserWorkflow.includes(
     'and (.preparationState | IN("COMPLETED", "DEGRADED"))'))
   assert.ok(productionOrdinaryUserWorkflow.includes(

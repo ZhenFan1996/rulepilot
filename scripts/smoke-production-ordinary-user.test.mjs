@@ -203,6 +203,16 @@ test('public status validator rejects contradictory or expanded workflow artifac
     assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
     await writeFile(publicStatus, JSON.stringify({ ...validDoubleFailure, answerDiagnostic: validAnswerDiagnostic }))
     assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
+    for (const [status, stopReason] of [
+      ['MODEL_TIMEOUT', 'MODEL_REQUEST_TIMEOUT'],
+      ['MODEL_UNAVAILABLE', 'MODEL_REQUEST_UNAVAILABLE'],
+    ]) {
+      await writeFile(publicStatus, JSON.stringify({
+        ...validDoubleFailure,
+        answerDiagnostic: { ...validAnswerDiagnostic, status, stopReason },
+      }))
+      assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
+    }
     await writeFile(publicStatus, JSON.stringify(validSuccess))
     assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '0'])).code, 0)
 
@@ -864,45 +874,50 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(deleted, true)
     answerHasCitations = true
 
-    answerStatus = 'MODEL_TIMEOUT'
-    answerRunState = 'DEGRADED'
-    answerStopReason = 'TIMEOUT'
-    deleted = false
-    planStarted = false
-    const unpublishedAnswerStatus = join(directory, 'unpublished-answer-status.json')
-    const unpublishedAnswer = await spawnResult(
-      'bash',
-      [resolve('scripts/smoke-production-ordinary-user.sh'),
-        '--base-url', `http://127.0.0.1:${address.port}`,
-        '--pdf', pdf,
-        '--timeout-seconds', '10'],
-      {
-        ...process.env,
-        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
-        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: unpublishedAnswerStatus,
-      },
-    )
-    assert.equal(unpublishedAnswer.code, 1, unpublishedAnswer.stderr)
-    assert.deepEqual(JSON.parse(await readFile(unpublishedAnswerStatus, 'utf8')), {
-      outcome: 'FAILED',
-      exitCode: 1,
-      lastCompletedStage: 'lesson-verified',
-      failureCode: 'ANSWER_EVIDENCE_INVALID',
-      failureCauseCode: 'ANSWER_NOT_PUBLISHED',
-      cleanupOutcome: 'SUCCEEDED',
-      answerDiagnostic: {
-        status: 'MODEL_TIMEOUT',
-        assistantRunId: '77777777-7777-4777-8777-777777777777',
-        runState: 'DEGRADED',
-        lastErrorCode: null,
-        stopReason: 'TIMEOUT',
-        ownerVerified: true,
-      },
-    })
-    const unpublishedPublicText = await readFile(unpublishedAnswerStatus, 'utf8')
-    assert.doesNotMatch(unpublishedPublicText,
-      /ownerUsername|subjectId|private model progress|privateAnswerOperation|victory points|player/)
-    assert.equal(deleted, true)
+    for (const [status, stopReason] of [
+      ['MODEL_TIMEOUT', 'MODEL_REQUEST_TIMEOUT'],
+      ['MODEL_UNAVAILABLE', 'MODEL_REQUEST_UNAVAILABLE'],
+    ]) {
+      answerStatus = status
+      answerRunState = 'DEGRADED'
+      answerStopReason = stopReason
+      deleted = false
+      planStarted = false
+      const unpublishedAnswerStatus = join(directory, `unpublished-${status.toLowerCase()}-status.json`)
+      const unpublishedAnswer = await spawnResult(
+        'bash',
+        [resolve('scripts/smoke-production-ordinary-user.sh'),
+          '--base-url', `http://127.0.0.1:${address.port}`,
+          '--pdf', pdf,
+          '--timeout-seconds', '10'],
+        {
+          ...process.env,
+          RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+          RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: unpublishedAnswerStatus,
+        },
+      )
+      assert.equal(unpublishedAnswer.code, 1, unpublishedAnswer.stderr)
+      assert.deepEqual(JSON.parse(await readFile(unpublishedAnswerStatus, 'utf8')), {
+        outcome: 'FAILED',
+        exitCode: 1,
+        lastCompletedStage: 'lesson-verified',
+        failureCode: 'ANSWER_EVIDENCE_INVALID',
+        failureCauseCode: 'ANSWER_NOT_PUBLISHED',
+        cleanupOutcome: 'SUCCEEDED',
+        answerDiagnostic: {
+          status,
+          assistantRunId: '77777777-7777-4777-8777-777777777777',
+          runState: 'DEGRADED',
+          lastErrorCode: null,
+          stopReason,
+          ownerVerified: true,
+        },
+      })
+      const unpublishedPublicText = await readFile(unpublishedAnswerStatus, 'utf8')
+      assert.doesNotMatch(unpublishedPublicText,
+        /ownerUsername|subjectId|private model progress|privateAnswerOperation|victory points|player/)
+      assert.equal(deleted, true)
+    }
     answerStatus = 'ANSWERED'
     answerRunState = 'COMPLETED'
     answerStopReason = null

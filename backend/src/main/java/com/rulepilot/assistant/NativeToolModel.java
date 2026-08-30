@@ -4,6 +4,7 @@ import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolMedia;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import java.util.List;
+import java.util.Objects;
 
 /** Provider-neutral native tool-call model port. */
 public interface NativeToolModel {
@@ -16,6 +17,27 @@ public interface NativeToolModel {
 
     default boolean supports(Role role, String ownerUsername) {
         return true;
+    }
+
+    enum ModelRequestFailureKind {
+        TIMEOUT,
+        TEMPORARILY_UNAVAILABLE
+    }
+
+    /** Provider-neutral failure from one model request; retry policy remains with the caller. */
+    final class ModelRequestFailure extends RuntimeException {
+        private final ModelRequestFailureKind kind;
+
+        public ModelRequestFailure(ModelRequestFailureKind kind, Throwable cause) {
+            super(
+                    "native model request failed: " + Objects.requireNonNull(kind).name(),
+                    Objects.requireNonNull(cause));
+            this.kind = kind;
+        }
+
+        public ModelRequestFailureKind kind() {
+            return kind;
+        }
     }
 
     record ToolSpec(

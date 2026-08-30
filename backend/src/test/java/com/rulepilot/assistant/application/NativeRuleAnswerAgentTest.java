@@ -292,6 +292,34 @@ class NativeRuleAnswerAgentTest {
         assertThat(result.code()).isEqualTo("NUMERIC_VALUE_UNSUPPORTED");
     }
 
+    @Test
+    void mapsTypedProviderFailuresToRetryablePublicStatusesWithoutChangingTheQuestion() {
+        String question = "When may this effect resolve?";
+        Map<String, AnswerStatus> expectedStatuses = Map.of(
+                "MODEL_REQUEST_TIMEOUT", AnswerStatus.MODEL_TIMEOUT,
+                "MODEL_REQUEST_UNAVAILABLE", AnswerStatus.MODEL_UNAVAILABLE);
+
+        expectedStatuses.forEach((reason, expectedStatus) -> {
+            NativeToolAgent failedAgent = request -> new RunResult(
+                    RunStatus.FALLBACK,
+                    request.fallbackText(),
+                    reason,
+                    1,
+                    0,
+                    List.of());
+            NativeRuleAnswerAgent answers = answers(failedAgent, emptyLookup());
+
+            var outcome = answers.answer(question, new QuestionContext(versionId), "player", null, runId);
+            var presented = PlayerFacingAnswerPresenter.present(outcome.answer(), question, PlayerLocale.EN);
+
+            assertThat(outcome.answer().status()).isEqualTo(expectedStatus);
+            assertThat(presented.recovery()).isNotNull().satisfies(recovery -> {
+                assertThat(recovery.draft()).isEqualTo(question);
+                assertThat(recovery.canRetryUnchanged()).isTrue();
+            });
+        });
+    }
+
     private NativeRuleAnswerAgent answers(NativeToolAgent agent, RuleEvidenceLookup lookup) {
         ToolScope scope = new ToolScope(
                 "player", versionId, runId, Instant.now().plusSeconds(30));
