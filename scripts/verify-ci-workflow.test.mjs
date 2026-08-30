@@ -803,6 +803,13 @@ async function createReleaseGuardFixture() {
     '#!/usr/bin/env bash',
     'set -Eeuo pipefail',
     '[[ "$1" == ls-remote || "$3" == ls-remote ]] || { echo "Unexpected git invocation: $*" >&2; exit 64; }',
+    'if [[ -n "${RULEPILOT_TEST_GIT_FAILURE_COUNTER:-}" ]]; then',
+    '  remaining=$(<"$RULEPILOT_TEST_GIT_FAILURE_COUNTER")',
+    '  if (( remaining > 0 )); then',
+    '    printf "%s\\n" "$((remaining - 1))" > "$RULEPILOT_TEST_GIT_FAILURE_COUNTER"',
+    '    exit 128',
+    '  fi',
+    'fi',
     'printf "%s\\trefs/heads/main\\n" "${RULEPILOT_TEST_CURRENT_MAIN_SHA:?}"',
     '',
   ].join('\n'), { mode: 0o755 })
@@ -1766,7 +1773,7 @@ test('stale qualified commits cannot create a production checkpoint', async (con
   const currentMainGate = checkpointGuard.indexOf('require_current_qualified_main "$release_id"', lock)
   const firstMutation = checkpointGuard.indexOf('claim_active_transaction_held', currentMainGate)
   assert.match(productionReleaseGuard,
-    /require_current_qualified_main\(\)[\s\S]*?timeout 20s git ls-remote[\s\S]*?refs\/heads\/main[\s\S]*?Candidate release is no longer/)
+    /require_current_qualified_main\(\)[\s\S]*?QUALIFIED_MAIN_VERIFY_ATTEMPTS[\s\S]*?timeout 20s git ls-remote[\s\S]*?refs\/heads\/main[\s\S]*?Candidate release is no longer/)
   assert.ok(lock >= 0 && lock < currentMainGate && currentMainGate < firstMutation)
 
   if (process.platform !== 'linux') {
@@ -1791,6 +1798,73 @@ test('stale qualified commits cannot create a production checkpoint', async (con
         return true
       },
     )
+    await assert.rejects(access(join(fixture.root, 'deployment-guards', 'active-transaction')))
+    await assert.rejects(access(join(fixture.guardState, 'previous-release')))
+    assert.equal(await realpath(fixture.current), fixture.previousRelease)
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('qualified main lookup retries transient transport failures before checkpointing', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('qualified main retry is exercised on the Linux CI runner')
+    return
+  }
+  const fixture = await createReleaseGuardFixture()
+  const failures = join(fixture.root, 'qualified-main-failures')
+  try {
+    await writeFile(failures, '2\n')
+    const checkpoint = await execFileAsync(
+      'bash',
+      [productionReleaseGuardPath, 'checkpoint', fixture.root, fixture.release],
+      {
+        env: {
+          ...fixture.processEnvironment,
+          RULEPILOT_TEST_GIT_FAILURE_COUNTER: failures,
+        },
+      },
+    )
+
+    assert.equal(checkpoint.stdout.trim(), fixture.previous)
+    assert.equal(await readFile(failures, 'utf8'), '0\n')
+    assert.match(checkpoint.stderr, /attempt 1\/3; retrying[\s\S]*attempt 2\/3; retrying/)
+    assert.equal(
+      await readFile(join(fixture.root, 'deployment-guards', 'active-transaction'), 'utf8'),
+      `${fixture.release}\n`,
+    )
+  } finally {
+    await stopReleaseGuardWatchdog(fixture)
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('qualified main lookup remains fail-closed after its retry budget', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('qualified main retry exhaustion is exercised on the Linux CI runner')
+    return
+  }
+  const fixture = await createReleaseGuardFixture()
+  const failures = join(fixture.root, 'qualified-main-failures')
+  try {
+    await writeFile(failures, '3\n')
+    await assert.rejects(
+      execFileAsync(
+        'bash',
+        [productionReleaseGuardPath, 'checkpoint', fixture.root, fixture.release],
+        {
+          env: {
+            ...fixture.processEnvironment,
+            RULEPILOT_TEST_GIT_FAILURE_COUNTER: failures,
+          },
+        },
+      ),
+      (error) => {
+        assert.match(error.stderr, /Could not verify the current qualified main revision after 3 attempts/)
+        return true
+      },
+    )
+    assert.equal(await readFile(failures, 'utf8'), '0\n')
     await assert.rejects(access(join(fixture.root, 'deployment-guards', 'active-transaction')))
     await assert.rejects(access(join(fixture.guardState, 'previous-release')))
     assert.equal(await realpath(fixture.current), fixture.previousRelease)

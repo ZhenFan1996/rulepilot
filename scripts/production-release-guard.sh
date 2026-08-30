@@ -10,6 +10,8 @@ readonly WATCHDOG_READY_POLL_SECONDS=0.05
 readonly ROLLBACK_READY_TIMEOUT_SECONDS=360
 readonly ROLLBACK_READY_POLL_SECONDS=2
 readonly QUALIFIED_MAIN_REMOTE=https://github.com/ZhenFan1996/rulepilot.git
+readonly QUALIFIED_MAIN_VERIFY_ATTEMPTS=3
+readonly QUALIFIED_MAIN_VERIFY_RETRY_SECONDS=1
 readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen
 readonly EXPECTED_RECOMMENDATION_MODEL=qwen3.8-flash
 
@@ -28,13 +30,21 @@ require_candidate_release_id() {
 
 require_current_qualified_main() {
 	local release_id=$1
-	local candidate_sha remote_line remote_sha remote_ref extra
+	local candidate_sha remote_line remote_sha remote_ref extra attempt
 	require_candidate_release_id "$release_id"
 	candidate_sha=${release_id%%-*}
-	if ! remote_line=$(GIT_TERMINAL_PROMPT=0 timeout 20s git ls-remote \
-		--exit-code "$QUALIFIED_MAIN_REMOTE" refs/heads/main); then
-		fail "Could not verify the current qualified main revision"
-	fi
+	for ((attempt = 1; attempt <= QUALIFIED_MAIN_VERIFY_ATTEMPTS; attempt++)); do
+		if remote_line=$(GIT_TERMINAL_PROMPT=0 timeout 20s git ls-remote \
+			--exit-code "$QUALIFIED_MAIN_REMOTE" refs/heads/main); then
+			break
+		fi
+		if (( attempt == QUALIFIED_MAIN_VERIFY_ATTEMPTS )); then
+			fail "Could not verify the current qualified main revision after ${QUALIFIED_MAIN_VERIFY_ATTEMPTS} attempts"
+		fi
+		printf 'Qualified main revision lookup failed on attempt %s/%s; retrying.\n' \
+			"$attempt" "$QUALIFIED_MAIN_VERIFY_ATTEMPTS" >&2
+		sleep "$QUALIFIED_MAIN_VERIFY_RETRY_SECONDS"
+	done
 	read -r remote_sha remote_ref extra <<< "$remote_line"
 	[[ -z "${extra:-}" && "$remote_sha" =~ ^[0-9a-f]{40}$ && "$remote_ref" == refs/heads/main ]] \
 		|| fail "Current qualified main revision response is invalid"
