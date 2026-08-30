@@ -169,6 +169,8 @@ PR CI 只运行可重复、无付费模型的确定性检查；真实模型 cana
 
 合并到 `main` 后，部署 workflow 只接受该 SHA 已成功的 CI。源码、控制面和运行产物先在无生产权限 job 中封存并绑定 SHA，再交给隔离的生产 runner；release guard 在部署锁内验证镜像、数据库迁移、API、worker、前端、健康状态和 exact release identity，失败时回滚到上一个已提交 release。
 
+生产主机装载镜像或构建基础镜像后，PostgreSQL、Redis、RabbitMQ 和 MinIO 必须跨一个完整 health failure 窗口保持连续健康，候选应用才会启动。部署只观察同一容器自行恢复，不自动 restart、force-recreate 或删除持久卷；持续异常仍然 fail closed。失败诊断先记录全部共享依赖与应用容器的安全状态，再执行耗时的磁盘扫描，避免丢失最接近故障时刻的 owner 证据。
+
 推荐 canary 与规则书→讲解→答疑 canary 分开运行。它们记录完整结果、模型/工具调用图、各段延迟、typed failure、部署 SHA 和清理结果，但不以固定模型调用数、固定页数、固定章节数或固定延迟充当产品正确性合同。sanitizer 删除凭据、模型私有 reasoning、用户上传和受版权保护的原始规则书内容；有 artifact 不等于旅程成功。
 
 2026-08-30/31 的 Qwen3.8 Flash 与 Qwen3.7 Plus 真实基线保存在仓库外 `.local/agent-evaluation`：

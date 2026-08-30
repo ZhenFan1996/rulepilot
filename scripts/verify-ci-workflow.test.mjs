@@ -35,6 +35,7 @@ const productionReleaseGuard = await readFile(
   new URL('./production-release-guard.sh', import.meta.url),
   'utf8',
 )
+const productionLauncher = await readFile(new URL('./run-production.sh', import.meta.url), 'utf8')
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
 const productionRecommendationWorkflow = await readFile(
   new URL('../.github/workflows/production-recommendation-journey.yml', import.meta.url),
@@ -85,6 +86,72 @@ function workflowRunBlock(workflow, stepName) {
     content.push(line.slice(runIndent + 2))
   }
   return `${content.join('\n')}\n`
+}
+
+function shellFunction(script, functionName) {
+  const startMarker = `${functionName}() {\n`
+  const start = script.indexOf(startMarker)
+  assert.notEqual(start, -1, `Shell function was not found: ${functionName}`)
+  const end = script.indexOf('\n}\n', start)
+  assert.notEqual(end, -1, `Shell function ending was not found: ${functionName}`)
+  return script.slice(start, end + 2)
+}
+
+async function runStatefulDependencyWait(rabbitHealthyAfterRounds, readyTimeoutSeconds) {
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-stateful-health.'))
+  const clock = join(root, 'clock')
+  const round = join(root, 'round')
+  await writeFile(clock, '0\n')
+  await writeFile(round, '0\n')
+  const waitFunction = shellFunction(productionLauncher, 'wait_for_stateful_dependencies')
+  const harness = `
+set -eu
+${waitFunction}
+compose() {
+  [ "$1" = ps ] && [ "$2" = -q ]
+  printf '%s-container\\n' "$3"
+}
+docker() {
+  [ "$1" = inspect ] && [ "$2" = --format ]
+  format=$3
+  container=$4
+  if [ "$format" = '{{.State.Status}}' ]; then
+    printf 'running\\n'
+    return 0
+  fi
+  service=\${container%-container}
+  current_round=$(sed -n '1p' "$RULEPILOT_TEST_ROUND")
+  if [ "$service" = rabbitmq ] && [ "$current_round" -lt "$RULEPILOT_TEST_RABBIT_HEALTHY_AFTER" ]; then
+    health=unhealthy
+  else
+    health=healthy
+  fi
+  if [ "$service" = minio ]; then
+    printf '%s\\n' "$((current_round + 1))" > "$RULEPILOT_TEST_ROUND"
+  fi
+  printf '%s\\n' "$health"
+}
+date() {
+  current_time=$(sed -n '1p' "$RULEPILOT_TEST_CLOCK")
+  printf '%s\\n' "$((current_time + 1))" > "$RULEPILOT_TEST_CLOCK"
+  printf '%s\\n' "$current_time"
+}
+sleep() { :; }
+wait_for_stateful_dependencies
+`
+  try {
+    return await execFileAsync('sh', ['-c', harness], {
+      env: {
+        ...process.env,
+        PRODUCTION_INFRASTRUCTURE_READY_TIMEOUT_SECONDS: String(readyTimeoutSeconds),
+        RULEPILOT_TEST_CLOCK: clock,
+        RULEPILOT_TEST_RABBIT_HEALTHY_AFTER: String(rabbitHealthyAfterRounds),
+        RULEPILOT_TEST_ROUND: round,
+      },
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 const productionRecommendationSanitizer = workflowRunBlock(
@@ -1794,6 +1861,41 @@ test('activation refreshes its lease after every slow cleanup while still holdin
     && finalHeartbeat < lockScopeEnd)
 })
 
+test('production dependency health tolerates recovery but requires consecutive stable samples', async () => {
+  const result = await runStatefulDependencyWait(2, 30)
+  assert.match(result.stdout, /rabbitmq\(running\/unhealthy\)/)
+  assert.match(result.stdout, /stability sample 1\/12/)
+  assert.match(result.stdout, /stability sample 11\/12/)
+  assert.match(result.stdout, /healthy for 12 consecutive samples/)
+})
+
+test('production dependency health remains fail closed for a persistently unhealthy service', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait(999, 8),
+    (error) => {
+      assert.match(error.stdout, /did not remain healthy within 8 second\(s\)/)
+      assert.match(error.stdout, /rabbitmq\(running\/unhealthy\)/)
+      return true
+    },
+  )
+})
+
+test('production activation observes dependencies after pressure without restarting them', () => {
+  assert.match(productionLauncher,
+    /compose up -d --build --no-deps postgres redis rabbitmq minio\s+wait_for_stateful_dependencies/)
+  assert.doesNotMatch(productionLauncher,
+    /compose up -d --build --wait postgres redis rabbitmq minio/)
+  const dependencyWait = shellFunction(productionLauncher, 'wait_for_stateful_dependencies')
+  assert.doesNotMatch(dependencyWait, /restart|force-recreate/)
+
+  const activation = workflowRunBlock(
+    deploymentWorkflow,
+    'Activate release and verify production health',
+  )
+  assert.match(activation,
+    /Ensuring the current release remains available[\s\S]*?up -d --no-build --no-deps api worker/)
+})
+
 test('activation diagnostics safely describe containers without a Docker healthcheck', () => {
   const activation = workflowRunBlock(
     deploymentWorkflow,
@@ -1815,6 +1917,12 @@ test('activation diagnostics safely describe containers without a Docker healthc
     /health=\{\{with index \.State "Health"\}\}\{\{\.Status\}\}\{\{else\}\}not-configured\{\{end\}\}/)
   assert.doesNotMatch(diagnostic,
     /\.State\.Health|docker logs|\.Config\.Env|printenv|inspect .*\.Config|inspect .*Log/)
+
+  const boundarySnapshot = activation.indexOf('Production container state at the failure boundary:')
+  const expensiveDiskScan = activation.indexOf('Production filesystem usage:', boundarySnapshot)
+  assert.ok(boundarySnapshot >= 0 && boundarySnapshot < expensiveDiskScan)
+  assert.match(activation,
+    /for service in postgres redis rabbitmq minio api worker frontend gateway; do/)
 })
 
 test('unarmed watchdog deadline records an unchanged terminal and deletes its secret snapshot', async (context) => {

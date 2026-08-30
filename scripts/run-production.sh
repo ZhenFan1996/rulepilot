@@ -191,6 +191,56 @@ wait_for_worker() {
 	exit 1
 }
 
+wait_for_stateful_dependencies() {
+	ready_timeout_seconds=${PRODUCTION_INFRASTRUCTURE_READY_TIMEOUT_SECONDS:-180}
+	case "$ready_timeout_seconds" in
+		''|*[!0-9]*|0)
+			echo "PRODUCTION_INFRASTRUCTURE_READY_TIMEOUT_SECONDS must be a positive integer."
+			return 1
+			;;
+	esac
+	started_at=$(date +%s)
+	deadline=$((started_at + ready_timeout_seconds))
+	stable_samples=0
+	last_observation="no containers observed"
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		all_healthy=true
+		unsettled_services=
+		for service in postgres redis rabbitmq minio; do
+			container=$(compose ps -q "$service" 2>/dev/null || true)
+			container_state=missing
+			container_health=missing
+			if [ -n "$container" ]; then
+				container_state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || true)
+				container_health=$(docker inspect --format \
+					'{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' \
+					"$container" 2>/dev/null || true)
+			fi
+			if [ "$container_state" != running ] || [ "$container_health" != healthy ]; then
+				all_healthy=false
+				unsettled_services="${unsettled_services}${unsettled_services:+, }${service}(${container_state}/${container_health})"
+			fi
+		done
+		if [ "$all_healthy" = true ]; then
+			stable_samples=$((stable_samples + 1))
+			last_observation="all healthy; stability sample ${stable_samples}/12"
+			if [ "$stable_samples" -ge 12 ]; then
+				echo "Production stateful dependencies are healthy for 12 consecutive samples."
+				return 0
+			fi
+		else
+			stable_samples=0
+			last_observation=$unsettled_services
+		fi
+		printf 'Waiting for production stateful dependencies: %s\n' "$last_observation"
+		sleep 5
+	done
+
+	printf 'Production stateful dependencies did not remain healthy within %s second(s): %s\n' \
+		"$ready_timeout_seconds" "$last_observation"
+	return 1
+}
+
 wait_for_tempo() {
 	tempo_address=${TEMPO_PORT:-3200}
 	attempt=1
@@ -232,7 +282,11 @@ case "${1:-config}" in
 		chmod -R a+rX "$ROOT_DIR/backend/target"
 		# Keep metrics dashboards off the constrained host; configure_tracing_backend starts only the bounded Tempo
 		# service when the deployment has explicitly enabled exact-release traces.
-		compose up -d --build --wait postgres redis rabbitmq minio
+		# Compose treats an existing `unhealthy` dependency as terminal even when a later healthcheck would recover.
+		# Start the exact stateful topology first, then require one full health-failure window of stable samples after
+		# image and build pressure ends.
+		compose up -d --build --no-deps postgres redis rabbitmq minio
+		wait_for_stateful_dependencies
 		configure_tracing_backend
 		prebuilt_backend=${RULEPILOT_PREBUILT_BACKEND_IMAGE:-false}
 		prebuilt_frontend=${RULEPILOT_PREBUILT_FRONTEND_IMAGE:-false}
