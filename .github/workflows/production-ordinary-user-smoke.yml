@@ -76,6 +76,7 @@ jobs:
       - name: Probe the public release without production authority
         shell: bash
         run: |
+          set +e
           set -uo pipefail
           endpoint=https://rulepilot.cn/api/public/release
           printf 'expectedSha=%s\n' "$RULEPILOT_SMOKE_TESTED_SHA"
