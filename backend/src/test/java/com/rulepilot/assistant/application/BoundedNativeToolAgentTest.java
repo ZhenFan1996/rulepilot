@@ -21,6 +21,8 @@ import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolModel.ConversationMessage;
 import com.rulepilot.assistant.NativeToolModel.MessageRole;
 import com.rulepilot.assistant.NativeToolModel.ModelRequest;
+import com.rulepilot.assistant.NativeToolModel.ModelRequestFailure;
+import com.rulepilot.assistant.NativeToolModel.ModelRequestFailureKind;
 import com.rulepilot.assistant.NativeToolModel.ModelToolCall;
 import com.rulepilot.assistant.NativeToolModel.ModelTurn;
 import java.time.Instant;
@@ -172,6 +174,28 @@ class BoundedNativeToolAgentTest {
         assertThat(rejection.path("data").path("path").asText()).isEqualTo("/");
         assertThat(rejection.path("data").path("reason").asText()).isEqualTo("limit must be positive");
         assertThat(checked.inputSchema()).contains("\"additionalProperties\":true");
+    }
+
+    @Test
+    void stopsEachTypedProviderFailureWithoutRepairOrASecondModelCall() {
+        for (ModelRequestFailureKind kind : ModelRequestFailureKind.values()) {
+            AtomicInteger requests = new AtomicInteger();
+            NativeToolModel failedModel = request -> {
+                requests.incrementAndGet();
+                throw new ModelRequestFailure(kind, new IllegalStateException("provider failed"));
+            };
+
+            var result = agent(failedModel, List.of(tool("search_rule_evidence")), new RecordingInvocations(null))
+                    .run(request(Set.of("search_rule_evidence"), TerminalContract.none()));
+
+            assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
+            assertThat(result.reason()).isEqualTo(switch (kind) {
+                case TIMEOUT -> "MODEL_REQUEST_TIMEOUT";
+                case TEMPORARILY_UNAVAILABLE -> "MODEL_REQUEST_UNAVAILABLE";
+            });
+            assertThat(result.observations()).isEmpty();
+            assertThat(requests).hasValue(1);
+        }
     }
 
     private BoundedNativeToolAgent agent(

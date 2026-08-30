@@ -634,7 +634,8 @@ jobs:
                     and (.lastErrorCode == null or (.lastErrorCode | type == "string"
                       and test("^[A-Z][A-Z0-9_]{2,63}$")))
                     and (.stopReason == null or (.stopReason | IN("MODEL_CAPABILITY_UNAVAILABLE",
-                      "TIMEOUT", "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
+                      "MODEL_REQUEST_TIMEOUT", "MODEL_REQUEST_UNAVAILABLE", "TIMEOUT",
+                      "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
                       "CANCELLED", "EXECUTION_FAILED", "TOOL_ALLOWLIST_UNAVAILABLE",
                       "COMPLETION_NO_PROGRESS", "ACTION_NO_PROGRESS",
                       "OBSERVATION_BUDGET_EXHAUSTED", "OBSERVATION_BUDGET_EXCEEDED",

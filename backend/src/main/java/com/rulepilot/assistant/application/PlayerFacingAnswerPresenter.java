@@ -176,7 +176,7 @@ public final class PlayerFacingAnswerPresenter {
                     : "问题和规则依据本身没有被拒绝；答疑模型恢复后，适合原样重试同一个问题。";
             return new FailureCopy(
                     english
-                            ? "No configured answer model or provider was available for this request."
+                            ? "No answer model or provider was available for this request."
                             : "这次请求没有可用的答疑模型或模型提供方。",
                     null,
                     new Recovery(

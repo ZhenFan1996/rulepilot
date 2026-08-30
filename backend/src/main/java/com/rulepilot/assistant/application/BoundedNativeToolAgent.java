@@ -14,6 +14,7 @@ import com.rulepilot.assistant.NativeToolAgent.TerminalValidation;
 import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolModel.ConversationMessage;
 import com.rulepilot.assistant.NativeToolModel.ModelRequest;
+import com.rulepilot.assistant.NativeToolModel.ModelRequestFailure;
 import com.rulepilot.assistant.NativeToolModel.ModelTurn;
 import com.rulepilot.assistant.NativeToolModel.ModelToolCall;
 import com.rulepilot.assistant.NativeToolModel.ToolSpec;
@@ -716,6 +717,8 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     private String diagnosticReason(String reason) {
         return switch (reason) {
             case "MODEL_CAPABILITY_UNAVAILABLE",
+                    "MODEL_REQUEST_TIMEOUT",
+                    "MODEL_REQUEST_UNAVAILABLE",
                     "TIMEOUT",
                     "STEP_BUDGET",
                     "TOOL_BUDGET",
@@ -800,6 +803,12 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     private String stopReason(RuntimeException exception) {
         if (exception instanceof com.rulepilot.assistant.AgentExecutionStoppedException stopped) {
             return stopped.reason().name();
+        }
+        if (exception instanceof ModelRequestFailure failedRequest) {
+            return switch (failedRequest.kind()) {
+                case TIMEOUT -> "MODEL_REQUEST_TIMEOUT";
+                case TEMPORARILY_UNAVAILABLE -> "MODEL_REQUEST_UNAVAILABLE";
+            };
         }
         return "EXECUTION_FAILED";
     }

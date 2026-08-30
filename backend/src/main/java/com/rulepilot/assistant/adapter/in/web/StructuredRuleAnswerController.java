@@ -357,6 +357,12 @@ public class StructuredRuleAnswerController {
             case "TIMEOUT" -> english
                     ? "The answer Agent stopped at the TIMEOUT resource boundary"
                     : "答疑 Agent 在 TIMEOUT 资源边界停止";
+            case "MODEL_REQUEST_TIMEOUT" -> english
+                    ? "The answer model request stopped at the MODEL_REQUEST_TIMEOUT boundary"
+                    : "答疑模型请求因超时在 MODEL_REQUEST_TIMEOUT 边界停止";
+            case "MODEL_REQUEST_UNAVAILABLE" -> english
+                    ? "The answer model or provider was temporarily unavailable at the MODEL_REQUEST_UNAVAILABLE boundary"
+                    : "答疑模型或模型提供方暂时不可用，已在 MODEL_REQUEST_UNAVAILABLE 边界停止";
             case "CANCELLED" -> english
                     ? "The answer Agent stopped because the owner cancellation reached the CANCELLED boundary"
                     : "答疑 Agent 因所有者取消到达 CANCELLED 边界而停止";

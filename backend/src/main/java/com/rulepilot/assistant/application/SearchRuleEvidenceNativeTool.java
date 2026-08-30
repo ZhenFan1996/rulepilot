@@ -73,9 +73,11 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
     public String description() {
         return "Use when supplied evidence misses one accepted obligation. Search the active immutable rulebook for "
                 + "one condition, exception, list item, example, or advice need per call; do not retry a failed query "
-                + "with superficial synonyms. Results are candidate excerpts and locators, not a ruling or proof of "
-                + "applicability. Read useful exact pages before deciding. Stop when the obligation is covered or no "
-                + "independent query remains.";
+                + "with superficial synonyms. Each result carries source identity, canonical excerpt, and page "
+                + "snapshot. It may support a citation directly when the excerpt contains enough subject, condition, "
+                + "exception, and applicability context. Read the exact page only when fuller page context, a crossed "
+                + "chunk boundary, a condition, an exception, a list continuation, or applicability remains unresolved. "
+                + "Stop when the obligation is covered or no independent query remains.";
     }
 
     @Override

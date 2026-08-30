@@ -39,6 +39,30 @@ describe('offline knowledge cache', () => {
     expect(entries[0]?.ruling?.id).toBe('ruling-1')
   })
 
+  it('keeps a complete verdict when no additional explanation is needed', () => {
+    const conciseAnswer = { ...answer, explanation: '' }
+    cacheOfflineAnswer('plan-concise', '硬币如何计分？', conciseAnswer)
+    cacheOfflineRuling('plan-concise', '硬币如何计分？', {
+      id: 'ruling-concise',
+      shortVerdict: conciseAnswer.shortVerdict,
+      explanation: '',
+      citations: conciseAnswer.citations.map(citation => ({
+        ...citation,
+        chunkId: 'chunk-concise',
+        sectionType: 'SCORING',
+      })),
+      exceptions: [],
+      confidence: 'HIGH',
+      status: 'CONFIRMED',
+      version: 1,
+    })
+
+    expect(loadOfflineKnowledge('plan-concise')[0]).toMatchObject({
+      answer: { shortVerdict: conciseAnswer.shortVerdict, explanation: '' },
+      ruling: { id: 'ruling-concise', explanation: '' },
+    })
+  })
+
   it('keeps a detailed cited answer offline without prose or citation-count rejection', () => {
     const detailedQuestion = '请结合当前完整局面逐步解释：'.repeat(80)
     const detailedAnswer: OfflineAnswer = {

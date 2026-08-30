@@ -52,6 +52,10 @@ function isString(value: unknown, _max: number): value is string {
   return typeof value === 'string' && value.length > 0
 }
 
+function isOptionalString(value: unknown): value is string {
+  return typeof value === 'string'
+}
+
 function isCitation(value: unknown): value is OfflineCitation {
   if (!value || typeof value !== 'object') return false
   const citation = value as Record<string, unknown>
@@ -68,7 +72,7 @@ function isAnswer(value: unknown): value is OfflineAnswer {
   const answer = value as Record<string, unknown>
   return answer.status === 'ANSWERED'
     && isString(answer.shortVerdict, 2_000)
-    && isString(answer.explanation, 20_000)
+    && isOptionalString(answer.explanation)
     && Array.isArray(answer.citations)
     && answer.citations.length > 0
     && answer.citations.every(isCitation)
@@ -86,7 +90,7 @@ function isRuling(value: unknown): value is OfflineRuling {
   const ruling = value as Record<string, unknown>
   return isString(ruling.id, 80)
     && isString(ruling.shortVerdict, 2_000)
-    && isString(ruling.explanation, 20_000)
+    && isOptionalString(ruling.explanation)
     && Array.isArray(ruling.citations)
     && ruling.citations.length > 0
     && ruling.citations.every(isRulingCitation)

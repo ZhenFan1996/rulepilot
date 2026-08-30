@@ -60,6 +60,23 @@ class ConfirmedRulingServiceTest {
     }
 
     @Test
+    void confirmsACompleteVerdictWithoutRequiringDuplicateExplanation() {
+        InMemoryRulings repository = new InMemoryRulings();
+        ConfirmedRulingService service = service(repository, Set.of(), List.of(evidence(chunkId)));
+
+        ConfirmedRuling ruling = service.confirm(
+                versionId, Set.of(), "How are coins scored?",
+                "Each remaining coin scores one point.", "   ",
+                List.of(chunkId), List.of(), RulingConfidence.HIGH, "alice");
+
+        assertThat(ruling.status()).isEqualTo(RulingStatus.CONFIRMED);
+        assertThat(ruling.shortVerdict()).isEqualTo("Each remaining coin scores one point.");
+        assertThat(ruling.explanation()).isEmpty();
+        assertThat(service.find(versionId, Set.of(), "How are coins scored?", "alice"))
+                .hasValueSatisfying(answer -> assertThat(answer.explanation()).isEmpty());
+    }
+
+    @Test
     void preservesLongFormConfirmedContentBecauseThePersistenceColumnsAreText() {
         InMemoryRulings repository = new InMemoryRulings();
         ConfirmedRulingService service = service(repository, Set.of(), List.of(evidence(chunkId)));

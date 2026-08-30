@@ -45,7 +45,7 @@ public record ConfirmedRuling(
             throw new IllegalArgumentException("ruling question hash is invalid");
         }
         shortVerdict = requiredText(shortVerdict, "short verdict");
-        explanation = requiredText(explanation, "explanation");
+        explanation = optionalText(explanation);
         createdBy = schemaBounded(createdBy, "creator", 120);
         citations = List.copyOf(citations);
         exceptions = exceptions.stream()
@@ -106,6 +106,10 @@ public record ConfirmedRuling(
             throw new IllegalArgumentException(field + " is required");
         }
         return value.strip();
+    }
+
+    private static String optionalText(String value) {
+        return value == null ? "" : value.strip();
     }
 
     private static String schemaBounded(String value, String field, int maxLength) {

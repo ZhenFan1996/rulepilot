@@ -56,7 +56,7 @@ public class NativeRuleAnswerAgent {
               "properties": {
                 "kind": {"type": "string", "enum": ["CHAT", "RULE_ANSWER", "CLARIFICATION"]},
                 "shortVerdict": {"type": "string"},
-                "explanation": {"type": "string", "description": "For RULE_ANSWER, a non-blank player-facing explanation grounded in the cited rule text. CHAT and CLARIFICATION may leave this empty."},
+                "explanation": {"type": "string", "description": "Optional additional player-facing explanation. Leave empty when shortVerdict already gives the complete useful answer."},
                 "clarification": {"type": ["string", "null"]},
                 "citationIds": {
                   "type": "array",
@@ -181,22 +181,18 @@ public class NativeRuleAnswerAgent {
             }
             return TerminalValidation.accepted();
         }
-        if (candidate.explanation.isBlank()) {
-            return rejected(
-                    "RULE_EXPLANATION_REQUIRED", "/explanation",
-                    "A rule answer must explain the cited rule in player-facing language.", allowedIds);
-        }
         if (candidate.citationIds.isEmpty()) {
             return rejected(
                     "CITATION_REQUIRED", "/citationIds",
-                    "A rule answer must cite at least one evidence identity from an exact page read.", allowedIds);
+                    "A rule answer must cite at least one source-bearing evidence identity observed in this Agent run.",
+                    allowedIds);
         }
         for (int index = 0; index < candidate.citationIds.size(); index++) {
             String id = candidate.citationIds.get(index);
             if (!allowedEvidence.containsKey(id)) {
                 return rejected(
                         "CITATION_NOT_OBSERVED", "/citationIds/" + index,
-                        "The citation identity was not returned by a successful exact page read in this Agent run.",
+                        "The citation identity was not returned by a source-bearing search or exact page read in this Agent run.",
                         allowedIds);
             }
         }
@@ -423,7 +419,8 @@ public class NativeRuleAnswerAgent {
             List<ObservationRecord> observations, Set<Integer> allowedPages) {
         Map<String, ObservedEvidence> allowed = new LinkedHashMap<>();
         for (ObservationRecord observation : observations) {
-            if (!"read_rule_pages".equals(observation.toolName())
+            if (!("search_rule_evidence".equals(observation.toolName())
+                            || "read_rule_pages".equals(observation.toolName()))
                     || observation.observation().status() == ObservationStatus.ERROR) {
                 continue;
             }
@@ -457,13 +454,18 @@ public class NativeRuleAnswerAgent {
         return """
                 You are the sole answer Agent for one active immutable board-game rulebook.
                 Decide the next action yourself. Ordinary non-rule conversation uses kind CHAT and no citation.
-                For a rule claim, search only when needed, treat search and relationship results as candidates, and
-                read the useful exact pages before relying on them. You may call mutually independent read-only tools
-                together; choose a dependent read only after observing its prerequisite. Preserve supported portions
-                when one sibling read fails and localize only what remains unresolved.
+                For a rule claim, search only when needed. A search_rule_evidence result is source-bearing when its
+                excerpt directly contains enough subject, condition, exception, and applicability context for the
+                answer; cite that observed evidenceId without repeating the read. Use read_rule_pages only when the
+                search excerpt needs fuller page context, a crossed chunk boundary, a condition, an exception, a list
+                continuation, or an applicability check. Relationship results remain candidates and cannot be cited.
+                You may call mutually independent read-only tools together; choose a dependent read only after
+                observing its prerequisite. Preserve supported portions when one sibling read fails and localize only
+                what remains unresolved.
                 Every terminal response must be one complete JSON object satisfying the schema below. Cite only
-                evidenceId values observed from read_rule_pages in this run. Do not print raw evidence IDs or page
-                excerpts in player prose; the application publishes citations separately. Declare every numeric
+                evidenceId values observed from source-bearing search_rule_evidence or read_rule_pages results in this
+                run. Do not print raw evidence IDs or page excerpts in player prose; the application publishes
+                citations separately. Declare every numeric
                 literal used as a hard rule fact in numericClaims with the exact literal and its evidenceId. Unknown
                 additive fields are ignored. Write all player-facing prose yourself in %s. No reviewer or prose
                 template follows this turn.
@@ -507,9 +509,12 @@ public class NativeRuleAnswerAgent {
     }
 
     private AnswerStatus fallbackStatus(String reason) {
-        if ("MODEL_CAPABILITY_UNAVAILABLE".equals(reason)) return AnswerStatus.MODEL_UNAVAILABLE;
+        if (Set.of("MODEL_CAPABILITY_UNAVAILABLE", "MODEL_REQUEST_UNAVAILABLE").contains(reason)) {
+            return AnswerStatus.MODEL_UNAVAILABLE;
+        }
         if (Set.of(
                         "TIMEOUT",
+                        "MODEL_REQUEST_TIMEOUT",
                         "STEP_BUDGET",
                         "TOOL_BUDGET",
                         "MODEL_BUDGET",
@@ -527,8 +532,13 @@ public class NativeRuleAnswerAgent {
         if ("MODEL_CAPABILITY_UNAVAILABLE".equals(reason)) {
             return english ? "No answer model is currently available." : "当前没有可用的答疑模型。";
         }
+        if ("MODEL_REQUEST_UNAVAILABLE".equals(reason)) {
+            return english
+                    ? "The answer model or provider was temporarily unavailable for this request."
+                    : "本次请求的答疑模型或模型提供方暂时不可用。";
+        }
         return switch (reason) {
-            case "TIMEOUT" -> english
+            case "TIMEOUT", "MODEL_REQUEST_TIMEOUT" -> english
                     ? "This answer did not finish before the request deadline."
                     : "这次答疑未能在请求时限内完成。";
             case "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",

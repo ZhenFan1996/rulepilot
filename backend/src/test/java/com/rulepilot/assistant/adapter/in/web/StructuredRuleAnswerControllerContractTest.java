@@ -156,6 +156,35 @@ class StructuredRuleAnswerControllerContractTest {
     }
 
     @Test
+    void reportsTypedModelRequestFailuresWithoutCollapsingThemToExecutionFailed() {
+        List.of("MODEL_REQUEST_TIMEOUT", "MODEL_REQUEST_UNAVAILABLE").forEach(code -> {
+            ActivitySnapshot stopped = activity(
+                    "nativeToolFallback|" + code,
+                    ActivityOutcome.REJECTED,
+                    "private provider detail");
+
+            var english = StructuredRuleAnswerController.playerActivity(stopped, PlayerLocale.EN);
+            var chinese = StructuredRuleAnswerController.playerActivity(stopped, PlayerLocale.ZH_CN);
+
+            assertThat(english.actor()).isEqualTo("answer_agent");
+            assertThat(english.stage()).isEqualTo("agent_stopped");
+            assertThat(english.status()).isEqualTo("rejected");
+            assertThat(english.message()).contains(code).doesNotContain("EXECUTION_FAILED", "private provider detail");
+            assertThat(chinese.message()).contains(code).doesNotContain("EXECUTION_FAILED", "private provider detail");
+            assertThat(english.nextAction()).isEqualTo("This answer run ends at the recorded boundary");
+            assertThat(chinese.nextAction()).isEqualTo("本次答疑运行在该记录边界结束");
+
+            if (code.equals("MODEL_REQUEST_TIMEOUT")) {
+                assertThat(english.message()).contains("model request");
+                assertThat(chinese.message()).contains("超时");
+            } else {
+                assertThat(english.message()).contains("temporarily unavailable");
+                assertThat(chinese.message()).contains("暂时不可用");
+            }
+        });
+    }
+
+    @Test
     void reportsSiblingReadFailureAsLocalWhileKeepingOtherObservationsAvailable() {
         ActivitySnapshot failedObservation = activity(
                 "nativeObs|crop_rule_page_image|schema-hash|call-id",
