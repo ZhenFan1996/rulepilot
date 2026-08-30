@@ -15,6 +15,8 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.hibernate.SessionFactory;
@@ -123,6 +125,7 @@ class JpaAgentExecutionControlPostgresTest {
     private static UUID createRun(String mode) {
         UUID runId = UUID.randomUUID();
         Instant now = Instant.now();
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         jdbc.update(
                 "INSERT INTO assistant_run (id, mode, subject_id, owner_username, state, revision, created_at, updated_at) "
                         + "VALUES (?, ?, ?, ?, 'RECEIVED', 1, ?, ?)",
@@ -130,8 +133,8 @@ class JpaAgentExecutionControlPostgresTest {
                 mode,
                 UUID.randomUUID(),
                 "budget-player",
-                now,
-                now);
+                timestamp,
+                timestamp);
         return runId;
     }
 
