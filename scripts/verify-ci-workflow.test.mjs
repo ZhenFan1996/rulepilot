@@ -35,6 +35,7 @@ const productionReleaseGuard = await readFile(
   new URL('./production-release-guard.sh', import.meta.url),
   'utf8',
 )
+const productionLauncher = await readFile(new URL('./run-production.sh', import.meta.url), 'utf8')
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
 const productionRecommendationWorkflow = await readFile(
   new URL('../.github/workflows/production-recommendation-journey.yml', import.meta.url),
@@ -85,6 +86,159 @@ function workflowRunBlock(workflow, stepName) {
     content.push(line.slice(runIndent + 2))
   }
   return `${content.join('\n')}\n`
+}
+
+function shellFunction(script, functionName) {
+  const startMarker = `${functionName}() {\n`
+  const start = script.indexOf(startMarker)
+  assert.notEqual(start, -1, `Shell function was not found: ${functionName}`)
+  const end = script.indexOf('\n}\n', start)
+  assert.notEqual(end, -1, `Shell function ending was not found: ${functionName}`)
+  return script.slice(start, end + 2)
+}
+
+async function runStatefulDependencyWait({
+  rabbitHealthyAfterRounds = 0,
+  rabbitFailureRound = -1,
+  historyGapAfterRound = -1,
+  readyTimeoutSeconds = 90,
+  timeoutRuntimeQueries = false,
+  driftService = '',
+} = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-stateful-health.'))
+  const clock = join(root, 'clock')
+  const round = join(root, 'round')
+  await writeFile(clock, '0\n')
+  await writeFile(round, '0\n')
+  const composeWithTimeout = shellFunction(productionLauncher, 'compose_with_timeout')
+  const dockerWithTimeout = shellFunction(productionLauncher, 'docker_with_timeout')
+  const queryTimeoutFunction = shellFunction(productionLauncher, 'stateful_query_timeout')
+  const boundedCompose = shellFunction(productionLauncher, 'bounded_stateful_compose')
+  const boundedDocker = shellFunction(productionLauncher, 'bounded_stateful_docker')
+  const waitFunction = shellFunction(productionLauncher, 'wait_for_stateful_dependencies')
+  const harness = `
+set -eu
+ROOT_DIR="$RULEPILOT_TEST_ROOT"
+BASE_FILE="$ROOT_DIR/compose.yml"
+DEPLOYMENT_FILE="$ROOT_DIR/compose.deployment.yml"
+PRODUCTION_FILE="$ROOT_DIR/compose.production.yml"
+${composeWithTimeout}
+${dockerWithTimeout}
+${queryTimeoutFunction}
+${boundedCompose}
+${boundedDocker}
+${waitFunction}
+timeout() {
+  [ "$1" = -k ]
+  shift 2
+  duration=\${1%s}
+  shift
+  if [ "$RULEPILOT_TEST_TIMEOUT_RUNTIME_QUERIES" = true ]; then
+    case " $* " in
+      *' docker inspect --format '*)
+        current_time=$(sed -n '1p' "$RULEPILOT_TEST_CLOCK")
+        printf '%s\\n' "$((current_time + duration))" > "$RULEPILOT_TEST_CLOCK"
+        return 124
+        ;;
+    esac
+  fi
+  "$@"
+}
+docker() {
+  if [ "$1" = compose ]; then
+    shift
+    compose_command=
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        config|ps)
+          compose_command=$1
+          shift
+          break
+          ;;
+        *) shift ;;
+      esac
+    done
+    if [ "$compose_command" = ps ]; then
+      [ "$1" = -q ]
+      printf '%s-container\\n' "$2"
+      return 0
+    fi
+    if [ "$1" = --hash ]; then
+      printf '%s %s-config-hash\\n' "$2" "$2"
+      return 0
+    fi
+    [ "$1" = --images ]
+    printf '%s:image\\n' "$2"
+    return 0
+  fi
+  if [ "$1" = image ]; then
+    [ "$2" = inspect ] && [ "$3" = --format ]
+    image_name=$5
+    service=\${image_name%:image}
+    printf '%s-image-id\\n' "$service"
+    return 0
+  fi
+  [ "$1" = inspect ] && [ "$2" = --format ]
+  container=$4
+  service=\${container%-container}
+  current_round=$(sed -n '1p' "$RULEPILOT_TEST_ROUND")
+  config_hash="$service-config-hash"
+  if [ "$service" = "$RULEPILOT_TEST_DRIFT_SERVICE" ]; then
+    config_hash="$service-drifted-config-hash"
+  fi
+  printf 'container|running|healthy|%s-image-id|%s\\n' "$service" "$config_hash"
+  first_retained_round=$((current_round - 4))
+  if [ "$first_retained_round" -lt 0 ]; then
+    first_retained_round=0
+  fi
+  log_round=$first_retained_round
+  while [ "$log_round" -le "$current_round" ]; do
+    probe_exit=0
+    if [ "$service" = rabbitmq ] \
+      && { [ "$log_round" -lt "$RULEPILOT_TEST_RABBIT_HEALTHY_AFTER" ] \
+        || [ "$log_round" -eq "$RULEPILOT_TEST_RABBIT_FAILURE_ROUND" ]; }; then
+      probe_exit=1
+    fi
+    printf 'probe|round-%06d|%s\\n' "$log_round" "$probe_exit"
+    log_round=$((log_round + 1))
+  done
+  if [ "$service" = minio ]; then
+    next_round=$((current_round + 1))
+    if [ "$current_round" -eq "$RULEPILOT_TEST_HISTORY_GAP_AFTER_ROUND" ]; then
+      next_round=$((current_round + 6))
+    fi
+    printf '%s\\n' "$next_round" > "$RULEPILOT_TEST_ROUND"
+  fi
+}
+date() {
+  sed -n '1p' "$RULEPILOT_TEST_CLOCK"
+}
+sleep() {
+  current_time=$(sed -n '1p' "$RULEPILOT_TEST_CLOCK")
+  printf '%s\\n' "$((current_time + $1))" > "$RULEPILOT_TEST_CLOCK"
+}
+wait_for_stateful_dependencies
+`
+  try {
+    return await execFileAsync('sh', ['-c', harness], {
+      env: {
+        ...process.env,
+        PRODUCTION_INFRASTRUCTURE_READY_TIMEOUT_SECONDS: String(readyTimeoutSeconds),
+        PRODUCTION_DOCKER_QUERY_TIMEOUT_SECONDS: '5',
+        PRODUCTION_INFRASTRUCTURE_OBSERVATION_INTERVAL_SECONDS: '3',
+        RULEPILOT_TEST_CLOCK: clock,
+        RULEPILOT_TEST_RABBIT_HEALTHY_AFTER: String(rabbitHealthyAfterRounds),
+        RULEPILOT_TEST_RABBIT_FAILURE_ROUND: String(rabbitFailureRound),
+        RULEPILOT_TEST_HISTORY_GAP_AFTER_ROUND: String(historyGapAfterRound),
+        RULEPILOT_TEST_ROOT: root,
+        RULEPILOT_TEST_ROUND: round,
+        RULEPILOT_TEST_TIMEOUT_RUNTIME_QUERIES: String(timeoutRuntimeQueries),
+        RULEPILOT_TEST_DRIFT_SERVICE: driftService,
+      },
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 const productionRecommendationSanitizer = workflowRunBlock(
@@ -697,6 +851,8 @@ test('CI owns automatic and manual deployment qualification', () => {
   assert.match(ciWorkflow, /if-no-files-found:\s*error/)
   assert.match(playwrightConfig, /outputFolder:\s*'playwright-report'/)
   assert.match(ciWorkflow, /make backend-test[\s\S]*?make backend-runtime-image-smoke/)
+  assert.match(ciWorkflow,
+    /node-version:\s*'24'[\s\S]*?make production-dependency-test[\s\S]*?make frontend-test/)
   assert.match(ciWorkflow, /^  workflow_dispatch:\s*$/m)
   assert.match(deploymentWorkflow,
     /docker build[\s\S]*?--file "\$RULEPILOT_BUILD_SOURCE\/backend\/Dockerfile\.runtime"/)
@@ -1794,6 +1950,87 @@ test('activation refreshes its lease after every slow cleanup while still holdin
     && finalHeartbeat < lockScopeEnd)
 })
 
+test('production dependency health ignores stale healthy state and proves new successful probes', async () => {
+  const result = await runStatefulDependencyWait({ rabbitHealthyAfterRounds: 2 })
+  assert.match(result.stdout, /rabbitmq\(healthcheck-exit-1\)/)
+  assert.match(result.stdout, /rabbitmq=1/)
+  assert.match(result.stdout, /rabbitmq=2/)
+  assert.match(result.stdout, /completed at least 12 new successful healthchecks/)
+  assert.match(result.stdout, /remained healthy for 60 second\(s\)/)
+})
+
+test('production dependency health remains fail closed when probes keep failing behind stale healthy state', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ rabbitHealthyAfterRounds: 999, readyTimeoutSeconds: 8 }),
+    (error) => {
+      assert.match(error.stdout, /did not prove stable health within 8 second\(s\)/)
+      assert.match(error.stdout, /rabbitmq\(healthcheck-exit-1\)/)
+      return true
+    },
+  )
+})
+
+test('production dependency health bounds unavailable Docker runtime queries', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ readyTimeoutSeconds: 8, timeoutRuntimeQueries: true }),
+    (error) => {
+      assert.match(error.stdout, /docker-query-unavailable/)
+      assert.match(error.stdout, /did not prove stable health within 8 second\(s\)/)
+      return true
+    },
+  )
+})
+
+test('production dependency health resets when retained probe history cannot prove continuity', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({
+      historyGapAfterRound: 10,
+      rabbitFailureRound: 11,
+      readyTimeoutSeconds: 65,
+    }),
+    (error) => {
+      assert.match(error.stdout, /healthcheck-history-gap/)
+      assert.match(error.stdout, /did not prove stable health within 65 second\(s\)/)
+      return true
+    },
+  )
+})
+
+test('production dependency health rejects stateful configuration drift without recreating it', async () => {
+  await assert.rejects(
+    runStatefulDependencyWait({ driftService: 'rabbitmq' }),
+    (error) => {
+      assert.match(error.stdout, /rabbitmq has configuration drift/)
+      assert.match(error.stdout, /explicit stateful maintenance path/)
+      return true
+    },
+  )
+})
+
+test('production activation observes existing dependencies after pressure without restarting or recreating them', () => {
+  assert.match(productionLauncher,
+    /compose_with_timeout "\$infrastructure_start_timeout_seconds"[\s\\]+up -d --build --no-deps --no-recreate postgres redis rabbitmq minio[\s\S]+wait_for_stateful_dependencies/)
+  assert.doesNotMatch(productionLauncher,
+    /compose up -d --build --no-deps (?!--no-recreate\b)postgres redis rabbitmq minio/)
+  assert.doesNotMatch(productionLauncher,
+    /compose up -d --build --wait postgres redis rabbitmq minio/)
+  const dependencyWait = shellFunction(productionLauncher, 'wait_for_stateful_dependencies')
+  assert.doesNotMatch(dependencyWait, /restart|force-recreate/)
+  assert.match(dependencyWait, /\.State\.Health\.Log/)
+  assert.match(dependencyWait, /stable_duration_seconds=60/)
+  assert.match(dependencyWait, /required_successful_healthchecks=12/)
+  assert.doesNotMatch(dependencyWait, /PRODUCTION_INFRASTRUCTURE_STABLE_DURATION_SECONDS/)
+  assert.doesNotMatch(dependencyWait, /PRODUCTION_INFRASTRUCTURE_REQUIRED_SUCCESSFUL_HEALTHCHECKS/)
+  assert.match(productionLauncher, /timeout -k 2s "\$\{command_timeout_seconds\}s" docker/)
+
+  const activation = workflowRunBlock(
+    deploymentWorkflow,
+    'Activate release and verify production health',
+  )
+  assert.match(activation,
+    /Ensuring the current release remains available[\s\S]*?up -d --no-build --no-deps api worker/)
+})
+
 test('activation diagnostics safely describe containers without a Docker healthcheck', () => {
   const activation = workflowRunBlock(
     deploymentWorkflow,
@@ -1815,6 +2052,12 @@ test('activation diagnostics safely describe containers without a Docker healthc
     /health=\{\{with index \.State "Health"\}\}\{\{\.Status\}\}\{\{else\}\}not-configured\{\{end\}\}/)
   assert.doesNotMatch(diagnostic,
     /\.State\.Health|docker logs|\.Config\.Env|printenv|inspect .*\.Config|inspect .*Log/)
+
+  const boundarySnapshot = activation.indexOf('Production container state at the failure boundary:')
+  const expensiveDiskScan = activation.indexOf('Production filesystem usage:', boundarySnapshot)
+  assert.ok(boundarySnapshot >= 0 && boundarySnapshot < expensiveDiskScan)
+  assert.match(activation,
+    /for service in postgres redis rabbitmq minio api worker frontend gateway; do/)
 })
 
 test('unarmed watchdog deadline records an unchanged terminal and deletes its secret snapshot', async (context) => {

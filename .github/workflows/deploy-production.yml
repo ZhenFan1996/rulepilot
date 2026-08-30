@@ -761,6 +761,19 @@ jobs:
             trap - ERR
             echo "Production activation failed; collecting safe diagnostics." >&2
             cd "${release_dir}" 2>/dev/null || cd "${application_root}/current"
+            echo "Production container state at the failure boundary:"
+            for service in postgres redis rabbitmq minio api worker frontend gateway; do
+              service_container=$(docker compose --env-file .env \
+                -f infra/compose.yml \
+                -f infra/compose.deployment.yml \
+                -f infra/compose.production.yml ps -q "$service" 2>/dev/null || true)
+              if [[ -n "$service_container" ]]; then
+                printf 'service=%s ' "$service"
+                safe_container_state "$service_container"
+              else
+                printf 'service=%s container=missing\n' "$service"
+              fi
+            done
             echo "Production filesystem usage:"
             df -h "${application_root}" || true
             echo "Production directory usage:"
@@ -772,22 +785,6 @@ jobs:
               -f infra/compose.yml \
               -f infra/compose.deployment.yml \
               -f infra/compose.production.yml ps --all || true
-            postgres_container=$(docker compose --env-file .env \
-              -f infra/compose.yml \
-              -f infra/compose.deployment.yml \
-              -f infra/compose.production.yml ps -q postgres 2>/dev/null || true)
-            if [[ -n "$postgres_container" ]]; then
-              echo "PostgreSQL runtime state:"
-              safe_container_state "$postgres_container"
-            fi
-            api_container=$(docker compose --env-file .env \
-              -f infra/compose.yml \
-              -f infra/compose.deployment.yml \
-              -f infra/compose.production.yml ps -q api 2>/dev/null || true)
-            if [[ -n "$api_container" ]]; then
-              echo "API runtime state:"
-              safe_container_state "$api_container"
-            fi
             if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
               echo "Restoring the complete current release after failed activation."
               if "$guard_script" rollback-held \
@@ -837,7 +834,7 @@ jobs:
             RULEPILOT_RELEASE_ID="${current_release##*/}" docker compose --env-file .env \
               -f infra/compose.yml \
               -f infra/compose.deployment.yml \
-              -f infra/compose.production.yml up -d --no-build api worker
+              -f infra/compose.production.yml up -d --no-build --no-deps api worker
           fi
           (cd /tmp && sha256sum --check "${backend_image_filename}.sha256")
           (cd /tmp && sha256sum --check "${frontend_image_filename}.sha256")
