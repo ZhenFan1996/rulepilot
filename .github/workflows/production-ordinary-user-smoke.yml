@@ -113,6 +113,11 @@ jobs:
           curl_probe no-proxy-x25519 --noproxy '*' --curves X25519
           curl_probe tls12 --tlsv1.2 --tls-max 1.2
           curl_probe http11 --http1.1
+          curl_probe no-alpn --no-alpn
+          curl_probe tls12-no-alpn --tlsv1.2 --tls-max 1.2 --no-alpn
+          curl_probe tls12-http11-no-alpn --tlsv1.2 --tls-max 1.2 --http1.1 --no-alpn
+          curl_probe tls12-cipher-no-alpn --tlsv1.2 --tls-max 1.2 --no-alpn \
+            --ciphers ECDHE-ECDSA-AES128-GCM-SHA256
           curl_probe direct-ip --resolve rulepilot.cn:443:114.55.72.40
 
           openssl_probe() {
@@ -134,12 +139,20 @@ jobs:
 
           python3 - <<'PY'
           import json
+          import ssl
           import urllib.request
 
           endpoint = "https://rulepilot.cn/api/public/release"
+          tls12 = ssl.create_default_context()
+          tls12.minimum_version = ssl.TLSVersion.TLSv1_2
+          tls12.maximum_version = ssl.TLSVersion.TLSv1_2
           for label, opener in (
               ("default", urllib.request.build_opener()),
               ("no-proxy", urllib.request.build_opener(urllib.request.ProxyHandler({}))),
+              ("tls12", urllib.request.build_opener(
+                  urllib.request.ProxyHandler({}),
+                  urllib.request.HTTPSHandler(context=tls12),
+              )),
           ):
               try:
                   with opener.open(endpoint, timeout=15) as response:
