@@ -148,6 +148,7 @@ test('writes a controlled public failure status even when input validation stops
       failureCode: 'INPUT_INVALID',
       failureCauseCode: null,
       cleanupOutcome: 'NOT_REQUIRED',
+      answerDiagnostic: null,
     })
     assert.doesNotMatch(await readFile(publicStatus, 'utf8'), /unsupported-input/)
   } finally {
@@ -166,6 +167,30 @@ test('public status validator rejects contradictory or expanded workflow artifac
     failureCode: 'NAVIGATION_FAILED',
     failureCauseCode: null,
     cleanupOutcome: 'FAILED',
+    answerDiagnostic: null,
+  }
+  const validAnswerDiagnostic = {
+    status: 'MODEL_TIMEOUT',
+    assistantRunId: '77777777-7777-4777-8777-777777777777',
+    runState: 'DEGRADED',
+    lastErrorCode: 'QUESTION_AGENT_FAILED',
+    stopReason: 'TIMEOUT',
+    ownerVerified: true,
+  }
+  const validSuccess = {
+    outcome: 'SUCCEEDED',
+    exitCode: 0,
+    lastCompletedStage: 'journey-completed',
+    failureCode: null,
+    failureCauseCode: null,
+    cleanupOutcome: 'SUCCEEDED',
+    answerDiagnostic: {
+      ...validAnswerDiagnostic,
+      status: 'ANSWERED',
+      runState: 'COMPLETED',
+      lastErrorCode: null,
+      stopReason: null,
+    },
   }
   try {
     await writeFile(publicStatus, JSON.stringify(validDoubleFailure))
@@ -176,6 +201,10 @@ test('public status validator rejects contradictory or expanded workflow artifac
       failureCauseCode: 'AGENT_TIMEOUT',
     }))
     assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
+    await writeFile(publicStatus, JSON.stringify({ ...validDoubleFailure, answerDiagnostic: validAnswerDiagnostic }))
+    assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
+    await writeFile(publicStatus, JSON.stringify(validSuccess))
+    assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '0'])).code, 0)
 
     const counterexamples = [
       { ...validDoubleFailure, outcome: 'SUCCEEDED' },
@@ -186,12 +215,28 @@ test('public status validator rejects contradictory or expanded workflow artifac
       {
         outcome: 'SUCCEEDED', exitCode: 0, lastCompletedStage: 'journey-completed',
         failureCode: 'NAVIGATION_FAILED', failureCauseCode: null, cleanupOutcome: 'SUCCEEDED',
+        answerDiagnostic: null,
       },
       {
         outcome: 'FAILED', exitCode: 1, lastCompletedStage: 'journey-completed',
         failureCode: 'CLEANUP_FAILED', failureCauseCode: null, cleanupOutcome: 'SUCCEEDED',
+        answerDiagnostic: null,
       },
       { ...validDoubleFailure, rawModelOutput: 'must never become public' },
+      { ...validDoubleFailure, answerDiagnostic: { status: 'MODEL_TIMEOUT' } },
+      { ...validDoubleFailure, answerDiagnostic: { ...validAnswerDiagnostic, lastErrorCode: 'AI' } },
+      { ...validDoubleFailure, answerDiagnostic: { ...validAnswerDiagnostic, stopReason: 'MODEL_TEXT_REPAIR' } },
+      { ...validDoubleFailure, answerDiagnostic: { ...validAnswerDiagnostic, ownerVerified: false } },
+      { ...validSuccess, answerDiagnostic: null },
+      { ...validSuccess, answerDiagnostic: { ...validSuccess.answerDiagnostic, runState: 'DEGRADED' } },
+      { ...validSuccess, answerDiagnostic: { ...validSuccess.answerDiagnostic, stopReason: 'TIMEOUT' } },
+      {
+        ...validDoubleFailure,
+        answerDiagnostic: {
+          ...validAnswerDiagnostic,
+          ownerUsername: 'player',
+        },
+      },
     ]
     for (const status of counterexamples) {
       await writeFile(publicStatus, JSON.stringify(status))
@@ -296,6 +341,7 @@ test('one absolute forward deadline bounds sequential HTTP stages and still perm
       failureCode: 'SOURCE_UPLOAD_FAILED',
       failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
     })
   } finally {
     server.closeAllConnections()
@@ -382,6 +428,7 @@ test('discovers and deletes only the uniquely titled upload when the accepted PO
       failureCode: 'SOURCE_UPLOAD_FAILED',
       failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
     })
   } finally {
     server.closeAllConnections()
@@ -405,10 +452,24 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let lessonFailureCode = null
   let answerHasCitations = true
   let answerReferencesAlign = true
+  let answerStatus = 'ANSWERED'
+  let answerRunState = 'COMPLETED'
+  let answerLastErrorCode = null
+  let answerStopReason = null
+  let answerRequested = false
+  let answerRunDoesNotAdvance = false
   let navigationFails = false
   let deletionFails = false
   let completeLessonImmediately = false
   let expectedQuestion = 'How many victory points is each lit dock worth during final scoring?'
+  const expectedAnswerDiagnostic = {
+    status: 'ANSWERED',
+    assistantRunId: '77777777-7777-4777-8777-777777777777',
+    runState: 'COMPLETED',
+    lastErrorCode: null,
+    stopReason: null,
+    ownerVerified: true,
+  }
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
     calls.push({ method: request.method, url: request.url, body })
@@ -436,6 +497,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       return json(response, 200, [])
     }
     if (request.method === 'POST' && request.url === '/api/v1/documents') {
+      answerRequested = false
       const multipart = body.toString('latin1')
       assert.match(multipart, /Lantern Relay rulebook EN v4 12pages/)
       assert.match(multipart, /BASE_RULEBOOK/)
@@ -560,15 +622,15 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     }
     if (request.method === 'POST'
       && request.url === '/api/v1/document-versions/22222222-2222-2222-2222-222222222222/answers') {
+      answerRequested = true
       assert.deepEqual(JSON.parse(body.toString()), {
         question: expectedQuestion,
         language: 'en',
       })
       return json(response, 200, {
-        assistantRunId: '77777777-7777-4777-8777-777777777777',
         answer: {
           language: 'en',
-          status: 'ANSWERED',
+          status: answerStatus,
           shortVerdict: 'Each lit dock is worth three victory points.',
           explanation: 'Final scoring awards three points for every dock you lit.',
           citations: answerHasCitations ? [{
@@ -585,6 +647,33 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
           confirmedRulingId: null,
           confirmedRulingVersion: null,
         },
+      })
+    }
+    if (request.method === 'GET'
+      && request.url === '/api/v1/assistant-runs/latest?mode=QUESTION_ANSWER&subjectId=22222222-2222-2222-2222-222222222222') {
+      if (!answerRequested && !answerRunDoesNotAdvance) {
+        return json(response, 404, { error: 'assistant run does not exist' })
+      }
+      return json(response, 200, {
+        run: {
+          id: answerRunDoesNotAdvance
+            ? '99999999-9999-4999-8999-999999999999'
+            : '77777777-7777-4777-8777-777777777777',
+          mode: 'QUESTION_ANSWER',
+          subjectId: '22222222-2222-2222-2222-222222222222',
+          ownerUsername: 'player',
+          state: answerRunState,
+          lastErrorCode: answerLastErrorCode,
+        },
+        steps: [{ summary: 'private model progress must not be published' }],
+        activities: [
+          { type: 'MODEL', outcome: 'SUCCEEDED', operation: 'privateAnswerOperation', input: expectedQuestion },
+          { type: 'VALIDATION', outcome: 'REJECTED', operation: 'explanationRepair|TIMEOUT' },
+          ...answerStopReason == null ? [] : [{
+            type: 'VALIDATION', outcome: 'REJECTED',
+            operation: `nativeToolFallback|${answerStopReason}`,
+          }],
+        ],
       })
     }
     if (request.method === 'POST' && request.url?.endsWith('/cancellation')) {
@@ -657,6 +746,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: null,
       failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: expectedAnswerDiagnostic,
     })
     const retained = JSON.parse(await readFile(retainedResult, 'utf8'))
     assert.equal(retained.stage, 'lesson')
@@ -711,6 +801,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: 'TEACHING_PREPARATION_FAILED',
       failureCauseCode: 'TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED',
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
     })
     assert.equal(deleted, true)
     preparationFailureCode = null
@@ -739,6 +830,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: 'LESSON_GENERATION_FAILED',
       failureCauseCode: 'TEACHING_WORKFLOW_FAILED',
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
     })
     assert.equal(deleted, true)
     lessonFailureCode = null
@@ -767,9 +859,83 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: 'ANSWER_EVIDENCE_INVALID',
       failureCauseCode: 'ANSWER_CITATIONS_MISSING',
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: expectedAnswerDiagnostic,
     })
     assert.equal(deleted, true)
     answerHasCitations = true
+
+    answerStatus = 'MODEL_TIMEOUT'
+    answerRunState = 'DEGRADED'
+    answerStopReason = 'TIMEOUT'
+    deleted = false
+    planStarted = false
+    const unpublishedAnswerStatus = join(directory, 'unpublished-answer-status.json')
+    const unpublishedAnswer = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: unpublishedAnswerStatus,
+      },
+    )
+    assert.equal(unpublishedAnswer.code, 1, unpublishedAnswer.stderr)
+    assert.deepEqual(JSON.parse(await readFile(unpublishedAnswerStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'lesson-verified',
+      failureCode: 'ANSWER_EVIDENCE_INVALID',
+      failureCauseCode: 'ANSWER_NOT_PUBLISHED',
+      cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: {
+        status: 'MODEL_TIMEOUT',
+        assistantRunId: '77777777-7777-4777-8777-777777777777',
+        runState: 'DEGRADED',
+        lastErrorCode: null,
+        stopReason: 'TIMEOUT',
+        ownerVerified: true,
+      },
+    })
+    const unpublishedPublicText = await readFile(unpublishedAnswerStatus, 'utf8')
+    assert.doesNotMatch(unpublishedPublicText,
+      /ownerUsername|subjectId|private model progress|privateAnswerOperation|victory points|player/)
+    assert.equal(deleted, true)
+    answerStatus = 'ANSWERED'
+    answerRunState = 'COMPLETED'
+    answerStopReason = null
+
+    answerRunDoesNotAdvance = true
+    deleted = false
+    planStarted = false
+    const staleAnswerStatus = join(directory, 'stale-answer-status.json')
+    const staleAnswer = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: staleAnswerStatus,
+      },
+    )
+    assert.equal(staleAnswer.code, 1, staleAnswer.stderr)
+    assert.match(staleAnswer.stderr, /did not expose one new owned question-answer run/)
+    assert.deepEqual(JSON.parse(await readFile(staleAnswerStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'lesson-verified',
+      failureCode: 'ANSWER_EVIDENCE_INVALID',
+      failureCauseCode: 'ANSWER_RUN_AUDIT_INVALID',
+      cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
+    })
+    assert.equal(deleted, true)
+    answerRunDoesNotAdvance = false
 
     answerReferencesAlign = false
     deleted = false
@@ -812,6 +978,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: 'TEACHING_PLAN_INVALID',
       failureCauseCode: 'TEACHING_PLAN_TITLE_MISMATCH',
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
     })
     const checkpoint = JSON.parse(await readFile(retainedPlanCheckpoint, 'utf8'))
     assert.equal(checkpoint.stage, 'plan')
@@ -937,6 +1104,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: 'NAVIGATION_FAILED',
       failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: expectedAnswerDiagnostic,
     })
     assert.equal(deleted, true)
 
@@ -967,6 +1135,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: 'NAVIGATION_FAILED',
       failureCauseCode: null,
       cleanupOutcome: 'FAILED',
+      answerDiagnostic: expectedAnswerDiagnostic,
     })
     assert.equal(deleted, false)
 
@@ -996,6 +1165,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       failureCode: 'CLEANUP_FAILED',
       failureCauseCode: null,
       cleanupOutcome: 'FAILED',
+      answerDiagnostic: expectedAnswerDiagnostic,
     })
     assert.equal(deleted, false)
   } finally {
@@ -1171,6 +1341,7 @@ test('recovers the exact official import identity and cleans only its document w
       failureCode: 'OFFICIAL_IMPORT_FAILED',
       failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
     })
   } finally {
     server.closeAllConnections()
@@ -1193,6 +1364,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
   const effectiveSource = `${canonicalSource}?rulepilot_canary=run-1`
   const canaryTitle = 'Dune: Imperium · RulePilot canary run-1'
   let deleted = false
+  let answerRequested = false
 
   const run = (id, state, createdAt, completedAt, activities) => ({
     run: { id, state, createdAt, completedAt, lastErrorCode: null },
@@ -1349,6 +1521,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
       return json(response, 200, lesson)
     }
     if (request.method === 'POST' && request.url === `/api/v1/document-versions/${versionId}/answers`) {
+      answerRequested = true
       assert.deepEqual(JSON.parse(body.toString()), {
         question: '游戏什么时候结束？胜利点相同时如何决胜？请标出规则书页码。',
         language: 'zh-CN',
@@ -1361,6 +1534,22 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
         },
         rulingReference: { citationIds: ['99999999-0000-4111-8222-333333333333'],
           confirmedRulingId: null, confirmedRulingVersion: null },
+      })
+    }
+    if (request.method === 'GET'
+      && request.url === `/api/v1/assistant-runs/latest?mode=QUESTION_ANSWER&subjectId=${versionId}`) {
+      if (!answerRequested) return json(response, 404, { error: 'assistant run does not exist' })
+      return json(response, 200, {
+        run: {
+          id: '88888888-9999-4aaa-8bbb-cccccccccccc',
+          mode: 'QUESTION_ANSWER',
+          subjectId: versionId,
+          ownerUsername: 'player',
+          state: 'COMPLETED',
+          lastErrorCode: null,
+        },
+        steps: [],
+        activities: [],
       })
     }
     if (request.method === 'POST' && request.url?.endsWith('/cancellation')) return json(response, 202, {})
@@ -1569,6 +1758,7 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
       failureCode: 'OFFICIAL_IMPORT_FAILED',
       failureCauseCode: null,
       cleanupOutcome: 'SUCCEEDED',
+      answerDiagnostic: null,
     })
     assert.deepEqual(deleted, [`/api/v1/documents/${documentId}`])
   } finally {
