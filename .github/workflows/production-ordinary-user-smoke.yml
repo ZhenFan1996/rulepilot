@@ -50,6 +50,11 @@ on:
         required: true
         default: false
         type: boolean
+      transport_probe_only:
+        description: Run a read-only public TLS transport matrix without the ordinary-user journey
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -60,8 +65,103 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  transport_probe:
+    name: Compare public TLS observer paths
+    if: inputs.transport_probe_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RULEPILOT_SMOKE_TESTED_SHA: ${{ inputs.tested_sha }}
+    steps:
+      - name: Probe the public release without production authority
+        shell: bash
+        run: |
+          set -uo pipefail
+          endpoint=https://rulepilot.cn/api/public/release
+          printf 'expectedSha=%s\n' "$RULEPILOT_SMOKE_TESTED_SHA"
+          curl --version | head -n 2
+          openssl version -a | head -n 2
+          python3 --version
+          node --version
+          for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+            if [[ -v "$name" ]]; then
+              printf '%s=set\n' "$name"
+            else
+              printf '%s=unset\n' "$name"
+            fi
+          done
+
+          curl_probe() {
+            local label=$1
+            shift
+            local body metrics status
+            body=$(mktemp "$RUNNER_TEMP/rulepilot-transport-body.XXXXXX")
+            metrics=$(curl --proto '=https' --silent --show-error --max-time 15 \
+              --output "$body" --write-out 'http=%{http_code} connect=%{time_connect} appconnect=%{time_appconnect} total=%{time_total}' \
+              "$@" "$endpoint" 2>&1)
+            status=$?
+            printf 'curl[%s] exit=%s %s\n' "$label" "$status" "$metrics"
+            if (( status == 0 )); then
+              jq --compact-output '{commitSha,releaseId}' "$body"
+            fi
+            rm -f "$body"
+          }
+          curl_probe default
+          curl_probe no-proxy --noproxy '*'
+          curl_probe x25519 --curves X25519
+          curl_probe no-proxy-x25519 --noproxy '*' --curves X25519
+          curl_probe tls12 --tlsv1.2 --tls-max 1.2
+          curl_probe http11 --http1.1
+          curl_probe direct-ip --resolve rulepilot.cn:443:114.55.72.40
+
+          openssl_probe() {
+            local label=$1
+            shift
+            local output status
+            output=$(mktemp "$RUNNER_TEMP/rulepilot-openssl-output.XXXXXX")
+            timeout 15 openssl s_client -brief -connect rulepilot.cn:443 \
+              -servername rulepilot.cn "$@" </dev/null > "$output" 2>&1
+            status=$?
+            printf 'openssl[%s] exit=%s\n' "$label" "$status"
+            sed -n '1,12p' "$output"
+            rm -f "$output"
+          }
+          openssl_probe default
+          openssl_probe x25519 -groups X25519
+          openssl_probe tls12 -tls1_2
+          openssl_probe tls13-x25519 -tls1_3 -groups X25519
+
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          endpoint = "https://rulepilot.cn/api/public/release"
+          for label, opener in (
+              ("default", urllib.request.build_opener()),
+              ("no-proxy", urllib.request.build_opener(urllib.request.ProxyHandler({}))),
+          ):
+              try:
+                  with opener.open(endpoint, timeout=15) as response:
+                      payload = json.load(response)
+                      print(f"python[{label}] http={response.status} commitSha={payload.get('commitSha')}")
+              except Exception as error:
+                  print(f"python[{label}] error={type(error).__name__}: {error}")
+          PY
+
+          node - <<'JS'
+          const endpoint = 'https://rulepilot.cn/api/public/release'
+          try {
+            const response = await fetch(endpoint, { signal: AbortSignal.timeout(15_000) })
+            const payload = await response.json()
+            console.log(`node[fetch] http=${response.status} commitSha=${payload.commitSha}`)
+          } catch (error) {
+            console.log(`node[fetch] error=${error.name}: ${error.message}`)
+          }
+          JS
+
   prepare_smoke:
     name: Prepare immutable ordinary-user probe without production authority
+    if: inputs.transport_probe_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
