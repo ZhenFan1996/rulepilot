@@ -78,7 +78,7 @@ class NativeReadToolsTest {
     }
 
     @Test
-    void contextExpansionRejectsMalformedDuplicateAndHiddenScopeArguments() {
+    void contextExpansionRejectsBadRequiredValuesButIgnoresAdditiveScopeLikeFields() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         var tool = new ExpandRuleEvidenceContextNativeTool(readTools, JsonMapper.builder().build());
         UUID anchorId = UUID.randomUUID();
@@ -88,11 +88,18 @@ class NativeReadToolsTest {
         assertThatThrownBy(() -> tool.execute(
                         "{\"evidenceIds\":[\"" + anchorId + "\",\"" + anchorId + "\"],\"radius\":1}", scope()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> tool.execute(
-                        "{\"evidenceIds\":[\"" + anchorId + "\"],\"radius\":1,"
-                                + "\"documentVersionId\":\"attacker\"}", scope()))
-                .isInstanceOf(IllegalArgumentException.class);
         verify(readTools, never()).readRuleEvidenceContext(any(), any(), any(Integer.class));
+
+        ToolScope scoped = scope();
+        when(readTools.readRuleEvidenceContext(scoped.documentVersionId(), Set.of(anchorId), 1))
+                .thenReturn(new RuleEvidenceContext(List.of(), List.of()));
+        var result = tool.execute(
+                "{\"evidenceIds\":[\"" + anchorId + "\"],\"radius\":1,"
+                        + "\"documentVersionId\":\"ignored-model-value\"}",
+                scoped);
+
+        assertThat(result.code()).isEqualTo("NO_CONTEXT_ANCHOR");
+        verify(readTools).readRuleEvidenceContext(scoped.documentVersionId(), Set.of(anchorId), 1);
     }
 
     @Test
@@ -143,18 +150,25 @@ class NativeReadToolsTest {
     }
 
     @Test
-    void relationshipSearchRejectsUnknownFieldsAndOutOfScopeEvidence() {
+    void relationshipSearchIgnoresAdditiveFieldsButStillRejectsOutOfScopeEvidence() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         var tool = new SearchRuleRelationshipsNativeTool(readTools, JsonMapper.builder().build());
+        ToolScope scoped = scope();
+        when(readTools.searchRuleEvidence(any())).thenReturn(List.of());
 
-        assertThatThrownBy(() -> tool.execute(
-                        "{\"topic\":\"movement\",\"limit\":3,\"documentVersionId\":\"attacker\"}", scope()))
-                .isInstanceOf(IllegalArgumentException.class);
-        verify(readTools, never()).searchRuleEvidence(any());
+        var additive = tool.execute(
+                "{\"topic\":\"movement\",\"limit\":3,"
+                        + "\"documentVersionId\":\"ignored-model-value\"}", scoped);
+
+        assertThat(additive.code()).isEqualTo("NO_RELATIONSHIP_CANDIDATES");
+        ArgumentCaptor<AssistantReadTools.SearchRuleEvidence> request =
+                ArgumentCaptor.forClass(AssistantReadTools.SearchRuleEvidence.class);
+        verify(readTools).searchRuleEvidence(request.capture());
+        assertThat(request.getValue().documentVersionId()).isEqualTo(scoped.documentVersionId());
 
         when(readTools.searchRuleEvidence(any())).thenReturn(List.of(new RuleEvidence(
                 UUID.randomUUID(), UUID.randomUUID(), "RULE", "Movement", "Unless stopped, move.", 2, 2)));
-        assertThatThrownBy(() -> tool.execute("{\"topic\":\"movement\",\"limit\":3}", scope()))
+        assertThatThrownBy(() -> tool.execute("{\"topic\":\"movement-other\",\"limit\":3}", scoped))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -215,7 +229,7 @@ class NativeReadToolsTest {
     }
 
     @Test
-    void invalidSearchArgumentsNeverReachRetrieval() {
+    void invalidSearchValuesNeverReachRetrievalWhileAdditiveFieldsAreIgnored() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         SearchRuleEvidenceNativeTool tool = new SearchRuleEvidenceNativeTool(readTools, JsonMapper.builder().build());
 
@@ -224,12 +238,23 @@ class NativeReadToolsTest {
                                 + "\"includeAdjacentContext\":false}",
                         scope()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> tool.execute(
-                        "{\"query\":\"x\",\"limit\":1,\"sectionTypes\":[],"
-                                + "\"includeAdjacentContext\":false,\"documentVersionId\":\"attacker-value\"}",
-                        scope()))
-                .isInstanceOf(IllegalArgumentException.class);
-        verify(readTools, never()).searchRuleEvidence(any());
+        verify(readTools, never()).searchRuleEvidencePage(any(), any(Integer.class), any(Integer.class), any());
+
+        ToolScope scoped = scope();
+        when(readTools.searchRuleEvidencePage(any(), any(Integer.class), any(Integer.class), any()))
+                .thenReturn(new RuleEvidencePage(List.of(), false, 0));
+        var additive = tool.execute(
+                "{\"query\":\"x\",\"limit\":1,\"sectionTypes\":[],"
+                        + "\"includeAdjacentContext\":false,"
+                        + "\"documentVersionId\":\"ignored-model-value\"}",
+                scoped);
+
+        assertThat(additive.code()).isEqualTo("NO_EVIDENCE");
+        ArgumentCaptor<AssistantReadTools.SearchRuleEvidence> request =
+                ArgumentCaptor.forClass(AssistantReadTools.SearchRuleEvidence.class);
+        verify(readTools).searchRuleEvidencePage(
+                request.capture(), any(Integer.class), any(Integer.class), any());
+        assertThat(request.getValue().documentVersionId()).isEqualTo(scoped.documentVersionId());
     }
 
     @Test

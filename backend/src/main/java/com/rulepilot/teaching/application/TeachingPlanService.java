@@ -31,14 +31,7 @@ public class TeachingPlanService {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingPlanService.class);
     private static final int VISUAL_PAGE_BASELINE_MODEL_CALLS = 1;
-    private static final int OUTLINE_STAGE_BASELINE_MODEL_CALLS = 1;
-    // Canonical ownership is page-local: all typed slots from one source page are classified together, and pages may
-    // run independently. Keeping one shard per page preserves relationships among rules visible on the same page and
-    // prevents dense ledgers from expanding into one serial model stage per slot.
-    private static final int CANONICAL_SHARDS_PER_VISUAL_PAGE = 1;
-    // Routing target only. Above this complete-text size, use the durable page ledger and hierarchical planner. No
-    // source text is cropped or rejected at this value.
-    static final int DIRECT_TEXT_PLANNING_TARGET_CHARACTERS = 32_000;
+    private static final int OUTLINE_AGENT_BASELINE_MODEL_CALLS = 1;
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
     private final DocumentProcessing documents;
@@ -98,62 +91,23 @@ public class TeachingPlanService {
                         .toList();
         var outlineRequest = new OutlineRequest(
                 pages, List.of(), learningGoal, createdBy);
-        var outline = organizeInitialOutline(
-                canonicalPagePlanning,
-                playerGameTitle,
-                outlineRequest,
-                pages,
-                documentPages,
-                assistantRunId);
+        var outline = organizeInitialOutline(playerGameTitle, outlineRequest, pages, assistantRunId);
         try {
-            if (canonicalPagePlanning || hasStructuredSourceDependencies(pages)) {
-                VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
-            }
-            TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
             plans.validate(outline);
         } catch (IllegalArgumentException invalidOutline) {
-            log.warn("Source-bound teaching outline was incomplete; rejecting preparation: {}", invalidOutline.getMessage());
+            log.warn("Teaching outline action result was unusable: {}", invalidOutline.getMessage());
             if (assistantRunId != null) {
                 invocations.record(
                         assistantRunId,
                         ActivityType.VALIDATION,
-                        "rejectIncompleteSemanticOutline",
+                        "rejectTeachingOutlineActionResult",
                         ActivityOutcome.REJECTED,
-                        "Lesson preparation stopped because the source-bound plan did not satisfy its authoritative contract");
+                        "Lesson preparation stopped because the Agent published no usable chapter plan");
             }
-            throw new IllegalStateException(
-                    "source-bound teaching outline was incomplete; retry preparation",
-                    invalidOutline);
-        }
-        if (canonicalPagePlanning || hasStructuredSourceDependencies(pages)) {
-            VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
+            throw new IllegalStateException("teaching outline was unusable; retry preparation", invalidOutline);
         }
         if (catalogGameTitle.isPresent()) {
             outline = withGameTitle(catalogGameTitle.orElseThrow(), outline);
-        }
-        TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
-        try {
-            TeachingWholeGameUnderstandingPolicy.validateComplete(outline);
-        } catch (IllegalArgumentException incompleteWholeGameUnderstanding) {
-            if (assistantRunId != null) {
-                invocations.record(
-                        assistantRunId,
-                        ActivityType.VALIDATION,
-                        "rejectIncompleteWholeGameTeachingUnderstanding",
-                        ActivityOutcome.REJECTED,
-                        "Lesson preparation stopped before chapter fan-out because the source-bound whole-game understanding was incomplete");
-            }
-            throw new IllegalStateException(
-                    "teaching outline did not form a source-bound whole-game understanding; retry preparation",
-                    incompleteWholeGameUnderstanding);
-        }
-        if (assistantRunId != null) {
-            invocations.record(
-                    assistantRunId,
-                    ActivityType.VALIDATION,
-                    "completeWholeGameTeachingUnderstanding",
-                    ActivityOutcome.SUCCEEDED,
-                    "Source-bound whole-game understanding persisted before lesson chapter generation");
         }
         log.info(
                 "Teaching outline generated for documentVersionId={}: gameTitle={}, topics={}",
@@ -161,7 +115,7 @@ public class TeachingPlanService {
                 outline.gameTitle(),
                 outline.topics().stream()
                         .map(topic -> topic.key() + " visual=" + topic.visualEvidenceRecommended()
-                                + " tags=" + topic.coverageTags() + " queries=" + topic.retrievalQueries())
+                                + " pages=" + topic.sourcePageNumbers())
                         .toList());
         return publication.publish(plans.create(
                 documentVersionId,
@@ -190,13 +144,9 @@ public class TeachingPlanService {
         long visualPageCalls = canonicalPagePlanning
                 ? (long) VISUAL_PAGE_BASELINE_MODEL_CALLS * pageCount
                 : 0;
-        // This is a scheduler capacity estimate, never a call-count budget. It counts the ordinary first candidate for
-        // every page-owned stage plus global ordering. Changed rejection observations may continue under the persisted
-        // token/deadline boundary, while an identical observation stops as no-progress.
-        long plannerStages = canonicalPagePlanning
-                ? (long) CANONICAL_SHARDS_PER_VISUAL_PAGE * pageCount + 1
-                : 1;
-        long estimatedModelCalls = visualPageCalls + OUTLINE_STAGE_BASELINE_MODEL_CALLS * plannerStages;
+        // This sizes queue capacity only. The same outline Agent chooses how many read/publish turns it needs, while
+        // the durable run deadline and token reservation remain the resource boundary.
+        long estimatedModelCalls = visualPageCalls + OUTLINE_AGENT_BASELINE_MODEL_CALLS;
         if (estimatedModelCalls > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("teaching preparation workload is too large");
         }
@@ -205,7 +155,7 @@ public class TeachingPlanService {
 
     static boolean requiresExtendedPreparationLane(WorkloadDemand workload) {
         if (workload == null) throw new IllegalArgumentException("teaching preparation workload is required");
-        int ordinaryCapacityBaseline = OUTLINE_STAGE_BASELINE_MODEL_CALLS;
+        int ordinaryCapacityBaseline = OUTLINE_AGENT_BASELINE_MODEL_CALLS;
         return workload.estimatedModelCalls() > ordinaryCapacityBaseline;
     }
 
@@ -230,16 +180,10 @@ public class TeachingPlanService {
         }
     }
 
-    private static boolean hasStructuredSourceDependencies(List<PageInput> pages) {
-        return pages.stream().anyMatch(page -> !page.sourceDependencies().isEmpty());
-    }
-
     private TeachingOutlineModel.OutlineDraft organizeInitialOutline(
-            boolean canonicalPagePlanning,
             String playerGameTitle,
             OutlineRequest request,
             List<PageInput> pages,
-            List<DocumentProcessing.PageView> documentPages,
             UUID assistantRunId) {
         TeachingOutlineModel.OutlineDraft organized;
         try {
@@ -248,9 +192,7 @@ public class TeachingPlanService {
                     : outlines.organize(request, modelCalls(assistantRunId));
         } catch (OutlineGenerationException generationFailure) {
             log.warn(
-                    "Teaching outline generation failed before a source-bound whole-game plan was available "
-                            + "(canonicalPagePlanning={}, failureType={})",
-                    canonicalPagePlanning,
+                    "Teaching outline Agent stopped before it published a usable plan (failureType={})",
                     generationFailure.getCause() == null
                             ? generationFailure.getClass().getSimpleName()
                             : generationFailure.getCause().getClass().getSimpleName());
@@ -260,25 +202,18 @@ public class TeachingPlanService {
                         ActivityType.VALIDATION,
                         "rejectTeachingOutlineGenerationFailure",
                         ActivityOutcome.REJECTED,
-                        "Lesson preparation stopped because no source-bound whole-game outline reached the publication boundary before durable execution stopped");
+                        "Lesson preparation stopped because the outline Agent published no usable chapter before durable execution stopped");
             }
             throw generationFailure;
         }
         return preferDocumentTitle(
                 playerGameTitle,
-                VisualOutlineEvidencePolicy.bindIconLegendEvidence(organized, documentPages),
+                organized,
                 pages);
     }
 
     static boolean requiresCanonicalPagePlanning(List<DocumentProcessing.PageView> pages) {
         if (pages == null || pages.isEmpty()) return false;
-        long catalogCharacters = 0;
-        for (DocumentProcessing.PageView page : pages) {
-            String text = page.text() == null ? "" : page.text().strip();
-            if (text.isBlank()) continue;
-            catalogCharacters += text.length();
-            if (catalogCharacters > DIRECT_TEXT_PLANNING_TARGET_CHARACTERS) return true;
-        }
         return pages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
     }
 
@@ -314,9 +249,8 @@ public class TeachingPlanService {
                 selectedTitle,
                 outline.premise(),
                 outline.topics(),
-                outline.sourceCoverageSlots(),
-                outline.sourceCoverageInventoryComplete(),
-                outline.wholeGameUnderstanding());
+                outline.topicDependencies(),
+                outline.unresolvedTopics());
     }
 
     static String playerGameTitle(
@@ -341,9 +275,8 @@ public class TeachingPlanService {
                 gameTitle.strip(),
                 outline.premise(),
                 outline.topics(),
-                outline.sourceCoverageSlots(),
-                outline.sourceCoverageInventoryComplete(),
-                outline.wholeGameUnderstanding());
+                outline.topicDependencies(),
+                outline.unresolvedTopics());
     }
 
     private ModelCallExecutor modelCalls(UUID assistantRunId) {

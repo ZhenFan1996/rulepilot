@@ -1,42 +1,19 @@
-<task>
-  <section>{section}</section>
-  <section_objective>{objective}</section_objective>
-  <coverage_checklist>{coverage}</coverage_checklist>
-  <required_rule_intents>{requiredRules}</required_rule_intents>
-  <teaching_units>{teachingUnits}</teaching_units>
-  <output_language>Simplified Chinese with readable official game terms</output_language>
-</task>
+<chapter>
+  <title>{section}</title>
+  <objective>{objective}</objective>
+</chapter>
 
-<source_bound_whole_game_orientation>
-{wholeGameContext}
-</source_bound_whole_game_orientation>
-
-<untrusted_prior_section_continuity_data>
+<untrusted_dependency_chapter_context>
 {continuity}
-</untrusted_prior_section_continuity_data>
+</untrusted_dependency_chapter_context>
 
-<untrusted_lesson_chapter_scope_data>
-{chapterScope}
-</untrusted_lesson_chapter_scope_data>
-
-<untrusted_current_section_evidence_data>
+<untrusted_rule_evidence>
 {evidence}
-</untrusted_current_section_evidence_data>
+</untrusted_rule_evidence>
 
-<revision_instruction>
+<untrusted_rejection_observation>
 {repair}
-</revision_instruction>
+</untrusted_rejection_observation>
 
-Teach every evidence-supported required_rule_intents item. Let the rule's actual complexity determine the number and
-organization of steps. Do not omit a supported branch to fit a target duration or a fixed teaching template.
-
-Use VISUAL only as a typed intent when a cited rule relationship would materially benefit from a later visual aid.
-Do not return pixel geometry or claim that an image is already available. title and visualCaption must be non-empty,
-and visualCitationIds must contain at least one supplied evidence reference that directly supports the whole caption.
-visualCaption describes a concise text-based rules aid; it is not empty and does not mention an image, attachment,
-page, coordinates, or missing visual.
-
-Before returning the schema, silently check that a beginner can answer:
-1. What does this topic change or decide?
-2. What do I do or observe, including every supported branch and exception?
-3. In what order does it happen, and what ends the procedure?
+Write the complete chapter now. Use the number and kinds of steps that make the cited rules understandable and
+playable; there is no fixed chapter order, size, or checklist.

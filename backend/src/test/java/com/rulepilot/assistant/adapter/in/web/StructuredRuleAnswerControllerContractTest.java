@@ -107,55 +107,70 @@ class StructuredRuleAnswerControllerContractTest {
         String json = new ObjectMapper().writeValueAsString(projected);
 
         assertThat(json)
-                .contains("\"actor\":\"rulebook_reader\"")
-                .contains("\"stage\":\"reading_pages\"")
-                .contains("\"message\":\"Reading the exact rulebook pages\"")
+                .contains("\"actor\":\"rulebook_tool\"")
+                .contains("\"stage\":\"read_tool\"")
+                .contains("\"message\":\"The answer Agent called the exact-page read tool\"")
                 .contains("\"status\":\"succeeded\"")
-                .contains("\"nextAction\":\"Next: verify what the cited text actually supports\"")
+                .contains("\"nextAction\":\"Its correlated observation returns to the same Agent\"")
                 .doesNotContain("internal-provider-argument", "raw tool result", "operation", "summary");
     }
 
     @Test
-    void keepsRecoverableValidationRejectionsInProgressInsteadOfReportingAStoppedAnswer() {
+    void returnsCompleteRejectedPayloadsToTheSameAgentWithoutInventingAReviewerStage() {
         List<String> recoverableOperations = List.of(
                 "nativeCompletionRequirement",
                 "nativeEmptyCompletion",
                 "nativeCompletionProtocol",
                 "nativeActionProtocol",
-                "nativeToolSchema",
-                "nativeObs|search_rule_evidence|schema-hash|call-id");
+                "nativeToolSchema");
 
         recoverableOperations.forEach(operation -> {
             ActivitySnapshot rejected = activity(operation, ActivityOutcome.REJECTED, "private validation detail");
 
             var projected = StructuredRuleAnswerController.playerActivity(rejected, PlayerLocale.ZH_CN);
 
-            assertThat(projected.actor()).isEqualTo("answer_validator");
-            assertThat(projected.stage()).isEqualTo("correcting_answer");
+            assertThat(projected.actor()).isEqualTo("answer_agent");
+            assertThat(projected.stage()).isIn("repairing_terminal", "repairing_action");
             assertThat(projected.status()).isEqualTo("running");
-            assertThat(projected.message()).isEqualTo("回答草稿未通过校验，答疑助手正在修正");
-            assertThat(projected.nextAction()).isEqualTo("下一步：用有效操作或有依据的回答继续");
+            assertThat(projected.message()).contains("完整").contains("同一 Agent");
+            assertThat(projected.nextAction()).isEqualTo("同一 Agent 会整包重新生成");
         });
     }
 
     @Test
-    void reportsRepeatedIdenticalObservationAsAStoppedSupplementarySearch() {
-        ActivitySnapshot stalled = activity(
-                "nativeObservationNoProgress|read_rule_pages",
+    void reportsTypedStopCodeWithoutInventingAReviewOrNextStage() {
+        ActivitySnapshot stopped = activity(
+                "nativeToolFallback|OBSERVATION_NO_PROGRESS",
                 ActivityOutcome.REJECTED,
                 "raw observation fingerprint");
 
-        var projected = StructuredRuleAnswerController.playerActivity(stalled, PlayerLocale.EN);
+        var projected = StructuredRuleAnswerController.playerActivity(stopped, PlayerLocale.EN);
 
-        assertThat(projected.actor()).isEqualTo("answer_validator");
-        assertThat(projected.stage()).isEqualTo("evidence_search_stalled");
+        assertThat(projected.actor()).isEqualTo("answer_agent");
+        assertThat(projected.stage()).isEqualTo("agent_stopped");
         assertThat(projected.status()).isEqualTo("rejected");
         assertThat(projected.message())
-                .contains("Supplementary evidence search stopped")
-                .contains("answer can continue with evidence already checked")
+                .contains("OBSERVATION_NO_PROGRESS")
                 .doesNotContain("fingerprint");
-        assertThat(projected.nextAction())
-                .isEqualTo("Next: compose and validate from the evidence already checked");
+        assertThat(projected.nextAction()).isEqualTo("This answer run ends at the recorded boundary");
+    }
+
+    @Test
+    void reportsSiblingReadFailureAsLocalWhileKeepingOtherObservationsAvailable() {
+        ActivitySnapshot failedObservation = activity(
+                "nativeObs|crop_rule_page_image|schema-hash|call-id",
+                ActivityOutcome.REJECTED,
+                "private crop failure");
+
+        var projected = StructuredRuleAnswerController.playerActivity(failedObservation, PlayerLocale.EN);
+
+        assertThat(projected.actor()).isEqualTo("rulebook_tool");
+        assertThat(projected.stage()).isEqualTo("tool_observation");
+        assertThat(projected.status()).isEqualTo("rejected");
+        assertThat(projected.message())
+                .contains("typed local failure")
+                .contains("completed sibling observations remain available")
+                .doesNotContain("private crop failure");
     }
 
     @Test

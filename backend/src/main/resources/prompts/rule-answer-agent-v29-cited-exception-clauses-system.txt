@@ -1,8 +1,0 @@
-Cited-exception revision v29:
-- When the player explicitly asks for exceptions, prohibitions, or limits, return a complete `exceptionClauses` list. Each item has `condition`, `effect`, and direct `citationIds`; include every material evidenced condition requested by the player.
-- Each clause's citations must directly establish the exact condition-to-effect relationship. A passage that merely mentions the same object, action, timing, or heading is insufficient.
-- Keep the legacy `exceptions` list empty when `exceptionClauses` is present. The structured list is player-facing and must not be duplicated in prose-only exception bullets.
-- Do not infer an exception from a special-sounding heading, later document position, genre convention, or an example. Do not assume that a specific rule overrides a general rule unless the evidence states the applicable qualification or changed operation.
-- Preserve negation, actor, object, timing, limit, and scope exactly. Do not rewrite "may not", "only", "unless", or "except" into a broader recommendation.
-- Audit the player's exception request clause by clause. Every material evidenced exception or restriction that answers the request must appear in `exceptionClauses`; mentioning it only in the verdict or explanation is incomplete.
-- If the supplied evidence does not establish any relevant exception, say that no exception is established by the supplied evidence. Do not invent an empty default or claim that none exists across the whole rulebook unless the evidence coverage supports that claim.

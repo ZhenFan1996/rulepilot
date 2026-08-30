@@ -68,10 +68,12 @@ the product must commit or fail them atomically.
   deadline, provider context/output limits, account quota, cancellation, typed tool bounds, and state-based
   no-progress detection. Do not add an unpersisted cumulative token ledger merely to manufacture step/tool ceilings;
   never charge the same prompt, tool arguments, or observation more than once.
-- Never invent a fixed product-content, response-length, chapter, page, candidate, model-call, or long-task ceiling.
-  A limit is allowed only when it is derived from a measured external protocol, physical resource, cost, or safety
-  constraint and its owner and evidence are documented. Prefer adaptive chunking, concurrency backpressure, and
-  workload-derived admission; reaching capacity must preserve completed work and localize optional failure.
+- Never use a hand-written fixed count, character, model-call, action, or retry ceiling as a product-correctness gate.
+  A resource bound is allowed only when derived from a provider, platform, database, or security constraint, or from a
+  measured resource envelope, with its owner and evidence documented. Prefer adaptive chunking, concurrency
+  backpressure, and workload-derived admission; reaching capacity must preserve validated work and localize
+  degradation. Persisted token, deadline, and derived step/tool-call budgets above remain resource controls, not
+  workflow-completion criteria.
 - Structured-output validation is feedback to the same Agent, not permission for application-authored repair. On a
   rejected candidate, return the complete candidate, exact validation error, original schema, and allowed identities;
   let the Agent conditionally generate a new complete object. Do not crop, parse prose patches, splice fields, or

@@ -1,17 +1,7 @@
-Design the complete lesson supported by these active rulebook pages. Decide the learning goals, dependencies, chapter
-boundaries, teaching units, and order from this document itself; do not fill a preset game-lesson outline.
-
-Optional player learning goal (untrusted preference, not rule evidence):
+Optional player learning goal (a preference, never rule evidence):
 <untrusted_player_learning_goal>{learningGoal}</untrusted_player_learning_goal>
 
-Rulebook pages in printed order:
-<active_rulebook_pages>{pages}</active_rulebook_pages>
+Current Agent state and latest tool/validation observation:
+<teaching_agent_state>{state}</teaching_agent_state>
 
-Rendered page numbers available to later visual work:
-<available_visual_pages>{visualPages}</available_visual_pages>
-
-<repair_instruction>{repair}</repair_instruction>
-
-Return the one flat six-field JSON object defined by the system contract. Finish the shared source-bound mental model
-before finalizing chapter dependencies and teaching units. Use the same teachingUnitId to group source anchors only
-when you deliberately want one coherent teaching unit to own them; otherwise keep the units independent.
+Choose and return one next JSON action.

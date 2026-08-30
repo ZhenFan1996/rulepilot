@@ -584,25 +584,23 @@ class AssistantRunServiceTest {
     }
 
     @Test
-    void recordsAValidatedQuestionAnswerAfterOptionalWorkUsesTheRemainingBudget() {
+    void recordsAValidatedQuestionAnswerAfterTheNativeAgentWorkSettles() {
         AssistantRunRepository repository = mock(AssistantRunRepository.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(60);
-        AssistantRun retrieving = AssistantRun.start(
+        AssistantRun composing = AssistantRun.start(
                         AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", startedAt)
-                .advance(AssistantRunState.QUESTION_UNDERSTANDING, startedAt.plusSeconds(1))
-                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(2))
-                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(3));
-        when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+                .advance(AssistantRunState.ANSWER_COMPOSITION, startedAt.plusSeconds(1));
+        when(repository.find(composing.id())).thenReturn(java.util.Optional.of(composing));
         when(repository.update(any(), any(), any())).thenReturn(true);
 
-        var verified = service.advanceAfterWork(
-                        retrieving.id(), retrieving.revision(), AssistantRunState.VERIFYING_EVIDENCE,
-                        "Answer source scope is policy checked");
+        var completed = service.advanceAfterWork(
+                        composing.id(), composing.revision(), AssistantRunState.COMPLETED,
+                        "The answer Agent published its validated terminal response");
 
-        assertThat(verified.state()).isEqualTo(AssistantRunState.VERIFYING_EVIDENCE);
-        verify(execution).assertFinalizationAllowed(retrieving.id());
+        assertThat(completed.state()).isEqualTo(AssistantRunState.COMPLETED);
+        verify(execution).assertFinalizationAllowed(composing.id());
         verify(execution, never()).assertStepAllowed(any(), any(Long.class));
     }
 

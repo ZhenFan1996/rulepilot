@@ -393,7 +393,7 @@ describe('LessonsView', () => {
     await flushPromises()
 
     const pending = wrapper.get('[data-testid="pending-guide-journey"]')
-    expect(pending.attributes('data-failure-classification')).toBe('external-repair')
+    expect(pending.attributes('data-failure-classification')).toBe('repair-required')
     expect(pending.attributes('data-failure-recovery')).toBe('manual-repair')
     expect(pending.text()).toContain('这不是可以安全原样重试的失败')
     expect(pending.text()).toContain(expectedDetail)

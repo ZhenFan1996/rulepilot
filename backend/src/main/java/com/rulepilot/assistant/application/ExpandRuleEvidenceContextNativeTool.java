@@ -39,7 +39,7 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
                 "cursor": {"description": "Opaque nextCursor from the preceding observation for these exact handles and radius, or null for the first page.", "type": ["string", "null"], "format": "uuid"}
               },
               "required": ["evidenceIds", "radius"],
-              "additionalProperties": false
+              "additionalProperties": true
             }
             """;
 
@@ -278,7 +278,7 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
     private Arguments parse(String argumentsJson) {
         try {
             return objectMapper.readerFor(Arguments.class)
-                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .readValue(argumentsJson);
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException(

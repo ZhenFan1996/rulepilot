@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import LessonChapterList from '@/components/LessonChapterList.vue'
+import PlayerFailureDetails from '@/components/PlayerFailureDetails.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
 import {
   acceptProgressiveLesson,
@@ -10,6 +11,7 @@ import {
 } from '@/lib/liveLesson'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
+import { teachingFailureOwner, type PlayerFailureDescriptor } from '@/lib/playerFailureSemantics'
 import {
   playerJourneyFailurePresentation,
   playerJourneyRunIsTerminal,
@@ -29,6 +31,7 @@ interface TeachingPlan {
   gameTitle: string
   premise: string
   sections: Array<{ position: number; title: string; visualEvidenceRecommended: boolean }>
+  unresolvedTopics?: string[]
 }
 
 interface TeachingPlanSeed {
@@ -37,6 +40,7 @@ interface TeachingPlanSeed {
   gameTitle: string
   premise: string
   sections: Array<{ position: number; title: string; visualEvidenceRecommended?: boolean }>
+  unresolvedTopics?: string[]
 }
 
 interface VisualFocus {
@@ -132,9 +136,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。',
   refreshIdentity: '登录会话已失效，只停止当前页面刷新；已显示章节仍然保留，后台任务保持持久状态。重新登录后会重新绑定并刷新最新进度。',
   refreshResponseIdentity: '服务器返回了另一个讲解任务的状态，已停止合并；当前已显示章节仍然保留。',
-  refreshService: '有限刷新重试已用完，已停止自动刷新；已显示章节仍然保留，可以手动重试。',
+  refreshService: '当前页面无法继续自动刷新；已显示章节仍然保留，后台任务状态未被改写，可以手动重新连接。',
   ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
-  failureBoundary: '格式校验没通过不等于整轮失败：系统会把模型刚才的完整结果、具体哪里不对、正确格式和本次可用的页码或来源全部交回同一个模型。只要新结果还在变化，而且本轮仍有文字处理额度和有效工作时间，就会继续修正；只有模型再次给出一模一样、且已经被拒绝的结果，才会停止这一步以免空转。单页读不到、单章依据不足或某章配图失败都只影响对应局部，其他页面和已发布正文保留。整轮只有在用户取消、文字处理额度或有效工作时间用完、整份规则书不可读、没有任何可核验依据、最终一章都无法发布，或模型服务、保存、身份、引用发生无法恢复的错误时才停止。登录失效只停止当前页面刷新；后台任务保持持久状态，重新登录后会重新绑定并刷新。',
+  failureBoundary: '单页、单章或配图失败只影响对应局部；模型服务、排队、超时、传输或取消可保留进度原样重试；认证、输入、来源、所有权、版本、保存、身份或引用问题需修复后重试。结构化格式错误由同一 Agent 接收完整候选和校验记录后内部修正，不会要求玩家改写问题；只有完全重复、无进展或资源停止才结束这一步。',
 } : {
   dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', updates: 'Guide updates', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
   draft: '{done} / {total} chapters passed citation-ownership, rulebook-version, and structure checks; the remaining chapters are still being generated.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only chapters with usable rulebook support.',
@@ -149,9 +153,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.',
   refreshIdentity: "The signed-in session expired. Only this page's refresh has stopped; displayed chapters remain available, and the background task keeps its durable state. Sign in again to rebind and refresh the latest progress.",
   refreshResponseIdentity: 'The server returned status for a different guide, so merging stopped. Displayed chapters remain available.',
-  refreshService: 'The bounded refresh retries were exhausted, so automatic refresh stopped. Displayed chapters remain available; retry manually.',
+  refreshService: 'This page cannot continue automatic refresh. Displayed chapters remain available, the background state was not rewritten, and you can reconnect manually.',
   ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
-  failureBoundary: "A format check is not a failed run. The same model receives its complete result, exactly what was wrong, the required format, and the page or source IDs available for this request. It keeps correcting while the replacement changes and the run still has text-processing allowance and active-work time. This step stops only when the model repeats an identical result that was already rejected, preventing an endless loop. An unreadable page, unsupported chapter, or missing chapter visual affects only that item; other pages and published text remain. The whole run stops only after cancellation, exhausted text-processing allowance or active-work time, a wholly unreadable rulebook, no verifiable rule source, no publishable chapter, or a model-service, persistence, identity, or citation error that cannot be recovered safely. Sign-in expiry stops only this page's refresh; the background task keeps its durable state. Sign in again to rebind and refresh the latest progress.",
+  failureBoundary: 'A failed page, chapter, or visual affects only that item. Provider, queue, timeout, transport, or cancellation stops preserve progress for an unchanged retry. Authentication, input, source, ownership, version, persistence, identity, or citation errors require repair first. Typed-format errors are corrected internally by the same Agent with the complete candidate and validation record; players are not asked to rewrite the question. Only exact repetition, no progress, or a resource stop ends that step.',
 })
 
 const active = computed(() => teachingRunIsActive(run.value?.run.state))
@@ -164,6 +168,35 @@ const teachingFailurePolicy = computed(() => {
   const current = run.value?.run
   if (!current || current.state === 'COMPLETED' || !playerJourneyRunIsTerminal(current.state)) return null
   return typedFailurePolicy(current.lastErrorCode ?? current.state, 'GENERATE_LESSON', false)
+})
+const latestRejectedActivity = computed(() => [...(run.value?.activities ?? [])]
+  .reverse()
+  .find(activity => activity.outcome === 'FAILED' || activity.outcome === 'REJECTED') ?? null)
+const visibleFailureDetails = computed<PlayerFailureDescriptor | null>(() => {
+  if (teachingFailurePolicy.value && run.value) {
+    const code = run.value.run.lastErrorCode ?? run.value.run.state
+    return {
+      category: teachingFailurePolicy.value.failureClassification,
+      owner: teachingFailureOwner(code, locale.value),
+      code,
+    }
+  }
+  const activity = latestRejectedActivity.value
+  if (!activity) return null
+  const operation = activity.operation
+  const category = operation.startsWith('enrichTeachingSectionVisual|')
+    || operation.startsWith('publishTeachingSection|')
+    ? 'local-degradation'
+    : operation.startsWith('validateTeachingOutlineAction|')
+      || operation.startsWith('advanceTeachingOutlineAgent|')
+      ? 'internal-correction'
+      : 'retry-preserved'
+  const owner = operation.startsWith('enrichTeachingSectionVisual|')
+    ? locale.value === 'en' ? 'Visual enrichment' : '配图处理'
+    : operation.startsWith('publishTeachingSection|')
+      ? locale.value === 'en' ? 'Chapter publication' : '章节发布'
+      : locale.value === 'en' ? 'Guide Agent' : '讲解 Agent'
+  return { category, owner, code: `${operation} · ${activity.summary}` }
 })
 function withFailureGuidance(text: string) {
   if (!teachingFailurePolicy.value) return text
@@ -502,6 +535,13 @@ onBeforeUnmount(() => {
             <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="supportedChapterCount" :aria-label="copy.progressAria(supportedChapterCount, plan.sections.length)"><div data-testid="recommendation-lesson-progress" class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
             <p v-if="activityText" class="mt-2 text-xs text-ink/50">{{ activityText }}</p>
             <p data-testid="recommendation-lesson-failure-boundary" class="mt-2 text-xs leading-5 text-ink/50">{{ copy.failureBoundary }}</p>
+            <PlayerFailureDetails
+              v-if="visibleFailureDetails"
+              class="mt-3"
+              :category="visibleFailureDetails.category"
+              :owner="visibleFailureDetails.owner"
+              :code="visibleFailureDetails.code"
+            />
           </div>
         </header>
 
@@ -524,6 +564,10 @@ onBeforeUnmount(() => {
           <section v-else-if="error || !plan || !lesson" class="rounded-xl border border-red-200 bg-paper p-10 text-center" role="alert"><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></section>
           <template v-else>
             <p class="rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/55">{{ copy.source }}</p>
+            <div v-if="plan.unresolvedTopics?.length" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950">
+              <p class="font-semibold">{{ locale === 'en' ? 'Locally unavailable topics' : '局部未完成主题' }}</p>
+              <ul class="mt-1 list-disc pl-5"><li v-for="topic in plan.unresolvedTopics" :key="topic">{{ topic }}</li></ul>
+            </div>
             <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :page-preview-image-url="pagePreviewImageUrl" :focused-page-image-url="focusedPageImageUrl" />
           </template>
         </div>

@@ -144,6 +144,7 @@ class SpringAiNativeToolModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).isEqualTo("none");
+        assertThat(options.getParallelToolCalls()).isTrue();
         assertThat(options.getToolCallbacks()).isEmpty();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
     }

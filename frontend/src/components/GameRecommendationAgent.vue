@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
+import PlayerFailureDetails from '@/components/PlayerFailureDetails.vue'
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
 import RecommendationAnswerWorkspace from '@/components/RecommendationAnswerWorkspace.vue'
 import RecommendationGameDetailsDialog from '@/components/RecommendationGameDetailsDialog.vue'
@@ -27,6 +28,7 @@ import { useModalFocus } from '@/composables/useModalFocus'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { RecommendationRequestError, RecommendationStreamError, streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale, type AppLocale } from '@/lib/locale'
+import { recommendationFailureDescriptor } from '@/lib/playerFailureSemantics'
 import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 import {
   forgetRecommendationConversation,
@@ -44,7 +46,7 @@ const copy = {
     description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…', workingReply: '正在回复', workingSearch: '正在查找桌游', workingRecommendation: '正在整理推荐', replyingDetail: '正在生成回复…',
-    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', modelConfigurationError: '这次推荐没有完成，也没有写入对话结果。你刚才的请求仍保留；请先配置并保存推荐模型。当前配置不变时，同一请求不会成功，也不会自动重试。', failureTimeBudget: '失败原因：查找、核对或生成没有在本轮时间上限内完成。', failureModelResponse: '失败原因：模型这次没有返回完整、可执行的结构，因此未发布临时文字。', failureServiceConfiguration: '失败原因：推荐模型或所需能力当前没有可用配置。', failureActionBudget: '失败原因：模型在收到逐步执行或参数校验反馈后，仍重复不兼容或无效动作。', failurePublicationBoundary: '失败原因：最终结果没有在安全发布边界内完整交付。', failureService: '失败原因：推荐服务没有完成本轮请求。', failureTimeLimit: '失败原因：整轮总时限已用完，模型或检索仍未形成完整结果。', failureModelNotConfigured: '失败原因：当前账号没有可用的推荐模型配置。', failureProviderCall: '失败原因：推荐模型连接失败或提前中断；这不代表没有匹配候选。', failureProviderProtocol: '失败原因：模型返回的工具协议无法安全解析，因此没有执行不确定动作。', failureProviderTruncated: '失败原因：模型输出达到长度上限，回答或工具参数不完整。', failureEmptyModel: '失败原因：模型既没有自然回答也没有选择工具；系统没有伪造回复或强制再调用一次。', failureRepeatedParallel: '失败原因：模型在看到逐步执行提示后，仍重复同一组并行动作。', failureRepeatedInvalid: '失败原因：模型在看到参数错误后，仍重复完全相同的无效动作。', failurePublicationRejected: '失败原因：候选、证据归属或完整回复没有通过发布校验，因此未展示未经支持的推荐。', failureUnclassified: '失败原因：推荐服务遇到未能归类的运行故障，没有写入未完成结果。', retry: '重试', modelSettings: '前往模型设置', profile: '这次想找',
+    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', modelConfigurationError: '这次推荐没有完成，也没有写入对话结果。你刚才的请求仍保留；请先配置并保存推荐模型。当前配置不变时，同一请求不会成功，也不会自动重试。', retry: '重试', modelSettings: '前往模型设置', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '可核对的 BGG 资料 · 从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     researchSources: '资料来源',
@@ -68,7 +70,7 @@ const copy = {
     description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
-    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', modelConfigurationError: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; first configure and save a recommendation model. With the configuration unchanged, the same request cannot succeed and will not retry automatically.', failureTimeBudget: 'Why it failed: search, verification, or generation did not finish within this turn’s time limit.', failureModelResponse: 'Why it failed: the model did not return a complete executable structure, so provisional text was not published.', failureServiceConfiguration: 'Why it failed: the recommendation model or a required capability is not currently configured.', failureActionBudget: 'Why it failed: after receiving step-by-step or argument-validation feedback, the model repeated an incompatible or invalid action.', failurePublicationBoundary: 'Why it failed: the final result did not complete inside the safe publication boundary.', failureService: 'Why it failed: the recommendation service did not complete this turn.', failureTimeLimit: 'Why it failed: the total turn time limit expired before the model or retrieval produced a complete result.', failureModelNotConfigured: 'Why it failed: this account has no available recommendation-model configuration.', failureProviderCall: 'Why it failed: the recommendation-model request failed or disconnected; this does not mean no candidate matched.', failureProviderProtocol: 'Why it failed: the model returned a tool protocol that could not be parsed safely, so no uncertain action ran.', failureProviderTruncated: 'Why it failed: the model reached its output limit, leaving the answer or action arguments incomplete.', failureEmptyModel: 'Why it failed: the model returned neither a natural reply nor an action; the app did not invent text or force another call.', failureRepeatedParallel: 'Why it failed: after a step-by-step observation, the model repeated the same parallel action set.', failureRepeatedInvalid: 'Why it failed: after an argument error, the model repeated the identical invalid action.', failurePublicationRejected: 'Why it failed: the candidates, evidence ownership, or complete reply failed publication checks, so no unsupported recommendation was shown.', failureUnclassified: 'Why it failed: the recommendation service hit an unclassified runtime fault and did not save an incomplete result.', retry: 'Retry', modelSettings: 'Open model settings', profile: 'Looking for',
+    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', modelConfigurationError: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; first configure and save a recommendation model. With the configuration unchanged, the same request cannot succeed and will not retry automatically.', retry: 'Retry', modelSettings: 'Open model settings', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Verifiable BGG details · Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     researchSources: 'Sources',
@@ -92,14 +94,14 @@ const copy = {
 const loadingCopy = {
   'zh-CN': {
     requesting: '收到，接着聊下去…', understanding_request: '正在结合前文理解你这句话…',
-    selecting_tools: '正在确认下一步该核对什么…',
+    selecting_tools: 'Agent 正在观察并决定如何回应…',
     searching_bgg_catalog: '正在桌游目录里查找…', reading_game_details: '正在翻看这款游戏的详细资料…',
     discovering_candidates: '正在补充更贴近这个感觉的候选…', verifying_bgg_candidates: '正在核对人数、时长和玩法…',
     researching_game_fit: '正在看看实际游玩感受…', composing_response: '正在整理已经核对的结果…',
   },
   en: {
     requesting: 'Got it. Continuing from here…', understanding_request: 'Understanding this turn in the context of the conversation…',
-    selecting_tools: 'Choosing what to check next…',
+    selecting_tools: 'The Agent is observing and deciding how to respond…',
     searching_bgg_catalog: 'Searching the game catalog…', reading_game_details: 'Reading this game\'s details…',
     discovering_candidates: 'Looking for a closer fit…', verifying_bgg_candidates: 'Checking player count, time, and play style…',
     researching_game_fit: 'Checking how it feels to play…', composing_response: 'A few good options are ready…',
@@ -109,23 +111,21 @@ const loadingCopy = {
 const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction, string>> = {
   'zh-CN': {
     understand_request: '读取当前消息与对话上下文',
-    choose_next_action: '正在确认需要核对的资料',
+    observe_and_decide: 'Agent 观察当前结果并决定如何回应',
     reply_to_user: '根据当前对话直接组织回答', ask_user: '确认一个会改变结果的必要信息',
-    resolve_bgg_game: '在 BGG 核对玩家提到的完整游戏名',
-    inspect_candidate_titles: '按候选标题搜索 BGG 并读取详情', browse_bgg_catalog: '按当前条件浏览 BGG 候选',
-    discover_public_candidates: '从公开资料寻找符合描述的新候选', lookup_bgg_games: '读取候选的 BGG 人数、时长与机制详情',
+    search_bgg_catalog: '按当前条件搜索并核验 BGG 候选',
+    discover_public_relationship: '查证有出处的公开身份关系',
     research_game_fit: '查证有出处的实际游玩感受', compare_candidates: '梳理候选之间有证据的关键差异',
-    report_no_match: '说明当前条件下没有足够匹配', recommend_games: '校验候选并组织最终推荐',
+    recommend_games: '校验候选并发布完整推荐',
   },
   en: {
     understand_request: 'Read the current message and conversation context',
-    choose_next_action: 'Confirm what information needs checking',
+    observe_and_decide: 'Observe the current result and decide how to respond',
     reply_to_user: 'Compose a direct response from the conversation', ask_user: 'Ask for one necessary choice that changes the result',
-    resolve_bgg_game: 'Resolve the player-authored title in BGG',
-    inspect_candidate_titles: 'Search candidate titles and load their BGG details', browse_bgg_catalog: 'Browse BGG under the current constraints',
-    discover_public_candidates: 'Find new identities from attributed public sources', lookup_bgg_games: 'Load player count, time, and mechanism facts from BGG',
+    search_bgg_catalog: 'Search and verify BGG candidates under the current constraints',
+    discover_public_relationship: 'Verify an attributed public identity relationship',
     research_game_fit: 'Check attributed reports about play experience', compare_candidates: 'Compare candidate-scoped evidence',
-    report_no_match: 'Explain the shortfall under the current constraints', recommend_games: 'Validate candidates and compose the recommendation',
+    recommend_games: 'Validate candidates and publish the complete recommendation',
   },
 }
 
@@ -211,8 +211,14 @@ function playerSafeFailureReason(value: unknown): RecommendationFailureReason | 
     : null
 }
 
-function boundedPlayerFacingText(value: string, maximumCodePoints = 1_200) {
-  return Array.from(value.trim()).slice(0, maximumCodePoints).join('')
+function playerSafeFailureDetailCode(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_]*$/.test(value)
+    ? value
+    : null
+}
+
+function playerFacingText(value: string) {
+  return value.trim()
 }
 
 function restoredDraft() {
@@ -255,6 +261,7 @@ const unavailableFailure = ref(false)
 const turnIdentityConflict = ref(false)
 const failureBoundary = ref<RecommendationFailureBoundary | null>(null)
 const failureReason = ref<RecommendationFailureReason | null>(null)
+const failureDetailCode = ref<string | null>(null)
 const failedAssistantMessage = ref('')
 const pendingAssistantPreview = ref('')
 const activeTurnLocale = ref<AppLocale | null>(null)
@@ -357,28 +364,21 @@ useModalFocus({
 
 const publiclyReportedActions = new Set<RecommendationProgressAction>([
   'understand_request',
+  'observe_and_decide',
   'reply_to_user',
   'ask_user',
-  'resolve_bgg_game',
-  'inspect_candidate_titles',
-  'browse_bgg_catalog',
-  'discover_public_candidates',
-  'lookup_bgg_games',
+  'search_bgg_catalog',
+  'discover_public_relationship',
   'research_game_fit',
   'compare_candidates',
-  'report_no_match',
   'recommend_games',
 ])
 
 const externalWorkActions = new Set<RecommendationProgressAction>([
-  'resolve_bgg_game',
-  'inspect_candidate_titles',
-  'browse_bgg_catalog',
-  'discover_public_candidates',
-  'lookup_bgg_games',
+  'search_bgg_catalog',
+  'discover_public_relationship',
   'research_game_fit',
   'compare_candidates',
-  'report_no_match',
   'recommend_games',
 ])
 
@@ -478,12 +478,12 @@ const recommendationEvidenceSummary = computed(() => {
     const source = stage === 'researching_game_fit'
       ? 'Sources: BGG facts and attributed public play reports.'
       : 'Source: BGG catalog and game-detail facts.'
-    return `${source} ${progress.observedCandidates} candidates seen · ${progress.verifiedCandidates} facts checked · ${progress.hardRejectedCandidates} did not meet your stated constraints. Next: ${loadingCopy.en[stage]}`
+    return `${source} ${progress.observedCandidates} candidates seen · ${progress.verifiedCandidates} facts checked · ${progress.hardRejectedCandidates} did not meet your stated constraints. Current state: ${loadingCopy.en[stage]}`
   }
   const source = stage === 'researching_game_fit'
     ? '来源：BGG 事实与有出处的公开游玩资料。'
     : '来源：BGG 目录与游戏详情事实。'
-  return `${source}目录候选 ${progress.observedCandidates} 款 · 已核对 ${progress.verifiedCandidates} 款 · 有 ${progress.hardRejectedCandidates} 款不满足你明确说出的条件。下一步：${loadingCopy['zh-CN'][stage]}`
+  return `${source}目录候选 ${progress.observedCandidates} 款 · 已核对 ${progress.verifiedCandidates} 款 · 有 ${progress.hardRejectedCandidates} 款不满足你明确说出的条件。当前状态：${loadingCopy['zh-CN'][stage]}`
 })
 const recommendationSoftBudgetReached = computed(() => loading.value && externalWorkActive.value && loadingElapsedSeconds.value >= 8)
 const hasVerifiedCandidates = computed(() => messages.value.some(message =>
@@ -499,50 +499,19 @@ const recommendationSoftBudgetCopy = computed(() => {
     ? 'There is not yet a new candidate safe to show. Catalog facts and fit tradeoffs still need checking; unfinished candidates stay hidden.'
     : '目前还没有足以展示的新候选；还需核对目录事实与匹配取舍，未完成候选不会提前显示。'
 })
-const failureBoundaryCopy: Record<RecommendationFailureBoundary, CopyKey> = {
-  time_budget: 'failureTimeBudget',
-  model_response: 'failureModelResponse',
-  service_configuration: 'failureServiceConfiguration',
-  action_budget: 'failureActionBudget',
-  publication_boundary: 'failurePublicationBoundary',
-  service_failure: 'failureService',
-}
-const failureReasonCopy: Record<Exclude<RecommendationFailureReason, 'resource_budget_exhausted'>, CopyKey> = {
-  time_limit: 'failureTimeLimit',
-  model_not_configured: 'failureModelNotConfigured',
-  provider_call_failed: 'failureProviderCall',
-  provider_protocol_invalid: 'failureProviderProtocol',
-  provider_output_truncated: 'failureProviderTruncated',
-  empty_model_response: 'failureEmptyModel',
-  repeated_incompatible_actions: 'failureRepeatedParallel',
-  repeated_invalid_action: 'failureRepeatedInvalid',
-  publication_rejected: 'failurePublicationRejected',
-  service_failure: 'failureUnclassified',
-}
 const requiresModelConfiguration = computed(() => unavailableFailure.value
   && failureReason.value === 'model_not_configured')
-const legacyResourceBudgetExplanation = {
-  'zh-CN': '失败原因：这个轮次由旧版本已移除的累计资源预算终止；这不代表请求太大，也不需要缩小问题。当前版本可以保留原请求直接重试。',
-  en: 'Why it failed: this turn was stopped by a cumulative resource budget that has since been removed. The request was not inherently too large; the current version can retry it unchanged.',
-} as const
+const recommendationFailureDetails = computed(() => recommendationFailureDescriptor(
+  failureReason.value,
+  failureDetailCode.value,
+  failureBoundary.value,
+  failedTurnLocale.value ?? locale.value,
+))
 const failureMessage = computed(() => {
   const responseLocale = failedTurnLocale.value ?? locale.value
-  const summary = requiresModelConfiguration.value
+  return requiresModelConfiguration.value
     ? translated(responseLocale, 'modelConfigurationError')
     : translated(responseLocale, unavailableFailure.value ? 'unavailableError' : 'error')
-  const reason = failureReason.value
-  let explanation = ''
-  if (unavailableFailure.value && reason === 'resource_budget_exhausted') {
-    explanation = legacyResourceBudgetExplanation[responseLocale]
-  } else if (unavailableFailure.value && reason) {
-    explanation = translated(
-      responseLocale,
-      failureReasonCopy[reason as Exclude<RecommendationFailureReason, 'resource_budget_exhausted'>],
-    )
-  } else if (unavailableFailure.value && failureBoundary.value) {
-    explanation = translated(responseLocale, failureBoundaryCopy[failureBoundary.value])
-  }
-  return [summary, explanation].filter(Boolean).join(' ')
 })
 const visibleFailedAssistantMessage = computed(() => failedAssistantMessage.value
   || (failed.value ? translated(failedTurnLocale.value ?? locale.value, 'failureReply') : ''))
@@ -594,8 +563,8 @@ function journeyText(game: RecommendationGame, status?: RecommendationJourneySta
   if (!status) return t('journeyPending', { game: game.name })
   const parameters = { game: game.name, progress: status.projection.progress ?? 0 }
   if (status.projection.failureRecovery === 'restart-from-completed') return t('journeyStopped', parameters)
-  if (status.projection.failureClassification === 'preserved-stop') return t('journeyPreserved', parameters)
-  if (status.projection.failureClassification === 'external-repair') return t('journeyFailed', parameters)
+  if (status.projection.failureClassification === 'retry-preserved') return t('journeyPreserved', parameters)
+  if (status.projection.failureClassification === 'repair-required') return t('journeyFailed', parameters)
   if (status?.projection.state === 'failed' || status?.projection.retryAction) return t('journeyFailed', parameters)
   if (status?.projection.canReadLesson) return t('journeyReady', parameters)
   return status.projection.progress === null
@@ -629,11 +598,8 @@ function toolLabelsFor(turnResponse?: RecommendationAgentResponse) {
   const labels: string[] = []
   const add = (label: string) => { if (!labels.includes(label)) labels.push(label) }
   if (actions.includes('recommend_games')) add(translated(turnLocale, 'toolUnderstand'))
-  if (actions.includes('resolve_bgg_game')) add(translated(turnLocale, 'toolReference'))
-  if (actions.includes('browse_bgg_catalog')) add(translated(turnLocale, 'toolCatalog'))
-  if (actions.includes('inspect_candidate_titles')) add(translated(turnLocale, 'toolNames'))
-  if (actions.includes('lookup_bgg_games')) add(translated(turnLocale, 'toolDetails'))
-  if (actions.includes('discover_public_candidates')) add(translated(turnLocale, 'toolDiscover'))
+  if (actions.includes('search_bgg_catalog')) add(translated(turnLocale, 'toolCatalog'))
+  if (actions.includes('discover_public_relationship')) add(translated(turnLocale, 'toolDiscover'))
   if (actions.includes('research_game_fit')) add(translated(turnLocale, 'toolResearch'))
   if (actions.includes('compare_candidates')) add(translated(turnLocale, 'toolCompare'))
   return labels
@@ -746,6 +712,7 @@ async function submitPendingTurn(
   turnIdentityConflict.value = false
   failureBoundary.value = null
   failureReason.value = null
+  failureDetailCode.value = null
   failedAssistantMessage.value = ''
   beginLoading()
   failed.value = false
@@ -814,7 +781,8 @@ async function submitPendingTurn(
       unavailableFailure.value = true
       failureBoundary.value = playerSafeFailureBoundary(parsed.failureBoundary)
       failureReason.value = playerSafeFailureReason(parsed.failureReason)
-      failedAssistantMessage.value = boundedPlayerFacingText(parsed.assistantMessage)
+      failureDetailCode.value = playerSafeFailureDetailCode(parsed.failureDetailCode)
+      failedAssistantMessage.value = playerFacingText(parsed.assistantMessage)
       failed.value = true
       return
     }
@@ -1141,6 +1109,7 @@ function clearVisibleRecommendationConversation(preserveSelectedIdentity = false
   turnIdentityConflict.value = false
   failureBoundary.value = null
   failureReason.value = null
+  failureDetailCode.value = null
   failedAssistantMessage.value = ''
   activeTurnLocale.value = null
   failedTurnLocale.value = null
@@ -1286,8 +1255,11 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
     failureReason.value = unavailableFailure.value
       ? playerSafeFailureReason(lastTurnResult?.failureReason)
       : null
+    failureDetailCode.value = unavailableFailure.value
+      ? playerSafeFailureDetailCode(lastTurnResult?.failureDetailCode)
+      : null
     failedAssistantMessage.value = unavailableFailure.value
-      ? boundedPlayerFacingText(lastTurnResult?.assistantMessage ?? '')
+      ? playerFacingText(lastTurnResult?.assistantMessage ?? '')
       : ''
     const pendingTurn = pending.transcript.at(-1)
     const visibleLastTurn = messages.value.at(-1)
@@ -1455,6 +1427,7 @@ function reset(preserveJourney = false) {
   turnIdentityConflict.value = false
   failureBoundary.value = null
   failureReason.value = null
+  failureDetailCode.value = null
   failedAssistantMessage.value = ''
   activeTurnLocale.value = null
   failedTurnLocale.value = null
@@ -1716,6 +1689,12 @@ onBeforeUnmount(() => {
             <div v-if="clarification?.options.length && !loading && !failed" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert">
               <p>{{ failureMessage }}</p>
+              <PlayerFailureDetails
+                class="mt-3"
+                :category="recommendationFailureDetails.category"
+                :owner="recommendationFailureDetails.owner"
+                :code="recommendationFailureDetails.code"
+              />
               <RouterLink v-if="requiresModelConfiguration" data-testid="recommendation-model-settings" :to="{ name: 'model-settings' }" class="mt-2 inline-flex min-h-11 items-center font-semibold underline underline-offset-4">{{ modelSettingsLabel }}</RouterLink>
               <button v-else type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button>
             </div>

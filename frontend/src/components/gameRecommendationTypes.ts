@@ -145,6 +145,7 @@ export type RecommendationAgentResponse = {
   webResearchCalls?: number
   failureBoundary?: RecommendationFailureBoundary | null
   failureReason?: RecommendationFailureReason | null
+  failureDetailCode?: string | null
   userModel?: {
     summary: string
     hypotheses: {
@@ -168,6 +169,7 @@ export type RecommendationTurnResult = {
   assistantMessage: string
   failureBoundary?: RecommendationFailureBoundary | null
   failureReason?: RecommendationFailureReason | null
+  failureDetailCode?: string | null
 }
 
 export type RecommendationServerSession = {
@@ -227,15 +229,11 @@ export type RecommendationProgressFocus = {
 
 export type RecommendationProgressAction =
   | 'understand_request'
-  | 'choose_next_action'
+  | 'observe_and_decide'
   | 'reply_to_user'
   | 'ask_user'
-  | 'resolve_bgg_game'
-  | 'inspect_candidate_titles'
-  | 'browse_bgg_catalog'
-  | 'discover_public_candidates'
-  | 'lookup_bgg_games'
+  | 'search_bgg_catalog'
+  | 'discover_public_relationship'
   | 'research_game_fit'
   | 'compare_candidates'
-  | 'report_no_match'
   | 'recommend_games'

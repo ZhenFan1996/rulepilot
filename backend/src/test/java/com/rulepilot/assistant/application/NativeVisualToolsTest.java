@@ -35,27 +35,33 @@ class NativeVisualToolsTest {
                         Set.of("crop_rule_page_image", "read_rule_page_image", "read_visual_page_facts")))
                 .extracting(spec -> spec.name())
                 .containsExactly("crop_rule_page_image", "read_rule_page_image", "read_visual_page_facts");
-        assertThat(registry.specifications(Role.ANSWER, Set.of("read_visual_page_facts")))
+        assertThat(registry.specifications(
+                        Role.ANSWER,
+                        Set.of("crop_rule_page_image", "read_rule_page_image", "read_visual_page_facts")))
                 .extracting(spec -> spec.name())
-                .containsExactly("read_visual_page_facts");
+                .containsExactly("crop_rule_page_image", "read_rule_page_image", "read_visual_page_facts");
         assertThat(registry.specifications(Role.TEACHING, Set.of("read_visual_page_facts"))).isEmpty();
 
-        var rejected = registry.execute(
+        var page = registry.execute(
                 Role.ANSWER,
                 "read_rule_page_image",
-                "{\"evidenceId\":\"" + evidenceId + "\",\"pageNumber\":4}",
+                "{\"evidenceId\":\"" + evidenceId
+                        + "\",\"pageNumber\":4,\"additiveHint\":\"ignored\"}",
                 scope());
-        assertThat(rejected.observation().status()).isEqualTo(ObservationStatus.ERROR);
-        assertThat(rejected.observation().code()).isEqualTo("TOOL_NOT_ALLOWED");
+        assertThat(page.observation().status()).isEqualTo(ObservationStatus.SUCCESS);
+        assertThat(page.observation().code()).isEqualTo("PAGE_IMAGE_FOUND");
 
         var facts = registry.execute(
                 Role.ANSWER,
                 "read_visual_page_facts",
-                "{\"evidenceId\":\"" + evidenceId + "\",\"pageNumber\":4}",
+                "{\"evidenceId\":\"" + evidenceId
+                        + "\",\"pageNumber\":4,\"additiveHint\":true}",
                 scope());
         assertThat(facts.observation().status()).isEqualTo(ObservationStatus.SUCCESS);
         assertThat(facts.observation().media()).isEmpty();
         assertThat(facts.observation().data()).containsEntry("mechanicalRuleAuthority", false);
+        assertThat(registry.specification(Role.ANSWER, "crop_rule_page_image").inputSchema())
+                .contains("\"additionalProperties\": true");
     }
 
     @Test
@@ -94,8 +100,9 @@ class NativeVisualToolsTest {
 
         assertThat(overflow.observation().code()).isEqualTo("INVALID_ARGUMENT");
         assertThat(overflow.observation().data())
-                .containsEntry("validationError", "the crop rectangle must remain inside the normalized page")
-                .containsEntry("inputSchema", crop.inputSchema());
+                .containsEntry("path", "/")
+                .containsEntry("reason", "the crop rectangle must remain inside the normalized page")
+                .containsEntry("currentSchema", crop.inputSchema());
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> crop.execute(
                         "{\"evidenceId\":\"" + evidenceId

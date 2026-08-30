@@ -58,35 +58,11 @@ public record AssistantRun(
             Map.entry(AssistantRunState.MEDIA_PACKAGING, Set.of(AssistantRunState.COMPLETED, AssistantRunState.DEGRADED)));
 
     private static final Map<AssistantRunState, Set<AssistantRunState>> QUESTION_TRANSITIONS = Map.ofEntries(
-            Map.entry(AssistantRunState.RECEIVED, Set.of(AssistantRunState.QUESTION_UNDERSTANDING)),
-            Map.entry(
-                    AssistantRunState.QUESTION_UNDERSTANDING,
-                    Set.of(
-                            AssistantRunState.NEED_CLARIFICATION,
-                            AssistantRunState.RETRIEVAL_PLANNING,
-                            AssistantRunState.COMPLETED,
-                            AssistantRunState.DEGRADED)),
-            Map.entry(AssistantRunState.NEED_CLARIFICATION, Set.of(AssistantRunState.QUESTION_UNDERSTANDING)),
-            Map.entry(AssistantRunState.RETRIEVAL_PLANNING, Set.of(AssistantRunState.RETRIEVING)),
-            Map.entry(AssistantRunState.RETRIEVING, Set.of(AssistantRunState.VERIFYING_EVIDENCE)),
-            Map.entry(
-                    AssistantRunState.VERIFYING_EVIDENCE,
-                    Set.of(
-                            AssistantRunState.RETRIEVAL_PLANNING,
-                            AssistantRunState.NEED_CLARIFICATION,
-                            AssistantRunState.INSUFFICIENT_EVIDENCE,
-                            AssistantRunState.ANSWER_COMPOSITION,
-                            AssistantRunState.DEGRADED)),
+            Map.entry(AssistantRunState.RECEIVED, Set.of(AssistantRunState.ANSWER_COMPOSITION)),
             Map.entry(
                     AssistantRunState.ANSWER_COMPOSITION,
                     Set.of(
-                            AssistantRunState.CRITIQUING,
-                            AssistantRunState.INSUFFICIENT_EVIDENCE,
-                            AssistantRunState.COMPLETED,
-                            AssistantRunState.DEGRADED)),
-            Map.entry(
-                    AssistantRunState.CRITIQUING,
-                    Set.of(
+                            AssistantRunState.NEED_CLARIFICATION,
                             AssistantRunState.INSUFFICIENT_EVIDENCE,
                             AssistantRunState.COMPLETED,
                             AssistantRunState.DEGRADED)));

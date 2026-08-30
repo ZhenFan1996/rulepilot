@@ -11,4 +11,9 @@ public final class TeachingPlanPersistenceRoundTrip {
         TeachingPlanEntity entity = new TeachingPlanEntity(plan);
         return entity.toDomain(plan.sections());
     }
+
+    public static TeachingPlan.PlannedSection serializeAndReloadSection(
+            TeachingPlan.PlannedSection section) {
+        return new TeachingPlanSectionEntity(java.util.UUID.randomUUID(), section).toDomain();
+    }
 }

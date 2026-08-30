@@ -1,7 +1,6 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.PlayerLocale;
-import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.application.PlayerFacingRuleAnswer.Citation;
 import com.rulepilot.assistant.application.PlayerFacingRuleAnswer.Recovery;
 import com.rulepilot.assistant.application.PlayerFacingRuleAnswer.SourceKind;
@@ -27,11 +26,39 @@ public final class PlayerFacingAnswerPresenter {
                         citation.pageFrom(),
                         citation.pageTo()))
                 .toList();
+        if (answer.status() == AnswerStatus.CLARIFICATION_REQUIRED) {
+            return new PlayerFacingRuleAnswer(
+                    languageTag(language),
+                    answer.status(),
+                    answer.shortVerdict(),
+                    answer.explanation() == null ? "" : answer.explanation(),
+                    List.of(),
+                    List.of(),
+                    AnswerConfidence.LOW,
+                    null,
+                    source(answer),
+                    answer.clarification(),
+                    null,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of());
+        }
         if (!answer.status().publishesConclusion()) {
             List<Citation> safeSources = answer.status() == AnswerStatus.INSUFFICIENT_EVIDENCE
                     ? citations
                     : List.of();
-            return safeFailure(answer.status(), language, question, safeSources, source(answer), answer.clarification());
+            return safeFailure(answer, language, question, safeSources, source(answer));
         }
         return new PlayerFacingRuleAnswer(
                 languageTag(language),
@@ -46,83 +73,34 @@ public final class PlayerFacingAnswerPresenter {
                 null,
                 null,
                 answer.warnings(),
-                answer.calculations().stream()
-                        .map(value -> new RuleAnswering.Calculation(value.expression(), value.result()))
-                        .toList(),
-                answer.situationChecks().stream()
-                        .map(value -> new RuleAnswering.SituationCheck(
-                                value.requirement(), value.status().name(), value.playerFact()))
-                        .toList(),
-                answer.walkthroughSteps().stream()
-                        .map(value -> new RuleAnswering.WalkthroughStep(
-                                value.instruction(), value.explanation(), value.orderBasis().name()))
-                        .toList(),
-                answer.decisionBranches().stream()
-                        .map(value -> new RuleAnswering.DecisionBranch(
-                                value.condition(), value.outcome(), value.basis().name()))
-                        .toList(),
-                answer.exceptionClauses().stream()
-                        .map(value -> new RuleAnswering.ExceptionClause(value.condition(), value.effect()))
-                        .toList(),
-                answer.termDefinitions().stream()
-                        .map(value -> new RuleAnswering.TermDefinition(
-                                value.term(), value.definition(), value.boundary()))
-                        .toList(),
-                answer.workedExamples().stream()
-                        .map(value -> new RuleAnswering.WorkedExample(
-                                value.setup(), value.action(), value.outcome(), value.basis().name()))
-                        .toList(),
-                answer.priorityResolutions().stream()
-                        .map(value -> new RuleAnswering.RulePriorityResolution(
-                                value.baseRule(), value.competingRule(), value.resolution(), value.basis().name()))
-                        .toList(),
-                answer.timingResolutions().stream()
-                        .map(value -> new RuleAnswering.RuleTimingResolution(
-                                value.timingContext(), value.resolutionOrder(), value.orderSource(), value.basis().name()))
-                        .toList(),
-                answer.tieResolutions().stream()
-                        .map(value -> new RuleAnswering.RuleTieResolution(
-                                value.tieContext(), value.resolutionSteps(), value.finalOutcome(), value.basis().name()))
-                        .toList(),
-                answer.scopeResolutions().stream()
-                        .map(value -> new RuleAnswering.RuleScopeResolution(
-                                value.ruleContext(), value.governingCondition(), value.currentSituation(),
-                                value.matchStatus().name(), value.effect(), value.basis().name()))
-                        .toList(),
-                answer.conceptComparisons().stream()
-                        .map(value -> new RuleAnswering.RuleConceptComparison(
-                                value.leftConcept(), value.leftDefinition(), value.rightConcept(), value.rightDefinition(),
-                                value.commonGround(), value.keyDifference(), value.practicalBoundary(), value.basis().name()))
-                        .toList(),
-                answer.ruleOptions().stream()
-                        .map(value -> new RuleAnswering.RuleOption(
-                                value.decisionContext(), value.selectionRule(), value.optionName(),
-                                value.availabilityCondition(), value.result(), value.basis().name()))
-                        .toList());
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of());
     }
 
     private static PlayerFacingRuleAnswer safeFailure(
-            AnswerStatus status,
+            StructuredRuleAnswer answer,
             PlayerLocale language,
             String question,
             List<Citation> citations,
             SourceKind source) {
-        return safeFailure(status, language, question, citations, source, null);
-    }
-
-    private static PlayerFacingRuleAnswer safeFailure(
-            AnswerStatus status,
-            PlayerLocale language,
-            String question,
-            List<Citation> citations,
-            SourceKind source,
-            String clarification) {
-        FailureCopy copy = failureCopy(status, language, question, clarification);
+        AnswerStatus status = answer.status();
+        FailureCopy copy = failureCopy(status, language, question, answer.clarification());
         return new PlayerFacingRuleAnswer(
                 languageTag(language),
                 status,
-                copy.verdict(),
-                "",
+                answer.shortVerdict().isBlank() ? copy.verdict() : answer.shortVerdict(),
+                answer.explanation() == null ? "" : answer.explanation(),
                 citations,
                 List.of(),
                 AnswerConfidence.LOW,
@@ -177,6 +155,21 @@ public final class PlayerFacingAnswerPresenter {
                     null,
                     new Recovery(detail, english ? "Add detail" : "补充细节", "", false));
         }
+        if (status == AnswerStatus.RETRIEVAL_UNAVAILABLE) {
+            String detail = english
+                    ? "The question was not rejected and the answer model was not called. Retry the same question unchanged after rule search recovers."
+                    : "问题本身没有被拒绝，答疑模型也尚未调用；规则检索恢复后可以原样重试同一个问题。";
+            return new FailureCopy(
+                    english
+                            ? "Rule search was temporarily unavailable, so no answer was generated."
+                            : "规则检索暂时不可用，因此这次尚未生成回答。",
+                    null,
+                    new Recovery(
+                            detail,
+                            english ? "Reuse the same question" : "保留原问题",
+                            safeQuestionDraft(question),
+                            true));
+        }
         if (status == AnswerStatus.MODEL_UNAVAILABLE) {
             String detail = english
                     ? "The question and rule sources were not rejected. Once the answer model is available, it is appropriate to retry the same question unchanged."
@@ -223,16 +216,16 @@ public final class PlayerFacingAnswerPresenter {
                             false));
         }
         String detail = english
-                ? "Retrying unchanged immediately is unlikely to help; review or rephrase the question, or try later."
-                : "立即原样重试通常无益，请检查或改写问题，也可以稍后再试。";
+                ? "The question itself was not rejected. The same Agent stopped after a complete response or action failed its typed JSON, evidence-identity, or no-progress boundary."
+                : "问题本身没有被拒绝；同一 Agent 是在完整回复或动作触发 typed JSON、证据身份或无进展边界后停止的。";
         return new FailureCopy(
                 english
-                        ? "The generated answer failed its structure or citation-identifier contract."
-                        : "生成的回答未通过结构或引用标识契约。",
+                        ? "The answer Agent stopped at a typed publication boundary."
+                        : "答疑 Agent 已在 typed 发布边界停止。",
                 null,
                 new Recovery(
                         detail,
-                        english ? "Review or rephrase" : "检查或改写问题",
+                        english ? "Review Agent result" : "查看 Agent 结果",
                         safeQuestionDraft(question),
                         false));
     }

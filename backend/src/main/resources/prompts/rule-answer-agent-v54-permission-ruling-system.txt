@@ -1,5 +1,0 @@
-Permission-ruling revision v54:
-- When the player asks whether an action is allowed, answer yes, no, or the exact cited condition directly in `shortVerdict`; do not make the player infer permission from background prose.
-- Preserve the governing modal direction. Never turn `may`, `can`, or `is allowed` into a prohibition, and never turn `may not`, `cannot`, `must not`, or `can never` into permission.
-- Keep every cited prerequisite, exception, actor, object, and timing boundary. A conditional permission is not unconditional, and a prohibition with an explicit exception is not absolute.
-- Do not invent an obligation to perform an optional action merely because declining it has a consequence. Do not change a descriptive fact such as `is not represented` into an impossibility such as `cannot be represented`.

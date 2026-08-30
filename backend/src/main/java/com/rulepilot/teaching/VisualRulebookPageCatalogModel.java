@@ -42,23 +42,26 @@ public interface VisualRulebookPageCatalogModel {
 
     record TeachingCatalogRejection(
             String candidateJson,
-            String validationError,
-            String outputContract,
+            TeachingCatalogRepairCode code,
+            String path,
+            String reason,
+            String schema,
             Set<Integer> allowedPageIds) {
 
         public TeachingCatalogRejection {
             if (candidateJson == null
-                    || validationError == null
-                    || validationError.isBlank()
-                    || outputContract == null
-                    || outputContract.isBlank()
+                    || code == null
+                    || path == null || path.isBlank()
+                    || reason == null || reason.isBlank()
+                    || schema == null || schema.isBlank()
                     || allowedPageIds == null
                     || allowedPageIds.isEmpty()
                     || allowedPageIds.stream().anyMatch(page -> page == null || page < 1)) {
                 throw new IllegalArgumentException("visual Teaching catalog rejection is incomplete");
             }
-            validationError = validationError.strip();
-            outputContract = outputContract.strip();
+            path = path.strip();
+            reason = reason.strip();
+            schema = schema.strip();
             allowedPageIds = Set.copyOf(allowedPageIds);
         }
     }
@@ -155,23 +158,6 @@ public interface VisualRulebookPageCatalogModel {
         }
     }
 
-    /**
-     * A compact page-role ledger used only to build an immutable source-bound plan. Coverage tags express teaching
-     * obligations visible on a page; they are not themselves rule claims and never replace the page evidence.
-     */
-    record SourceDependency(String title, List<String> missingCoverageTags) {
-
-        public SourceDependency {
-            if (title == null || title.isBlank()
-                    || missingCoverageTags == null
-                    || missingCoverageTags.stream().anyMatch(tag -> tag == null || tag.isBlank())) {
-                throw new IllegalArgumentException("visual teaching source dependency is invalid");
-            }
-            title = title.strip();
-            missingCoverageTags = missingCoverageTags.stream().map(String::strip).distinct().toList();
-        }
-    }
-
     record ModelExecutionIdentity(String provider, String model) {
         public ModelExecutionIdentity {
             provider = auditValue(provider, "provider");
@@ -210,10 +196,6 @@ public interface VisualRulebookPageCatalogModel {
             String factualSummary,
             List<String> keywords,
             List<VisualAnchor> visualAnchors,
-            List<SourceDependency> sourceDependencies,
-            List<String> ruleGroupIdentifiers,
-            boolean ruleGroupInventoryComplete,
-            List<VisualQuantityObservation> quantityObservations,
             List<RuleGroupFact> ruleGroupFacts) {
 
         public PageSummary(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
@@ -222,10 +204,6 @@ public interface VisualRulebookPageCatalogModel {
                     printedTerms,
                     factualSummary,
                     keywords,
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    false,
                     List.of(),
                     List.of());
         }
@@ -242,33 +220,6 @@ public interface VisualRulebookPageCatalogModel {
                     factualSummary,
                     keywords,
                     visualAnchors,
-                    List.of(),
-                    List.of(),
-                    false,
-                    List.of(),
-                    List.of());
-        }
-
-        public PageSummary(
-                int pageNumber,
-                String printedTerms,
-                String factualSummary,
-                List<String> keywords,
-                List<VisualAnchor> visualAnchors,
-                List<SourceDependency> sourceDependencies,
-                List<String> ruleGroupIdentifiers,
-                boolean ruleGroupInventoryComplete,
-                List<VisualQuantityObservation> quantityObservations) {
-            this(
-                    pageNumber,
-                    printedTerms,
-                    factualSummary,
-                    keywords,
-                    visualAnchors,
-                    sourceDependencies,
-                    ruleGroupIdentifiers,
-                    ruleGroupInventoryComplete,
-                    quantityObservations,
                     List.of());
         }
 
@@ -277,13 +228,6 @@ public interface VisualRulebookPageCatalogModel {
                     || (keywords != null
                             && keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank()))
                     || (visualAnchors != null && visualAnchors.stream().anyMatch(java.util.Objects::isNull))
-                    || sourceDependencies == null
-                    || sourceDependencies.stream().anyMatch(java.util.Objects::isNull)
-                    || ruleGroupIdentifiers == null
-                    || ruleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank())
-                    || quantityObservations == null
-                    || quantityObservations.stream().anyMatch(java.util.Objects::isNull)
                     || ruleGroupFacts == null
                     || ruleGroupFacts.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("visual page summary is invalid");
@@ -294,27 +238,11 @@ public interface VisualRulebookPageCatalogModel {
             factualSummary = factualSummary == null || factualSummary.isBlank()
                     ? "该页没有可可靠转写的规则文字；请直接查看页面图像。"
                     : factualSummary.strip();
-            keywords = keywords == null || keywords.isEmpty()
-                    ? List.of("page " + pageNumber)
+            keywords = keywords == null
+                    ? List.of()
                     : keywords.stream().map(String::strip).distinct().toList();
             visualAnchors = visualAnchors == null ? List.of() : visualAnchors.stream().distinct().toList();
-            sourceDependencies = sourceDependencies.stream().distinct().toList();
-            ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
-            quantityObservations = List.copyOf(new java.util.LinkedHashSet<>(quantityObservations));
             ruleGroupFacts = ruleGroupFacts.stream().distinct().toList();
-            Set<String> ruleGroupIdentities = Set.copyOf(ruleGroupIdentifiers);
-            Set<String> factIdentities = ruleGroupFacts.stream()
-                    .map(RuleGroupFact::identifier)
-                    .collect(java.util.stream.Collectors.toSet());
-            if (ruleGroupInventoryComplete && !factIdentities.equals(ruleGroupIdentities)) {
-                throw new IllegalArgumentException("visual rule-group facts must exactly match their JSON identifiers");
-            }
-            if (quantityObservations.stream().anyMatch(observation -> observation.pageNumber() != pageNumber
-                    || !ruleGroupIdentities.contains(observation.ruleGroupIdentifier()))) {
-                throw new IllegalArgumentException(
-                        "visual quantity observation must match its page and rule group");
-            }
-            VisualQuantityObservation.appendEvidence(factualSummary, quantityObservations);
         }
     }
 }

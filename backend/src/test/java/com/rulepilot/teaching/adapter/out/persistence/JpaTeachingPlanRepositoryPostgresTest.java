@@ -72,17 +72,9 @@ class JpaTeachingPlanRepositoryPostgresTest {
     void saveAndReloadPreservesTheSourceBoundWholeGameContext() {
         UUID versionId = createDocumentVersion();
         var context = new TeachingPlan.WholeGameContext(
-                "先识别共享状态，再判断条件变化。",
-                List.of(
-                        new TeachingPlan.GlobalConcept(
-                                "shared-state", "共享状态", "识别共同观察的状态。",
-                                List.of("R-alpha"), List.of(2), List.of("observe-state"), List.of()),
-                        new TeachingPlan.GlobalConcept(
-                                "conditional-change", "条件变化", "判断状态何时改变。",
-                                List.of("R-beta"), List.of(3), List.of("apply-change"), List.of("shared-state"))),
                 List.of(new TeachingPlan.TopicDependency(
                         "observe-state", "apply-change", "先观察，后改变。")),
-                true);
+                List.of("条件变化例外尚未解决。"));
         TeachingPlan original = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
@@ -107,7 +99,6 @@ class JpaTeachingPlanRepositoryPostgresTest {
         TeachingPlan restored = inTransaction(repository -> repository.findById(original.id()).orElseThrow());
 
         assertThat(restored.wholeGameContext()).isEqualTo(context);
-        assertThat(restored.wholeGameContext().evidenceBound()).isTrue();
         assertThat(restored.sections()).isEqualTo(original.sections());
     }
 
@@ -120,13 +111,7 @@ class JpaTeachingPlanRepositoryPostgresTest {
                 "只验证列表字段",
                         "Large-context game",
                         "列表只需要一句前提。",
-                new TeachingPlan.WholeGameContext(
-                        "不应为列表反序列化的完整上下文。",
-                        List.of(new TeachingPlan.GlobalConcept(
-                                "large-context", "大上下文", "仅详情需要。",
-                                List.of("很多证据"), List.of(9), List.of("setup"), List.of())),
-                        List.of(),
-                        true),
+                new TeachingPlan.WholeGameContext(List.of(), List.of("列表应显示这个缺口。")),
                 List.of(new TeachingPlan.PlannedSection(
                         1, "setup", "设置", "摆好组件。", true, true,
                         List.of("不应返回给列表的检索词"), List.of("internal-tag"), List.of(9))),

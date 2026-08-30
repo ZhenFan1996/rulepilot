@@ -378,9 +378,13 @@ public class IllustratedLessonService {
 
     @Transactional(readOnly = true)
     public Optional<TeachingPlanSummary.LessonProgress> latestProgress(UUID teachingPlanId) {
+        List<String> unresolvedTopics = plans.findById(teachingPlanId)
+                .map(plan -> plan.wholeGameContext().unresolvedTopics())
+                .orElse(List.of());
         return repository.findLatestProgressSummariesByPlans(List.of(teachingPlanId)).stream()
                 .findFirst()
-                .map(TeachingPlanSummary.LessonProgress::from);
+                .map(TeachingPlanSummary.LessonProgress::from)
+                .map(progress -> progress.withUnresolvedTopics(unresolvedTopics));
     }
 
     static UUID candidateSubjectId(UUID teachingPlanId) {

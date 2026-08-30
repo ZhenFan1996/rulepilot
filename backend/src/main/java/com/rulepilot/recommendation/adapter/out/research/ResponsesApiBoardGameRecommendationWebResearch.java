@@ -293,7 +293,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                     .map(Source::index)
                     .collect(java.util.stream.Collectors.toUnmodifiableSet());
             JsonNode payload = functionPayload(output, SearchPurpose.PUBLIC_DISCOVERY);
-            if (!exactFields(payload, "candidates", "publicContext")) {
+            if (!requiredFields(payload, "candidates", "publicContext")) {
                 return invalidDiscovery("payload-shape");
             }
             List<PublicContextEvidence> publicContext = parsePublicContext(
@@ -321,7 +321,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
         for (int index = 0; index < payload.size(); index++) {
             JsonNode context = payload.get(index);
             try {
-                if (!exactFields(
+                if (!requiredFields(
                         context,
                         "subjectKind",
                         "subject",
@@ -369,7 +369,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
         for (int index = 0; index < payload.size(); index++) {
             JsonNode candidate = payload.get(index);
             try {
-                if (!exactFields(candidate, "name", "fitObservation", "sourceIndexes")) {
+                if (!requiredFields(candidate, "name", "fitObservation", "sourceIndexes")) {
                     throw new ValidationFailure("item-shape");
                 }
                 String name = nonBlankText(candidate.path("name"));
@@ -440,7 +440,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             if (!output.isArray()) return invalid("output-shape");
             List<Source> sources = sources(output);
             JsonNode payload = functionPayload(output, SearchPurpose.FIT_RESEARCH);
-            if (!payload.isObject() || payload.size() != 1 || !payload.path("games").isArray()) {
+            if (!requiredFields(payload, "games") || !payload.path("games").isArray()) {
                 return invalid("payload-shape");
             }
             java.util.Set<Integer> allowed = request.candidates().stream()
@@ -455,7 +455,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             for (int gameIndex = 0; gameIndex < gamePayload.size(); gameIndex++) {
                 JsonNode game = gamePayload.get(gameIndex);
                 try {
-                    if (!exactFields(game, "bggId", "observations")
+                    if (!requiredFields(game, "bggId", "observations")
                             || !game.path("bggId").canConvertToInt()
                             || game.path("bggId").intValue() < 1
                             || !game.path("observations").isArray()) {
@@ -470,7 +470,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                             observationIndex++) {
                         JsonNode observation = observationPayload.get(observationIndex);
                         try {
-                            if (!exactFields(observation, "text", "sourceIndexes")) {
+                            if (!requiredFields(observation, "text", "sourceIndexes")) {
                                 throw new ValidationFailure("observation-shape");
                             }
                             String text = nonBlankText(observation.path("text"));
@@ -716,8 +716,8 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
         }
     }
 
-    private boolean exactFields(JsonNode node, String... names) {
-        if (!node.isObject() || node.size() != names.length) return false;
+    private boolean requiredFields(JsonNode node, String... names) {
+        if (!node.isObject()) return false;
         for (String name : names) if (!node.has(name)) return false;
         return true;
     }
@@ -754,14 +754,13 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                 """
                 {
                   "type":"object",
-                  "additionalProperties":false,
                   "properties":{
-                    "candidates":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{
+                    "candidates":{"type":"array","items":{"type":"object","properties":{
                       "name":{"type":"string","minLength":1},
                       "fitObservation":{"type":"string","minLength":1},
                       "sourceIndexes":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"integer","minimum":1}}
                     },"required":["name","fitObservation","sourceIndexes"]}},
-                    "publicContext":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{
+                    "publicContext":{"type":"array","items":{"type":"object","properties":{
                       "subjectKind":{"type":"string","enum":["PERSON","EVENT","ORGANIZATION","ENTITY"]},
                       "subject":{"type":"string","minLength":1},
                       "relation":{"type":"string","minLength":1},
@@ -780,11 +779,10 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                 """
                 {
                   "type":"object",
-                  "additionalProperties":false,
                   "properties":{
-                    "games":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{
+                    "games":{"type":"array","items":{"type":"object","properties":{
                       "bggId":{"type":"integer","minimum":1},
-                      "observations":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{
+                      "observations":{"type":"array","items":{"type":"object","properties":{
                         "text":{"type":"string","minLength":1},
                         "sourceIndexes":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"integer","minimum":1}}
                       },"required":["text","sourceIndexes"]}

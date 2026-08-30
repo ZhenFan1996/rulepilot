@@ -101,7 +101,10 @@ rulepilot:
     api-enabled: true
     worker-enabled: true
   agent:
-    max-tokens: ${AGENT_MAX_TOKENS:24000}
+    # Native ReAct re-sends the complete correlated observation history on each decision. The former 24k envelope
+    # exhausted after two parallel searches before an exact-page read could run; 64k remains finite while covering
+    # the measured search -> read -> terminal path.
+    max-tokens: ${AGENT_MAX_TOKENS:64000}
     timeout: ${AGENT_TIMEOUT:PT2M}
   document:
     max-pdf-pages: ${MAX_PDF_PAGES:500}
@@ -184,9 +187,6 @@ rulepilot:
       agent:
         max-tokens: ${VISUAL_ENRICHMENT_AGENT_MAX_TOKENS:600000}
         timeout: ${VISUAL_ENRICHMENT_AGENT_TIMEOUT:PT30M}
-    # First-pass chapters use the planner's rulebook-language terms. Supplemental searches belong to
-    # post-publication review instead of delaying the first complete, cited lesson.
-    base-max-retrieval-queries-per-section: ${TEACHING_BASE_MAX_RETRIEVAL_QUERIES_PER_SECTION:3}
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}

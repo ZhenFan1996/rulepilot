@@ -58,45 +58,38 @@ class AssistantRunTest {
     }
 
     @Test
-    void questionRunCanResumeAfterClarificationAndASecondRetrievalPlan() {
+    void questionClarificationSettlesTheNativeAgentRun() {
         AssistantRun run = AssistantRun.start(AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED);
 
-        run = advance(run, AssistantRunState.QUESTION_UNDERSTANDING, 1);
+        run = advance(run, AssistantRunState.ANSWER_COMPOSITION, 1);
         run = advance(run, AssistantRunState.NEED_CLARIFICATION, 2);
-        run = advance(run, AssistantRunState.QUESTION_UNDERSTANDING, 3);
-        run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, 4);
-        run = advance(run, AssistantRunState.RETRIEVING, 5);
-        run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, 6);
-        run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, 7);
 
-        assertThat(run.state()).isEqualTo(AssistantRunState.RETRIEVAL_PLANNING);
-        assertThat(run.completedAt()).isNull();
+        assertThat(run.state()).isEqualTo(AssistantRunState.NEED_CLARIFICATION);
+        assertThat(run.completedAt()).isEqualTo(STARTED.plusSeconds(2));
+        AssistantRun terminal = run;
+        assertThatThrownBy(() -> terminal.advance(
+                        AssistantRunState.ANSWER_COMPOSITION, STARTED.plusSeconds(3)))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
     void questionRunCanTerminateFromThePhaseThatActuallyProducedItsOutcome() {
-        AssistantRun cached = AssistantRun.start(
+        AssistantRun chat = AssistantRun.start(
                         AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
-                .advance(AssistantRunState.QUESTION_UNDERSTANDING, STARTED.plusSeconds(1))
+                .advance(AssistantRunState.ANSWER_COMPOSITION, STARTED.plusSeconds(1))
                 .advance(AssistantRunState.COMPLETED, STARTED.plusSeconds(2));
-        AssistantRun recoveredClarification = AssistantRun.start(
+        AssistantRun clarification = AssistantRun.start(
                         AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
-                .advance(AssistantRunState.QUESTION_UNDERSTANDING, STARTED.plusSeconds(1))
-                .advance(AssistantRunState.RETRIEVAL_PLANNING, STARTED.plusSeconds(2))
-                .advance(AssistantRunState.RETRIEVING, STARTED.plusSeconds(3))
-                .advance(AssistantRunState.VERIFYING_EVIDENCE, STARTED.plusSeconds(4))
-                .advance(AssistantRunState.NEED_CLARIFICATION, STARTED.plusSeconds(5));
-        AssistantRun preCompositionFailure = AssistantRun.start(
+                .advance(AssistantRunState.ANSWER_COMPOSITION, STARTED.plusSeconds(1))
+                .advance(AssistantRunState.NEED_CLARIFICATION, STARTED.plusSeconds(2));
+        AssistantRun boundaryFailure = AssistantRun.start(
                         AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
-                .advance(AssistantRunState.QUESTION_UNDERSTANDING, STARTED.plusSeconds(1))
-                .advance(AssistantRunState.RETRIEVAL_PLANNING, STARTED.plusSeconds(2))
-                .advance(AssistantRunState.RETRIEVING, STARTED.plusSeconds(3))
-                .advance(AssistantRunState.VERIFYING_EVIDENCE, STARTED.plusSeconds(4))
-                .advance(AssistantRunState.DEGRADED, STARTED.plusSeconds(5));
+                .advance(AssistantRunState.ANSWER_COMPOSITION, STARTED.plusSeconds(1))
+                .advance(AssistantRunState.DEGRADED, STARTED.plusSeconds(2));
 
-        assertThat(cached.state()).isEqualTo(AssistantRunState.COMPLETED);
-        assertThat(recoveredClarification.state()).isEqualTo(AssistantRunState.NEED_CLARIFICATION);
-        assertThat(preCompositionFailure.state()).isEqualTo(AssistantRunState.DEGRADED);
+        assertThat(chat.state()).isEqualTo(AssistantRunState.COMPLETED);
+        assertThat(clarification.state()).isEqualTo(AssistantRunState.NEED_CLARIFICATION);
+        assertThat(boundaryFailure.state()).isEqualTo(AssistantRunState.DEGRADED);
     }
 
     @Test

@@ -3,7 +3,6 @@ package com.rulepilot.teaching.adapter.out.model;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
-import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.VisualRegionLocator;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
@@ -45,19 +44,6 @@ class TeachingOutlineImagePreparerTest {
 
         assertThat(result.getWidth()).isEqualTo(400);
         assertThat(result.getHeight()).isEqualTo(600);
-    }
-
-    @Test
-    void reducesLargeLessonEvidencePagesBeforeVisionModelUse() throws Exception {
-        BufferedImage source = new BufferedImage(1800, 2400, BufferedImage.TYPE_INT_RGB);
-        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
-        ImageIO.write(source, "jpeg", encoded);
-
-        TeachingLessonModel.PageImageInput prepared = preparer.prepare(
-                new TeachingLessonModel.PageImageInput(8, "image/jpeg", encoded.toByteArray(), 1800, 2400));
-
-        assertThat(prepared.width()).isEqualTo(768);
-        assertThat(prepared.height()).isEqualTo(1024);
     }
 
     @Test

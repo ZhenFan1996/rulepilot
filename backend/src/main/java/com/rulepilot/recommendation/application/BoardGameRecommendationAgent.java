@@ -22,17 +22,12 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class BoardGameRecommendationAgent {
 
-    static final String UPDATE_PREFERENCES_TOOL = "update_preferences";
-    static final String ASK_TOOL = "ask_only_if_no_useful_answer";
-    static final String RESOLVE_TOOL = "resolve_bgg_game";
-    static final String BROWSE_TOOL = "browse_bgg_catalog";
+    static final String SEARCH_TOOL = "search_bgg_catalog";
     static final String DISCOVER_TOOL = "discover_public_relationship";
-    static final String LOOKUP_TOOL = "lookup_bgg_games";
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String RECOMMEND_TOOL = "recommend_games";
     static final String COMPARE_TOOL = "compare_candidates";
-    static final String NO_MATCH_TOOL = "report_no_match";
-    static final String PROMPT_VERSION = "recommendation-agent-v87-terminal-preferences";
+    static final String PROMPT_VERSION = "recommendation-agent-v90-single-search-contract";
 
     private final RecommendationReActLoop loop;
 
@@ -212,17 +207,13 @@ public class BoardGameRecommendationAgent {
     /** Player-safe execution actions. These expose capability use, never prompts, parameters, or private reasoning. */
     public enum ProgressAction {
         UNDERSTAND_REQUEST,
-        CHOOSE_NEXT_ACTION,
+        OBSERVE_AND_DECIDE,
         REPLY_TO_USER,
         ASK_USER,
-        RESOLVE_BGG_GAME,
-        INSPECT_CANDIDATE_TITLES,
-        BROWSE_BGG_CATALOG,
-        DISCOVER_PUBLIC_CANDIDATES,
-        LOOKUP_BGG_GAMES,
+        SEARCH_BGG_CATALOG,
+        DISCOVER_PUBLIC_RELATIONSHIP,
         RESEARCH_GAME_FIT,
         COMPARE_CANDIDATES,
-        REPORT_NO_MATCH,
         RECOMMEND_GAMES
     }
 
@@ -242,14 +233,12 @@ public class BoardGameRecommendationAgent {
         public ProgressFocus {
             Objects.requireNonNull(kind, "progress focus kind is required");
             Objects.requireNonNull(values, "progress focus values are required");
-            values = values.stream().map(value -> Objects.requireNonNull(value, "progress focus value is required").strip()).toList();
-            if (values.isEmpty()
-                    || values.size() > 3
-                    || values.stream().anyMatch(value -> value.isEmpty()
-                            || value.codePointCount(0, value.length()) > 120)
-                    || values.stream().distinct().count() != values.size()) {
-                throw new IllegalArgumentException("recommendation progress focus is invalid");
-            }
+            values = values.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::strip)
+                    .filter(value -> !value.isEmpty())
+                    .distinct()
+                    .toList();
         }
     }
 
@@ -494,14 +483,15 @@ public class BoardGameRecommendationAgent {
             List<String> actions,
             long totalElapsedMs,
             List<Long> modelCallElapsedMs,
-            FailureReason failureReason) {
+            FailureReason failureReason,
+            String failureDetailCode) {
         public HarnessTrace(
                 int modelCalls,
                 int catalogCalls,
                 int webResearchCalls,
                 boolean fallbackUsed,
                 List<String> actions) {
-            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, 0, List.of(), null);
+            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, 0, List.of(), null, null);
         }
 
         public HarnessTrace(
@@ -511,7 +501,7 @@ public class BoardGameRecommendationAgent {
                 boolean fallbackUsed,
                 List<String> actions,
                 long totalElapsedMs) {
-            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, totalElapsedMs, List.of(), null);
+            this(modelCalls, catalogCalls, webResearchCalls, fallbackUsed, actions, totalElapsedMs, List.of(), null, null);
         }
 
         public HarnessTrace(
@@ -530,6 +520,28 @@ public class BoardGameRecommendationAgent {
                     actions,
                     totalElapsedMs,
                     modelCallElapsedMs,
+                    null,
+                    null);
+        }
+
+        public HarnessTrace(
+                int modelCalls,
+                int catalogCalls,
+                int webResearchCalls,
+                boolean fallbackUsed,
+                List<String> actions,
+                long totalElapsedMs,
+                List<Long> modelCallElapsedMs,
+                FailureReason failureReason) {
+            this(
+                    modelCalls,
+                    catalogCalls,
+                    webResearchCalls,
+                    fallbackUsed,
+                    actions,
+                    totalElapsedMs,
+                    modelCallElapsedMs,
+                    failureReason,
                     null);
         }
 
@@ -541,6 +553,10 @@ public class BoardGameRecommendationAgent {
             if (modelCallElapsedMs.size() > modelCalls
                     || modelCallElapsedMs.stream().anyMatch(elapsed -> elapsed == null || elapsed < 0)) {
                 throw new IllegalArgumentException("model call elapsed times are invalid");
+            }
+            if (failureDetailCode != null
+                    && !failureDetailCode.matches("[A-Z][A-Z0-9_]*")) {
+                throw new IllegalArgumentException("failure detail code is invalid");
             }
         }
     }
@@ -618,7 +634,7 @@ public class BoardGameRecommendationAgent {
         public CandidateComparison {
             candidates = List.copyOf(candidates);
             axes = List.copyOf(axes);
-            if (candidates.size() < 2 || candidates.size() > 5 || axes.isEmpty() || axes.size() > 3) {
+            if (candidates.size() < 2 || axes.isEmpty()) {
                 throw new IllegalArgumentException("candidate comparison shape is invalid");
             }
         }
@@ -635,7 +651,7 @@ public class BoardGameRecommendationAgent {
         public ComparisonAxis {
             if (subject == null || subject.isBlank()) throw new IllegalArgumentException("comparison subject is invalid");
             cells = List.copyOf(cells);
-            if (cells.size() < 2 || cells.size() > 5) {
+            if (cells.size() < 2) {
                 throw new IllegalArgumentException("comparison cells are invalid");
             }
         }

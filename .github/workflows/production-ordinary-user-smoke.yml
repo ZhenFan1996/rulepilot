@@ -120,11 +120,10 @@ jobs:
               echo "bgg_id must be a positive integer for an image gallery" >&2
               exit 2
             }
-            [[ "$RULEBOOK_EXPECTED_PAGE_COUNT" =~ ^[1-9][0-9]*$ ]] \
-              && (( RULEBOOK_EXPECTED_PAGE_COUNT <= 20 )) || {
-                echo "this bounded production canary accepts between 1 and 20 gallery pages" >&2
-                exit 2
-              }
+            [[ "$RULEBOOK_EXPECTED_PAGE_COUNT" =~ ^[1-9][0-9]*$ ]] || {
+              echo "expected_page_count must be a positive integer" >&2
+              exit 2
+            }
             [[ -n "$RULEBOOK_LANGUAGE" ]] || { echo "language is required" >&2; exit 2; }
             [[ "$RULEBOOK_RIGHTS_CONFIRMED" == true ]] || {
               echo "rights_confirmed must be explicitly true for an image gallery" >&2
@@ -377,8 +376,9 @@ jobs:
           test -f "$http_client" && test ! -L "$http_client"
           reset_runner_command_file() {
             local target=$1
-            /usr/bin/rm -f -- "$target"
-            /usr/bin/install -m 600 /dev/null "$target"
+            test -f "$target" && test ! -L "$target"
+            /usr/bin/truncate -s 0 -- "$target"
+            /usr/bin/chmod 600 -- "$target"
           }
           cleanup_authority() {
             /usr/bin/rm -f -- \
@@ -656,54 +656,10 @@ jobs:
                     type == "number" and floor == . and . >= $minimum and . <= $maximum;
                   def number_between($minimum; $maximum):
                     type == "number" and . >= $minimum and . <= $maximum;
-                  def outcome_or_null:
-                    . == null or IN("SUCCEEDED", "FAILED", "REJECTED");
-                  def page_attempts_valid($pageCount):
-                    type == "object"
-                      and (keys | sort) == ["finalUnavailablePages", "initialFailed",
-                        "initialRejected", "initialSucceeded", "maximumSemanticAttemptsForAnyPage",
-                        "pages", "repairAttempted", "repairFailed", "repairSucceeded",
-                        "transientRetryAttempted", "transientRetryFailed",
-                        "transientRetrySucceeded", "valid"]
-                      and .valid == true
-                      and (.pages | type == "array" and length == $pageCount)
-                      and ([.pages[].page] == [range(1; $pageCount + 1)])
-                      and all(.pages[];
-                        type == "object"
-                          and (keys | sort) == ["finalOutcome", "initialOutcome", "page",
-                            "recoveryKind", "recoveryOutcome", "repairCode", "semanticAttempts"]
-                          and (.page | integer_between(1; $pageCount))
-                          and (.initialOutcome | IN("SUCCEEDED", "FAILED", "REJECTED"))
-                          and (.recoveryKind == null
-                            or (.recoveryKind | IN("TRANSIENT_RETRY", "CONTRACT_REPAIR")))
-                          and (.repairCode == null or (.repairCode | IN("MALFORMED_JSON",
-                            "SCHEMA_MISMATCH", "DUPLICATE_RULE_GROUP", "PAGE_BINDING_MISMATCH")))
-                          and (.recoveryOutcome | outcome_or_null)
-                          and (.semanticAttempts | integer_between(1; 2))
-                          and (.finalOutcome | IN("SUCCEEDED", "FAILED", "REJECTED")))
-                      and (.initialSucceeded | integer_between(0; $pageCount))
-                      and (.initialFailed | integer_between(0; $pageCount))
-                      and (.initialRejected | integer_between(0; $pageCount))
-                      and (.initialSucceeded + .initialFailed + .initialRejected == $pageCount)
-                      and (.transientRetryAttempted | integer_between(0; $pageCount))
-                      and (.transientRetrySucceeded | integer_between(0; $pageCount))
-                      and (.transientRetryFailed | integer_between(0; $pageCount))
-                      and (.transientRetrySucceeded + .transientRetryFailed
-                        == .transientRetryAttempted)
-                      and (.repairAttempted | integer_between(0; $pageCount))
-                      and (.repairSucceeded | integer_between(0; $pageCount))
-                      and (.repairFailed | integer_between(0; $pageCount))
-                      and (.repairSucceeded + .repairFailed == .repairAttempted)
-                      and (.transientRetryAttempted + .repairAttempted <= $pageCount)
-                      and (.maximumSemanticAttemptsForAnyPage | integer_between(1; 2))
-                      and (.finalUnavailablePages | type == "array"
-                        and length < $pageCount
-                        and unique == .
-                        and all(.[]; integer_between(1; $pageCount)));
                   def common_valid:
                     (.title | type == "string" and length >= 1 and length <= 160)
-                      and .preparationState == "COMPLETED"
-                      and .lessonState == "COMPLETED"
+                      and (.preparationState | IN("COMPLETED", "DEGRADED"))
+                      and (.lessonState | IN("COMPLETED", "DEGRADED"))
                       and (.lessonStatus | IN("COMPLETE", "DRAFT_READY"))
                       and (.answerStatus | IN("ANSWERED", "ANSWERED_WITH_WARNING"))
                       and (.sectionCount | integer_between(1; 10000))
@@ -721,23 +677,15 @@ jobs:
                       and (.navigation.maxMs | number_between(0; 1000000000));
                   . as $raw
                   | if has("sourceMode") then
-                      select((keys | sort) == ["answerCitationCount", "answerStatus", "cleanup",
-                        "effectiveSourceUrl", "focusedVisualStepCount", "lessonState", "lessonStatus",
-                        "navigation", "pageAttempts", "pageCount", "preparationState", "sectionCount",
-                        "sourceMode", "sourceUrl", "title", "visualAssemblyMode", "visualStepCount"])
-                      | select(common_valid)
+                      select(common_valid)
                       | select(.sourceMode == "official_image_gallery")
                       | select(.sourceUrl | type == "string" and length >= 1 and length <= 2048
                           and startswith("https://"))
                       | select(.effectiveSourceUrl | type == "string" and length >= 1 and length <= 2200
                           and startswith("https://"))
                       | select(.pageCount | integer_between(1; 500))
-                      | select(.pageAttempts | page_attempts_valid($raw.pageCount))
                     else
-                      select((keys | sort) == ["answerCitationCount", "answerStatus", "cleanup",
-                        "focusedVisualStepCount", "lessonState", "lessonStatus", "navigation",
-                        "preparationState", "sectionCount", "title", "visualAssemblyMode", "visualStepCount"])
-                      | select(common_valid)
+                      select(common_valid)
                     end
                   | {
                       sourceMode: .sourceMode,
@@ -745,22 +693,6 @@ jobs:
                       sourceUrl: .sourceUrl,
                       effectiveSourceUrl: .effectiveSourceUrl,
                       pageCount: .pageCount,
-                      pageAttempts: (if .pageAttempts == null then null else {
-                        pages: [.pageAttempts.pages[] | {page, initialOutcome, recoveryKind, repairCode,
-                          recoveryOutcome, semanticAttempts, finalOutcome}],
-                        initialSucceeded: .pageAttempts.initialSucceeded,
-                        initialFailed: .pageAttempts.initialFailed,
-                        initialRejected: .pageAttempts.initialRejected,
-                        transientRetryAttempted: .pageAttempts.transientRetryAttempted,
-                        transientRetrySucceeded: .pageAttempts.transientRetrySucceeded,
-                        transientRetryFailed: .pageAttempts.transientRetryFailed,
-                        repairAttempted: .pageAttempts.repairAttempted,
-                        repairSucceeded: .pageAttempts.repairSucceeded,
-                        repairFailed: .pageAttempts.repairFailed,
-                        finalUnavailablePages: .pageAttempts.finalUnavailablePages,
-                        maximumSemanticAttemptsForAnyPage: .pageAttempts.maximumSemanticAttemptsForAnyPage,
-                        valid: .pageAttempts.valid
-                      } end),
                       preparationState,
                       lessonState,
                       lessonStatus,

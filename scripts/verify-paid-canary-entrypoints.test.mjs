@@ -92,10 +92,10 @@ test('the shared gate precedes credential loading, provider commands, and full v
   }
 })
 
-test('recommendation canary has one representative direct-publication journey', () => {
-  assert.match(recommendation, /publishesAComplexTitleBoundedSlateWithoutOptionalResearch/)
+test('recommendation canary executes the real greeting and adaptive publication journeys', () => {
+  assert.match(recommendation, /repliesToAGreetingNaturallyWithoutUnneededExternalWork/)
+  assert.match(recommendation, /publishesAComplexTitleBoundedSlateWithAdaptiveResearch/)
   assert.doesNotMatch(recommendation, /RULEPILOT_RECOMMENDATION_CANARY_SCENARIO/)
-  assert.doesNotMatch(recommendation, /BoardGameRecommendationAgentPaidCanaryTest test/)
   assert.doesNotMatch(recommendation, /sanitized diagnostics/)
 })
 

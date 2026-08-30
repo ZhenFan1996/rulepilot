@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
+import PlayerFailureDetails from '@/components/PlayerFailureDetails.vue'
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import RulebookIdentityConfirmation from '@/components/documents/RulebookIdentityConfirmation.vue'
 import type {
@@ -25,6 +26,7 @@ import {
   teachingRunIsActive,
 } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
+import { teachingFailureOwner, type PlayerFailureDescriptor } from '@/lib/playerFailureSemantics'
 import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 import { playerWorkStatus, type PlayerWorkStage } from '@/lib/playerWorkStatus'
 import {
@@ -191,8 +193,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   currentFailure: '本次属于',
   currentFailureDetail: {
     'local-degradation': '可用内容已经保留，只有可选或局部工作未完成；主流程不会因此回退。',
-    'preserved-stop': '当前运行已经停止，已确认页面和已发布章节保留；系统不会在后台自行重新开始。',
-    'external-repair': '当前错误不适合原样重试；请按下面实际提供的操作处理，若没有操作入口则需等待服务恢复或联系支持。',
+    'retry-preserved': '当前运行已经停止，已确认页面和已发布章节保留；系统不会在后台自行重新开始。',
+    'repair-required': '当前错误不适合原样重试；请按下面实际提供的操作处理，若没有操作入口则需等待服务恢复或联系支持。',
+    'internal-correction': '这不是玩家输入失败；同一个 Agent 会收到完整候选与校验记录并返回完整替代结果。完全重复、无进展或资源停止会结束这一步。',
   },
   failureRecoveryDetail: {
     'retry-step': '后端允许你明确重试当前步骤；只有点击下面的按钮才会开始。',
@@ -214,18 +217,16 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     TEACHING_CONTINUATION_ADMISSION_FAILED: '第一段带引用讲解已经可读；其余章节获得 worker 后未能持久接管。',
     TEACHING_WORKFLOW_FAILED: '失败发生在读取章节证据、生成正文或核对引用期间；已经发布的章节会保留。',
     TEACHING_COMPLETION_FAILED: '讲解内容已经生成，但保存最终完成状态失败；已有可读章节会保留。',
-    AGENT_STEP_BUDGET: '这是旧运行保留的“步骤次数”终止码；当时已确认内容仍保留。新运行不按步骤次数停止。',
-    AGENT_TOOL_BUDGET: '这是旧运行保留的“工具调用次数”终止码；当时已确认内容仍保留。新运行只记录调用数，不以它作为失败边界。',
-    AGENT_MODEL_BUDGET: '这是旧运行保留的“模型调用次数”终止码；当时已确认内容仍保留。新运行只记录调用数，不以它作为失败边界。',
-    AGENT_TOKEN_BUDGET: '本轮达到文字处理预算；已确认内容会保留。',
-    AGENT_TIMEOUT: '整轮讲解达到总时限后停止；已确认内容会保留。',
+    AGENT_TIMEOUT: '本轮达到后端记录的截止时间；已确认内容会保留，可以原样启动新任务。',
   },
   generationLocalFailureTitle: '局部降级：可用内容保留',
-  generationLocalFailure: '一页图片只会在这些局部情况下标为“本页不可用”：原图读不到；处理本页的模型请求失败或超时；系统无法形成一份完整的错误说明交回模型；或模型再次返回以前已被拒绝的同一份完整结果。格式不合格但结果仍在变化时，系统会把完整结果、具体错误、格式要求和可用页码交回同一个模型继续修正。你主动取消、整轮文字处理额度或有效工作时间用完，属于整轮停止，不会冒充成某一页失败。单页不可用不会让整份讲解失败；其他成功页面和已经发布的章节都会保留。',
-  generationPreservedStopTitle: '保留已完成内容后停止',
-  generationPreservedStop: '整份讲解只有在这些情况下才会停止：你取消；整轮文字预算或有效工作时间用尽；整份规则书都无法读取；找不到任何能核验的规则依据；最后没有一章可以安全发布；或模型服务、保存、身份、引用校验发生无法恢复的错误。已经确认的页面和已经发布的章节不会被删除。登录会话失效只停止当前页面刷新；后台任务保持持久状态，重新登录后会重新绑定并刷新。',
+  generationLocalFailure: '单页、单章或配图不可用只影响对应局部；其他成功页面和已经发布的正文都会保留。',
+  generationPreservedStopTitle: '可原样重试，进度保留',
+  generationPreservedStop: '模型服务、排队、截止时间、传输或取消会停止当前任务，但已确认页面和已发布章节保留；可以用相同输入启动新任务。',
   generationRepairTitle: '需要你或运维修复后继续',
-  generationRepair: '登录或权限、无效参数、错误来源，以及无法恢复的模型服务、保存、身份或引用问题，需要先修复再继续。界面只会在确实能安全恢复时显示“重试”“换来源”或“上传”。单次请求超时只代表这一次没有完成，不等于整份讲解已经失败；后台会依据剩余文字预算、有效工作时间和取消状态决定能否继续。',
+  generationRepair: '登录或权限、无效输入、错误来源、所有权、版本、保存、身份或引用问题需要先修复，再重新发起。',
+  generationInternalCorrectionTitle: '内部 JSON 修正，不是玩家输入失败',
+  generationInternalCorrection: '同一个 Agent 会收到完整候选、code、path、reason、schema 和 allowed IDs，并必须返回完整替代结果；完全重复、无进展或资源停止才结束这一步。',
   visualRuleGroupSummaryTitle: '每页规则组最新状态',
   visualRuleGroupSummaryHint: '只按每页已发出的最新真实活动汇总；还没有活动的页面不会计入，下方保留每次玩家可见尝试。',
   visualRuleGroupStatus: {
@@ -239,7 +240,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   generationAttemptMarkerHint: '“!”表示这一条真实尝试未完成或未通过校验，“?”表示活动状态无法识别；两者都不代表整份讲解失败，请以上方每页最新状态和整条任务状态为准。',
   planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
-    '图片页直接按原图和页码整理规则，文字页直接读取原文；如果完整结果格式不合格，具体错误会交回同一个模型继续修正，直到通过、重复此前同一错误，或本轮文字预算 / 有效工作时间用尽',
+    '图片页直接按原图和页码整理规则，文字页直接读取原文；结构化格式不合格时，完整候选和校验记录会交回同一个 Agent，并要求返回完整替代结果',
     '按页面整理规则组，并记录规则书要求的外部资料',
     '通读整本规则书，形成整局认识并规划章节',
     '读取当前章节绑定的规则页与引用',
@@ -313,8 +314,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   currentFailure: 'This run is classified as',
   currentFailureDetail: {
     'local-degradation': 'Usable content remains available; only optional or page-local work did not finish, and the main flow does not roll back.',
-    'preserved-stop': 'This run has stopped. Confirmed pages and published chapters remain available, and the system will not restart it in the background.',
-    'external-repair': 'Repeating the same request is not a safe recovery. Use only the actions actually shown below; if none is available, wait for service recovery or contact support.',
+    'retry-preserved': 'This run has stopped. Confirmed pages and published chapters remain available, and the system will not restart it in the background.',
+    'repair-required': 'Repeating the same request is not a safe recovery. Use only the actions actually shown below; if none is available, wait for service recovery or contact support.',
+    'internal-correction': 'This is not a player-input failure. The same Agent receives the complete candidate and validation record and returns a complete replacement. Exact repetition, no progress, or a resource stop ends the step.',
   },
   failureRecoveryDetail: {
     'retry-step': 'The backend allows an explicit retry of this step; it starts only when you use the button below.',
@@ -326,28 +328,26 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED: 'The failure occurred while organizing the guide structure. Rulebook pages remain available, and first-section writing had not started.',
     TEACHING_PREPARATION_FIRST_SECTION_STARTUP_FAILED: 'The guide structure is ready. The failure occurred while generating and saving the first cited section; the rulebook and structure remain available.',
     TEACHING_PREPARATION_QUEUE_FULL: 'The guide-preparation queue was full. No model work started, and the rulebook is unaffected.',
-    TEACHING_PREPARATION_QUEUE_TIMEOUT: 'Guide preparation did not acquire a worker within its bounded wait. No model work started.',
+    TEACHING_PREPARATION_QUEUE_TIMEOUT: 'Guide preparation did not acquire a worker before the backend queue deadline. No model work started.',
     TEACHING_PREPARATION_WORKER_ADMISSION_FAILED: 'Guide preparation acquired a worker but could not durably claim the run. No model work started.',
     TEACHING_QUEUE_FULL: 'The writing run did not enter the execution queue. The rulebook and guide structure are unaffected.',
-    TEACHING_QUEUE_TIMEOUT: 'The writing run did not acquire a worker within its bounded wait. No model work started, so it is safe to retry.',
+    TEACHING_QUEUE_TIMEOUT: 'The writing run did not acquire a worker before the backend queue deadline. No model work started, so it is safe to retry.',
     TEACHING_WORKER_ADMISSION_FAILED: 'The writing run acquired a worker but could not durably claim the run. No model work started, so it is safe to retry.',
     TEACHING_CONTINUATION_QUEUE_FULL: 'The first cited section is already readable. The failure occurred while queueing the remaining chapters.',
-    TEACHING_CONTINUATION_QUEUE_TIMEOUT: 'The first cited section is already readable. The remaining chapters did not acquire a worker within their bounded wait.',
+    TEACHING_CONTINUATION_QUEUE_TIMEOUT: 'The first cited section is already readable. The remaining chapters did not acquire a worker before the backend queue deadline.',
     TEACHING_CONTINUATION_ADMISSION_FAILED: 'The first cited section is already readable. The remaining chapters acquired a worker but could not durably claim the run.',
     TEACHING_WORKFLOW_FAILED: 'The failure occurred while retrieving chapter evidence, writing content, or checking citations. Published chapters remain available.',
     TEACHING_COMPLETION_FAILED: 'Guide content was generated, but its final completed state could not be saved. Readable chapters remain available.',
-    AGENT_STEP_BUDGET: 'This code is retained for an older run that stopped at the retired step-count boundary. Its confirmed content remains available; new runs do not stop by step count.',
-    AGENT_TOOL_BUDGET: 'This code is retained for an older run that stopped at the retired tool-call boundary. Its confirmed content remains available; new runs observe tool-call counts but do not use them as a failure boundary.',
-    AGENT_MODEL_BUDGET: 'This code is retained for an older run that stopped at the retired model-call boundary. Its confirmed content remains available; new runs observe model-call counts but do not use them as a failure boundary.',
-    AGENT_TOKEN_BUDGET: 'This run reached its text-processing budget. Confirmed content remains available.',
-    AGENT_TIMEOUT: 'The whole guide run stopped at its overall deadline. Confirmed content remains available.',
+    AGENT_TIMEOUT: 'The run reached the backend-recorded deadline. Confirmed content remains available, and the same input can start a fresh task.',
   },
   generationLocalFailureTitle: 'Local degradation: usable content remains',
-  generationLocalFailure: 'An image page is marked “locally unavailable” only when its source image cannot be read, that page’s model request fails or times out, the application cannot form complete correction feedback, or the model repeats an identical complete result that was already rejected. If a result has the wrong format but is still changing, the same model receives the complete result, exact error, required format, and allowed page IDs and may correct it again. Cancellation or exhausted whole-run text allowance or active-work time stops the run; it is never disguised as one failed page. One unavailable page does not fail the guide, and other successful pages and published chapters remain available.',
-  generationPreservedStopTitle: 'Stop after preserving completed work',
-  generationPreservedStop: "The whole guide stops only when you cancel; the run exhausts its text budget or active-work time; the entire rulebook is unreadable; no rule source can be verified; no chapter can be published safely; or the model service, persistence, identity, or citation boundary fails without a safe recovery. Confirmed pages and published chapters are never removed. Sign-in expiry stops only this page's refresh. The background task keeps its durable state; sign in again to rebind and refresh.",
+  generationLocalFailure: 'An unavailable page, chapter, or visual affects only that item. Other successful pages and published text remain available.',
+  generationPreservedStopTitle: 'Retry unchanged; progress preserved',
+  generationPreservedStop: 'Provider, queue, deadline, transport, or cancellation stops preserve confirmed pages and published chapters; the same input can start a fresh task.',
   generationRepairTitle: 'You or operations must repair this before continuing',
-  generationRepair: 'Sign-in or authorization issues, invalid parameters, the wrong source, and nonrecoverable model-service, persistence, identity, or citation errors must be repaired before continuing. The UI shows Retry, Change source, or Upload only when that action is safe. One request timeout means only that attempt did not finish; it does not by itself mean the whole guide failed. Remaining text budget, active-work time, and cancellation state decide whether work can continue.',
+  generationRepair: 'Authentication, invalid input, source, ownership, version, persistence, identity, or citation errors must be repaired before starting again.',
+  generationInternalCorrectionTitle: 'Internal JSON correction, not a player-input failure',
+  generationInternalCorrection: 'The same Agent receives the complete candidate, code, path, reason, schema, and allowed IDs and must return a complete replacement. Exact repetition, no progress, or a resource stop ends the step.',
   visualRuleGroupSummaryTitle: 'Latest rule-group state by page',
   visualRuleGroupSummaryHint: 'This uses only the latest real activity emitted for each page. Pages without an activity are not counted, and every player-visible attempt remains below.',
   visualRuleGroupStatus: {
@@ -363,7 +363,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   generationAttemptMarkerHint: '“!” marks one real attempt that did not complete or pass validation, while “?” marks an unrecognized activity status. Neither means the entire guide failed; use the latest per-page state above and the overall run state.',
   planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
-    'Build page-bound rule facts directly from image pages and read text layers as source text; if a complete result has the wrong format, the same model receives the exact error and may correct it until it passes, repeats a previous error, or the run exhausts its text budget or active-work time',
+    'Build page-bound rule facts from image pages and text layers; typed-format failures return the complete candidate and exact validation record to the same Agent for a complete replacement',
     'Organise each page into rule groups and record any external material the rulebook requires',
     'Read the whole rulebook, form a whole-game view, and plan the chapters',
     'Read the source pages and citations bound to the current chapter',
@@ -508,7 +508,7 @@ const currentWorkStatus = computed(() => {
   const outcome = cancelled
     ? 'cancelled'
     : current.retryAction ? 'needs-action'
-      : current.state === 'failed' || current.failureClassification === 'external-repair' ? 'failed' : 'none'
+      : current.state === 'failed' || current.failureClassification === 'repair-required' ? 'failed' : 'none'
   return playerWorkStatus(stage, { capability, readiness, terminality, outcome }, locale.value)
 })
 const sourceWorkStatus = computed(() => {
@@ -564,7 +564,8 @@ const currentFailureTitle = computed(() => {
   const classification = projection.value.failureClassification
   if (!classification) return ''
   if (classification === 'local-degradation') return copy.value.generationLocalFailureTitle
-  if (classification === 'preserved-stop') return copy.value.generationPreservedStopTitle
+  if (classification === 'retry-preserved') return copy.value.generationPreservedStopTitle
+  if (classification === 'internal-correction') return copy.value.generationInternalCorrectionTitle
   return copy.value.generationRepairTitle
 })
 const currentFailureDetail = computed(() => {
@@ -580,13 +581,43 @@ const currentFailureCauseDetail = computed(() => {
   if (!errorCode) return ''
   return (copy.value.failureCauseDetail as Record<string, string>)[errorCode] ?? ''
 })
+const visibleFailureDetails = computed<PlayerFailureDescriptor | null>(() => {
+  const code = projection.value.errorCode
+  if (projection.value.failureClassification && code) {
+    return {
+      category: projection.value.failureClassification,
+      owner: teachingFailureOwner(code, locale.value),
+      code,
+    }
+  }
+  const activity = [...(teachingRun.value?.activities ?? preparationRun.value?.activities ?? [])]
+    .reverse()
+    .find(entry => entry.outcome === 'FAILED' || entry.outcome === 'REJECTED')
+  if (!activity) return null
+  const operation = activity.operation
+  const category = operation.startsWith('enrichTeachingSectionVisual|')
+    || operation.startsWith('publishTeachingSection|')
+    ? 'local-degradation'
+    : operation.startsWith('validateTeachingOutlineAction|')
+      || operation.startsWith('advanceTeachingOutlineAgent|')
+      ? 'internal-correction'
+      : 'retry-preserved'
+  const owner = operation.startsWith('enrichTeachingSectionVisual|')
+    ? locale.value === 'en' ? 'Visual enrichment' : '配图处理'
+    : operation.startsWith('publishTeachingSection|')
+      ? locale.value === 'en' ? 'Chapter publication' : '章节发布'
+      : locale.value === 'en' ? 'Guide Agent' : '讲解 Agent'
+  return { category, owner, code: `${operation} · ${activity.summary}` }
+})
 const retryActionLabel = computed(() => projection.value.failureRecovery === 'restart-from-completed'
   ? copy.value.restart
   : copy.value.retry)
 const terminalAlertClass = computed(() => projection.value.failureClassification === 'local-degradation'
   ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-  : projection.value.failureClassification === 'preserved-stop'
+  : projection.value.failureClassification === 'retry-preserved'
     ? 'border-amber-200 bg-amber-50 text-amber-950'
+    : projection.value.failureClassification === 'internal-correction'
+      ? 'border-indigo/25 bg-indigo/5 text-indigo'
     : 'border-red-200 bg-red-50 text-red-800')
 const safeCloseDetail = computed(() => projection.value.failureClassification || generationStoppedByPlayer.value
   ? copy.value.safeStopped
@@ -1744,6 +1775,13 @@ onBeforeUnmount(() => {
         <div v-if="journeyProgressValue !== null" class="mt-3 h-2 overflow-hidden rounded-full bg-copper/10" role="progressbar" :aria-label="copy.progress" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="journeyProgressValue">
           <div class="h-full rounded-full bg-copper transition-[width] duration-500" :style="{ width: `${journeyProgressValue}%` }" />
         </div>
+        <PlayerFailureDetails
+          v-if="visibleFailureDetails"
+          class="mt-4"
+          :category="visibleFailureDetails.category"
+          :owner="visibleFailureDetails.owner"
+          :code="visibleFailureDetails.code"
+        />
         <div
           v-if="projection.failureClassification"
           data-testid="recommendation-journey-terminal-alert"
@@ -1792,18 +1830,22 @@ onBeforeUnmount(() => {
               <span>{{ step }}</span>
             </li>
           </ol>
-          <div data-testid="recommendation-teaching-failure-boundary" class="mt-3 grid gap-2 lg:grid-cols-3">
+          <div data-testid="recommendation-teaching-failure-boundary" class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
             <div data-failure-classification="local-degradation" :data-current-failure="projection.failureClassification === 'local-degradation' ? 'true' : undefined" class="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2" :class="projection.failureClassification === 'local-degradation' ? 'ring-2 ring-emerald-500/40' : ''">
               <p class="text-xs font-semibold text-emerald-800">{{ copy.generationLocalFailureTitle }}</p>
               <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationLocalFailure }}</p>
             </div>
-            <div data-failure-classification="preserved-stop" :data-current-failure="projection.failureClassification === 'preserved-stop' ? 'true' : undefined" class="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2" :class="projection.failureClassification === 'preserved-stop' ? 'ring-2 ring-amber-500/40' : ''">
+            <div data-failure-classification="retry-preserved" :data-current-failure="projection.failureClassification === 'retry-preserved' ? 'true' : undefined" class="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2" :class="projection.failureClassification === 'retry-preserved' ? 'ring-2 ring-amber-500/40' : ''">
               <p class="text-xs font-semibold text-amber-800">{{ copy.generationPreservedStopTitle }}</p>
               <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationPreservedStop }}</p>
             </div>
-            <div data-failure-classification="external-repair" :data-current-failure="projection.failureClassification === 'external-repair' ? 'true' : undefined" class="rounded-lg border border-red-200 bg-red-50/70 px-3 py-2" :class="projection.failureClassification === 'external-repair' ? 'ring-2 ring-red-500/40' : ''">
+            <div data-failure-classification="repair-required" :data-current-failure="projection.failureClassification === 'repair-required' ? 'true' : undefined" class="rounded-lg border border-red-200 bg-red-50/70 px-3 py-2" :class="projection.failureClassification === 'repair-required' ? 'ring-2 ring-red-500/40' : ''">
               <p class="text-xs font-semibold text-red-800">{{ copy.generationRepairTitle }}</p>
               <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationRepair }}</p>
+            </div>
+            <div data-failure-classification="internal-correction" :data-current-failure="projection.failureClassification === 'internal-correction' ? 'true' : undefined" class="rounded-lg border border-indigo/20 bg-indigo/5 px-3 py-2" :class="projection.failureClassification === 'internal-correction' ? 'ring-2 ring-indigo/30' : ''">
+              <p class="text-xs font-semibold text-indigo">{{ copy.generationInternalCorrectionTitle }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationInternalCorrection }}</p>
             </div>
           </div>
           <section

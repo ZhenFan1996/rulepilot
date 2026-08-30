@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.out.persistence;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.teaching.application.TeachingPlanRepository;
@@ -74,7 +75,7 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
     public List<TeachingPlanSummary> findSummariesByCreatedBy(String createdBy) {
         List<Object[]> planRows = entityManager
                 .createQuery(
-                        "select p.id, p.documentVersionId, p.gameTitle, p.premise, p.createdBy, p.createdAt "
+                        "select p.id, p.documentVersionId, p.gameTitle, p.premise, p.wholeGameContext, p.createdBy, p.createdAt "
                                 + "from TeachingPlanEntity p where p.createdBy = :createdBy order by p.createdAt desc",
                         Object[].class)
                 .setParameter("createdBy", createdBy)
@@ -107,10 +108,11 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                         (UUID) row[1],
                         (String) row[2],
                         (String) row[3],
+                        TeachingPlanEntity.readContext((String) row[4], (String) row[3]).unresolvedTopics(),
                         sectionsByPlan.getOrDefault((UUID) row[0], List.of()),
                         null,
-                        (String) row[4],
-                        (Instant) row[5]))
+                        (String) row[5],
+                        (Instant) row[6]))
                 .toList();
     }
 
@@ -196,7 +198,10 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
 @Table(name = "teaching_plan")
 class TeachingPlanEntity {
 
-    private static final ObjectMapper JSON = JsonMapper.builder().findAndAddModules().build();
+    private static final ObjectMapper JSON = JsonMapper.builder()
+            .findAndAddModules()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .build();
 
     @Id
     UUID id;
@@ -257,7 +262,7 @@ class TeachingPlanEntity {
         }
     }
 
-    private static TeachingPlan.WholeGameContext readContext(String value, String premise) {
+    static TeachingPlan.WholeGameContext readContext(String value, String premise) {
         if (value == null || value.isBlank()) return TeachingPlan.WholeGameContext.legacy(premise);
         try {
             return JSON.readValue(value, TeachingPlan.WholeGameContext.class);

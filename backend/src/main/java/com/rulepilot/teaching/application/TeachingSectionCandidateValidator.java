@@ -11,6 +11,7 @@ import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
 import java.util.Map;
@@ -40,13 +41,15 @@ final class TeachingSectionCandidateValidator {
             TeachingLessonModel.SectionRequest modelRequest,
             SectionDraft draft,
             EvidenceStatus evidenceStatus) {
+        java.util.Set<UUID> requestEvidenceIds = modelRequest.evidence().stream()
+                .map(TeachingLessonModel.EvidenceInput::chunkId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
+                .filter(source -> requestEvidenceIds.contains(source.chunkId()))
                 .collect(Collectors.toUnmodifiableMap(
                         RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
-        SectionDraft acceptedDraft = draft;
-        LessonDraftValidator.validateDraft(acceptedDraft, modelRequest);
-        List<UUID> visualCitationIds = LessonDraftValidator.validatedVisualCitationIds(acceptedDraft, allowedEvidence);
-        List<Claim> reviewClaims = LessonDraftValidator.reviewClaims(acceptedDraft, visualCitationIds);
+        LessonDraftValidator.validateDraft(draft);
+        List<Claim> reviewClaims = LessonDraftValidator.reviewClaims(draft);
         List<EvidenceClaim> generatedClaims = reviewClaims.stream()
                 .map(claim -> new EvidenceClaim(claim.text(), claim.citationIds()))
                 .toList();
@@ -58,30 +61,30 @@ final class TeachingSectionCandidateValidator {
             throw new IllegalArgumentException(
                     "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
         }
-        List<LessonStep> steps = IntStream.range(0, acceptedDraft.steps().size())
+        List<LessonStep> steps = IntStream.range(0, draft.steps().size())
                 .mapToObj(index -> LessonDraftValidator.validatedStep(
-                        // Preserve typed VISUAL intent; the visual Agent resolves an opaque candidate ID to
-                        // application-owned coordinates after composition.
-                        index + 1, acceptedDraft.steps().get(index), allowedEvidence))
+                        index + 1, draft.steps().get(index), allowedEvidence))
                 .toList();
-        List<Integer> visualSourcePages = visualCitationIds.stream()
-                .map(allowedEvidence::get)
-                .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
+        List<UUID> citedIds = steps.stream()
+                .flatMap(step -> step.sourceChunkIds().stream())
+                .distinct()
+                .toList();
+        List<Integer> citedPages = steps.stream()
+                .flatMap(step -> step.sourcePages().stream())
                 .distinct()
                 .sorted()
-                .boxed()
                 .toList();
         return new LessonSection(
                 planned.position(),
                 planned.topicKey(),
                 planned.coverageTags(),
-                acceptedDraft.title(),
+                draft.title(),
                 planned.required(),
                 evidenceStatus,
-                acceptedDraft.visualKind(),
-                acceptedDraft.visualCaption(),
-                visualSourcePages,
-                visualCitationIds,
+                VisualKind.REFERENCE_CARD,
+                draft.title(),
+                citedPages,
+                citedIds,
                 steps);
     }
 

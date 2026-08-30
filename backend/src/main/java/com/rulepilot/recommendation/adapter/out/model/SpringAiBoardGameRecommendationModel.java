@@ -9,10 +9,6 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -21,7 +17,6 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.MessageAggregator;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
@@ -78,64 +73,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         return invoke(request, temperature, "react", ownerUsername);
     }
 
-    @Override
-    public Turn stream(
-            Request request,
-            String ownerUsername,
-            Consumer<String> accumulatedTextListener) {
-        RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
-        ChatModel model = selected.model();
-        Prompt prompt = new Prompt(
-                request.messages().stream().map(this::message).toList(),
-                requestOptions(selected, request)
-                        .temperature(temperature)
-                        .build());
-        long startedAt = System.nanoTime();
-        AtomicLong firstTextAt = new AtomicLong();
-        AtomicReference<ChatResponse> aggregated = new AtomicReference<>();
-        AtomicBoolean toolCallObserved = new AtomicBoolean();
-        StringBuilder accumulatedText = new StringBuilder();
-
-        var chunks = model.stream(prompt).doOnNext(response -> {
-            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) return;
-            AssistantMessage output = response.getResult().getOutput();
-            if (!output.getToolCalls().isEmpty()) {
-                if (toolCallObserved.compareAndSet(false, true) && accumulatedText.length() > 0) {
-                    accumulatedText.setLength(0);
-                    accumulatedTextListener.accept("");
-                }
-                return;
-            }
-            if (toolCallObserved.get()) return;
-            String chunk = output.getText();
-            if (chunk == null || chunk.isEmpty()) return;
-            firstTextAt.compareAndSet(0, System.nanoTime());
-            accumulatedText.append(chunk);
-            accumulatedTextListener.accept(accumulatedText.toString());
-        });
-        new MessageAggregator().aggregate(chunks, aggregated::set).blockLast();
-        ChatResponse response = aggregated.get();
-        if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
-            throw new IllegalStateException("recommendation model returned no streamed result");
-        }
-        AssistantMessage output = response.getResult().getOutput();
-        if (!output.getToolCalls().isEmpty()
-                && toolCallObserved.compareAndSet(false, true)
-                && accumulatedText.length() > 0) {
-            accumulatedText.setLength(0);
-            accumulatedTextListener.accept("");
-        }
-        logUsage(
-                request,
-                response,
-                (System.nanoTime() - startedAt) / 1_000_000,
-                temperature,
-                "react_stream",
-                selected,
-                firstTextAt.get() == 0 ? -1 : (firstTextAt.get() - startedAt) / 1_000_000);
-        return turn(response);
-    }
-
     private Turn invoke(
             Request request, double requestTemperature, String operation, String ownerUsername) {
         RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
@@ -177,7 +114,9 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 builder.extraBody(Map.of("enable_thinking", false));
             }
             builder.toolChoice(openAiToolChoice(request, selected.provider()));
-            builder.parallelToolCalls(false);
+            if ("qwen".equals(selected.provider())) {
+                builder.parallelToolCalls(true);
+            }
             options = builder;
         } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {
             GoogleGenAiChatOptions.Builder builder = defaults.mutate();

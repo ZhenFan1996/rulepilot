@@ -79,15 +79,16 @@ public record PlayerFacingRuleAnswer(
                 || !conceptComparisons.isEmpty()
                 || !ruleOptions.isEmpty();
         if (publishesConclusion
-                && (citations.isEmpty() || answerBasis == null || clarification != null || recovery != null
+                && ((citations.isEmpty() != (answerBasis == null)) || clarification != null || recovery != null
                         || (status == AnswerStatus.ANSWERED_WITH_WARNING) != !warnings.isEmpty())) {
             throw new IllegalArgumentException("player-facing conclusion is invalid");
         }
         if (!publishesConclusion
-                && (recovery == null || confidence != AnswerConfidence.LOW || answerBasis != null
-                        || !explanation.isEmpty() || !exceptions.isEmpty() || !warnings.isEmpty() || hasStructuredDetails
+                && (confidence != AnswerConfidence.LOW || answerBasis != null
+                        || !exceptions.isEmpty() || !warnings.isEmpty() || hasStructuredDetails
                         || status != AnswerStatus.INSUFFICIENT_EVIDENCE && !citations.isEmpty()
-                        || (status == AnswerStatus.CLARIFICATION_REQUIRED) != (clarification != null))) {
+                        || (status == AnswerStatus.CLARIFICATION_REQUIRED) != (clarification != null)
+                        || status != AnswerStatus.CLARIFICATION_REQUIRED && recovery == null)) {
             throw new IllegalArgumentException("player-facing recovery is invalid");
         }
     }

@@ -1,3 +1,0 @@
-Concise-exception-verdict revision v31:
-- When `exceptionClauses` carries the detailed conditions and effects, keep `shortVerdict` clear and directly useful. Summarize the practical result; do not mechanically repeat every full clause in the verdict.
-- Put qualifications, enumerated cases, and procedural detail in the cited structured clauses and concise explanation. Never sacrifice citation fidelity merely to shorten the verdict.

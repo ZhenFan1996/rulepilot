@@ -1,7 +1,6 @@
 package com.rulepilot.recommendation;
 
 import java.util.List;
-import java.util.function.Consumer;
 
 /** Provider-neutral generation port for conversational replies and native recommendation actions. */
 public interface BoardGameRecommendationModel {
@@ -17,22 +16,6 @@ public interface BoardGameRecommendationModel {
 
     default Turn next(Request request, String ownerUsername) {
         return next(request);
-    }
-
-    /**
-     * Delivers cumulative player-facing text as provider text chunks arrive. Implementations must never emit text,
-     * names, or arguments from an action-call chunk, and must revoke provisional text if the same turn later chooses
-     * an action.
-     */
-    default Turn stream(
-            Request request,
-            String ownerUsername,
-            Consumer<String> accumulatedTextListener) {
-        Turn turn = next(request, ownerUsername);
-        if (turn.toolCalls().isEmpty() && !turn.text().isBlank()) {
-            accumulatedTextListener.accept(turn.text());
-        }
-        return turn;
     }
 
     record ToolSpec(String name, String description, String inputSchema) {

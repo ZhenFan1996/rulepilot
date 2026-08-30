@@ -1,13 +1,15 @@
 package com.rulepilot.recommendation.application;
 
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
-import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
-import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.PublicContextEvidence;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
+import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -15,46 +17,31 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
-/** Mutable state for one recommendation conversation turn. */
+/** Mutable execution facts for one turn; {@link CatalogSearch} is the sole candidate-filter owner. */
 final class RecommendationAgentState {
 
     final long startedAtNanos;
     final String modelConfigurationOwner;
-    RecommendationProfile profile;
+    final RecommendationProfile profile;
     final Set<Integer> excludedIds;
     final Set<Integer> previouslyShownIds = new LinkedHashSet<>();
-    final Set<Integer> legalIds = new LinkedHashSet<>();
-    final Map<Integer, String> candidateNames = new LinkedHashMap<>();
     final Map<Integer, Game> verified = new LinkedHashMap<>();
     final Set<Integer> freshVerifiedIds = new LinkedHashSet<>();
-    final Map<String, ContextualPreference> contextualPreferences = new LinkedHashMap<>();
-    final Set<Integer> targetGameIds = new LinkedHashSet<>();
-    final Set<Integer> comparisonReferenceIds = new LinkedHashSet<>();
     final Set<Integer> comparisonSubjectIds = new LinkedHashSet<>();
     final Set<Integer> finalResponseGameIds = new LinkedHashSet<>();
     final Set<String> finalResponseEvidenceIds = new LinkedHashSet<>();
     final Set<String> finalResponsePublicEvidenceIds = new LinkedHashSet<>();
     final Map<String, Object> finalResponseDecisionFacts = new LinkedHashMap<>();
+    final Map<String, PublicContextEvidence> publicContextEvidence = new LinkedHashMap<>();
+    final List<String> actions = new ArrayList<>();
     PublicationSeed pendingPublicationSeed;
-    TitleConstraint titleConstraint;
+    CatalogSearch activeSearch;
     Research research = Research.empty();
     CandidateComparison comparison;
-    final List<String> actions = new ArrayList<>();
-    boolean webResearchAvailable;
-    NamedGamePurpose namedGamePurpose;
-    boolean unresolvedPlayerTitle;
-    int referenceResolutionAttempts;
-    boolean catalogBrowseAttempted;
-    boolean discoveryAttempted;
-    DiscoveryPurpose discoveryPurpose;
-    List<CandidateLead> discoveredCandidateLeads = List.of();
-    final Map<String, PublicContextEvidence> publicContextEvidence = new LinkedHashMap<>();
     List<Source> publicContextSources = List.of();
-    boolean researchAttempted;
-    boolean clarificationBlockedByExecutionFailure;
+    boolean webResearchAvailable;
     String webResearchFailureCode = "";
     int modelCalls;
     final List<Long> modelCallElapsedMs = new ArrayList<>();
@@ -77,17 +64,12 @@ final class RecommendationAgentState {
         previouslyShownIds.addAll(request.shownBggIds());
         comparisonSubjectIds.addAll(request.shownBggIds());
         if (request.focusedBggId() != null) comparisonSubjectIds.add(request.focusedBggId());
-        webResearchAvailable = webResearchConfigured;
-        request.knownGames().forEach(game -> observeCandidate(
-                game.bggId(), game.originalName().isBlank() ? game.name() : game.originalName()));
         request.priorVerifiedGames().forEach(this::restoreVerified);
-        legalIds.addAll(request.shownBggIds());
-        if (request.focusedBggId() != null) legalIds.add(request.focusedBggId());
+        webResearchAvailable = webResearchConfigured;
     }
 
-    void addVerified(Game game) {
-        if (game == null || game.details() == null) return;
-        observeCandidate(game.ranking().bggId(), game.ranking().sourceName());
+    synchronized void addVerified(Game game) {
+        if (game == null || game.ranking() == null || game.details() == null) return;
         int bggId = game.ranking().bggId();
         verified.put(bggId, game);
         freshVerifiedIds.add(bggId);
@@ -104,24 +86,38 @@ final class RecommendationAgentState {
     }
 
     private void restoreVerified(Game game) {
-        if (game == null || game.details() == null) return;
-        observeCandidate(game.ranking().bggId(), game.ranking().sourceName());
+        if (game == null || game.ranking() == null || game.details() == null) return;
         verified.putIfAbsent(game.ranking().bggId(), game);
     }
 
-    void assignNamedGameRole(int bggId, NamedGamePurpose purpose) {
-        targetGameIds.remove(bggId);
-        comparisonReferenceIds.remove(bggId);
-        if (purpose == NamedGamePurpose.TARGET_GAME) targetGameIds.add(bggId);
-        if (purpose == NamedGamePurpose.COMPARISON_REFERENCE) comparisonReferenceIds.add(bggId);
-        if (purpose == NamedGamePurpose.DISCUSSION_SUBJECT || purpose == NamedGamePurpose.TARGET_GAME) {
-            comparisonSubjectIds.add(bggId);
-        }
+    synchronized void beginCatalogSearch(CatalogSearch search) {
+        activeSearch = search;
+        pendingPublicationSeed = null;
     }
 
-    void observeCandidate(int bggId, String name) {
-        legalIds.add(bggId);
-        candidateNames.put(bggId, name == null ? "" : name);
+    synchronized void completeCatalogSearch(int catalogSourceCount, List<Game> games) {
+        actions.add("SEARCH_BGG_CATALOG");
+        sourceCount = Math.max(sourceCount, catalogSourceCount);
+        games.forEach(game -> {
+            addVerified(game);
+            comparisonSubjectIds.add(game.ranking().bggId());
+        });
+    }
+
+    RecommendationProfile selectionProfile() {
+        return activeSearch == null ? RecommendationProfile.empty() : activeSearch.selectionProfile();
+    }
+
+    synchronized void recordCatalogCall() {
+        catalogCalls++;
+    }
+
+    synchronized void recordAction(String action) {
+        actions.add(action);
+    }
+
+    synchronized void recordSourceCount(int count) {
+        sourceCount = Math.max(sourceCount, count);
     }
 
     void disableWebResearch(String code) {
@@ -130,73 +126,62 @@ final class RecommendationAgentState {
         actions.add("WEB_RESEARCH_DEGRADED:" + webResearchFailureCode);
     }
 
-    void reconsiderSelectionAfterPreferenceUpdate() {
-        // Verified BGG facts remain valid, but every selection/retrieval decision derived from the old
-        // profile is provisional. Previously shown cards become eligible again under the corrected profile;
-        // only explicit exclusions remain excluded. Reopen bounded candidate reads and discard fit research
-        // whose question may have been framed around the superseded preference set.
-        boolean selectionWorkObserved = catalogBrowseAttempted
-                || discoveryAttempted
-                || !verified.isEmpty()
-                || !research.games().isEmpty();
-        previouslyShownIds.clear();
-        catalogBrowseAttempted = false;
-        researchAttempted = false;
-        research = Research.empty();
-        pendingPublicationSeed = null;
-        if (selectionWorkObserved) {
-            actions.add("RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE");
-        }
-    }
-
     long elapsedMs() {
         return Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000);
     }
 
-    void recordModelCallElapsed(long startedAtNanos) {
-        modelCallElapsedMs.add(Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000));
+    void recordModelCallElapsed(long callStartedAtNanos) {
+        modelCallElapsedMs.add(Math.max(0, (System.nanoTime() - callStartedAtNanos) / 1_000_000));
     }
 
     boolean hasVerifiedPublicContext() {
         return !publicContextEvidence.isEmpty();
     }
 
-    record ContextualPreference(
-            String field,
-            String value,
+    record CatalogSearch(
+            List<BggGameType> includeTypes,
+            List<BggGameType> excludeTypes,
+            TitleFilter title,
+            Integer players,
+            Integer maxMinutes,
+            ConstraintRange<BigDecimal> complexity,
             String evidenceId,
-            String evidenceText,
-            String reason) {}
-
-    enum NamedGamePurpose {
-        TARGET_GAME,
-        COMPARISON_REFERENCE,
-        DISCUSSION_SUBJECT,
-        IDENTITY_ONLY
-    }
-
-    enum DiscoveryPurpose {
-        IDENTITY_ONLY,
-        SELECTABLE_CARDS
-    }
-
-    record TitleConstraint(String value, String evidenceId) {
-        TitleConstraint {
-            value = normalize(value);
-            evidenceId = Objects.requireNonNull(evidenceId, "title constraint evidence is required").strip();
-            if (value.isEmpty() || evidenceId.isEmpty()) {
-                throw new IllegalArgumentException("title constraint is invalid");
+            RecommendationProfile selectionProfile) {
+        CatalogSearch {
+            includeTypes = includeTypes == null ? List.of() : List.copyOf(includeTypes);
+            excludeTypes = excludeTypes == null ? List.of() : List.copyOf(excludeTypes);
+            if (evidenceId == null || evidenceId.isBlank() || selectionProfile == null) {
+                throw new IllegalArgumentException("catalog search contract is invalid");
             }
         }
 
         boolean matches(Game game) {
             if (game == null || game.ranking() == null || game.details() == null) return false;
+            List<BggGameType> actualTypes = game.ranking().types();
+            if (!includeTypes.isEmpty() && includeTypes.stream().noneMatch(actualTypes::contains)) return false;
+            if (excludeTypes.stream().anyMatch(actualTypes::contains)) return false;
+            return title == null || title.matches(game);
+        }
+    }
+
+    record TitleFilter(TitleMatch match, String value) {
+        TitleFilter {
+            if (match == null || normalize(value).isEmpty()) {
+                throw new IllegalArgumentException("title filter is invalid");
+            }
+            value = value.strip();
+        }
+
+        boolean matches(Game game) {
+            String expected = normalize(value);
             return java.util.stream.Stream.of(
                             game.ranking().sourceName(),
                             game.details().name(),
                             game.details().officialChineseName())
-                    .map(TitleConstraint::normalize)
-                    .anyMatch(title -> title.contains(value));
+                    .map(TitleFilter::normalize)
+                    .anyMatch(actual -> match == TitleMatch.EXACT
+                            ? actual.equals(expected)
+                            : actual.contains(expected));
         }
 
         private static String normalize(String value) {
@@ -207,23 +192,19 @@ final class RecommendationAgentState {
         }
     }
 
-    record PublicationSeed(
-            List<Integer> candidateBggIds,
-            List<Integer> referenceBggIds,
-            int requestedCount) {
+    enum TitleMatch {
+        EXACT,
+        CONTAINS
+    }
+
+    record PublicationSeed(List<Integer> candidateBggIds) {
         PublicationSeed {
             candidateBggIds = candidateBggIds == null ? List.of() : List.copyOf(candidateBggIds);
-            referenceBggIds = referenceBggIds == null ? List.of() : List.copyOf(referenceBggIds);
             if (candidateBggIds.isEmpty()
                     || candidateBggIds.stream().anyMatch(id -> id == null || id <= 0)
-                    || candidateBggIds.stream().distinct().count() != candidateBggIds.size()
-                    || referenceBggIds.stream().anyMatch(id -> id == null || id <= 0)
-                    || referenceBggIds.stream().distinct().count() != referenceBggIds.size()
-                    || requestedCount < 1) {
+                    || candidateBggIds.stream().distinct().count() != candidateBggIds.size()) {
                 throw new IllegalArgumentException("recommendation publication seed is invalid");
             }
         }
-
     }
-
 }

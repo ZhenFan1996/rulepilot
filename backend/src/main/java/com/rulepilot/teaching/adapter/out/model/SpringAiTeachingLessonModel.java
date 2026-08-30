@@ -19,7 +19,6 @@ import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
 import com.rulepilot.teaching.TeachingLessonModel.RuleFactDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import java.text.BreakIterator;
 import java.util.LinkedHashMap;
@@ -52,8 +51,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             new BeanOutputConverter<>(ModelSectionDraft.class);
     private static final ObjectMapper STRICT_TEACHING_OUTPUT = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-            .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .disable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final String TEACHING_OUTPUT_FORMAT = TEACHING_OUTPUT_CONVERTER.getFormat();
     private static final String QWEN_TEACHING_SCHEMA = buildQwenTeachingSchema();
@@ -86,26 +85,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     @Override
     public String providerId() {
         return models.providerFor(Role.TEACHING);
-    }
-
-    @Override
-    public boolean supportsVisualEvidence() {
-        // Section composition writes cited teaching prose and visual intent only. The post-publication visual Agent
-        // owns page pixels, opaque candidate selection, and immutable crop geometry.
-        return false;
-    }
-
-    @Override
-    public boolean supportsVisualEvidence(String modelConfigurationOwner) {
-        return false;
-    }
-
-    @Override
-    public int maxConcurrentSectionRequests(String modelConfigurationOwner) {
-        String teaching = models.providerFor(Role.TEACHING, modelConfigurationOwner);
-        // Section composition always uses TEACHING. A Qwen visual assignment must not serialize independent
-        // DeepSeek teaching calls merely because visual enrichment runs later in the same lesson workflow.
-        return "qwen".equals(teaching) ? 1 : Integer.MAX_VALUE;
     }
 
     @Override
@@ -155,12 +134,18 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     @Override
     public CandidateRejection rejectionObservation(
-            SectionRequest request, SectionDraft candidate, String validationError) {
+            SectionRequest request,
+            SectionDraft candidate,
+            String code,
+            String path,
+            String reason) {
         try {
             return rejectionObservation(
                     request,
                     STRICT_TEACHING_OUTPUT.writeValueAsString(toModelDraft(request, candidate)),
-                    validationError);
+                    code,
+                    path,
+                    reason);
         } catch (JsonProcessingException serializationFailure) {
             throw new IllegalStateException("cannot serialize rejected teaching candidate", serializationFailure);
         }
@@ -168,19 +153,22 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     @Override
     public CandidateRejection rejectionObservation(
-            SectionRequest request, String candidateJson, String validationError) {
+            SectionRequest request,
+            String candidateJson,
+            String code,
+            String path,
+            String reason) {
         return new CandidateRejection(
                 candidateJson,
-                validationError,
+                code,
+                path,
+                reason,
                 usesQwen(roleFor(request), request.modelConfigurationOwner())
                         ? QWEN_TEACHING_SCHEMA
                         : TEACHING_TEXT_OUTPUT_CONTRACT,
                 request.topicKey(),
                 IntStream.range(0, request.evidence().size())
                         .mapToObj(index -> "E" + (index + 1))
-                        .toList(),
-                request.teachingUnits().stream()
-                        .map(TeachingUnitInput::unitId)
                         .toList());
     }
 
@@ -197,7 +185,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 <untrusted_rejection_observation>%s</untrusted_rejection_observation>
                 Decide how to correct the candidate using only the original request and evidence. Return one new complete
                 JSON object that satisfies the original output contract. Do not return a patch, prose, markdown, or partial
-                fields. Use only the allowed section, evidence, and teaching-unit identities listed in the observation.
+                fields. Use only the allowed section and evidence identities listed in the observation.
                 """.formatted(observation);
     }
 
@@ -205,42 +193,27 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         boolean qwen = usesQwen(role, owner);
-        int fixedContractTokens = estimateTokens(systemPrompt(qwen))
+        int contractTokens = estimateTokens(systemPrompt(qwen))
                 + estimateTokens(promptWithoutParameters(prompts.teachingUser()))
-                + (qwen ? estimateTokens(QWEN_TEACHING_SCHEMA) : 0);
-        int objectiveTokens = estimateTokens(request.objective());
-        int requiredRuleTokens = request.requiredRuleIntents().isEmpty()
-                ? 0
-                : estimateTokens(request.requiredRuleIntents().toString())
-                        + estimateTokens(request.teachingUnits().toString());
+                + (qwen ? estimateTokens(QWEN_TEACHING_SCHEMA) : 0)
+                + estimateTokens(request.title())
+                + estimateTokens(request.objective());
         int evidenceTokens = estimateTokens(modelEvidence(request).toString());
-        int chapterScopeTokens = estimateTokens(request.chapterScope());
         int continuityTokens = request.priorSections().isEmpty()
                 ? 0
                 : estimateTokens(request.priorSections().toString());
         int revisionTokens = estimateTokens(revisionInstruction);
-        int otherRequestTokens = estimateTokens(request.title())
-                + estimateTokens(request.coverageTags().toString())
-                + estimateTokens(request.wholeGameContext().toString());
-        int totalTokens = fixedContractTokens
-                + objectiveTokens
-                + requiredRuleTokens
+        int totalTokens = contractTokens
                 + evidenceTokens
-                + chapterScopeTokens
                 + continuityTokens
-                + revisionTokens
-                + otherRequestTokens;
+                + revisionTokens;
         return new InputTokenProfile(
                 resolvedProvider(role, owner),
                 totalTokens,
-                fixedContractTokens,
-                objectiveTokens,
-                requiredRuleTokens,
+                contractTokens,
                 evidenceTokens,
-                chapterScopeTokens,
                 continuityTokens,
-                revisionTokens,
-                otherRequestTokens);
+                revisionTokens);
     }
 
     private String resolvedProvider(Role role, String owner) {
@@ -252,12 +225,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         for (String parameter : List.of(
                 "section",
                 "objective",
-                "coverage",
-                "requiredRules",
-                "teachingUnits",
-                "wholeGameContext",
                 "continuity",
-                "chapterScope",
                 "evidence",
                 "repair")) {
             result = result.replace("{" + parameter + "}", "");
@@ -322,12 +290,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         user.text(prompts.teachingUser())
                                 .param("section", request.title())
                                 .param("objective", request.objective())
-                                .param("coverage", request.coverageTags())
-                                .param("requiredRules", request.requiredRuleIntents())
-                                .param("teachingUnits", modelTeachingUnits(request))
-                                .param("wholeGameContext", request.wholeGameContext())
                                 .param("continuity", request.priorSections())
-                                .param("chapterScope", request.chapterScope())
                                 .param("evidence", modelEvidence(request))
                                 .param("repair", repairInstruction);
                     });
@@ -367,24 +330,20 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         }
     }
 
-    /**
-     * The generated schema is also the admission contract. Missing record fields and unexpected repair prose must not
-     * be converted into Java defaults because the reader relies on every typed display field being deliberate.
-     */
+    /** Parses transport structure; the candidate validator remains the owner of required publication semantics. */
     static ModelSectionDraft parseStructuredDraft(String responseContent) throws JsonProcessingException {
         if (responseContent == null || responseContent.isBlank()) return null;
         JsonNode root = STRICT_TEACHING_OUTPUT.readTree(responseContent);
-        requireArray(root, "visualCitationIds", "teaching section");
         JsonNode steps = requireArray(root, "steps", "teaching section");
         for (JsonNode step : steps) {
             requireArray(step, "citationIds", "teaching step");
-            requireArray(step, "teachingUnitIds", "teaching step");
-            JsonNode ruleFacts = requireArray(step, "ruleFacts", "teaching step");
-            for (JsonNode ruleFact : ruleFacts) {
-                requireArray(ruleFact, "citationIds", "teaching rule fact");
+            JsonNode ruleFacts = step.path("ruleFacts");
+            if (ruleFacts.isArray()) {
+                for (JsonNode ruleFact : ruleFacts) {
+                    requireArray(ruleFact, "citationIds", "teaching rule fact");
+                }
             }
         }
-        rejectDuplicateArrayItems(root, "teaching section");
         return STRICT_TEACHING_OUTPUT.readValue(responseContent, ModelSectionDraft.class);
     }
 
@@ -396,31 +355,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                     contract + " field " + field + " must be an array");
         }
         return owner.get(field);
-    }
-
-    private static void rejectDuplicateArrayItems(JsonNode node, String path)
-            throws com.fasterxml.jackson.databind.JsonMappingException {
-        if (node.isArray()) {
-            java.util.LinkedHashSet<JsonNode> unique = new java.util.LinkedHashSet<>();
-            int index = 0;
-            for (JsonNode item : node) {
-                if (!unique.add(item)) {
-                    throw com.fasterxml.jackson.databind.JsonMappingException.from(
-                            (com.fasterxml.jackson.core.JsonParser) null,
-                            path + " contains a duplicate array item at index " + index);
-                }
-                rejectDuplicateArrayItems(item, path + "[" + index + "]");
-                index++;
-            }
-            return;
-        }
-        if (node.isObject()) {
-            var fields = node.fields();
-            while (fields.hasNext()) {
-                var field = fields.next();
-                rejectDuplicateArrayItems(field.getValue(), path + "." + field.getKey());
-            }
-        }
     }
 
     private int usageValue(Integer value) {
@@ -480,12 +414,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                     new BeanOutputConverter<>(ModelSectionDraft.class).getJsonSchema());
             ObjectNode properties = (ObjectNode) schema.path("properties");
             ((ObjectNode) properties.path("title")).put("minLength", 1);
-            ((ObjectNode) properties.path("visualCaption")).put("minLength", 1);
-            ((ObjectNode) properties.path("visualCitationIds")).put("minItems", 1);
             ObjectNode steps = (ObjectNode) properties.path("steps");
             steps.put("minItems", 1);
             ObjectNode stepProperties = (ObjectNode) steps.path("items").path("properties");
             ((ObjectNode) stepProperties.path("citationIds")).put("minItems", 1);
+            removeRequiredField((ObjectNode) steps.path("items"), "ruleFacts");
             ObjectNode ruleFacts = (ObjectNode) stepProperties.path("ruleFacts");
             ObjectNode ruleFactProperties = (ObjectNode) ruleFacts.path("items").path("properties");
             ((ObjectNode) ruleFactProperties.path("citationIds")).put("minItems", 1);
@@ -493,6 +426,16 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         } catch (Exception exception) {
             throw new IllegalStateException("cannot build the teaching response schema", exception);
         }
+    }
+
+    private static void removeRequiredField(ObjectNode schema, String optionalField) {
+        if (!(schema.path("required") instanceof com.fasterxml.jackson.databind.node.ArrayNode required)) return;
+        List<String> retained = new java.util.ArrayList<>();
+        required.forEach(field -> {
+            if (!optionalField.equals(field.asText())) retained.add(field.asText());
+        });
+        required.removeAll();
+        retained.forEach(required::add);
     }
 
     private boolean usesQwen(Role role, String modelConfigurationOwner) {
@@ -557,34 +500,15 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return Map.copyOf(references);
     }
 
-    List<ModelTeachingUnit> modelTeachingUnits(SectionRequest request) {
-        Map<UUID, String> references = new LinkedHashMap<>();
-        evidenceIds(request).forEach((reference, id) -> references.put(id, reference));
-        return request.teachingUnits().stream()
-                .map(unit -> {
-                    List<String> directEvidenceReferences = unit.directEvidenceIds().stream()
-                            .map(references::get)
-                            .filter(java.util.Objects::nonNull)
-                            .toList();
-                    return new ModelTeachingUnit(
-                            unit.unitId(), unit.sourceIdentifiers(), directEvidenceReferences);
-                })
-                .toList();
-    }
-
     private ModelSectionDraft toModelDraft(SectionRequest request, SectionDraft draft) {
         Map<UUID, String> references = new LinkedHashMap<>();
         evidenceIds(request).forEach((reference, id) -> references.put(id, reference));
         return new ModelSectionDraft(
                 draft.title(),
-                draft.visualKind(),
-                draft.visualCaption(),
-                draft.visualCitationIds().stream().map(references::get).toList(),
                 draft.steps().stream()
                         .map(step -> new ModelStepDraft(
                                 step.heading(), step.kind(), step.text(),
                                 step.citationIds().stream().map(references::get).toList(),
-                                step.teachingUnitIds(),
                                 step.ruleFacts().stream()
                                         .map(fact -> new ModelRuleFact(
                                                 fact.role(),
@@ -603,14 +527,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         }
         return new SectionDraft(
                 draft.title(),
-                draft.visualKind(),
-                draft.visualCaption(),
-                resolveReferences(draft.visualCitationIds(), evidenceIds),
                 draft.steps().stream()
                         .map(step -> new StepDraft(
                                 step.heading(), step.kind(), step.text(),
                                 resolveReferences(step.citationIds(), evidenceIds),
-                                step.teachingUnitIds(),
                                 step.ruleFacts().stream()
                                         .map(fact -> new RuleFactDraft(
                                                 fact.role(),
@@ -620,16 +540,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .toList());
     }
 
-    private List<UUID> resolveReferences(List<String> references, Map<String, UUID> evidenceIds) {
+    static List<UUID> resolveReferences(List<String> references, Map<String, UUID> evidenceIds) {
         if (references == null) {
             throw new IllegalArgumentException("teaching model must return explicit evidence reference arrays");
         }
         List<String> normalized = references.stream()
                 .map(reference -> reference == null ? "" : reference.strip().toUpperCase())
+                .distinct()
                 .toList();
-        if (new java.util.LinkedHashSet<>(normalized).size() != normalized.size()) {
-            throw new IllegalArgumentException("teaching model returned duplicate evidence references");
-        }
         return normalized.stream()
                 .map(reference -> {
                     UUID id = evidenceIds.get(reference);
@@ -651,20 +569,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             int pageFrom,
             int pageTo) {}
 
-    record ModelTeachingUnit(
-            String unitId,
-            List<String> sourceIdentifiers,
-            List<String> directEvidenceIds) {}
-
     record ModelSectionDraft(
             String title,
-            VisualKind visualKind,
-            String visualCaption,
-            List<String> visualCitationIds,
             List<ModelStepDraft> steps) {
         ModelSectionDraft {
-            visualCitationIds = visualCitationIds == null ? List.of() : List.copyOf(visualCitationIds);
-            steps = steps == null ? List.of() : List.copyOf(steps);
+            steps = steps == null ? List.of() : steps.stream().distinct().toList();
         }
     }
 
@@ -673,12 +582,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             TeachingMove kind,
             String text,
             List<String> citationIds,
-            List<String> teachingUnitIds,
             List<ModelRuleFact> ruleFacts) {
         ModelStepDraft {
-            citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
-            teachingUnitIds = teachingUnitIds == null ? List.of() : List.copyOf(teachingUnitIds);
-            ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
+            citationIds = citationIds == null ? List.of() : citationIds.stream().distinct().toList();
+            ruleFacts = ruleFacts == null ? List.of() : ruleFacts.stream().distinct().toList();
         }
     }
 
@@ -687,7 +594,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             String text,
             List<String> citationIds) {
         ModelRuleFact {
-            citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
+            citationIds = citationIds == null ? List.of() : citationIds.stream().distinct().toList();
         }
     }
 }

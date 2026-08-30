@@ -46,14 +46,13 @@ final class TeachingSectionEvidenceRetriever {
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             UUID assistantRunId,
-            int queryBudget,
             boolean bindVisualPageEvidence) {
         Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
         Optional<TeachingVisualEvidenceResolver.CanonicalPageObservation> canonicalPageObservation = Optional.empty();
         boolean conflictingEvidence = false;
         int toolCalls = 0;
-        for (String query : TeachingEvidenceRetrievalPolicy.queries(planned, queryBudget)) {
+        for (String query : TeachingEvidenceRetrievalPolicy.queries(planned)) {
             toolCalls++;
             try {
                 List<RuleEvidence> retrieved = invocations.invoke(
@@ -101,8 +100,8 @@ final class TeachingSectionEvidenceRetriever {
         return verifiedResult(plan, evidence, toolCalls, canonicalPageObservation);
     }
 
-    static int maximumToolCalls(TeachingPlan.PlannedSection planned, int maxRetrievalQueries) {
-        int searches = TeachingEvidenceRetrievalPolicy.queries(planned, maxRetrievalQueries).size();
+    static int maximumToolCalls(TeachingPlan.PlannedSection planned) {
+        int searches = TeachingEvidenceRetrievalPolicy.queries(planned).size();
         int possibleVisualPageRead = TeachingVisualEvidenceResolver.maximumPageReadToolCalls(planned);
         return Math.addExact(searches, possibleVisualPageRead);
     }

@@ -41,6 +41,7 @@ public class PublicLessonReader {
     public Optional<PublicLesson> find(UUID teachingPlanId) {
         return plans.findById(teachingPlanId).flatMap(plan -> lessons.findLatestByPlan(plan.id())
                 .filter(PublicLessonReader::isPubliclyReadable)
+                .map(PlayerFacingLessonLanguagePolicy::publicProjection)
                 .flatMap(lesson -> rulebooks
                 .findReference(plan.documentVersionId())
                 .map(rulebook -> new PublicLesson(
@@ -50,6 +51,7 @@ public class PublicLessonReader {
                         rulebook.officialSourceUrl(),
                         cover(rulebook),
                         gameIdentity(plan.gameTitle(), rulebook),
+                        plan.wholeGameContext().unresolvedTopics(),
                 lesson))));
     }
 
@@ -104,6 +106,7 @@ public class PublicLessonReader {
             String officialSourceUrl,
             PublicCover gameCover,
             PublicGameIdentityLookup.Identity publicGame,
+            java.util.List<String> unresolvedTopics,
             IllustratedLesson lesson) {
         public PublicLesson {
             if (teachingPlanId == null || documentVersionId == null || rulebookTitle == null || rulebookTitle.isBlank()
@@ -111,6 +114,26 @@ public class PublicLessonReader {
                 throw new IllegalArgumentException("public lesson is invalid");
             }
             rulebookTitle = rulebookTitle.strip();
+            unresolvedTopics = unresolvedTopics == null ? java.util.List.of() : java.util.List.copyOf(unresolvedTopics);
+        }
+
+        public PublicLesson(
+                UUID teachingPlanId,
+                UUID documentVersionId,
+                String rulebookTitle,
+                String officialSourceUrl,
+                PublicCover gameCover,
+                PublicGameIdentityLookup.Identity publicGame,
+                IllustratedLesson lesson) {
+            this(
+                    teachingPlanId,
+                    documentVersionId,
+                    rulebookTitle,
+                    officialSourceUrl,
+                    gameCover,
+                    publicGame,
+                    java.util.List.of(),
+                    lesson);
         }
 
         public Set<Integer> citedPages() {

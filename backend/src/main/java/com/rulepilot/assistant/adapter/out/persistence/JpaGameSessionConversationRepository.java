@@ -825,10 +825,10 @@ class PersistedRuleSituationCheck {
 @Embeddable
 class PersistedRuleCalculation {
 
-    @Column(nullable = false, length = 160)
+    @Column(nullable = false, columnDefinition = "text")
     String expression;
 
-    @Column(nullable = false, length = 80)
+    @Column(nullable = false, columnDefinition = "text")
     String result;
 
     protected PersistedRuleCalculation() {}

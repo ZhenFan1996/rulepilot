@@ -14,12 +14,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -30,68 +25,8 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Sinks;
 
 class SpringAiBoardGameRecommendationModelTest {
-
-    @Test
-    void streamsCumulativeNaturalTextBeforeTheProviderCompletes() throws Exception {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
-        Sinks.Many<ChatResponse> provider = Sinks.many().unicast().onBackpressureBuffer();
-        when(chatModel.stream(any(Prompt.class))).thenReturn(provider.asFlux());
-        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
-        List<String> parts = new CopyOnWriteArrayList<>();
-        CountDownLatch firstPart = new CountDownLatch(1);
-
-        CompletableFuture<Turn> completion = CompletableFuture.supplyAsync(() -> adapter.stream(
-                request(List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}"))),
-                null,
-                text -> {
-                    parts.add(text);
-                    firstPart.countDown();
-                }));
-
-        assertThat(provider.tryEmitNext(textResponse("你", null))).isEqualTo(Sinks.EmitResult.OK);
-        assertThat(firstPart.await(1, TimeUnit.SECONDS)).isTrue();
-        assertThat(parts).containsExactly("你");
-        assertThat(completion).isNotDone();
-
-        assertThat(provider.tryEmitNext(textResponse("好", "stop"))).isEqualTo(Sinks.EmitResult.OK);
-        assertThat(provider.tryEmitComplete()).isEqualTo(Sinks.EmitResult.OK);
-        var turn = completion.get(2, TimeUnit.SECONDS);
-
-        assertThat(parts).containsExactly("你", "你好");
-        assertThat(turn.text()).isEqualTo("你好");
-        assertThat(turn.toolCalls()).isEmpty();
-    }
-
-    @Test
-    void revokesProvisionalTextAndNeverPublishesToolCallChunkContent() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
-                textResponse("我先看看。", null),
-                response(
-                        "tool_calls",
-                        "DO_NOT_LEAK_TOOL_CONTENT",
-                        new AssistantMessage.ToolCall("browse-1", "function", "browse", "{}"))));
-        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
-        List<String> parts = new CopyOnWriteArrayList<>();
-
-        var turn = adapter.stream(
-                request(List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}"))),
-                null,
-                parts::add);
-
-        assertThat(parts).containsExactly("我先看看。", "");
-        assertThat(parts).noneMatch(part -> part.contains("DO_NOT_LEAK_TOOL_CONTENT")
-                || part.contains("browse-1")
-                || part.contains("{}"));
-        assertThat(turn.toolCalls()).singleElement().satisfies(call ->
-                assertThat(call.name()).isEqualTo("browse"));
-    }
 
     @Test
     void letsGeminiChooseAnActionOrFinishNaturally() {
@@ -142,7 +77,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).isEqualTo("auto");
-        assertThat(options.getParallelToolCalls()).isFalse();
+        assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getMaxTokens()).isEqualTo(4_096);
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
@@ -171,26 +106,7 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void keepsQwenAutoEvenWhenOneActionIsAvailable() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
-        when(chatModel.call(any(Prompt.class))).thenReturn(response(
-                "tool_calls",
-                new AssistantMessage.ToolCall("browse-1", "function", "browse", "{\"requestedCount\":1}")));
-        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
-
-        adapter.next(request(List.of(new ToolSpec("browse", "Browse the catalog", "{\"type\":\"object\"}"))));
-
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).call(prompt.capture());
-        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("auto");
-        assertThat(options.getParallelToolCalls()).isFalse();
-        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
-    }
-
-    @Test
-    void keepsQwenAutoWireModeWhenSeveralTypedActionsAreAvailable() {
+    void enablesQwenParallelToolCallsWhenSeveralTypedActionsAreAvailable() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
         when(chatModel.call(any(Prompt.class))).thenReturn(response(
@@ -206,7 +122,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).isEqualTo("auto");
-        assertThat(options.getParallelToolCalls()).isFalse();
+        assertThat(options.getParallelToolCalls()).isTrue();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
     }
 
@@ -230,7 +146,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).isEqualTo("auto");
-        assertThat(options.getParallelToolCalls()).isFalse();
+        assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
     }
@@ -252,7 +168,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).isEqualTo("auto");
-        assertThat(options.getParallelToolCalls()).isFalse();
+        assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getExtraBody()).isNullOrEmpty();
     }
 
@@ -272,7 +188,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getToolChoice()).isEqualTo("auto");
-        assertThat(options.getParallelToolCalls()).isFalse();
+        assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getExtraBody()).isNullOrEmpty();
     }
 
@@ -374,12 +290,4 @@ class SpringAiBoardGameRecommendationModelTest {
                 ChatGenerationMetadata.builder().finishReason(finishReason).build())));
     }
 
-    private ChatResponse textResponse(String text, String finishReason) {
-        AssistantMessage output = AssistantMessage.builder()
-                .content(text)
-                .build();
-        ChatGenerationMetadata.Builder metadata = ChatGenerationMetadata.builder();
-        if (finishReason != null) metadata.finishReason(finishReason);
-        return new ChatResponse(List.of(new Generation(output, metadata.build())));
-    }
 }

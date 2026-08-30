@@ -207,117 +207,181 @@ public class StructuredRuleAnswerController {
     }
 
     static PlayerActivity playerActivity(ActivitySnapshot activity, PlayerLocale locale) {
-        String operation = activity.operation();
-        String actor = "answer_agent";
-        String stage;
-        boolean correctionInProgress = activity.type() == ActivityType.VALIDATION
-                && activity.outcome() == ActivityOutcome.REJECTED
-                && isRecoverableValidation(operation);
-        boolean observationStalled = activity.type() == ActivityType.VALIDATION
-                && activity.outcome() == ActivityOutcome.REJECTED
-                && operation.startsWith("nativeObservationNoProgress");
-        if (correctionInProgress) {
-            actor = "answer_validator";
-            stage = "correcting_answer";
-        } else if (observationStalled) {
-            actor = "answer_validator";
-            stage = "evidence_search_stalled";
-        } else if (operation.startsWith("nativeTool|search_rule_evidence") || operation.equals("hybridRuleSearch")) {
-            actor = "rulebook_search";
-            stage = "searching_evidence";
-        } else if (operation.startsWith("nativeTool|search_rule_relationships")) {
-            actor = "rulebook_search";
-            stage = "checking_exceptions";
-        } else if (operation.startsWith("nativeTool|expand_rule_evidence_context")) {
-            actor = "rulebook_reader";
-            stage = "expanding_context";
-        } else if (operation.startsWith("nativeTool|read_rule_pages")) {
-            actor = "rulebook_reader";
-            stage = "reading_pages";
-        } else if (activity.type() == ActivityType.MODEL) {
-            stage = "composing_answer";
-        } else if (activity.type() == ActivityType.CRITIC) {
-            actor = "answer_reviewer";
-            stage = "reviewing_support";
-        } else if (activity.type() == ActivityType.VALIDATION) {
-            actor = "answer_validator";
-            stage = "validating_citations";
-        } else {
-            actor = "rulebook_tool";
-            stage = "checking_rule_details";
-        }
         boolean english = locale == PlayerLocale.EN;
-        String message = switch (stage) {
-            case "searching_evidence" -> english
-                    ? "Searching the indexed rulebook for direct evidence"
-                    : "正在规则书索引中查找直接依据";
-            case "checking_exceptions" -> english
-                    ? "Checking exception and override clauses"
-                    : "正在核对例外与覆盖条款";
-            case "expanding_context" -> english
-                    ? "Reading the context around the matched citation"
-                    : "正在阅读命中引用前后的完整语境";
-            case "reading_pages" -> english
-                    ? "Reading the exact rulebook pages"
-                    : "正在读取对应的规则书原页";
-            case "composing_answer" -> english
-                    ? "Composing only from verified evidence"
-                    : "正在只根据已核实证据组织回答";
-            case "reviewing_support" -> english
-                    ? "Reviewing whether each conclusion is supported"
-                    : "正在复核每个结论是否有依据";
-            case "validating_citations" -> english
-                    ? "Validating citation ownership and page boundaries"
-                    : "正在校验引用归属与页码边界";
-            case "correcting_answer" -> english
-                    ? "The draft did not pass validation; the answer agent is correcting it"
-                    : "回答草稿未通过校验，答疑助手正在修正";
-            case "evidence_search_stalled" -> english
-                    ? "Supplementary evidence search stopped because the same tool call returned the same evidence twice; the answer can continue with evidence already checked"
-                    : "相同工具调用连续两次返回完全相同的证据，已停止补充查找；答疑会继续使用已有的核验证据";
-            default -> english ? "Checking a rule-specific detail" : "正在核对具体规则细节";
-        };
-        String nextAction = switch (stage) {
-            case "searching_evidence", "checking_exceptions" -> english
-                    ? "Next: read the strongest matching rule in context"
-                    : "下一步：阅读最强命中规则的上下文";
-            case "expanding_context", "reading_pages" -> english
-                    ? "Next: verify what the cited text actually supports"
-                    : "下一步：核对原文实际支持的结论边界";
-            case "composing_answer" -> english
-                    ? "Next: validate the answer and citations"
-                    : "下一步：校验回答与引用";
-            case "correcting_answer" -> english
-                    ? "Next: retry with a valid action or supported answer"
-                    : "下一步：用有效操作或有依据的回答继续";
-            case "evidence_search_stalled" -> english
-                    ? "Next: compose and validate from the evidence already checked"
-                    : "下一步：根据已有核验证据组织并校验回答";
-            default -> english
-                    ? "Next: publish the supported answer"
-                    : "下一步：发布有依据的回答";
-        };
-        String status = correctionInProgress
+        ActivityProjection projection = projectNativeActivity(activity, english);
+        String status = projection.repairInProgress()
                 ? "running"
                 : activity.outcome().name().toLowerCase(java.util.Locale.ROOT);
         return new PlayerActivity(
                 activity.sequence(),
-                actor,
-                stage,
-                message,
+                projection.actor(),
+                projection.stage(),
+                projection.message(),
                 status,
-                nextAction,
+                projection.nextAction(),
                 activity.latencyMs());
     }
 
-    private static boolean isRecoverableValidation(String operation) {
+    private static ActivityProjection projectNativeActivity(ActivitySnapshot activity, boolean english) {
+        String operation = activity.operation();
+        if (activity.type() == ActivityType.MODEL) {
+            return new ActivityProjection(
+                    "answer_agent",
+                    "model_decision",
+                    english
+                            ? "The answer Agent is deciding whether to answer or read rulebook evidence"
+                            : "答疑 Agent 正在决定直接回答或读取哪些规则书证据",
+                    english
+                            ? "The same Agent continues from this decision"
+                            : "同一 Agent 会从本次决策继续",
+                    false);
+        }
+        if (activity.type() == ActivityType.TOOL && operation.startsWith("nativeTool|")) {
+            return new ActivityProjection(
+                    "rulebook_tool",
+                    "read_tool",
+                    readToolMessage(nativeToolName(operation), english),
+                    english
+                            ? "Its correlated observation returns to the same Agent"
+                            : "带调用关联标识的 observation 会返回同一 Agent",
+                    false);
+        }
+        if (operation.startsWith("nativeObs|")) {
+            boolean localFailure = activity.outcome() == ActivityOutcome.REJECTED;
+            return new ActivityProjection(
+                    "rulebook_tool",
+                    "tool_observation",
+                    localFailure
+                            ? (english
+                                    ? "This read tool returned a typed local failure; completed sibling observations remain available"
+                                    : "本次只读工具返回 typed 局部失败；已完成的同批 observation 仍然可用")
+                            : (english
+                                    ? "A correlated read-only tool observation returned to the answer Agent"
+                                    : "一条带调用关联标识的只读 observation 已返回答疑 Agent"),
+                    english
+                            ? "The same Agent decides again from all available observations"
+                            : "同一 Agent 会基于全部可用 observation 再次决策",
+                    false);
+        }
+        if (isTerminalRepair(operation)) {
+            boolean actionRepair = operation.equals("nativeActionProtocol") || operation.equals("nativeToolSchema");
+            return new ActivityProjection(
+                    "answer_agent",
+                    actionRepair ? "repairing_action" : "repairing_terminal",
+                    actionRepair
+                            ? (english
+                                    ? "The complete rejected action and current tool contract returned to the same Agent"
+                                    : "被拒绝的完整动作与当前工具合同已返回同一 Agent")
+                            : (english
+                                    ? "The complete rejected terminal payload and current publication contract returned to the same Agent"
+                                    : "被拒绝的完整终态 payload 与当前发布合同已返回同一 Agent"),
+                    english
+                            ? "The same Agent regenerates the whole payload"
+                            : "同一 Agent 会整包重新生成",
+                    true);
+        }
+        if (operation.startsWith("nativeToolFallback|")) {
+            String stopCode = operation.substring("nativeToolFallback|".length());
+            return new ActivityProjection(
+                    "answer_agent",
+                    "agent_stopped",
+                    stopMessage(stopCode, english),
+                    english
+                            ? "This answer run ends at the recorded boundary"
+                            : "本次答疑运行在该记录边界结束",
+                    false);
+        }
+        if (operation.startsWith("nativeObservationNoProgress|")) {
+            return new ActivityProjection(
+                    "answer_agent",
+                    "agent_stopped",
+                    english
+                            ? "The answer Agent stopped at OBSERVATION_NO_PROGRESS after repeating the same read and observation"
+                            : "答疑 Agent 因重复相同读取并得到相同 observation，在 OBSERVATION_NO_PROGRESS 边界停止",
+                    english
+                            ? "This answer run ends at the recorded boundary"
+                            : "本次答疑运行在该记录边界结束",
+                    false);
+        }
+        return new ActivityProjection(
+                "answer_agent",
+                "publication_boundary",
+                english
+                        ? "The native Agent is checking a schema, evidence identity, or resource boundary"
+                        : "native Agent 正在检查 schema、证据身份或资源边界",
+                english
+                        ? "A rejection returns to the same Agent when repair remains allowed"
+                        : "若仍允许修复，拒绝结果会返回同一 Agent",
+                false);
+    }
+
+    private static String nativeToolName(String operation) {
+        int start = "nativeTool|".length();
+        int end = operation.indexOf('|', start);
+        return end < 0 ? operation.substring(start) : operation.substring(start, end);
+    }
+
+    private static String readToolMessage(String toolName, boolean english) {
+        return switch (toolName) {
+            case "search_rule_evidence" -> english
+                    ? "The answer Agent called the read-only rulebook search tool"
+                    : "答疑 Agent 调用了只读规则书搜索工具";
+            case "search_rule_relationships" -> english
+                    ? "The answer Agent called the read-only rule relationship search tool"
+                    : "答疑 Agent 调用了只读规则关系搜索工具";
+            case "expand_rule_evidence_context" -> english
+                    ? "The answer Agent called the read-only context expansion tool"
+                    : "答疑 Agent 调用了只读上下文扩展工具";
+            case "read_rule_pages" -> english
+                    ? "The answer Agent called the exact-page read tool"
+                    : "答疑 Agent 调用了规则书原页读取工具";
+            case "read_visual_page_facts", "read_rule_page_image", "crop_rule_page_image" -> english
+                    ? "The answer Agent called a read-only visual rulebook tool"
+                    : "答疑 Agent 调用了只读规则书视觉工具";
+            default -> english
+                    ? "The answer Agent called an allow-listed read-only tool"
+                    : "答疑 Agent 调用了 allow-list 内的只读工具";
+        };
+    }
+
+    private static boolean isTerminalRepair(String operation) {
         return operation.equals("nativeCompletionRequirement")
                 || operation.equals("nativeEmptyCompletion")
                 || operation.equals("nativeCompletionProtocol")
                 || operation.equals("nativeActionProtocol")
-                || operation.equals("nativeToolSchema")
-                || operation.startsWith("nativeObs|");
+                || operation.equals("nativeToolSchema");
     }
+
+    private static String stopMessage(String code, boolean english) {
+        return switch (code) {
+            case "TIMEOUT" -> english
+                    ? "The answer Agent stopped at the TIMEOUT resource boundary"
+                    : "答疑 Agent 在 TIMEOUT 资源边界停止";
+            case "CANCELLED" -> english
+                    ? "The answer Agent stopped because the owner cancellation reached the CANCELLED boundary"
+                    : "答疑 Agent 因所有者取消到达 CANCELLED 边界而停止";
+            case "TOKEN_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "STEP_BUDGET",
+                    "OBSERVATION_BUDGET_EXHAUSTED", "OBSERVATION_BUDGET_EXCEEDED" -> english
+                    ? "The answer Agent stopped at the " + code + " resource boundary"
+                    : "答疑 Agent 在 " + code + " 资源边界停止";
+            case "COMPLETION_NO_PROGRESS", "ACTION_NO_PROGRESS", "OBSERVATION_NO_PROGRESS" -> english
+                    ? "The answer Agent stopped at " + code + " after the same rejected result made no progress"
+                    : "答疑 Agent 因相同拒绝结果没有进展，在 " + code + " 边界停止";
+            case "TOOL_ALLOWLIST_UNAVAILABLE", "MODEL_CAPABILITY_UNAVAILABLE", "EXECUTION_FAILED" -> english
+                    ? "The answer Agent stopped at the " + code + " execution boundary"
+                    : "答疑 Agent 在 " + code + " 执行边界停止";
+            default -> english
+                    ? "The answer Agent stopped at the EXECUTION_FAILED boundary"
+                    : "答疑 Agent 在 EXECUTION_FAILED 边界停止";
+        };
+    }
+
+    private record ActivityProjection(
+            String actor,
+            String stage,
+            String message,
+            String nextAction,
+            boolean repairInProgress) {}
 
     private final class PlayerActivityPump {
         private final SseEmitter emitter;

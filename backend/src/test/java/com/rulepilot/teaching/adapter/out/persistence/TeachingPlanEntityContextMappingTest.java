@@ -13,27 +13,9 @@ class TeachingPlanEntityContextMappingTest {
     @Test
     void productionEntityJsonRoundTripDoesNotLoseTheWholeGameContext() {
         var context = new TeachingPlan.WholeGameContext(
-                "先理解两项相互依赖的规则关系。",
-                List.of(
-                        new TeachingPlan.GlobalConcept(
-                                "first-relation",
-                                "第一项关系",
-                                "先建立第一项关系。",
-                                List.of("R-one"),
-                                List.of(2),
-                                List.of("first-topic"),
-                                List.of()),
-                        new TeachingPlan.GlobalConcept(
-                                "second-relation",
-                                "第二项关系",
-                                "第二项关系依赖第一项。",
-                                List.of("R-two"),
-                                List.of(3),
-                                List.of("second-topic"),
-                                List.of("first-relation"))),
                 List.of(new TeachingPlan.TopicDependency(
                         "first-topic", "second-topic", "先建立第一项关系。")),
-                true);
+                List.of("仍需说明一个可见缺口。"));
         TeachingPlan original = new TeachingPlan(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
@@ -54,6 +36,22 @@ class TeachingPlanEntityContextMappingTest {
         TeachingPlan restored = TeachingPlanPersistenceRoundTrip.serializeAndReload(original);
 
         assertThat(restored).isEqualTo(original);
-        assertThat(restored.wholeGameContext().evidenceBound()).isTrue();
+        assertThat(restored.wholeGameContext().unresolvedTopics())
+                .containsExactly("仍需说明一个可见缺口。");
+    }
+
+    @Test
+    void readsOldStoredContextByIgnoringRetiredCompletenessObjects() {
+        var context = TeachingPlanEntity.readContext("""
+                {"summary":"legacy","concepts":[{"conceptId":"old"}],"evidenceBound":true,
+                 "topicDependencies":[{"prerequisiteTopicKey":"setup","dependentTopicKey":"play",
+                 "reason":"setup first"}],"unresolvedTopics":["scoring still unknown"]}
+                """, "legacy premise");
+
+        assertThat(context.topicDependencies()).singleElement().satisfies(dependency -> {
+            assertThat(dependency.prerequisiteTopicKey()).isEqualTo("setup");
+            assertThat(dependency.dependentTopicKey()).isEqualTo("play");
+        });
+        assertThat(context.unresolvedTopics()).containsExactly("scoring still unknown");
     }
 }

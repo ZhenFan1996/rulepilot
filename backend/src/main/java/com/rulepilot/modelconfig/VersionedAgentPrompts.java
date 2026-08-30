@@ -2,7 +2,6 @@ package com.rulepilot.modelconfig;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
@@ -12,9 +11,6 @@ public class VersionedAgentPrompts {
 
     private final String focusedTeachingSystem;
     private final String teachingUser;
-    private final String focusedAnswerCoreSystem;
-    private final Map<String, String> focusedAnswerModules;
-    private final String answerUser;
     private final String criticSystem;
     private final String lessonStructureCriticSystem;
     private final String atomicCriticSystem;
@@ -30,34 +26,6 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v45-focused-source-contract-system.txt") Resource focusedTeachingSystem,
             @Value("classpath:prompts/teaching-agent-v44-quantitative-aggregation-system.txt") Resource teachingQuantitativeAggregation,
             @Value("classpath:prompts/teaching-agent-v12-user.txt") Resource teachingUser,
-            @Value("classpath:prompts/rule-answer-agent-v19-complete-list-system.txt") Resource answerCompleteList,
-            @Value("classpath:prompts/rule-answer-agent-v21-resolved-visual-language-system.txt") Resource answerResolvedVisualLanguage,
-            @Value("classpath:prompts/rule-answer-agent-v22-mechanical-list-consistency-system.txt") Resource answerMechanicalListConsistency,
-            @Value("classpath:prompts/rule-answer-agent-v24-grounded-calculation-system.txt") Resource answerGroundedCalculation,
-            @Value("classpath:prompts/rule-answer-agent-v25-rule-relationship-fidelity-system.txt") Resource answerRuleRelationshipFidelity,
-            @Value("classpath:prompts/rule-answer-agent-v27-cited-walkthrough-system.txt") Resource answerCitedWalkthrough,
-            @Value("classpath:prompts/rule-answer-agent-v28-cited-decision-table-system.txt") Resource answerCitedDecisionTable,
-            @Value("classpath:prompts/rule-answer-agent-v29-cited-exception-clauses-system.txt") Resource answerCitedExceptionClauses,
-            @Value("classpath:prompts/rule-answer-agent-v30-exception-focus-system.txt") Resource answerExceptionFocus,
-            @Value("classpath:prompts/rule-answer-agent-v31-concise-exception-verdict-system.txt") Resource answerConciseExceptionVerdict,
-            @Value("classpath:prompts/rule-answer-agent-v32-self-contained-exception-clauses-system.txt") Resource answerSelfContainedExceptionClauses,
-            @Value("classpath:prompts/rule-answer-agent-v33-cited-term-definitions-system.txt") Resource answerCitedTermDefinitions,
-            @Value("classpath:prompts/rule-answer-agent-v34-cited-worked-examples-system.txt") Resource answerCitedWorkedExamples,
-            @Value("classpath:prompts/rule-answer-agent-v35-cited-rule-priority-system.txt") Resource answerCitedRulePriority,
-            @Value("classpath:prompts/rule-answer-agent-v36-cited-timing-order-system.txt") Resource answerCitedTimingOrder,
-            @Value("classpath:prompts/rule-answer-agent-v37-cited-tie-resolution-system.txt") Resource answerCitedTieResolution,
-            @Value("classpath:prompts/rule-answer-agent-v38-cited-rule-scope-system.txt") Resource answerCitedRuleScope,
-            @Value("classpath:prompts/rule-answer-agent-v39-cited-concept-comparison-system.txt") Resource answerCitedConceptComparison,
-            @Value("classpath:prompts/rule-answer-agent-v40-cited-rule-options-system.txt") Resource answerCitedRuleOptions,
-            @Value("classpath:prompts/rule-answer-agent-v43-cited-rule-dependency-system.txt") Resource answerCitedRuleDependency,
-            @Value("classpath:prompts/rule-answer-agent-v44-player-readable-rule-dependency-system.txt") Resource answerPlayerReadableDependency,
-            @Value("classpath:prompts/rule-answer-agent-v46-self-contained-why-verdict-system.txt") Resource answerSelfContainedWhyVerdict,
-            @Value("classpath:prompts/rule-answer-agent-v47-cited-rule-conflict-check-system.txt") Resource answerCitedRuleConflictCheck,
-            @Value("classpath:prompts/rule-answer-agent-v48-self-contained-conflict-verdict-system.txt") Resource answerSelfContainedConflictVerdict,
-            @Value("classpath:prompts/rule-answer-agent-v49-direct-source-evidence-system.txt") Resource answerDirectSourceEvidence,
-            @Value("classpath:prompts/rule-answer-agent-v54-permission-ruling-system.txt") Resource answerPermissionRuling,
-            @Value("classpath:prompts/rule-answer-agent-v60-lean-runtime-core.txt") Resource answerLeanRuntimeCore,
-            @Value("classpath:prompts/rule-answer-agent-v6-user.txt") Resource answerUser,
             @Value("classpath:prompts/content-critic-v34-focused-runtime-system.txt") Resource focusedCriticSystem,
             @Value("classpath:prompts/content-critic-v35-quantitative-aggregation-system.txt") Resource criticQuantitativeAggregation,
             @Value("classpath:prompts/content-critic-v36-claim-aspect-contract-system.txt") Resource criticClaimAspectContract,
@@ -78,37 +46,6 @@ public class VersionedAgentPrompts {
             throws IOException {
         this.focusedTeachingSystem = combined(focusedTeachingSystem, teachingQuantitativeAggregation);
         this.teachingUser = read(teachingUser);
-        this.focusedAnswerCoreSystem = read(answerLeanRuntimeCore);
-        this.focusedAnswerModules = Map.ofEntries(
-                Map.entry("NONE", ""),
-                Map.entry("OPTIONS", combined(answerCompleteList, answerCitedRuleOptions)),
-                Map.entry("VISUAL", combined(answerResolvedVisualLanguage, answerMechanicalListConsistency)),
-                Map.entry("CALCULATION", read(answerGroundedCalculation)),
-                Map.entry("RULE_PRIORITY", combined(
-                        answerRuleRelationshipFidelity,
-                        answerCitedRulePriority,
-                        answerCitedRuleConflictCheck,
-                        answerSelfContainedConflictVerdict)),
-                Map.entry("WALKTHROUGH", combined(
-                        answerCitedWalkthrough,
-                        answerCitedRuleDependency,
-                        answerPlayerReadableDependency,
-                        answerSelfContainedWhyVerdict)),
-                Map.entry("DECISION_TABLE", read(answerCitedDecisionTable)),
-                Map.entry("EXCEPTIONS", combined(
-                        answerCitedExceptionClauses,
-                        answerExceptionFocus,
-                        answerConciseExceptionVerdict,
-                        answerSelfContainedExceptionClauses)),
-                Map.entry("DEFINITIONS", read(answerCitedTermDefinitions)),
-                Map.entry("CONCEPT_COMPARISON", read(answerCitedConceptComparison)),
-                Map.entry("EXAMPLE", read(answerCitedWorkedExamples)),
-                Map.entry("TIMING", read(answerCitedTimingOrder)),
-                Map.entry("TIE", read(answerCitedTieResolution)),
-                Map.entry("SCOPE", read(answerCitedRuleScope)),
-                Map.entry("SOURCE", read(answerDirectSourceEvidence)),
-                Map.entry("PERMISSION", read(answerPermissionRuling)));
-        this.answerUser = read(answerUser);
         this.criticSystem = combined(
                 focusedCriticSystem,
                 criticQuantitativeAggregation,
@@ -144,20 +81,6 @@ public class VersionedAgentPrompts {
 
     public String teachingUser() {
         return teachingUser;
-    }
-
-    /**
-     * Runtime answer prompt: stable evidence rules plus at most one user-facing explanation aid.
-     */
-    public String answerSystem(String answerAid) {
-        String module = focusedAnswerModules.get(answerAid == null || answerAid.isBlank() ? "NONE" : answerAid);
-        return module == null || module.isBlank()
-                ? focusedAnswerCoreSystem
-                : focusedAnswerCoreSystem + "\n\n" + module;
-    }
-
-    public String answerUser() {
-        return answerUser;
     }
 
     public String criticSystem() {

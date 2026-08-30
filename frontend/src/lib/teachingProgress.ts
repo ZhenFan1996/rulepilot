@@ -156,7 +156,7 @@ export function teachingActivityText(
       }
       return activity.outcome === 'SUCCEEDED'
         ? `${target}'s optional visual and cited text were published together`
-        : `${target}'s bounded visual selection is unavailable; only the visual is omitted and its cited text remains readable`
+        : `${target}'s visual is unavailable; only the visual is omitted and its cited text remains readable`
     }
     return 'Organising and reviewing the guide'
   }
@@ -290,8 +290,8 @@ export function teachingChapterFailureText(
   const summaries = rejected.map(activity => activity.summary)
   if (summaries.some(summary => summary.includes('TOOL_BUDGET_EXHAUSTED'))) {
     return locale === 'en'
-      ? 'The bounded rule-evidence read budget was exhausted before every chapter was supported.'
-      : '规则依据读取次数已用完，仍有章节没有得到依据。'
+      ? 'Rule-evidence reading stopped before every chapter was supported.'
+      : '规则依据读取已停止，仍有章节没有得到依据。'
   }
   if (summaries.some(summary => summary.includes('RETRIEVED_EVIDENCE_INVALID')
     || summary.includes('BASE_EVIDENCE_IDENTITY_INVALID'))) {
@@ -308,8 +308,8 @@ export function teachingChapterFailureText(
   if (summaries.some(summary => summary.includes('DRAFT_WITHHELD')
     || summary.includes('BASE_DRAFT_WITHHELD'))) {
     return locale === 'en'
-      ? 'The chapter draft still failed citation or structure validation after its bounded repair.'
-      : '章节草稿在有限修正后仍未通过引用或结构校验。'
+      ? 'The chapter draft did not pass citation or structure validation and was not published.'
+      : '章节草稿没有通过引用或结构校验，因此没有发布。'
   }
   return locale === 'en'
     ? 'Some chapters did not pass the publication boundary.'
@@ -331,25 +331,18 @@ export function teachingRunStopReasonText(
   }
   if (code === 'AGENT_TIMEOUT') {
     return locale === 'en'
-      ? 'The run reached its wall-time deadline after bounded recovery. Already published chapters remain available.'
-      : '本轮在有限恢复后到达总时限；已经发布的章节仍然保留。'
+      ? 'The run reached its backend-recorded deadline. Already published chapters remain available.'
+      : '本轮到达后端记录的截止时间；已经发布的章节仍然保留。'
   }
   if (code === 'AGENT_TOKEN_BUDGET') {
     return locale === 'en'
       ? 'The run exhausted its token budget. Already published chapters remain available.'
       : '本轮用完了令牌预算；已经发布的章节仍然保留。'
   }
-  if (code === 'AGENT_STEP_BUDGET'
-    || code === 'AGENT_TOOL_BUDGET'
-    || code === 'AGENT_MODEL_BUDGET') {
-    return locale === 'en'
-      ? 'This historical run was stopped by a retired call-count limit. Current runs record these counts without treating them as a failure boundary. Already published chapters remain available.'
-      : '这是一条历史任务：它曾被现已取消的调用次数上限停止。当前任务只记录这些次数，不再据此判定失败；已经发布的章节仍然保留。'
-  }
   if (code === 'TEACHING_COMPLETION_FAILED') {
     return locale === 'en'
-      ? 'The saved guide could not be marked complete after bounded persistence recovery. Its last durable chapters remain available.'
-      : '讲解在有限持久化恢复后仍无法标记完成；最后一次成功保存的章节仍然保留。'
+      ? 'The saved guide could not be marked complete. Its last durable chapters remain available.'
+      : '讲解无法标记为完成；最后一次成功保存的章节仍然保留。'
   }
   if (code === 'APPLICATION_RESTARTED') {
     return locale === 'en'
@@ -358,8 +351,8 @@ export function teachingRunStopReasonText(
   }
   if (code === 'TEACHING_PREPARATION_QUEUE_TIMEOUT' || code === 'TEACHING_QUEUE_TIMEOUT') {
     return locale === 'en'
-      ? 'The guide did not acquire a worker within its bounded queue wait. No model work started; retrying creates a fresh attempt.'
-      : '讲解任务在限定排队时间内没有获得 worker；模型工作尚未开始，可以直接重试新任务。'
+      ? 'The guide did not acquire a worker before the backend queue deadline. No model work started; retrying creates a fresh attempt.'
+      : '讲解任务在后端队列截止前没有获得 worker；模型工作尚未开始，可以直接重试新任务。'
   }
   if (code === 'TEACHING_PREPARATION_QUEUE_FULL') {
     return locale === 'en'
@@ -381,13 +374,13 @@ export function teachingRunStopReasonText(
   }
   if (code === 'TEACHING_QUEUE_FULL') {
     return locale === 'en'
-      ? 'The service could not schedule the next bounded work unit. Any chapter already published remains available.'
-      : '服务未能调度下一个有限工作单元；已经发布的章节仍然保留。'
+      ? 'The service could not schedule the next work unit. Any chapter already published remains available.'
+      : '服务未能调度下一个工作单元；已经发布的章节仍然保留。'
   }
   if (code === 'TEACHING_WORKFLOW_FAILED') {
     return locale === 'en'
-      ? 'A teaching service or persistence step still failed after its bounded recovery. Any durable chapter remains available.'
-      : '讲解服务或持久化步骤在有限恢复后仍失败；已经持久化的章节仍然保留。'
+      ? 'A teaching service or persistence step failed. Any durable chapter remains available.'
+      : '讲解服务或持久化步骤失败；已经持久化的章节仍然保留。'
   }
   return locale === 'en'
     ? 'The run stopped at a whole-run service boundary. Local visual or page omissions alone do not produce this state.'
@@ -704,8 +697,8 @@ function visualPageActivityText(
   }
   if (progress.candidateState === 'correction-follows') {
     return locale === 'en'
-      ? `${candidate} for ${target} did not pass ${visualPageCandidateReason(progress.reasonCode, locale)}; its complete JSON, exact error, original contract, and allowed page IDs returned to the same Agent, which may continue while the observation changes and run resources remain`
-      : `${target}的${candidate}未通过${visualPageCandidateReason(progress.reasonCode, locale)}；完整结果、具体错误、格式要求和可用页码已交回同一个模型，只要返回内容仍在变化且本轮还有文字预算和有效工作时间，就会继续修正`
+      ? `${candidate} for ${target} did not pass ${visualPageCandidateReason(progress.reasonCode, locale)}; its complete JSON, exact error, original contract, and allowed page IDs returned to the same Agent for a complete replacement`
+      : `${target}的${candidate}未通过${visualPageCandidateReason(progress.reasonCode, locale)}；完整结果、具体错误、格式要求和可用页码已交回同一个 Agent，并要求返回完整替代结果`
   }
   if (progress.candidateState === 'no-progress') {
     return locale === 'en'

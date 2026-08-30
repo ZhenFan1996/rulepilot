@@ -1,6 +1,5 @@
 package com.rulepilot.teaching;
 
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
 import java.util.List;
@@ -11,24 +10,6 @@ public interface TeachingLessonModel {
 
     default String providerId() {
         return "unspecified";
-    }
-
-    default boolean supportsVisualEvidence() {
-        return false;
-    }
-
-    /**
-     * Visual capability is selected from the lesson owner's model configuration, not worker-thread security state.
-     */
-    default boolean supportsVisualEvidence(String modelConfigurationOwner) {
-        return supportsVisualEvidence();
-    }
-
-    /**
-     * Provider accounts can impose a lower safe request concurrency than the lesson executor.
-     */
-    default int maxConcurrentSectionRequests(String modelConfigurationOwner) {
-        return Integer.MAX_VALUE;
     }
 
     /**
@@ -78,44 +59,70 @@ public interface TeachingLessonModel {
 
     /** Builds the complete observation for a candidate that reached deterministic application validation. */
     default CandidateRejection rejectionObservation(
-            SectionRequest request, SectionDraft candidate, String validationError) {
-        return rejectionObservation(request, candidate == null ? "" : candidate.toString(), validationError);
+            SectionRequest request,
+            SectionDraft candidate,
+            String code,
+            String path,
+            String reason) {
+        return rejectionObservation(request, candidate == null ? "" : candidate.toString(), code, path, reason);
     }
 
     /** Enriches a raw provider candidate with the original contract and every allowed opaque identity. */
     default CandidateRejection rejectionObservation(
-            SectionRequest request, String candidateJson, String validationError) {
+            SectionRequest request,
+            String candidateJson,
+            String code,
+            String path,
+            String reason) {
         return new CandidateRejection(
                 candidateJson,
-                validationError,
-                "TeachingLessonModel.SectionDraft JSON contract",
+                code,
+                path,
+                reason,
+                "{\"title\":\"...\",\"steps\":[{\"heading\":\"...\",\"kind\":\"DO\",\"text\":\"...\",\"citationIds\":[\"E1\"]}]}",
                 request.topicKey(),
-                request.evidence().stream().map(input -> input.chunkId().toString()).toList(),
-                request.teachingUnits().stream().map(TeachingUnitInput::unitId).toList());
+                request.evidence().stream().map(input -> input.chunkId().toString()).toList());
     }
 
     /** Identifies an untrusted provider response that could not satisfy the section output contract. */
     final class InvalidOutputException extends RuntimeException {
 
         private final String rejectedCandidate;
-        private final String validationError;
+        private final String code;
+        private final String path;
+        private final String reason;
 
         public InvalidOutputException(String message, Throwable cause) {
-            this(message, "", cause);
+            this("INVALID_JSON", "$", message, "", cause);
         }
 
         public InvalidOutputException(String message, String rejectedCandidate, Throwable cause) {
+            this("INVALID_JSON", "$", message, rejectedCandidate, cause);
+        }
+
+        public InvalidOutputException(
+                String code, String path, String message, String rejectedCandidate, Throwable cause) {
             super(message, cause);
             this.rejectedCandidate = rejectedCandidate == null ? "" : rejectedCandidate;
-            this.validationError = detailedError(message, cause);
+            this.code = required(code, "teaching rejection code");
+            this.path = required(path, "teaching rejection path");
+            this.reason = detailedError(message, cause);
         }
 
         public String rejectedCandidate() {
             return rejectedCandidate;
         }
 
-        public String validationError() {
-            return validationError;
+        public String code() {
+            return code;
+        }
+
+        public String path() {
+            return path;
+        }
+
+        public String reason() {
+            return reason;
         }
 
         private static String detailedError(String message, Throwable cause) {
@@ -134,30 +141,38 @@ public interface TeachingLessonModel {
             }
             return diagnostic.toString();
         }
+
+        private static String required(String value, String label) {
+            if (value == null || value.isBlank()) throw new IllegalArgumentException(label + " is required");
+            return value.strip();
+        }
     }
 
     /** Complete, untruncated validation feedback passed back to the same section Agent. */
     record CandidateRejection(
             String candidateJson,
-            String validationError,
-            String outputContract,
+            String code,
+            String path,
+            String reason,
+            String schema,
             String sectionIdentity,
-            List<String> allowedEvidenceIdentities,
-            List<String> allowedTeachingUnitIdentities) {
+            List<String> allowedEvidenceIdentities) {
 
         public CandidateRejection {
             candidateJson = candidateJson == null ? "" : candidateJson;
-            if (validationError == null || validationError.isBlank()
-                    || outputContract == null || outputContract.isBlank()
+            if (code == null || code.isBlank()
+                    || path == null || path.isBlank()
+                    || reason == null || reason.isBlank()
+                    || schema == null || schema.isBlank()
                     || sectionIdentity == null || sectionIdentity.isBlank()) {
                 throw new IllegalArgumentException("teaching candidate rejection is incomplete");
             }
-            validationError = validationError.strip();
-            outputContract = outputContract.strip();
+            code = code.strip();
+            path = path.strip();
+            reason = reason.strip();
+            schema = schema.strip();
             sectionIdentity = sectionIdentity.strip();
             allowedEvidenceIdentities = List.copyOf(Objects.requireNonNull(allowedEvidenceIdentities));
-            allowedTeachingUnitIdentities =
-                    List.copyOf(Objects.requireNonNull(allowedTeachingUnitIdentities));
         }
     }
 
@@ -178,36 +193,24 @@ public interface TeachingLessonModel {
     record InputTokenProfile(
             String providerId,
             int totalTokens,
-            int fixedContractTokens,
-            int objectiveTokens,
-            int requiredRuleTokens,
+            int contractTokens,
             int evidenceTokens,
-            int chapterScopeTokens,
             int continuityTokens,
-            int revisionTokens,
-            int otherRequestTokens) {
+            int revisionTokens) {
 
         public InputTokenProfile {
             if (providerId == null || providerId.isBlank() || providerId.length() > 40
                     || totalTokens < 1
-                    || fixedContractTokens < 0
-                    || objectiveTokens < 0
-                    || requiredRuleTokens < 0
+                    || contractTokens < 0
                     || evidenceTokens < 0
-                    || chapterScopeTokens < 0
                     || continuityTokens < 0
-                    || revisionTokens < 0
-                    || otherRequestTokens < 0) {
+                    || revisionTokens < 0) {
                 throw new IllegalArgumentException("teaching input token profile is invalid");
             }
-            long componentTotal = (long) fixedContractTokens
-                    + objectiveTokens
-                    + requiredRuleTokens
+            long componentTotal = (long) contractTokens
                     + evidenceTokens
-                    + chapterScopeTokens
                     + continuityTokens
-                    + revisionTokens
-                    + otherRequestTokens;
+                    + revisionTokens;
             if (componentTotal != totalTokens) {
                 throw new IllegalArgumentException("teaching input token profile total is inconsistent");
             }
@@ -233,218 +236,35 @@ public interface TeachingLessonModel {
             String topicKey,
             String title,
             String objective,
-            List<String> coverageTags,
             List<PriorSectionContext> priorSections,
             List<EvidenceInput> evidence,
-            List<PageImageInput> pageImages,
-            List<String> requiredRuleIntents,
-            List<TeachingUnitInput> teachingUnits,
-            String modelConfigurationOwner,
-            String chapterScope,
-            WholeGameContextInput wholeGameContext) {
+            String modelConfigurationOwner) {
 
         public SectionRequest(
                 String topicKey,
                 String title,
                 String objective,
-                List<String> coverageTags,
-                List<PriorSectionContext> priorSections,
-                List<EvidenceInput> evidence,
-                List<PageImageInput> pageImages,
-                List<String> requiredRuleIntents,
-                List<TeachingUnitInput> teachingUnits,
-                String modelConfigurationOwner,
-                String chapterScope) {
-            this(
-                    topicKey,
-                    title,
-                    objective,
-                    coverageTags,
-                    priorSections,
-                    evidence,
-                    pageImages,
-                    requiredRuleIntents,
-                    teachingUnits,
-                    modelConfigurationOwner,
-                    chapterScope,
-                    WholeGameContextInput.unavailable());
-        }
-
-        public SectionRequest(
-                String topicKey,
-                String title,
-                String objective,
-                List<String> coverageTags,
                 List<PriorSectionContext> priorSections,
                 List<EvidenceInput> evidence) {
             this(
                     topicKey,
                     title,
                     objective,
-                    coverageTags,
                     priorSections,
                     evidence,
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    null,
-                    "");
-        }
-
-        public SectionRequest(
-                String topicKey,
-                String title,
-                String objective,
-                List<String> coverageTags,
-                List<PriorSectionContext> priorSections,
-                List<EvidenceInput> evidence,
-                List<PageImageInput> pageImages) {
-            this(
-                    topicKey,
-                    title,
-                    objective,
-                    coverageTags,
-                    priorSections,
-                    evidence,
-                    pageImages,
-                    List.of(),
-                    List.of(),
-                    null,
-                    "");
-        }
-
-        public SectionRequest(
-                String topicKey,
-                String title,
-                String objective,
-                List<String> coverageTags,
-                List<PriorSectionContext> priorSections,
-                List<EvidenceInput> evidence,
-                List<PageImageInput> pageImages,
-                List<String> requiredRuleIntents,
-                String modelConfigurationOwner,
-                String chapterScope) {
-            this(
-                    topicKey,
-                    title,
-                    objective,
-                    coverageTags,
-                    priorSections,
-                    evidence,
-                    pageImages,
-                    requiredRuleIntents,
-                    List.of(),
-                    modelConfigurationOwner,
-                    chapterScope);
+                    null);
         }
 
         public SectionRequest {
             if (topicKey == null || topicKey.isBlank()
                     || title == null || title.isBlank()
                     || objective == null || objective.isBlank()
-                    || coverageTags == null
                     || priorSections == null
-                    || evidence == null || evidence.isEmpty()
-                    || pageImages == null
-                    || requiredRuleIntents == null
-                    || requiredRuleIntents.stream()
-                            .anyMatch(intent -> intent == null || intent.isBlank())
-                    || teachingUnits == null
-                    || teachingUnits.stream().anyMatch(java.util.Objects::isNull)
-                    || chapterScope == null
-                    || wholeGameContext == null) {
+                    || evidence == null || evidence.isEmpty()) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
-            coverageTags = List.copyOf(coverageTags);
             priorSections = List.copyOf(priorSections);
             evidence = List.copyOf(evidence);
-            pageImages = List.copyOf(pageImages);
-            requiredRuleIntents = requiredRuleIntents.stream().map(String::strip).distinct().toList();
-            teachingUnits = List.copyOf(teachingUnits);
-            chapterScope = chapterScope.strip();
-        }
-    }
-
-    /** One grouping decision made by the outline Agent, not a fixed lesson-template category. */
-    record TeachingUnitInput(String unitId, List<String> sourceIdentifiers, List<UUID> directEvidenceIds) {
-        public TeachingUnitInput(String unitId, List<String> sourceIdentifiers) {
-            this(unitId, sourceIdentifiers, List.of());
-        }
-
-        public TeachingUnitInput {
-            if (unitId == null || unitId.isBlank()
-                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty()
-                    || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
-                            || identifier.isBlank())
-                    || directEvidenceIds == null
-                    || directEvidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
-                throw new IllegalArgumentException("teaching unit input is invalid");
-            }
-            unitId = unitId.strip();
-            sourceIdentifiers = sourceIdentifiers.stream().map(String::strip).distinct().toList();
-            directEvidenceIds = directEvidenceIds.stream().distinct().toList();
-        }
-    }
-
-    /** Same immutable source-bound orientation is sent to every independently generated chapter. */
-    record WholeGameContextInput(
-            String summary,
-            List<GlobalConceptInput> concepts,
-            List<TopicDependencyInput> topicDependencies,
-            boolean evidenceBound) {
-        public WholeGameContextInput {
-            if (summary == null || summary.isBlank()
-                    || concepts == null || concepts.stream().anyMatch(java.util.Objects::isNull)
-                    || topicDependencies == null
-                    || topicDependencies.stream().anyMatch(java.util.Objects::isNull)
-                    || (evidenceBound && concepts.isEmpty())) {
-                throw new IllegalArgumentException("whole-game model input is invalid");
-            }
-            summary = summary.strip();
-            concepts = List.copyOf(concepts);
-            topicDependencies = List.copyOf(topicDependencies);
-        }
-
-        public static WholeGameContextInput unavailable() {
-            return new WholeGameContextInput(
-                    "No source-bound whole-game context is available for this legacy request.",
-                    List.of(),
-                    List.of(),
-                    false);
-        }
-    }
-
-    record GlobalConceptInput(
-            String conceptId,
-            String label,
-            String explanation,
-            List<String> sourceIdentifiers,
-            List<Integer> sourcePageNumbers,
-            List<String> relatedTopicKeys,
-            List<String> prerequisiteConceptIds) {
-        public GlobalConceptInput {
-            if (conceptId == null || conceptId.isBlank() || label == null || label.isBlank()
-                    || explanation == null || explanation.isBlank()
-                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty()
-                    || sourcePageNumbers == null || sourcePageNumbers.isEmpty()
-                    || relatedTopicKeys == null || relatedTopicKeys.isEmpty()
-                    || prerequisiteConceptIds == null) {
-                throw new IllegalArgumentException("whole-game concept input is invalid");
-            }
-            sourceIdentifiers = List.copyOf(sourceIdentifiers);
-            sourcePageNumbers = List.copyOf(sourcePageNumbers);
-            relatedTopicKeys = List.copyOf(relatedTopicKeys);
-            prerequisiteConceptIds = List.copyOf(prerequisiteConceptIds);
-        }
-    }
-
-    record TopicDependencyInput(String prerequisiteTopicKey, String dependentTopicKey, String reason) {
-        public TopicDependencyInput {
-            if (prerequisiteTopicKey == null || prerequisiteTopicKey.isBlank()
-                    || dependentTopicKey == null || dependentTopicKey.isBlank()
-                    || reason == null || reason.isBlank()) {
-                throw new IllegalArgumentException("whole-game dependency input is invalid");
-            }
         }
     }
 
@@ -504,29 +324,10 @@ public interface TeachingLessonModel {
         VISUAL_TRANSCRIPTION
     }
 
-    record PageImageInput(int pageNumber, String mediaType, byte[] content, int width, int height) {
-        public PageImageInput {
-            if (pageNumber < 1 || mediaType == null || mediaType.isBlank() || content == null || content.length == 0
-                    || width < 1 || height < 1) {
-                throw new IllegalArgumentException("teaching page image is invalid");
-            }
-            content = content.clone();
-        }
-
-        @Override
-        public byte[] content() {
-            return content.clone();
-        }
-    }
-
     record SectionDraft(
             String title,
-            VisualKind visualKind,
-            String visualCaption,
-            List<UUID> visualCitationIds,
             List<StepDraft> steps) {
         public SectionDraft {
-            visualCitationIds = visualCitationIds == null ? List.of() : List.copyOf(visualCitationIds);
             steps = steps == null ? List.of() : List.copyOf(steps);
         }
     }
@@ -536,15 +337,9 @@ public interface TeachingLessonModel {
             TeachingMove kind,
             String text,
             List<UUID> citationIds,
-            List<String> teachingUnitIds,
             List<RuleFactDraft> ruleFacts) {
         public StepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
-            if (teachingUnitIds != null && teachingUnitIds.stream()
-                    .anyMatch(unitId -> unitId == null || unitId.isBlank())) {
-                throw new IllegalArgumentException("teaching step unit references are invalid");
-            }
-            teachingUnitIds = teachingUnitIds == null ? List.of() : List.copyOf(teachingUnitIds);
             ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
         }
 
@@ -552,17 +347,12 @@ public interface TeachingLessonModel {
                 String heading,
                 TeachingMove kind,
                 String text,
-                List<UUID> citationIds,
-                List<String> teachingUnitIds) {
-            this(heading, kind, text, citationIds, teachingUnitIds, List.of());
-        }
-
-        public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
-            this(heading, kind, text, citationIds, List.of(), List.of());
+                List<UUID> citationIds) {
+            this(heading, kind, text, citationIds, List.of());
         }
 
         public StepDraft(String text, List<UUID> citationIds) {
-            this("照着做", TeachingMove.DO, text, citationIds, List.of(), List.of());
+            this("照着做", TeachingMove.DO, text, citationIds, List.of());
         }
     }
 
@@ -579,38 +369,23 @@ public interface TeachingLessonModel {
 
     private static InputTokenProfile approximateInputProfile(
             SectionRequest request, String revision, String providerId) {
-        int objectiveTokens = estimateTokens(request.objective());
-        int requiredRuleTokens = request.requiredRuleIntents().isEmpty()
-                ? 0
-                : estimateTokens(request.requiredRuleIntents().toString())
-                        + estimateTokens(request.teachingUnits().toString());
+        int contractTokens = estimateTokens(request.title()) + estimateTokens(request.objective());
         int evidenceTokens = estimateTokens(request.evidence().toString());
-        int chapterScopeTokens = estimateTokens(request.chapterScope());
         int continuityTokens = request.priorSections().isEmpty()
                 ? 0
                 : estimateTokens(request.priorSections().toString());
         int revisionTokens = estimateTokens(revision);
-        int otherRequestTokens = estimateTokens(
-                request.title() + " " + request.coverageTags() + " " + request.pageImages().size()
-                        + " " + request.wholeGameContext());
-        int totalTokens = objectiveTokens
-                + requiredRuleTokens
+        int totalTokens = contractTokens
                 + evidenceTokens
-                + chapterScopeTokens
                 + continuityTokens
-                + revisionTokens
-                + otherRequestTokens;
+                + revisionTokens;
         return new InputTokenProfile(
                 providerId,
                 totalTokens,
-                0,
-                objectiveTokens,
-                requiredRuleTokens,
+                contractTokens,
                 evidenceTokens,
-                chapterScopeTokens,
                 continuityTokens,
-                revisionTokens,
-                otherRequestTokens);
+                revisionTokens);
     }
 
     private static int estimateTokens(String value) {

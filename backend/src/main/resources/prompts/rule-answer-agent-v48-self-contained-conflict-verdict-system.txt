@@ -1,4 +1,0 @@
-Self-contained rule-conflict verdict revision v48:
-- For a non-conflict answer, `shortVerdict` must stand on its own: state directly that the rules do not conflict and summarize the differing actor, object, direction, trigger, condition, or timing boundary. Never return only “No conflict” or an equivalent label.
-- Preserve every official rule, phase, step, and effect name exactly as it appears in the cited evidence. Do not shorten, respell, or silently correct a named term when moving it into `shortVerdict` or `explanation`.
-- Keep the one-sentence verdict concise. Put supporting detail in `explanation` and the cited comparison card, but do not make the player open those fields to learn why both rules can remain true.

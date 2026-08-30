@@ -99,118 +99,11 @@ public class BoardGameRecommendationTools {
                     ToolName.SEARCH_BGG_CATALOG,
                     result.sourceCount(),
                     result.games(),
-                    List.of(),
                     "",
                     result.pageExhausted());
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation catalog search tool failed");
             return CatalogObservation.error(ToolName.SEARCH_BGG_CATALOG, "CATALOG_UNAVAILABLE");
-        }
-    }
-
-    CatalogObservation lookupGame(int bggId) {
-        try {
-            return new CatalogObservation(
-                    ToolStatus.SUCCESS,
-                    ToolName.LOOKUP_BGG_GAME,
-                    catalog.gameCount(),
-                    catalog.findGameById(bggId).map(List::of).orElseGet(List::of),
-                    List.of(),
-                    "");
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Recommendation BGG-ID detail tool failed");
-            return CatalogObservation.error(ToolName.LOOKUP_BGG_GAME, "CATALOG_UNAVAILABLE");
-        }
-    }
-
-    CatalogObservation lookupCandidates(List<Integer> bggIds) {
-        return lookupGames(bggIds, ToolName.LOOKUP_BGG_CANDIDATES);
-    }
-
-    /** Resolves discovered title hypotheses and hydrates BGG details in one application-owned read. */
-    CatalogObservation inspectTitleHypotheses(List<TitleHypothesis> hypotheses) {
-        try {
-            List<TitleResolution> resolutions = hypotheses.stream()
-                    .map(hypothesis -> catalog.searchByNames(List.of(hypothesis.title())).stream()
-                            .findFirst()
-                            .map(match -> new TitleResolution(hypothesis.correlationId(), match.bggId()))
-                            .orElse(null))
-                    .filter(java.util.Objects::nonNull)
-                    .toList();
-            List<Integer> ids = resolutions.stream()
-                    .map(TitleResolution::bggId)
-                    .distinct()
-                    .toList();
-            List<Game> games = ids.isEmpty() ? List.of() : catalog.findGamesByIds(ids);
-            return new CatalogObservation(
-                    ToolStatus.SUCCESS,
-                    ToolName.INSPECT_BGG_TITLES,
-                    catalog.gameCount(),
-                    games,
-                    resolutions,
-                    "");
-        } catch (IllegalArgumentException exception) {
-            return CatalogObservation.error(ToolName.INSPECT_BGG_TITLES, "INVALID_ARGUMENT");
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Recommendation BGG title-inspection tool failed");
-            return CatalogObservation.error(ToolName.INSPECT_BGG_TITLES, "CATALOG_UNAVAILABLE");
-        }
-    }
-
-    NameSearchObservation searchByNames(List<String> names) {
-        try {
-            return new NameSearchObservation(
-                    ToolStatus.SUCCESS,
-                    catalog.searchByNames(names),
-                    "");
-        } catch (IllegalArgumentException exception) {
-            return new NameSearchObservation(ToolStatus.ERROR, List.of(), "INVALID_ARGUMENT");
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Recommendation BGG name-search tool failed");
-            return new NameSearchObservation(ToolStatus.ERROR, List.of(), "CATALOG_UNAVAILABLE");
-        }
-    }
-
-    ReferenceObservation resolveReferenceTitle(String title) {
-        return resolveReferenceTitle(title, false);
-    }
-
-    ReferenceObservation resolveLocalReferenceTitle(String title) {
-        return resolveReferenceTitle(title, true);
-    }
-
-    private ReferenceObservation resolveReferenceTitle(String title, boolean localOnly) {
-        try {
-            List<Game> games = localOnly
-                    ? catalog.resolveLocalReferenceTitle(title)
-                    : catalog.resolveReferenceTitle(title);
-            boolean complete = games.size() == 1 && games.getFirst().details() != null;
-            return new ReferenceObservation(
-                    complete ? ToolStatus.SUCCESS : ToolStatus.PARTIAL,
-                    games,
-                    complete ? "" : games.isEmpty() ? "REFERENCE_NOT_FOUND" : "REFERENCE_DETAILS_UNAVAILABLE");
-        } catch (IllegalArgumentException exception) {
-            return new ReferenceObservation(ToolStatus.ERROR, List.of(), "INVALID_ARGUMENT");
-        } catch (RuntimeException exception) {
-            LOGGER.warn(localOnly
-                    ? "Recommendation local reference-title resolution failed"
-                    : "Recommendation reference-title resolution failed");
-            return new ReferenceObservation(ToolStatus.ERROR, List.of(), "CATALOG_UNAVAILABLE");
-        }
-    }
-
-    private CatalogObservation lookupGames(List<Integer> bggIds, ToolName tool) {
-        try {
-            return new CatalogObservation(
-                    ToolStatus.SUCCESS,
-                    tool,
-                    catalog.gameCount(),
-                    catalog.findGamesByIds(bggIds),
-                    List.of(),
-                    "");
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Recommendation BGG-ID lookup tool failed");
-            return CatalogObservation.error(tool, "CATALOG_UNAVAILABLE");
         }
     }
 
@@ -253,15 +146,7 @@ public class BoardGameRecommendationTools {
     }
 
     enum ToolName {
-        SEARCH_BGG_CATALOG,
-        LOOKUP_BGG_GAME,
-        LOOKUP_BGG_CANDIDATES,
-        INSPECT_BGG_TITLES,
-        SEARCH_BGG_BY_NAME,
-        RESOLVE_BGG_REFERENCE,
-        DISCOVER_CANDIDATES,
-        RESEARCH_GAME_FIT,
-        RESEARCH_GAME_QUESTION
+        SEARCH_BGG_CATALOG
     }
 
     enum ToolStatus {
@@ -276,47 +161,19 @@ public class BoardGameRecommendationTools {
             ToolName tool,
             int sourceCount,
             List<Game> games,
-            List<TitleResolution> titleResolutions,
             String code,
             boolean pageExhausted) {
 
-        CatalogObservation(
-                ToolStatus status,
-                ToolName tool,
-                int sourceCount,
-                List<Game> games,
-                List<TitleResolution> titleResolutions,
-                String code) {
-            this(status, tool, sourceCount, games, titleResolutions, code, true);
-        }
-
         CatalogObservation {
             games = List.copyOf(games);
-            titleResolutions = List.copyOf(titleResolutions);
         }
 
         static CatalogObservation error(ToolName tool, String code) {
-            return new CatalogObservation(ToolStatus.ERROR, tool, 0, List.of(), List.of(), code);
+            return new CatalogObservation(ToolStatus.ERROR, tool, 0, List.of(), code, true);
         }
 
         boolean succeeded() {
             return status == ToolStatus.SUCCESS;
-        }
-    }
-
-    record TitleHypothesis(String correlationId, String title) {
-        TitleHypothesis {
-            if (correlationId == null || correlationId.isBlank() || title == null || title.isBlank()) {
-                throw new IllegalArgumentException("title hypothesis is invalid");
-            }
-        }
-    }
-
-    record TitleResolution(String correlationId, int bggId) {
-        TitleResolution {
-            if (correlationId == null || correlationId.isBlank() || bggId < 1) {
-                throw new IllegalArgumentException("title resolution is invalid");
-            }
         }
     }
 
@@ -327,29 +184,6 @@ public class BoardGameRecommendationTools {
 
         Optional<CandidateDiscovery> result() {
             return Optional.ofNullable(discovery);
-        }
-    }
-
-    record NameSearchObservation(
-            ToolStatus status,
-            List<BoardGameRecommendationCatalog.Ranking> matches,
-            String code) {
-        NameSearchObservation {
-            matches = List.copyOf(matches);
-        }
-
-        boolean succeeded() {
-            return status == ToolStatus.SUCCESS;
-        }
-    }
-
-    record ReferenceObservation(ToolStatus status, List<Game> games, String code) {
-        ReferenceObservation {
-            games = List.copyOf(games);
-        }
-
-        boolean resolved() {
-            return status == ToolStatus.SUCCESS && games.size() == 1;
         }
     }
 

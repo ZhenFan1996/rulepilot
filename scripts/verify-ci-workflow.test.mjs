@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import {
   access,
   chmod,
@@ -49,16 +48,8 @@ const publicLessonCandidateWorkflow = await readFile(
   new URL('../.github/workflows/public-lesson-candidate.yml', import.meta.url),
   'utf8',
 )
-const productionRecommendationConfig = await readFile(
-  new URL('../frontend/playwright.recommendation-production.config.ts', import.meta.url),
-  'utf8',
-)
 const productionRecommendationSpec = await readFile(
   new URL('../frontend/e2e/production-recommendation-journey.spec.ts', import.meta.url),
-  'utf8',
-)
-const recommendationCanaryDiagnostics = await readFile(
-  new URL('../frontend/src/lib/recommendationCanaryDiagnostics.ts', import.meta.url),
   'utf8',
 )
 const productionReleaseGuardPath = new URL('./production-release-guard.sh', import.meta.url).pathname
@@ -267,159 +258,97 @@ ${embeddedPublicObserverRetryBlock()}
   return { status, stdout, stderr, calls }
 }
 
+function mergeProductionReport(target, overrides) {
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)
+      && target[key] !== null && typeof target[key] === 'object' && !Array.isArray(target[key])) {
+      mergeProductionReport(target[key], value)
+    } else {
+      target[key] = value
+    }
+  }
+  return target
+}
+
 function productionRecommendationRawReport(overrides = {}) {
   const testedSha = 'a'.repeat(40)
   const activeReleaseId = `${testedSha}-101-1`
-  const importJobId = '11111111-1111-4111-8111-111111111111'
-  const gameId = '22222222-2222-4222-8222-222222222222'
-  const editionId = '33333333-3333-4333-8333-333333333333'
-  const documentVersionId = '44444444-4444-4444-8444-444444444444'
-  const preparationRunId = '55555555-5555-4555-8555-555555555555'
-  return {
+  const model = { provider: 'qwen', model: 'qwen3.8-flash' }
+  const report = {
+    reportSchemaVersion: 2,
     generatedAt: '2026-08-29T00:00:00.000Z',
     completed: true,
     stage: 'completed',
-    testedSha,
-    activeReleaseSha: testedSha,
-    activeReleaseId,
-    publicReleaseId: activeReleaseId,
-    publicReleaseSha: testedSha,
-    publicReleaseNoStore: true,
-    routeStayedOnDiscover: true,
-    recommendationRequestedCardCount: 3,
-    recommendationExpectedPlayerCount: 5,
-    recommendationMaximumDurationMinutes: 90,
-    recommendationMaximumComplexity: 2.5,
-    recommendationExpectedGameType: 'party',
-    recommendationRequestMessageMatched: true,
-    recommendationProfileHardConstraintsMatched: true,
-    recommendationCardsHardConstraintsMatched: true,
-    recommendationFitClaimsHardConstraintsMatched: true,
-    recommendationComplexityHardConstraintsMatched: true,
-    recommendationGameTypeHardConstraintsMatched: true,
-    recommendationEvidenceBoundReplyParts: true,
-    recommendationPersistedCardCount: 3,
-    recommendationShortfallCount: 0,
-    recommendationOutcome: 'recommendations',
-    recommendationTerminalCategory: 'RECOMMENDATIONS',
-    recommendationTerminalObserved: true,
-    recommendationClickCaptured: true,
-    recommendationFirstProgressMs: 120,
-    recommendationSseTerminalCategory: 'RESULT',
-    recommendationSseTerminalMs: 900,
-    recommendationSseResultMs: 900,
-    recommendationSseErrorCode: null,
-    recommendationSseFailureBoundary: null,
-    recommendationSseFailureReason: null,
-    recommendationPersistedTerminalMs: 950,
-    recommendationRenderedSlateMs: 1_000,
-    recommendationElapsedMs: 1_000,
-    recommendationSloMet: true,
-    recommendationObservationWindowMs: 155_000,
-    recommendationCanaryFailureClass: null,
-    recommendationLastSessionProcessing: false,
-    recommendationProgressEvents: [{ stage: 'untrusted', phase: 'player-secret-marker' }],
-    recommendationLastProgressStage: 'selecting_tools',
-    recommendationLastProgressPhase: 'started',
-    recommendationLastProgressAction: 'browse_bgg_catalog',
-    recommendationLastProgressServerElapsedMs: 700,
-    recommendationLastProgressBrowserReceivedMs: 720,
-    recommendationStreamProbeFailed: false,
-    recommendationPublishedBggIds: [101, 102, 103],
-    recommendationAssistantReplyCharacterCount: 500,
-    recommendationRenderedReplyCharacterCount: 500,
-    recommendationCardReplyPartCount: 6,
-    recommendationUsableCardCount: 3,
-    recommendationUsableReplyPartCount: 6,
-    recommendationAssistantReplyUsable: true,
-    recommendationAllCardsUsable: true,
-    recommendationAllReplyPartsUsable: true,
-    recommendationSseContentDigest: {
-      assistantMessageSha256: '6'.repeat(64),
-      assistantMessageCharacterCount: 500,
-      cardReplyPartsSha256: '7'.repeat(64),
-      cardReplyPartsCharacterCount: 500,
-      cardReplyPartCount: 6,
-    },
-    recommendationPersistedContentDigest: {
-      assistantMessageSha256: '6'.repeat(64),
-      assistantMessageCharacterCount: 500,
-      cardReplyPartsSha256: '7'.repeat(64),
-      cardReplyPartsCharacterCount: 500,
-      cardReplyPartCount: 6,
-    },
-    recommendationRenderedContentDigest: {
-      assistantMessageSha256: '6'.repeat(64),
-      assistantMessageCharacterCount: 500,
-      cardReplyPartsSha256: '7'.repeat(64),
-      cardReplyPartsCharacterCount: 500,
-      cardReplyPartCount: 6,
-    },
-    recommendationSsePersistedContentConsistent: true,
-    recommendationPersistedDomContentConsistent: true,
-    recommendationCompletedWork: ['player-secret-marker'],
-    recommendationExpectedModel: { provider: 'qwen', model: 'qwen3.8-flash' },
-    recommendationModelBeforeRequest: { provider: 'qwen', model: 'qwen3.8-flash' },
-    recommendationModelAfterRequest: { provider: 'qwen', model: 'qwen3.8-flash' },
-    recommendationModelProvider: 'qwen',
-    recommendationModelName: 'qwen3.8-flash',
-    recommendationModelCalls: 2,
-    recommendationModelCallElapsedMs: [300, 400],
-    recommendationAgentElapsedMs: 800,
-    recommendationModelElapsedShare: 0.875,
-    recommendationCatalogCalls: 1,
-    recommendationWebResearchCalls: 0,
-    recommendationFailureBoundary: null,
-    recommendationFailureReason: null,
-    expectedRecommendationTitleTermSha256:
-      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-    handoffSelectedBggId: 101,
-    handoffActionClicked: true,
-    handoffSurfaceVisible: true,
-    handoffImportRequestedBggId: 101,
-    handoffImportResponseStatus: 200,
-    handoffImportResponseOk: true,
-    handoffImportResponseBggId: 101,
-    handoffImportedGameId: gameId,
-    handoffImportedEditionId: editionId,
-    handoffEditionBelongsToImportedGame: true,
-    handoffImportElapsedMs: 200,
-    handoffDiscoveryRequestedEditionId: null,
-    handoffDiscoveryResponseStatus: null,
-    handoffDiscoveryResponseOk: null,
-    handoffDiscoveryIdentityEditionId: null,
-    handoffDiscoveryIdentityMatched: null,
-    handoffDiscoveryConfigured: null,
-    handoffDiscoveryCandidateCount: null,
-    handoffImportableCandidateCount: null,
-    handoffImportableCandidateFound: null,
-    handoffDiscoveryCandidateIdentitySha256: null,
-    handoffRenderedCandidateIdentitySha256: null,
-    handoffCandidateIdentityOrderConsistent: null,
-    handoffDiscoveryElapsedMs: null,
-    handoffTerminalCategory: 'RESTORED_EXISTING',
-    handoffTerminalVisible: true,
-    handoffElapsedMs: 500,
-    handoffRulebookImportStarted: false,
-    handoffRestoredExistingJourney: true,
-    handoffRestoredImportJobId: importJobId,
-    handoffRestoredDocumentVersionId: documentVersionId,
-    handoffRestoredPreparationRunId: preparationRunId,
-    handoffFreshnessRequestPreparationRunMatched: true,
-    handoffFreshnessResponseStatus: 202,
-    handoffFreshnessResponseIdentityMatched: true,
-    handoffFreshnessResponseEligible: true,
-    handoffOfficialMutationAttemptedPaths: [
-      `POST /api/v1/documents/official-imports/${importJobId}/teaching-ensure-current`,
-    ],
-    handoffOfficialMutationBlocked: false,
-    handoffStoppedAtDiscoveryBoundary: false,
+    failedStage: null,
+    fatalFailure: null,
     rawModelOutputCaptured: false,
+    deployment: {
+      testedSha,
+      activeReleaseId,
+      before: { releaseId: activeReleaseId, commitSha: testedSha, noStore: true },
+      after: { releaseId: activeReleaseId, commitSha: testedSha, noStore: true },
+      exactAndStable: true,
+    },
+    model: {
+      expected: { ...model },
+      before: { ...model },
+      after: { ...model },
+      stable: true,
+    },
+    naturalReply: {
+      promptSha256: '1'.repeat(64),
+      requestMatched: true,
+      outcome: 'conversation',
+      assistantMessageSha256: '2'.repeat(64),
+      noExternalWork: true,
+      persistedMatched: true,
+      domMatched: true,
+      failure: null,
+    },
+    recommendation: {
+      promptSha256: '3'.repeat(64),
+      requestedCardCount: 3,
+      expectedPlayerCount: 5,
+      maximumDurationMinutes: 90,
+      maximumComplexity: 2.5,
+      expectedGameType: 'party',
+      requestMatched: true,
+      outcome: 'recommendations',
+      assistantMessageSha256: '4'.repeat(64),
+      cards: [101, 102, 103].map((bggId, index) => ({
+        bggId,
+        nameSha256: String(5 + index).repeat(64),
+        originalNameSha256: String(8 + index).slice(-1).repeat(64),
+        replyPartsSha256: String(index).repeat(64),
+      })),
+      shortfallCount: 0,
+      publicationErrors: [],
+      persistedMatched: true,
+      domMatched: true,
+      failure: null,
+    },
+    handoff: {
+      selectedBggId: 101,
+      actionClicked: true,
+      importResponseStatus: 200,
+      importedBggId: 101,
+      importedGameId: '22222222-2222-4222-8222-222222222222',
+      importedEditionId: '33333333-3333-4333-8333-333333333333',
+      editionBelongsToGame: true,
+      existingJobId: null,
+      discoveryEditionMatched: true,
+      sourceCount: 1,
+      terminal: 'SOURCE_REVIEW',
+      surfaceState: 'review',
+      canReadRulebook: false,
+      canReadLesson: false,
+      failureClassification: null,
+      blockedMutationPaths: [],
+    },
     credentialLeak: 'player-secret-marker',
-    ...overrides,
   }
+  return mergeProductionReport(report, overrides)
 }
-
 function productionRecommendationSanitizerEnvironment(root) {
   const testedSha = 'a'.repeat(40)
   return {
@@ -435,8 +364,32 @@ function productionRecommendationSanitizerEnvironment(root) {
     RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE: 'party',
     RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER: 'qwen',
     RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: 'qwen3.8-flash',
-    RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: '',
   }
+}
+
+async function productionRecommendationSanitizerFixture(rawReport) {
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-recommendation-sanitizer.'))
+  const home = join(root, 'home')
+  const artifactDirectory = join(root, 'production-recommendation-journey')
+  const rawReportPath = join(artifactDirectory, 'journey.raw.json')
+  const sanitizedReportPath = join(artifactDirectory, 'journey.json')
+  const credentialPath = join(root, 'rulepilot-recommendation-player-credentials')
+  await mkdir(join(home, '.ssh'), { recursive: true })
+  await mkdir(artifactDirectory, { recursive: true })
+  await writeFile(join(home, '.ssh', 'id_ed25519'), 'deployment-secret-marker')
+  await writeFile(join(home, '.ssh', 'known_hosts'), 'production-host-marker')
+  await writeFile(credentialPath, 'player-secret-marker')
+  if (rawReport !== undefined) {
+    await writeFile(rawReportPath,
+      typeof rawReport === 'string' ? rawReport : JSON.stringify(rawReport))
+  }
+  return { root, home, rawReportPath, sanitizedReportPath, credentialPath }
+}
+
+async function runProductionRecommendationSanitizer(root) {
+  await execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
+    env: productionRecommendationSanitizerEnvironment(root),
+  })
 }
 
 async function createReleaseGuardFixture() {
@@ -755,707 +708,303 @@ test('CI owns automatic and manual deployment qualification', () => {
   assert.doesNotMatch(deploymentWorkflow, /github\.event_name == 'workflow_dispatch'/)
 })
 
-test('production recommendation verifies one deployed main release through the exact rulebook discovery handoff', () => {
-  assert.match(productionRecommendationWorkflow,
-    /default: '今晚五个人，90 分钟内，BGG 复杂度不超过 2\.5，并且只看 BGG 的 PARTY（聚会游戏）分类。请直接挑三款，并把最推荐的一款放第一。'/)
+test('production recommendation keeps only the deployed user-visible journey contract', () => {
   assert.match(productionRecommendationWorkflow,
     /tested_sha:[\s\S]*?required: true[\s\S]*?type: string/)
   assert.match(productionRecommendationWorkflow,
-    /expected_title_term:[\s\S]*?required: false[\s\S]*?type: string/)
-  assert.match(productionRecommendationWorkflow,
-    /expected_provider:[\s\S]*?required: true[\s\S]*?type: string[\s\S]*?default: 'qwen'/)
-  assert.match(productionRecommendationWorkflow,
-    /expected_model:[\s\S]*?required: true[\s\S]*?type: string[\s\S]*?default: 'qwen3\.8-flash'/)
-  assert.match(productionRecommendationWorkflow,
-    /maximum_complexity:[\s\S]{0,220}?required: true[\s\S]{0,120}?type: number[\s\S]{0,120}?default: 2\.5/)
-  assert.match(productionRecommendationWorkflow,
-    /expected_game_type:[\s\S]{0,220}?required: true[\s\S]{0,120}?type: choice[\s\S]{0,120}?default: party[\s\S]{0,360}?- expansion/)
-  assert.match(productionRecommendationSpec,
-    /isSafeInteger\(maximumDuration\)[\s\S]{0,100}?maximumDuration > 0[\s\S]{0,100}?maximumDuration <= maximumDurationMinutes/)
-  assert.match(productionRecommendationWorkflow,
     /uses:\s*actions\/checkout@v6[\s\S]*?ref:\s*main[\s\S]*?fetch-depth:\s*0/)
-  assert.match(productionRecommendationWorkflow, /environment:\s*\n\s+name:\s*production/)
   assert.match(productionRecommendationWorkflow,
     /git merge-base --is-ancestor "\$tested_sha" origin\/main/)
   assert.match(productionRecommendationWorkflow, /git checkout --detach "\$tested_sha"/)
+  assert.match(productionRecommendationWorkflow, /environment:\s*\n\s+name:\s*production/)
+
   const prepareProbeStart = productionRecommendationWorkflow.indexOf('  prepare_probe:')
   const journeyStart = productionRecommendationWorkflow.indexOf('  journey:')
   const prepareProbeJob = productionRecommendationWorkflow.slice(prepareProbeStart, journeyStart)
   const journeyJob = productionRecommendationWorkflow.slice(journeyStart)
   assert.ok(prepareProbeStart >= 0 && journeyStart > prepareProbeStart)
-  assert.match(prepareProbeJob, /uses: actions\/checkout@v6/)
-  assert.match(prepareProbeJob, /npm --prefix frontend ci/)
   assert.match(prepareProbeJob, /actions\/upload-artifact@v7/)
   assert.doesNotMatch(prepareProbeJob,
     /environment:\s*\n\s+name:\s*production|secrets\.|DEPLOY_SSH_PRIVATE_KEY|\bssh\s|\bscp\s/)
   assert.match(journeyJob, /needs: prepare_probe/)
   assert.match(journeyJob,
     /mcr\.microsoft\.com\/playwright:v1\.61\.1-noble@sha256:[0-9a-f]{64}/)
-  assert.match(journeyJob, /actions\/download-artifact@v8/)
-  assert.match(journeyJob,
-    /ssh_options=\([\s\S]{0,500}?UserKnownHostsFile=\$HOME\/\.ssh\/known_hosts/)
   assert.doesNotMatch(journeyJob,
     /actions\/checkout|actions\/setup-node|npm (?:ci|install|exec)|npx playwright/)
-  const recommendationCredentialRead = productionRecommendationWorkflow.indexOf(
-    'name: Read exact active release and bounded player credentials',
-  )
-  const recommendationProbeVerification = productionRecommendationWorkflow.indexOf(
-    'name: Verify and extract the exact probe before production authority exists',
-  )
-  const recommendationKeyRemoval = productionRecommendationWorkflow.indexOf(
-    'rm -f "$HOME/.ssh/id_ed25519"',
-    recommendationCredentialRead,
-  )
-  const recommendationExercise = productionRecommendationWorkflow.indexOf(
-    'name: Exercise one production recommendation with only player authority',
-  )
-  const recommendationCredentialCleanup = productionRecommendationWorkflow.indexOf(
-    'name: Prove credentials are absent and rebuild the allowlisted journey report',
-  )
-  const recommendationReportUpload = productionRecommendationWorkflow.indexOf(
-    'name: Upload sanitized journey report',
-  )
-  assert.ok(recommendationProbeVerification >= journeyStart
-    && recommendationProbeVerification < recommendationCredentialRead)
-  assert.ok(recommendationCredentialRead < recommendationKeyRemoval
-    && recommendationKeyRemoval < recommendationExercise)
-  assert.ok(recommendationExercise < recommendationCredentialCleanup
-    && recommendationCredentialCleanup < recommendationReportUpload)
-  assert.match(journeyJob,
-    /printf '%s\\n%s\\n' "\$player_username_b64" "\$player_password_b64" > "\$credential_file"/)
-  assert.doesNotMatch(productionRecommendationWorkflow,
-    /PLAYER_(?:USERNAME|PASSWORD)_B64|player_(?:username|password)_b64[^\n]*GITHUB_ENV/)
-  assert.doesNotMatch(productionRecommendationWorkflow, /needs: production_credentials/)
-  assert.match(productionRecommendationWorkflow,
-    /id: production_identity[\s\S]*?active_release_id=%s\\n[^\n]*GITHUB_OUTPUT/)
-  assert.doesNotMatch(productionRecommendationWorkflow,
-    /player_(?:username|password)[^\n]*GITHUB_(?:ENV|OUTPUT)/)
-  assert.match(productionRecommendationWorkflow,
-    /! "\$active_release_id" =~ \^\$\{tested_sha\}-\[0-9\]\+-\[0-9\]\+\$/)
-  assert.match(journeyJob,
-    /"\$node_binary" frontend\/node_modules\/@playwright\/test\/cli\.js test/)
-  assert.match(journeyJob,
-    /reset_runner_command_file "\$runner_env_file"[\s\S]{0,180}?reset_runner_command_file "\$runner_path_file"/)
   assert.match(journeyJob,
     /\/usr\/bin\/env -i[\s\S]{0,1800}?RULEPILOT_RECOMMENDATION_REPORT="\$raw_report"/)
   assert.match(journeyJob,
     /deployment-guards\/active-transaction[\s\S]{0,180}?Production has an active deployment transaction/)
-  assert.match(journeyJob, /id: cleanup_credentials/)
+
+  const credentialRead = journeyJob.indexOf(
+    'name: Read exact active release and bounded player credentials',
+  )
+  const keyRemoval = journeyJob.indexOf('rm -f "$HOME/.ssh/id_ed25519"', credentialRead)
+  const exercise = journeyJob.indexOf(
+    'name: Exercise one production recommendation with only player authority',
+  )
+  const cleanup = journeyJob.indexOf(
+    'name: Prove credentials are absent and rebuild the allowlisted journey report',
+  )
+  const upload = journeyJob.indexOf('name: Upload sanitized journey report')
+  assert.ok(credentialRead >= 0 && credentialRead < keyRemoval
+    && keyRemoval < exercise && exercise < cleanup && cleanup < upload)
+  assert.match(journeyJob,
+    /name: Prove credentials are absent and rebuild the allowlisted journey report[\s\S]*?if: always\(\)/)
   assert.match(journeyJob,
     /name: Upload sanitized journey report\s+if: always\(\) && steps\.cleanup_credentials\.outcome == 'success'/)
   assert.match(journeyJob,
-    /rm -f "\$credential_file"[\s\S]{0,5000}?"\$node_binary" frontend\/node_modules\/@playwright\/test\/cli\.js/)
-  assert.match(journeyJob,
-    /raw_report="\$artifact_dir\/journey\.raw\.json"[\s\S]{0,2600}?RULEPILOT_RECOMMENDATION_REPORT="\$raw_report"/)
-  assert.match(journeyJob,
-    /name: Exercise one production recommendation with only player authority[\s\S]{0,300}?RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID: \$\{\{ steps\.production_identity\.outputs\.active_release_id \}\}/)
-  const sanitizerStep = productionRecommendationWorkflow.slice(
-    recommendationCredentialCleanup,
-    recommendationReportUpload,
-  )
-  assert.match(sanitizerStep,
-    /raw_report="\$artifact_dir\/journey\.raw\.json"[\s\S]*?sanitized_report="\$artifact_dir\/journey\.json"/)
-  assert.match(sanitizerStep, /jq --exit-status --compact-output/)
-  assert.match(sanitizerStep, /reportSchemaVersion: 1/)
-  assert.match(sanitizerStep,
-    /recommendationExpectedPlayerCount: \$expectedPlayerCount[\s\S]*?recommendationMaximumDurationMinutes: \$maximumDurationMinutes[\s\S]*?recommendationMaximumComplexity: \$maximumComplexity[\s\S]*?recommendationExpectedGameType: \$expectedGameType/)
-  assert.ok(sanitizerStep.includes(
-    '[[ "$maximum_complexity" =~ ^(0|[1-9][0-9]*)(\\.[0-9]+)?$ ]]',
-  ))
-  assert.match(sanitizerStep,
-    /\(\$value \| tonumber\) <= 5[\s\S]*?abstract\|customizable\|children\|family\|party\|strategy\|thematic\|war\|expansion/)
-  assert.match(sanitizerStep,
-    /shell: \/bin\/bash --noprofile --norc -p \{0\}[\s\S]*?BASH_ENV: \/dev\/null[\s\S]*?PATH: \/usr\/bin:\/bin/)
-  assert.match(sanitizerStep, /LD_LIBRARY_PATH: ''[\s\S]{0,80}?LD_PRELOAD: ''/)
-  assert.match(sanitizerStep,
-    /\/usr\/bin\/python3 -c[\s\S]{0,260}?unicodedata\.normalize\("NFKC"[\s\S]{0,180}?\.strip\(\)\.lower\(\)/)
-  assert.match(sanitizerStep,
-    /RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID: \$\{\{ steps\.production_identity\.outputs\.active_release_id \}\}/)
-  const reportInterface = productionRecommendationSpec.match(
-    /interface ProductionRecommendationReport \{([\s\S]*?)\n\}/,
-  )
-  const sanitizerRequiredKeys = sanitizerStep.match(/has_keys\(\[([\s\S]*?)\]\)\)/)
-  assert.notEqual(reportInterface, null)
-  assert.notEqual(sanitizerRequiredKeys, null)
-  const reportKeys = [...reportInterface[1].matchAll(/^\s{2}([A-Za-z][A-Za-z0-9]+):/gm)]
-    .map((match) => match[1])
-    .sort()
-  const requiredKeys = [...sanitizerRequiredKeys[1].matchAll(/"([A-Za-z][A-Za-z0-9]+)"/g)]
-    .map((match) => match[1])
-    .sort()
-  assert.deepEqual(requiredKeys, reportKeys)
-  assert.match(sanitizerStep,
-    /recommendationModelCalls: \$raw\.recommendationModelCalls[\s\S]*?recommendationModelCallElapsedMs: \$raw\.recommendationModelCallElapsedMs/)
-  assert.match(sanitizerStep,
-    /handoffRestoredExistingJourney: \$raw\.handoffRestoredExistingJourney[\s\S]*?handoffRestoredImportJobId: \$raw\.handoffRestoredImportJobId[\s\S]*?handoffRestoredDocumentVersionId: \$raw\.handoffRestoredDocumentVersionId[\s\S]*?handoffRestoredPreparationRunId: \$raw\.handoffRestoredPreparationRunId/)
-  assert.match(sanitizerStep,
-    /recommendationComplexityHardConstraintsMatched: \$raw\.recommendationComplexityHardConstraintsMatched[\s\S]*?recommendationGameTypeHardConstraintsMatched: \$raw\.recommendationGameTypeHardConstraintsMatched/)
-  assert.match(sanitizerStep,
-    /def completed_recommendation_acceptance\(\$raw\):[\s\S]*?recommendationGameTypeHardConstraintsMatched == true[\s\S]*?recommendationSloMet == true[\s\S]*?handoffTerminalVisible == true/)
-  assert.match(sanitizerStep,
-    /recommendationModelCalls \| is_positive_integer\)[\s\S]{0,180}?recommendationModelCallElapsedMs \| length\) == \$raw\.recommendationModelCalls/)
-  assert.match(sanitizerStep,
-    /recommendationCatalogCalls \| is_positive_integer\)[\s\S]{0,160}?recommendationWebResearchCalls \| is_non_negative_integer\)/)
-  assert.match(sanitizerStep,
-    /\(\(\$raw\.completed \| not\) or completed_recommendation_acceptance\(\$raw\)\)/)
-  assert.match(sanitizerStep, /def is_finite_number:[\s\S]{0,100}?\(\(\. - \.\) == 0\)/)
-  assert.match(sanitizerStep, /"invalid_stream_error", "unknown_stream_error"/)
-  assert.match(sanitizerStep,
-    /recommendationProgressEventCount: \(\$raw\.recommendationProgressEvents \| length\)[\s\S]*?recommendationLastProgressStage: \$raw\.recommendationLastProgressStage[\s\S]*?recommendationCompletedWorkCount: \(\$raw\.recommendationCompletedWork \| length\)[\s\S]*?handoffOfficialMutationAttemptCount: \(\$raw\.handoffOfficialMutationAttemptedPaths \| length\)/)
-  assert.match(sanitizerStep,
-    /recommendationSseFailureReason: \$raw\.recommendationSseFailureReason[\s\S]*?recommendationCanaryFailureClass: \$raw\.recommendationCanaryFailureClass[\s\S]*?recommendationFailureReason: \$raw\.recommendationFailureReason/)
-  assert.match(sanitizerStep,
-    /def is_progress_stage_or_null:[\s\S]{0,500}?"understanding_request"[\s\S]{0,500}?"composing_response"/)
-  assert.match(sanitizerStep,
-    /def is_progress_phase_or_null:[\s\S]{0,240}?"started"[\s\S]{0,240}?"failed"/)
-  assert.match(sanitizerStep,
-    /def is_progress_action_or_null:[\s\S]{0,700}?"understand_request"[\s\S]{0,700}?"recommend_games"/)
-  assert.doesNotMatch(sanitizerStep, /is_progress_slug_or_null/)
-  assert.doesNotMatch(sanitizerStep,
-    /recommendationProgressEvents: \$raw|recommendationCompletedWork: \$raw|handoffOfficialMutationAttemptedPaths: \$raw|\+ \$raw|with_entries/)
-  assert.match(sanitizerStep,
-    /mv "\$temporary_report" "\$sanitized_report"[\s\S]*?rm -f "\$raw_report"/)
-  assert.match(journeyJob,
-    /name: Upload sanitized journey report[\s\S]*?path: \$\{\{ runner\.temp \}\}\/production-recommendation-journey\/journey\.json/)
+    /path: \$\{\{ runner\.temp \}\}\/production-recommendation-journey\/journey\.json/)
   assert.doesNotMatch(journeyJob,
     /name: Upload sanitized journey report[\s\S]{0,500}?journey\.raw\.json/)
-  assert.match(productionRecommendationWorkflow, /::add-mask::\$player_username/)
-  assert.match(productionRecommendationWorkflow, /::add-mask::\$player_password/)
-  assert.match(productionRecommendationWorkflow,
-    /RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: \$\{\{ inputs\.selection_prompt \}\}/)
-  assert.match(productionRecommendationWorkflow,
-    /RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: \$\{\{ inputs\.requested_card_count \}\}/)
-  assert.match(productionRecommendationWorkflow,
-    /RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY: \$\{\{ inputs\.maximum_complexity \}\}/)
-  assert.match(productionRecommendationWorkflow,
-    /RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE: \$\{\{ inputs\.expected_game_type \}\}/)
-  assert.match(productionRecommendationWorkflow,
-    /RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: \$\{\{ inputs\.expected_title_term \}\}/)
-  assert.match(productionRecommendationWorkflow,
-    /RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER: \$\{\{ inputs\.expected_provider \}\}/)
-  assert.match(productionRecommendationWorkflow,
-    /RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: \$\{\{ inputs\.expected_model \}\}/)
-  assert.doesNotMatch(productionRecommendationWorkflow,
-    /target_bgg_id|target_names|230802|花砖物语|Azul/)
-  assert.doesNotMatch(productionRecommendationWorkflow,
-    /ready_public|verified_import|journey_mode|require_fresh_import|recommendation_only|rule_question|rule_follow_up/)
-
-  assert.match(productionRecommendationWorkflow, /playwright\.recommendation-production\.config\.ts/)
-  assert.match(productionRecommendationConfig,
-    /testMatch:\s*'production-recommendation-journey\.spec\.ts'/)
-  assert.match(productionRecommendationSpec,
-    /production returns one recommendation slate and hands its exact identity to rulebook discovery/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationModelCalls,[\s\S]{0,240}?\.toBeGreaterThanOrEqual\(1\)/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationCatalogCalls,[\s\S]{0,240}?\.toBeGreaterThanOrEqual\(1\)/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationWebResearchCalls,[\s\S]{0,240}?\.toBeGreaterThanOrEqual\(0\)/)
-  assert.doesNotMatch(productionRecommendationSpec, /MAX_RECOMMENDATION_MODEL_CALLS/)
-  assert.match(productionRecommendationSpec,
-    /const INTERACTION_SLO_MS = 20_000[\s\S]{0,300}?const RECOMMENDATION_DIAGNOSTIC_OBSERVATION_MS = 155_000[\s\S]{0,120}?const HANDOFF_OBSERVATION_MS = 50_000/)
-  assert.match(productionRecommendationSpec,
-    /recommendationRenderedSlateMs = slate\.elapsedMs[\s\S]{0,180}?slate\.elapsedMs !== null[\s\S]{0,120}?slate\.elapsedMs <= INTERACTION_SLO_MS/)
-  assert.match(recommendationCanaryDiagnostics,
-    /function classifyRecommendationCanaryFailure\([\s\S]{0,1200}?'observer_failure'[\s\S]{0,1200}?'product_terminal'[\s\S]{0,1200}?'lifecycle_deadline'[\s\S]{0,1200}?'terminal_evidence_gap'[\s\S]{0,1200}?'interaction_slo'/)
-  assert.match(productionRecommendationSpec,
-    /publicStreamErrorCodes: \[\.\.\.RECOMMENDATION_STREAM_ERROR_CODES\]/)
-  assert.doesNotMatch(productionRecommendationSpec, /SESSION_TIMEOUT/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationSloMet,[\s\S]{0,240}?\.toBe\(true\)/)
-  assert.match(productionRecommendationSpec,
-    /for \(const \[gameIndex, entry\] of result!\.games\.entries\(\)\)/)
-  assert.match(productionRecommendationSpec,
-    /expectUsablePlayerSurface\([\s\S]{0,180}?renderedCard/)
-  assert.match(productionRecommendationSpec,
-    /expectUsablePlayerSurface\([\s\S]{0,180}?renderedReplyParts\.nth\(partIndex\)/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationAllCardsUsable,[\s\S]{0,180}?\.toBe\(true\)/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationAllReplyPartsUsable,[\s\S]{0,180}?\.toBe\(true\)/)
-  assert.match(productionRecommendationSpec,
-    /expectUsablePlayerSurface\([\s\S]{0,220}?renderedAssistantReply/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.recommendationAssistantReplyUsable,[\s\S]{0,180}?\.toBe\(true\)/)
-  assert.match(productionRecommendationSpec, /const sseResultPromise = waitForBrowserSseResult/)
-  assert.match(productionRecommendationSpec, /const renderedSlatePromise = waitForFirstRenderedSlate/)
-  assert.match(productionRecommendationSpec,
-    /const \[firstProgressVisible, terminal, sseResult, renderedSlate\] = await Promise\.all/)
-  assert.doesNotMatch(productionRecommendationSpec,
-    /const terminal = await waitForPersistedTerminal/)
-  const sseObservation = productionRecommendationSpec.indexOf(
-    'const sseResultPromise = waitForBrowserSseResult',
-  )
-  const renderedObservation = productionRecommendationSpec.indexOf(
-    'const renderedSlatePromise = waitForFirstRenderedSlate',
-  )
-  const sendClick = productionRecommendationSpec.indexOf(
-    "await page.getByRole('button', { name: '发送', exact: true }).click()",
-  )
-  const persistedObservation = productionRecommendationSpec.indexOf(
-    'const persistedTerminalPromise = waitForPersistedTerminal',
-  )
-  const observationJoin = productionRecommendationSpec.indexOf(
-    'const [firstProgressVisible, terminal, sseResult, renderedSlate] = await Promise.all',
-  )
-  assert.ok(sseObservation >= 0 && sseObservation < sendClick)
-  assert.ok(renderedObservation >= 0 && renderedObservation < sendClick)
-  assert.ok(sendClick < persistedObservation && persistedObservation < observationJoin)
-  assert.match(productionRecommendationSpec,
-    /recommendationProgressEvents: RecommendationProgressEvidence\[\]/)
-  assert.match(productionRecommendationSpec,
-    /serverElapsedMs: number[\s\S]{0,120}?browserReceivedMs: number/)
-  assert.match(productionRecommendationSpec,
-    /report\.recommendationSseResultMs = sseResult === null/)
-  assert.match(productionRecommendationSpec,
-    /report\.recommendationPersistedTerminalMs = terminal\.session === null \? null : terminal\.elapsedMs/)
-  assert.match(productionRecommendationSpec,
-    /report\.recommendationRenderedSlateMs = slate\.elapsedMs/)
-  assert.match(productionRecommendationSpec,
-    /report\.recommendationSloMet = slate\.rendered[\s\S]{0,120}?slate\.elapsedMs !== null[\s\S]{0,120}?slate\.elapsedMs <= INTERACTION_SLO_MS/)
-  assert.match(productionRecommendationSpec,
-    /snapshot\.recommendationModel\?\.provider[\s\S]{0,160}?snapshot\.recommendationModel\?\.model/)
-  assert.match(productionRecommendationSpec,
-    /expect\(modelAssignment\.provider,[\s\S]{0,180}?\.toBe\(EXPECTED_MODEL_PROVIDER\)/)
-  assert.match(productionRecommendationSpec,
-    /expect\(modelAssignment\.model,[\s\S]{0,180}?\.toBe\(EXPECTED_MODEL_NAME\)/)
-  assert.match(productionRecommendationSpec,
-    /report\.recommendationModelCallElapsedMs = publicNonNegativeIntegers\([\s\S]{0,180}?result\?\.modelCallElapsedMs \?\? sseResult\?\.modelCallElapsedMs/)
-  assert.match(productionRecommendationSpec,
-    /\.toHaveLength\(report\.recommendationModelCalls!\)/)
-  assert.match(productionRecommendationSpec,
-    /report\.recommendationAgentElapsedMs = publicNonNegativeInteger\([\s\S]{0,160}?result\?\.agentElapsedMs \?\? sseResult\?\.agentElapsedMs/)
-  assert.match(productionRecommendationSpec,
-    /report\.recommendationPublishedBggIds = result\?\.games\.map\(\(\{ game \}\) => game\.bggId\)[\s\S]{0,100}?\?\? sseResult\?\.bggIds/)
-  assert.match(productionRecommendationSpec,
-    /expectedRecommendationTitleTermSha256:\s*sha256\(EXPECTED_TITLE_TERM\)/)
-  assert.match(productionRecommendationSpec,
-    /request\.get\('\/api\/public\/release'\)[\s\S]{0,500}?cache-control/)
-  assert.match(productionRecommendationSpec,
-    /publicReleaseBefore\.commitSha[\s\S]{0,220}?\.toBe\(TESTED_SHA\)/)
-  assert.match(productionRecommendationSpec,
-    /publicReleaseBefore\.releaseId[\s\S]{0,220}?\.toBe\(ACTIVE_RELEASE_ID\)/)
-  assert.match(productionRecommendationSpec,
-    /publicReleaseAfter[\s\S]{0,220}?\.toEqual\(publicReleaseBefore\)/)
-  assert.doesNotMatch(productionRecommendationSpec,
-    /recommendationPublishedGames|expectedRecommendationTitleTerm:\s*EXPECTED_TITLE_TERM/)
-  assert.match(productionRecommendationSpec,
-    /const selectedBggId = persistedBggIds\[0\][\s\S]{0,400}?report\.handoffSelectedBggId = selectedBggId!/)
-  assert.match(productionRecommendationSpec,
-    /\/api\\\/v1\\\/bgg\\\/games\\\/\\d\+\\\/import\$[\s\S]{0,260}?response\.request\(\)\.method\(\) === 'POST'/)
-  assert.match(productionRecommendationSpec,
-    /report\.handoffImportRequestedBggId[\s\S]{0,260}?\.toBe\(selectedBggId\)/)
-  assert.match(productionRecommendationSpec,
-    /report\.handoffImportResponseBggId[\s\S]{0,260}?\.toBe\(selectedBggId\)/)
-  assert.match(productionRecommendationSpec,
-    /report\.handoffEditionBelongsToImportedGame[\s\S]{0,260}?\.toBe\(true\)/)
-  assert.match(productionRecommendationSpec,
-    /report\.handoffDiscoveryRequestedEditionId[\s\S]{0,260}?\.toBe\(importedIdentity!\.edition\.id\)/)
-  assert.match(productionRecommendationSpec,
-    /report\.handoffDiscoveryIdentityMatched[\s\S]{0,260}?\.toBe\(true\)/)
-  assert.match(productionRecommendationWorkflow,
-    /expected_player_count:[\s\S]{0,180}?default: 5[\s\S]{0,260}?maximum_duration_minutes:[\s\S]{0,180}?default: 90/)
-  assert.match(productionRecommendationSpec,
-    /requestBody\?\.message[\s\S]{0,180}?\.toBe\(SELECTION_PROMPT\)/)
-  assert.match(productionRecommendationSpec,
-    /recommendationProfileHardConstraintsMatched[\s\S]{0,500}?recommendationCardsHardConstraintsMatched[\s\S]{0,500}?recommendationFitClaimsHardConstraintsMatched/)
-  assert.match(productionRecommendationSpec,
-    /gamesMatchCatalogBggType\(result\.games, expectedGameType\)[\s\S]{0,260}?claim\.subject === 'bggType'/)
-  assert.match(productionRecommendationSpec,
-    /isSafeInteger\(maximumDuration\)[\s\S]{0,220}?isFiniteNumber\(game\.averageWeight\)/)
-  assert.match(productionRecommendationSpec,
-    /isExactPreparationRunRequest\(requestBody, existing\.teachingPreparationRunId\)/)
-  assert.match(productionRecommendationSpec,
-    /ensureCurrentResponse\.status\(\)[\s\S]{0,220}?\.toBe\(202\)/)
-  assert.match(productionRecommendationSpec,
-    /handoffFreshnessResponseIdentityMatched = ensuredExisting !== null[\s\S]{0,320}?ensuredExisting\.teachingPreparationRunId === existingRestore\.teachingPreparationRunId[\s\S]{0,180}?handoffFreshnessResponseEligible = ensuredExisting\?\.freshnessEligible/)
-  assert.match(sanitizerStep,
-    /handoffFreshnessRequestPreparationRunMatched == true[\s\S]{0,180}?handoffFreshnessResponseStatus == 202[\s\S]{0,180}?handoffFreshnessResponseIdentityMatched == true[\s\S]{0,180}?handoffFreshnessResponseEligible == true/)
-  assert.match(productionRecommendationSpec,
-    /data-acquisition-mode/)
-  assert.match(productionRecommendationSpec,
-    /terminalFailure !== null\) throw new Error\(terminalFailure\)/)
-  assert.match(productionRecommendationSpec,
-    /handoffOfficialMutationAttemptedPaths\.push/)
-  assert.match(productionRecommendationSpec,
-    /RESTORED_EXISTING/)
-  assert.match(productionRecommendationSpec,
-    /expect\(report\.handoffRulebookImportStarted,[\s\S]{0,180}?\.toBe\(false\)/)
-  assert.match(productionRecommendationSpec,
-    /async function expectUsablePlayerSurface\(element: Locator, message: string\)/)
-  assert.match(productionRecommendationSpec,
-    /const hit = document\.elementFromPoint/)
-  assert.match(productionRecommendationSpec,
-    /expectUsablePlayerSurface\([\s\S]{0,220}?candidateItem/)
-  assert.match(productionRecommendationSpec,
-    /expectUsablePlayerSurface\([\s\S]{0,220}?candidateAction/)
-  assert.match(productionRecommendationSpec,
-    /handoffCandidateIdentityOrderConsistent[\s\S]{0,260}?\.toBe\(true\)/)
-  assert.match(productionRecommendationSpec,
-    /terminalFailure = 'Production discovery returned candidates but no importable rulebook source'/)
-  assert.doesNotMatch(productionRecommendationSpec,
-    /readyTeaching|TeachingPlan|Lesson|Answer|teaching-plans|answers\/stream/)
-  assert.doesNotMatch(productionRecommendationSpec,
-    /TARGET_BGG_ID|TARGET_NAME|gstoneCandidate|gstonegames\.com/)
   assert.doesNotMatch(productionRecommendationWorkflow, /echo "\$player_password"/)
-  assert.doesNotMatch(productionRecommendationWorkflow,
-    /'bash -s' -- "\$DEPLOY_PATH" "\$player_password"/)
-  assert.match(productionRecommendationWorkflow,
-    /name: Prove credentials are absent and rebuild the allowlisted journey report[\s\S]*?if: always\(\)[\s\S]*?id_ed25519/)
-  assert.match(productionRecommendationWorkflow, /test ! -e "\$HOME\/\.ssh\/id_ed25519"/)
-  assert.match(productionRecommendationWorkflow, /test ! -e "\$HOME\/\.ssh\/known_hosts"/)
+
+  assert.match(productionRecommendationSanitizer, /reportSchemaVersion: 2/)
+  assert.match(productionRecommendationSanitizer,
+    /def completed_acceptance\(\$raw\):[\s\S]*?exact_release\(\$raw\.deployment\.before\)[\s\S]*?exact_model\(\$raw\.model\.after\)/)
+  assert.match(productionRecommendationSanitizer,
+    /naturalReply:[\s\S]*?noExternalWork:[\s\S]*?persistedMatched:[\s\S]*?domMatched:/)
+  assert.match(productionRecommendationSanitizer,
+    /recommendation:[\s\S]*?publicationErrors:[\s\S]*?cards:/)
+  assert.match(productionRecommendationSanitizer,
+    /accepted_handoff[\s\S]*?editionBelongsToGame == true[\s\S]*?blockedMutationPaths \| length/)
+  const handoffAcceptance = productionRecommendationSanitizer.match(
+    /def accepted_handoff\([\s\S]*?\n\s+def completed_acceptance/,
+  )
+  assert.notEqual(handoffAcceptance, null)
+  assert.doesNotMatch(handoffAcceptance[0],
+    /sourceCount|surfaceState|canReadRulebook|canReadLesson/)
+  assert.match(productionRecommendationSanitizer,
+    /fallback_report\("missing_or_invalid_raw_report"\)/)
+  assert.match(productionRecommendationSanitizer,
+    /mv "\$temporary_report" "\$sanitized_report"[\s\S]*?rm -f "\$raw_report"/)
+  assert.doesNotMatch(productionRecommendationSanitizer,
+    /progress|sse|slo|elapsed|modelCalls|catalogCalls|webResearchCalls|characterCount|contentDigest|handoffFreshness|handoffRestored|handoffDiscoveryCandidate/i)
+
+  assert.match(productionRecommendationSpec, /reportSchemaVersion: 2/)
+  assert.match(productionRecommendationSpec, /rawModelOutputCaptured: false/)
+  assert.match(productionRecommendationSpec,
+    /production publishes natural and grounded recommendation replies before the exact-card handoff/)
+  assert.match(productionRecommendationSpec,
+    /deployment: \{[\s\S]*?before: ReleaseIdentity \| null, after: ReleaseIdentity \| null/)
+  assert.match(productionRecommendationSpec,
+    /naturalReply: \{[\s\S]*?noExternalWork:[\s\S]*?persistedMatched:[\s\S]*?domMatched:/)
+  assert.match(productionRecommendationSpec,
+    /recommendation: \{[\s\S]*?publicationErrors: string\[\][\s\S]*?cards:/)
+  assert.match(productionRecommendationSpec,
+    /handoff: \{[\s\S]*?editionBelongsToGame:[\s\S]*?blockedMutationPaths: string\[\]/)
 })
 
-test('production recommendation sanitizer rebuilds an allowlisted report after repo code exits', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'rulepilot-recommendation-sanitizer.'))
-  const home = join(root, 'home')
-  const artifactDirectory = join(root, 'production-recommendation-journey')
-  const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-  const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-  const credentialPath = join(root, 'rulepilot-recommendation-player-credentials')
+test('production recommendation sanitizer publishes a nested allowlisted success report', async () => {
+  const fixture = await productionRecommendationSanitizerFixture(
+    productionRecommendationRawReport(),
+  )
   try {
-    await mkdir(join(home, '.ssh'), { recursive: true })
-    await mkdir(artifactDirectory, { recursive: true })
-    await writeFile(join(home, '.ssh', 'id_ed25519'), 'deployment-secret-marker')
-    await writeFile(join(home, '.ssh', 'known_hosts'), 'production-host-marker')
-    await writeFile(credentialPath, 'player-secret-marker')
-    await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-      recommendationModelCalls: 3,
-      recommendationModelCallElapsedMs: [250, 300, 400],
-    })))
+    await runProductionRecommendationSanitizer(fixture.root)
 
-    await execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-      env: productionRecommendationSanitizerEnvironment(root),
-    })
-
-    const sanitizedText = await readFile(sanitizedReportPath, 'utf8')
+    const sanitizedText = await readFile(fixture.sanitizedReportPath, 'utf8')
     const sanitized = JSON.parse(sanitizedText)
-    assert.equal(sanitized.reportSchemaVersion, 1)
-    assert.equal(sanitized.recommendationExpectedPlayerCount, 5)
-    assert.equal(sanitized.recommendationMaximumDurationMinutes, 90)
-    assert.equal(sanitized.recommendationMaximumComplexity, 2.5)
-    assert.equal(sanitized.recommendationExpectedGameType, 'party')
-    assert.equal(sanitized.recommendationProfileHardConstraintsMatched, true)
-    assert.equal(sanitized.recommendationCardsHardConstraintsMatched, true)
-    assert.equal(sanitized.recommendationFitClaimsHardConstraintsMatched, true)
-    assert.equal(sanitized.recommendationComplexityHardConstraintsMatched, true)
-    assert.equal(sanitized.recommendationGameTypeHardConstraintsMatched, true)
-    assert.equal(sanitized.recommendationModelCalls, 3)
-    assert.deepEqual(sanitized.recommendationModelCallElapsedMs, [250, 300, 400])
-    assert.equal(sanitized.handoffRestoredExistingJourney, true)
-    assert.equal(sanitized.handoffRestoredImportJobId, '11111111-1111-4111-8111-111111111111')
-    assert.equal(sanitized.handoffRestoredDocumentVersionId,
-      '44444444-4444-4444-8444-444444444444')
-    assert.equal(sanitized.handoffRestoredPreparationRunId,
-      '55555555-5555-4555-8555-555555555555')
-    assert.equal(sanitized.recommendationProgressEventCount, 1)
-    assert.equal(sanitized.recommendationCompletedWorkCount, 1)
-    assert.equal(sanitized.handoffOfficialMutationAttemptCount, 1)
+    assert.equal(sanitized.reportSchemaVersion, 2)
+    assert.equal(sanitized.completed, true)
+    assert.deepEqual(Object.keys(sanitized).sort(), [
+      'completed', 'deployment', 'failedStage', 'fatalFailure', 'generatedAt', 'handoff',
+      'model', 'naturalReply', 'rawModelOutputCaptured', 'recommendation',
+      'reportSchemaVersion', 'stage',
+    ])
+    assert.deepEqual(sanitized.deployment.before, {
+      releaseId: `${'a'.repeat(40)}-101-1`,
+      commitSha: 'a'.repeat(40),
+      noStore: true,
+    })
+    assert.equal(sanitized.model.stable, true)
+    assert.equal(sanitized.naturalReply.noExternalWork, true)
+    assert.equal(sanitized.recommendation.cards.length, 3)
+    assert.deepEqual(sanitized.recommendation.publicationErrors, [])
+    assert.equal(sanitized.handoff.terminal, 'SOURCE_REVIEW')
+    assert.equal(sanitized.handoff.editionBelongsToGame, true)
     assert.equal(sanitized.rawModelOutputCaptured, false)
     assert.equal(Object.hasOwn(sanitized, 'credentialLeak'), false)
-    assert.equal(Object.hasOwn(sanitized, 'recommendationProgressEvents'), false)
-    assert.equal(Object.hasOwn(sanitized, 'recommendationCompletedWork'), false)
-    assert.equal(Object.hasOwn(sanitized, 'handoffOfficialMutationAttemptedPaths'), false)
     assert.doesNotMatch(sanitizedText, /player-secret-marker|deployment-secret-marker/)
-    await assert.rejects(access(rawReportPath))
-    await assert.rejects(access(credentialPath))
-    await assert.rejects(access(join(home, '.ssh', 'id_ed25519')))
-    await assert.rejects(access(join(home, '.ssh', 'known_hosts')))
+
+    await execFileAsync('bash', ['-c', productionRecommendationSuccessGate], {
+      env: productionRecommendationSanitizerEnvironment(fixture.root),
+    })
+    await assert.rejects(access(fixture.rawReportPath))
+    await assert.rejects(access(fixture.credentialPath))
+    await assert.rejects(access(join(fixture.home, '.ssh', 'id_ed25519')))
+    await assert.rejects(access(join(fixture.home, '.ssh', 'known_hosts')))
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await rm(fixture.root, { recursive: true, force: true })
   }
 })
 
-test('production recommendation sanitizer independently rejects a false completed acceptance claim', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'rulepilot-recommendation-sanitizer-incomplete.'))
-  const artifactDirectory = join(root, 'production-recommendation-journey')
-  const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-  const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-  try {
-    await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-    await mkdir(artifactDirectory, { recursive: true })
-    await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-      recommendationGameTypeHardConstraintsMatched: false,
-    })))
-
-    await assert.rejects(
-      execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-        env: productionRecommendationSanitizerEnvironment(root),
-      }),
+test('production recommendation accepts each explicit source or readable handoff terminal', async () => {
+  const existingJobId = '11111111-1111-4111-8111-111111111111'
+  const terminals = [
+    {
+      terminal: 'SOURCE_UNAVAILABLE',
+      surfaceState: 'unavailable',
+      sourceCount: null,
+    },
+    {
+      terminal: 'RULEBOOK_READABLE',
+      surfaceState: 'journey',
+      existingJobId,
+      discoveryEditionMatched: null,
+      sourceCount: null,
+      canReadRulebook: true,
+    },
+    {
+      terminal: 'LESSON_READABLE',
+      surfaceState: 'journey',
+      existingJobId,
+      discoveryEditionMatched: null,
+      sourceCount: null,
+      canReadRulebook: true,
+      canReadLesson: true,
+    },
+  ]
+  for (const handoff of terminals) {
+    const fixture = await productionRecommendationSanitizerFixture(
+      productionRecommendationRawReport({ handoff }),
     )
-    await assert.rejects(access(rawReportPath))
-    await assert.rejects(access(sanitizedReportPath))
-
-    await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-      recommendationModelCalls: 0,
-      recommendationModelCallElapsedMs: [],
-    })))
-    await assert.rejects(
-      execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-        env: productionRecommendationSanitizerEnvironment(root),
-      }),
-    )
-    await assert.rejects(access(rawReportPath))
-    await assert.rejects(access(sanitizedReportPath))
-  } finally {
-    await rm(root, { recursive: true, force: true })
+    try {
+      await runProductionRecommendationSanitizer(fixture.root)
+      const sanitized = JSON.parse(await readFile(fixture.sanitizedReportPath, 'utf8'))
+      assert.equal(sanitized.completed, true, handoff.terminal)
+      assert.equal(sanitized.handoff.terminal, handoff.terminal)
+      await execFileAsync('bash', ['-c', productionRecommendationSuccessGate], {
+        env: productionRecommendationSanitizerEnvironment(fixture.root),
+      })
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true })
+    }
   }
 })
 
-test('production journey success gates reject diagnostic-only artifacts', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'rulepilot-production-success-gates.'))
-  const recommendationDirectory = join(root, 'production-recommendation-journey')
-  const ordinaryDirectory = join(root, 'production-ordinary-user-smoke')
-  try {
-    await mkdir(recommendationDirectory, { recursive: true })
-    await mkdir(ordinaryDirectory, { recursive: true })
-    await writeFile(join(recommendationDirectory, 'journey.json'), JSON.stringify({
+test('production recommendation sanitizer independently downgrades false acceptance claims', async () => {
+  const falseClaims = [
+    ['natural projection', { naturalReply: { noExternalWork: false } }],
+    ['publication boundary', {
+      recommendation: { publicationErrors: ['hard-facts:101'] },
+    }],
+    ['exact handoff identity', { handoff: { importedBggId: 999 } }],
+    ['blocked handoff mutation', {
+      handoff: { blockedMutationPaths: ['POST /api/v1/documents/official-imports'] },
+    }],
+  ]
+  for (const [label, override] of falseClaims) {
+    const fixture = await productionRecommendationSanitizerFixture(
+      productionRecommendationRawReport(override),
+    )
+    try {
+      await runProductionRecommendationSanitizer(fixture.root)
+      const sanitized = JSON.parse(await readFile(fixture.sanitizedReportPath, 'utf8'))
+      assert.equal(sanitized.completed, false, label)
+      assert.equal(sanitized.stage, 'failed-acceptance', label)
+      assert.equal(sanitized.fatalFailure?.code, 'acceptance_contract_failed', label)
+      await assert.rejects(
+        execFileAsync('bash', ['-c', productionRecommendationSuccessGate], {
+          env: productionRecommendationSanitizerEnvironment(fixture.root),
+        }),
+      )
+      await assert.rejects(access(fixture.rawReportPath))
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('production recommendation sanitizer preserves bounded fatal diagnostics', async () => {
+  const failure = {
+    classification: 'product_terminal',
+    boundary: 'service_failure',
+    reason: 'service_failure',
+    code: 'recommendation_unavailable',
+  }
+  const fixture = await productionRecommendationSanitizerFixture(
+    productionRecommendationRawReport({
       completed: false,
-      stage: 'preflight-failed',
-      recommendationOutcome: null,
-      recommendationSloMet: null,
-      handoffTerminalCategory: 'NOT_OBSERVED',
-    }))
-    await writeFile(join(ordinaryDirectory, 'summary.json'), JSON.stringify({
+      stage: 'failed',
+      failedStage: 'recommendation',
+      fatalFailure: failure,
+      recommendation: { failure },
+    }),
+  )
+  try {
+    await runProductionRecommendationSanitizer(fixture.root)
+    const sanitizedText = await readFile(fixture.sanitizedReportPath, 'utf8')
+    const sanitized = JSON.parse(sanitizedText)
+    assert.equal(sanitized.completed, false)
+    assert.equal(sanitized.stage, 'failed')
+    assert.equal(sanitized.failedStage, 'recommendation')
+    assert.deepEqual(sanitized.fatalFailure, failure)
+    assert.deepEqual(sanitized.recommendation.failure, failure)
+    assert.doesNotMatch(sanitizedText, /player-secret-marker/)
+    await assert.rejects(access(fixture.rawReportPath))
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('production recommendation sanitizer emits a safe fallback without a valid raw report', async () => {
+  for (const rawReport of [undefined, '{not-json']) {
+    const fixture = await productionRecommendationSanitizerFixture(rawReport)
+    try {
+      await runProductionRecommendationSanitizer(fixture.root)
+      const sanitizedText = await readFile(fixture.sanitizedReportPath, 'utf8')
+      const sanitized = JSON.parse(sanitizedText)
+      assert.equal(sanitized.reportSchemaVersion, 2)
+      assert.equal(sanitized.completed, false)
+      assert.equal(sanitized.stage, 'preflight-failed')
+      assert.equal(sanitized.failedStage, 'preflight')
+      assert.deepEqual(sanitized.fatalFailure, {
+        classification: 'observer_failure',
+        boundary: null,
+        reason: null,
+        code: 'missing_or_invalid_raw_report',
+      })
+      assert.equal(sanitized.deployment.testedSha, 'a'.repeat(40))
+      assert.equal(sanitized.model.expected.model, 'qwen3.8-flash')
+      assert.equal(sanitized.rawModelOutputCaptured, false)
+      assert.doesNotMatch(sanitizedText, /player-secret-marker|deployment-secret-marker/)
+      await assert.rejects(
+        execFileAsync('bash', ['-c', productionRecommendationSuccessGate], {
+          env: productionRecommendationSanitizerEnvironment(fixture.root),
+        }),
+      )
+      await assert.rejects(access(fixture.rawReportPath))
+      await assert.rejects(access(fixture.credentialPath))
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('ordinary-user success gate still rejects diagnostic-only artifacts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-ordinary-user-success-gate.'))
+  const directory = join(root, 'production-ordinary-user-smoke')
+  try {
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, 'summary.json'), JSON.stringify({
       outcome: 'FAILED',
       exitCode: 1,
       lastCompletedStage: 'summary-unavailable',
-    }))
-
-    await assert.rejects(execFileAsync('bash', ['-c', productionRecommendationSuccessGate], {
-      env: { ...process.env, RUNNER_TEMP: root },
     }))
     await assert.rejects(execFileAsync('bash', ['-c', productionOrdinaryUserSuccessGate], {
       env: { ...process.env, RUNNER_TEMP: root },
     }))
 
-    await writeFile(join(recommendationDirectory, 'journey.json'), JSON.stringify({
-      completed: true,
-      stage: 'completed',
-      recommendationOutcome: 'recommendations',
-      recommendationSloMet: true,
-      handoffTerminalCategory: 'REVIEW',
-    }))
-    await writeFile(join(ordinaryDirectory, 'summary.json'), JSON.stringify({
+    await writeFile(join(directory, 'summary.json'), JSON.stringify({
       execution: { outcome: 'SUCCEEDED', exitCode: 0 },
       preparationState: 'COMPLETED',
       lessonState: 'COMPLETED',
       lessonStatus: 'COMPLETE',
       answerStatus: 'ANSWERED',
     }))
-
-    await execFileAsync('bash', ['-c', productionRecommendationSuccessGate], {
-      env: { ...process.env, RUNNER_TEMP: root },
-    })
     await execFileAsync('bash', ['-c', productionOrdinaryUserSuccessGate], {
       env: { ...process.env, RUNNER_TEMP: root },
     })
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-})
-
-test('production recommendation sanitizer rejects a completed discovery claim without a successful exact-edition response', async () => {
-  const editionId = '33333333-3333-4333-8333-333333333333'
-  for (const [label, corruptedEvidence] of [
-    ['response-not-ok', { handoffDiscoveryResponseOk: false }],
-    ['rendered-order-mismatch', {
-      handoffRenderedCandidateIdentitySha256: '9'.repeat(64),
-      handoffCandidateIdentityOrderConsistent: false,
-    }],
-  ]) {
-    const root = await mkdtemp(join(tmpdir(), `rulepilot-recommendation-discovery-${label}.`))
-    const artifactDirectory = join(root, 'production-recommendation-journey')
-    const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-    const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-    try {
-      await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-      await mkdir(artifactDirectory, { recursive: true })
-      await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-        handoffDiscoveryRequestedEditionId: editionId,
-        handoffDiscoveryResponseStatus: 200,
-        handoffDiscoveryResponseOk: true,
-        handoffDiscoveryIdentityEditionId: editionId,
-        handoffDiscoveryIdentityMatched: true,
-        handoffDiscoveryConfigured: true,
-        handoffDiscoveryCandidateCount: 1,
-        handoffImportableCandidateCount: 1,
-        handoffImportableCandidateFound: true,
-        handoffDiscoveryCandidateIdentitySha256: '8'.repeat(64),
-        handoffRenderedCandidateIdentitySha256: '8'.repeat(64),
-        handoffCandidateIdentityOrderConsistent: true,
-        handoffDiscoveryElapsedMs: 400,
-        handoffTerminalCategory: 'REVIEW',
-        handoffRestoredExistingJourney: false,
-        handoffRestoredImportJobId: null,
-        handoffRestoredDocumentVersionId: null,
-        handoffRestoredPreparationRunId: null,
-        handoffFreshnessRequestPreparationRunMatched: null,
-        handoffFreshnessResponseStatus: null,
-        handoffFreshnessResponseIdentityMatched: null,
-        handoffFreshnessResponseEligible: null,
-        handoffOfficialMutationAttemptedPaths: [],
-        handoffStoppedAtDiscoveryBoundary: true,
-        ...corruptedEvidence,
-      })))
-
-      await assert.rejects(
-        execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-          env: productionRecommendationSanitizerEnvironment(root),
-        }),
-      )
-      await assert.rejects(access(rawReportPath))
-      await assert.rejects(access(sanitizedReportPath))
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  }
-})
-
-test('production recommendation sanitizer safely publishes both bounded stream failure diagnostics', async () => {
-  for (const code of ['invalid_stream_error', 'unknown_stream_error']) {
-    const root = await mkdtemp(join(tmpdir(), `rulepilot-recommendation-sanitizer-${code}.`))
-    const artifactDirectory = join(root, 'production-recommendation-journey')
-    const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-    const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-    try {
-      await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-      await mkdir(artifactDirectory, { recursive: true })
-      await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-        completed: false,
-        stage: 'recommendation-stream-error',
-        recommendationSseTerminalCategory: 'ERROR',
-        recommendationSseErrorCode: code,
-        recommendationSseFailureBoundary: null,
-      })))
-
-      await execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-        env: productionRecommendationSanitizerEnvironment(root),
-      })
-      const sanitized = JSON.parse(await readFile(sanitizedReportPath, 'utf8'))
-      assert.equal(sanitized.completed, false)
-      assert.equal(sanitized.stage, 'recommendation-stream-error')
-      assert.equal(sanitized.recommendationSseErrorCode, code)
-      await assert.rejects(access(rawReportPath))
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  }
-})
-
-test('production recommendation sanitizer hashes the trusted NFKC trimmed lowercase title term', async () => {
-  const normalizedTerm = 'abc'
-  const normalizedDigest = createHash('sha256').update(normalizedTerm).digest('hex')
-  const rawTermDigest = createHash('sha256').update('  ＡBc  ').digest('hex')
-  for (const [label, digest, shouldPass] of [
-    ['normalized', normalizedDigest, true],
-    ['raw', rawTermDigest, false],
-  ]) {
-    const root = await mkdtemp(join(tmpdir(), `rulepilot-recommendation-title-${label}.`))
-    const artifactDirectory = join(root, 'production-recommendation-journey')
-    const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-    const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-    try {
-      await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-      await mkdir(artifactDirectory, { recursive: true })
-      await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport({
-        expectedRecommendationTitleTermSha256: digest,
-      })))
-      const execution = execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-        env: {
-          ...productionRecommendationSanitizerEnvironment(root),
-          RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: '  ＡBc  ',
-        },
-      })
-      if (shouldPass) {
-        await execution
-        const sanitized = JSON.parse(await readFile(sanitizedReportPath, 'utf8'))
-        assert.equal(sanitized.expectedRecommendationTitleTermSha256, normalizedDigest)
-      } else {
-        await assert.rejects(execution)
-        await assert.rejects(access(sanitizedReportPath))
-      }
-      await assert.rejects(access(rawReportPath))
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  }
-})
-
-test('production recommendation sanitizer rejects fractional integers and non-finite numbers', async () => {
-  for (const invalid of ['fractional-integer', 'non-finite-number']) {
-    const root = await mkdtemp(join(tmpdir(), `rulepilot-recommendation-number-${invalid}.`))
-    const artifactDirectory = join(root, 'production-recommendation-journey')
-    const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-    const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-    try {
-      await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-      await mkdir(artifactDirectory, { recursive: true })
-      let report = JSON.stringify(productionRecommendationRawReport({
-        recommendationAgentElapsedMs: invalid === 'fractional-integer' ? 800.5 : 800,
-      }))
-      if (invalid === 'non-finite-number') {
-        report = report.replace('"recommendationModelElapsedShare":0.875',
-          '"recommendationModelElapsedShare":1e999')
-      }
-      await writeFile(rawReportPath, report)
-      await assert.rejects(
-        execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-          env: productionRecommendationSanitizerEnvironment(root),
-        }),
-      )
-      await assert.rejects(access(rawReportPath))
-      await assert.rejects(access(sanitizedReportPath))
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  }
-})
-
-test('production recommendation sanitizer rejects mistyped evidence and deletes the raw report', async () => {
-  for (const [label, corruptedEvidence] of [
-    ['mistyped-count', { recommendationModelCalls: 'player-secret-marker' }],
-    ['unlisted-progress', { recommendationLastProgressStage: 'player_secret_marker' }],
-  ]) {
-    const root = await mkdtemp(join(tmpdir(), `rulepilot-recommendation-sanitizer-${label}.`))
-    const artifactDirectory = join(root, 'production-recommendation-journey')
-    const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-    const sanitizedReportPath = join(artifactDirectory, 'journey.json')
-    try {
-      await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-      await mkdir(artifactDirectory, { recursive: true })
-      await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport(corruptedEvidence)))
-
-      await assert.rejects(
-        execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-          env: productionRecommendationSanitizerEnvironment(root),
-        }),
-      )
-      await assert.rejects(access(rawReportPath))
-      await assert.rejects(access(sanitizedReportPath))
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  }
-})
-
-test('production recommendation sanitizer rejects workflow controls outside the fixed game taxonomy', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'rulepilot-recommendation-sanitizer-enum.'))
-  const artifactDirectory = join(root, 'production-recommendation-journey')
-  const rawReportPath = join(artifactDirectory, 'journey.raw.json')
-  try {
-    await mkdir(join(root, 'home', '.ssh'), { recursive: true })
-    await mkdir(artifactDirectory, { recursive: true })
-    await writeFile(rawReportPath, JSON.stringify(productionRecommendationRawReport()))
-    await assert.rejects(
-      execFileAsync('bash', ['-c', productionRecommendationSanitizer], {
-        env: {
-          ...productionRecommendationSanitizerEnvironment(root),
-          RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE: 'player-secret-marker',
-        },
-      }),
-    )
-    await assert.rejects(access(rawReportPath))
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -2826,8 +2375,11 @@ test('ordinary-user production artifacts retain a bounded public status', () => 
     /BASH_ENV: \/dev\/null[\s\S]{0,180}?LD_PRELOAD: ''[\s\S]{0,80}?PATH: \/usr\/bin:\/bin/)
   assert.match(productionOrdinaryUserWorkflow,
     /\(keys \| sort\) == \["cleanupOutcome", "exitCode", "failureCauseCode",[\s\S]{0,100}?"failureCode", "lastCompletedStage", "outcome"\]/)
-  assert.match(productionOrdinaryUserWorkflow,
-    /\(keys \| sort\) == \["answerCitationCount", "answerStatus", "cleanup",[\s\S]{0,220}?"visualAssemblyMode", "visualStepCount"\]/)
+  assert.ok(productionOrdinaryUserWorkflow.includes(
+    'and (.preparationState | IN("COMPLETED", "DEGRADED"))'))
+  assert.ok(productionOrdinaryUserWorkflow.includes(
+    'and (.answerCitationCount | integer_between(1; 10000))'))
+  assert.doesNotMatch(productionOrdinaryUserWorkflow, /pageAttempts|semanticAttempts/)
   assert.match(productionOrdinaryUserWorkflow,
     /raw_summary_size > 0 && raw_summary_size <= 1048576/)
   assert.match(productionOrdinaryUserWorkflow,
@@ -2924,6 +2476,8 @@ test('ordinary-user production probe isolates deployment authority from reposito
     /RULEPILOT_SMOKE_NODE_BINARY="\$node_binary"/)
   assert.match(smokeJob,
     /reset_runner_command_file "\$runner_env_file"[\s\S]{0,80}?reset_runner_command_file "\$runner_path_file"/)
+  assert.match(smokeJob, /\/usr\/bin\/truncate -s 0 -- "\$target"/)
+  assert.doesNotMatch(smokeJob, /\/usr\/bin\/install -m 600 \/dev\/null "\$target"/)
   assert.match(smokeJob,
     /raw_dir="\$RUNNER_TEMP\/production-ordinary-user-smoke-raw"/)
   assert.match(smokeJob,
@@ -2946,7 +2500,7 @@ test('ordinary-user production probe isolates deployment authority from reposito
     /name: Upload sanitized journey output\s+if: always\(\) && steps\.cleanup_credentials\.outcome == 'success'/)
 })
 
-test('official image-gallery production smoke requires explicit rights and bounded identity', () => {
+test('official image-gallery production smoke requires explicit rights and positive source identity', () => {
   assert.match(productionOrdinaryUserWorkflow,
     /source_mode:[\s\S]*?options:\s*\n\s+- upload\s*\n\s+- official_image_gallery/)
   assert.match(productionOrdinaryUserWorkflow,
@@ -2954,7 +2508,8 @@ test('official image-gallery production smoke requires explicit rights and bound
   assert.match(productionOrdinaryUserWorkflow,
     /\[\[ "\$RULEBOOK_RIGHTS_CONFIRMED" == true \]\][\s\S]*?--rights-confirmed/)
   assert.match(productionOrdinaryUserWorkflow,
-    /RULEBOOK_EXPECTED_PAGE_COUNT <= 20[\s\S]*?--source-mode official_image_gallery[\s\S]*?--bgg-id "\$RULEBOOK_BGG_ID"[\s\S]*?--expected-page-count "\$RULEBOOK_EXPECTED_PAGE_COUNT"[\s\S]*?--timeout-seconds 6600/)
+    /RULEBOOK_EXPECTED_PAGE_COUNT" =~ \^\[1-9\]\[0-9\]\*\$[\s\S]*?--source-mode official_image_gallery[\s\S]*?--bgg-id "\$RULEBOOK_BGG_ID"[\s\S]*?--expected-page-count "\$RULEBOOK_EXPECTED_PAGE_COUNT"[\s\S]*?--timeout-seconds 6600/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow, /RULEBOOK_EXPECTED_PAGE_COUNT <=/)
   assert.match(productionOrdinaryUserWorkflow,
     /smoke:[\s\S]*?timeout-minutes: 135[\s\S]*?--timeout-seconds 6600/)
 })

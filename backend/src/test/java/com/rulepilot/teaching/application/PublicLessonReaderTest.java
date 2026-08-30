@@ -131,6 +131,46 @@ class PublicLessonReaderTest {
     }
 
     @Test
+    void projectsOnlyCitedChaptersAndNarrowsPublicQuestionPagesWithoutMutatingTheStoredLesson() {
+        Fixture fixture = fixture();
+        UUID withheldChunk = UUID.randomUUID();
+        IllustratedLesson.LessonSection insufficient = new IllustratedLesson.LessonSection(
+                2,
+                "ending",
+                List.of("ending"),
+                "Ending",
+                true,
+                IllustratedLesson.EvidenceStatus.INSUFFICIENT_EVIDENCE,
+                IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "Unavailable ending source",
+                List.of(9),
+                List.of(withheldChunk),
+                List.of(new IllustratedLesson.LessonStep(
+                        1,
+                        "Withheld",
+                        IllustratedLesson.TeachingMove.WATCH,
+                        "This chapter is not published.",
+                        List.of(9),
+                        List.of(withheldChunk))));
+        IllustratedLesson stored = new IllustratedLesson(
+                fixture.lesson.id(),
+                fixture.lesson.teachingPlanId(),
+                IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(fixture.lesson.sections().getFirst(), insufficient),
+                fixture.lesson.generatorVersion(),
+                fixture.lesson.createdAt());
+        when(plans.findById(fixture.plan.id())).thenReturn(Optional.of(fixture.plan));
+        when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(stored));
+        when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(fixture.reference));
+
+        assertThat(reader.find(fixture.plan.id())).hasValueSatisfying(value -> {
+            assertThat(value.lesson().sections()).containsExactly(fixture.lesson.sections().getFirst());
+            assertThat(value.citedPages()).containsExactlyInAnyOrder(2, 5).doesNotContain(9);
+        });
+        assertThat(stored.sections()).containsExactly(fixture.lesson.sections().getFirst(), insufficient);
+    }
+
+    @Test
     void keeps_a_draft_with_a_player_facing_source_gap_out_of_the_anonymous_reader() {
         Fixture fixture = fixture();
         IllustratedLesson.LessonSection sourceGap = new IllustratedLesson.LessonSection(

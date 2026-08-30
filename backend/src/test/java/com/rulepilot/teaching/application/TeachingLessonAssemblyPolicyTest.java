@@ -2,20 +2,16 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
-import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import com.rulepilot.teaching.domain.TeachingPlan.WholeGameContext;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -24,136 +20,69 @@ class TeachingLessonAssemblyPolicyTest {
     private final TeachingLessonAssemblyPolicy policy = new TeachingLessonAssemblyPolicy();
 
     @Test
-    void distinguishesCompleteDraftAndIncompleteSnapshots() {
-        TeachingPlan plan = plan();
-
-        assertThat(policy.status(plan, List.of(section(1, "setup", EvidenceStatus.SUPPORTED, false),
-                        section(2, "scoring", EvidenceStatus.SUPPORTED, false))))
+    void keepsReadableChaptersAndMakesUnresolvedWorkExplicitlyDegraded() {
+        assertThat(policy.status(plan(List.of()), List.of(section(1), section(2))))
                 .isEqualTo(LessonStatus.COMPLETE);
-        assertThat(policy.status(plan, List.of(section(1, "setup", EvidenceStatus.CITED_DRAFT, false),
-                        section(2, "scoring", EvidenceStatus.SUPPORTED, false))))
+        assertThat(policy.status(plan(List.of("Repairing remains unresolved")), List.of(section(1), section(2))))
                 .isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(policy.status(plan, List.of(section(1, "setup", EvidenceStatus.SUPPORTED, false))))
-                .isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(policy.snapshot(
-                        UUID.randomUUID(),
-                        plan,
-                        List.of(section(1, "setup", EvidenceStatus.INSUFFICIENT_EVIDENCE, false),
-                                section(2, "scoring", EvidenceStatus.SUPPORTED, false)),
-                        "test-generator",
-                        Instant.EPOCH).status())
+        assertThat(policy.status(plan(List.of()), List.of(section(1))))
                 .isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(policy.snapshot(
-                        UUID.randomUUID(),
-                        plan,
-                        List.of(section(1, "setup", EvidenceStatus.INSUFFICIENT_EVIDENCE, false),
-                                section(2, "scoring", EvidenceStatus.INSUFFICIENT_EVIDENCE, false)),
-                        "test-generator",
-                        Instant.EPOCH).status())
+        assertThat(policy.status(plan(List.of()), List.of()))
                 .isEqualTo(LessonStatus.INCOMPLETE);
     }
 
     @Test
-    void reusesSupportedTextAndLetsOptionalVisualEnrichmentRunIndependently() {
-        TeachingPlan plan = plan();
-        LessonSection visualMissing = section(1, "setup", EvidenceStatus.SUPPORTED, false);
-        LessonSection scoring = section(2, "scoring", EvidenceStatus.SUPPORTED, false);
-        IllustratedLesson previous = new IllustratedLesson(
-                UUID.randomUUID(),
-                plan.id(),
-                LessonStatus.COMPLETE,
-                List.of(visualMissing, scoring, section(3, "old-topic", EvidenceStatus.SUPPORTED, true)),
-                "reusable",
-                Instant.EPOCH);
-
-        Map<String, LessonSection> reusable = policy.reusableSections(
-                plan, previous, Set.of("reusable"));
-
-        assertThat(reusable).containsOnlyKeys("setup", "scoring");
-        assertThat(policy.reusableSections(plan, previous, Set.of("other-version"))).isEmpty();
+    void givesDependentChaptersEveryReadablePrerequisiteWithoutAChapterCountCutoff() {
+        assertThat(policy.continuityContext(List.of(section(1), section(2), section(3), section(4))))
+                .extracting(context -> context.topicKey())
+                .containsExactly("chapter-1", "chapter-2", "chapter-3", "chapter-4");
     }
 
-    @Test
-    void doesNotReuseLegacyModelOwnedVisualCoordinatesAfterTheOwnershipMigration() {
-        TeachingPlan plan = plan();
-        LessonSection legacyVisual = section(1, "setup", EvidenceStatus.SUPPORTED, true);
-        IllustratedLesson previous = new IllustratedLesson(
-                UUID.randomUUID(),
-                plan.id(),
-                LessonStatus.COMPLETE,
-                List.of(legacyVisual),
-                "adaptive-teaching-v58-whole-game-context",
-                Instant.EPOCH);
-
-        assertThat(legacyVisual.steps().getFirst().visualFocus()).isNotNull();
-        assertThat(GroundedTeachingAgent.GENERATOR_VERSION)
-                .isEqualTo("adaptive-teaching-v60-deterministic-publication");
-        assertThat(policy.reusableSections(
-                        plan,
-                        previous,
-                        Set.of(GroundedTeachingAgent.GENERATOR_VERSION)))
-                .isEmpty();
-    }
-
-    @Test
-    void keepsOnlyTheLastTwoSupportedSectionsForContinuityAndBuildsTheSafeFallback() {
-        List<PriorSectionContext> context = policy.continuityContext(List.of(
-                section(1, "setup", EvidenceStatus.SUPPORTED, false),
-                section(2, "discarded", EvidenceStatus.INSUFFICIENT_EVIDENCE, false),
-                section(3, "flow", EvidenceStatus.SUPPORTED, false),
-                section(4, "scoring", EvidenceStatus.SUPPORTED, false)));
-        LessonSection insufficient = policy.insufficient(plan().sections().getFirst());
-
-        assertThat(context).extracting(PriorSectionContext::topicKey).containsExactly("flow", "scoring");
-        assertThat(insufficient.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
-        assertThat(insufficient.steps().getFirst())
-                .extracting(LessonStep::kind, LessonStep::sourceChunkIds)
-                .containsExactly(TeachingMove.WATCH, List.of());
-    }
-
-    private TeachingPlan plan() {
+    private TeachingPlan plan(List<String> unresolved) {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
-                "Test game",
-                "Learn the rules",
-                List.of(
-                        planned(1, "setup", true),
-                        planned(2, "scoring", false)),
+                null,
+                "Game",
+                "Learn naturally.",
+                new WholeGameContext(List.of(), unresolved),
+                List.of(planned(1), planned(2)),
                 "owner",
                 Instant.EPOCH);
     }
 
-    private TeachingPlan.PlannedSection planned(int position, String topicKey, boolean visualRecommended) {
+    private TeachingPlan.PlannedSection planned(int position) {
         return new TeachingPlan.PlannedSection(
                 position,
-                topicKey,
-                topicKey + " title",
-                "Learn " + topicKey,
+                "chapter-" + position,
+                "Chapter " + position,
+                "Learn chapter " + position,
                 true,
-                visualRecommended,
-                List.of(topicKey),
-                List.of(topicKey));
+                false,
+                List.of("chapter " + position),
+                List.of(),
+                List.of(position));
     }
 
-    private LessonSection section(int position, String topicKey, EvidenceStatus status, boolean visual) {
-        VisualFocus focus = visual ? new VisualFocus(1, "visible " + topicKey, 100, 100, 200, 200) : null;
+    private LessonSection section(int position) {
+        UUID citation = UUID.randomUUID();
         return new LessonSection(
                 position,
-                topicKey,
-                List.of(topicKey),
-                topicKey + " title",
+                "chapter-" + position,
+                List.of(),
+                "Chapter " + position,
                 true,
-                status,
+                EvidenceStatus.SUPPORTED,
                 VisualKind.REFERENCE_CARD,
-                "caption",
+                "Chapter " + position,
+                List.of(position),
+                List.of(citation),
                 List.of(new LessonStep(
                         1,
-                        "step",
-                        visual ? TeachingMove.VISUAL : TeachingMove.DO,
-                        "Do " + topicKey,
-                        List.of(1),
-                        List.of(UUID.randomUUID()),
-                        focus)));
+                        "Act",
+                        TeachingMove.DO,
+                        "Follow the cited rule.",
+                        List.of(position),
+                        List.of(citation))));
     }
 }
