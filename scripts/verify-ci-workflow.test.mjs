@@ -2757,7 +2757,17 @@ test('ordinary-user production artifacts retain a bounded public status', () => 
   assert.match(productionOrdinaryUserWorkflow,
     /BASH_ENV: \/dev\/null[\s\S]{0,180}?LD_PRELOAD: ''[\s\S]{0,80}?PATH: \/usr\/bin:\/bin/)
   assert.match(productionOrdinaryUserWorkflow,
-    /\(keys \| sort\) == \["cleanupOutcome", "exitCode", "failureCauseCode",[\s\S]{0,100}?"failureCode", "lastCompletedStage", "outcome"\]/)
+    /\(keys \| sort\) == \["answerDiagnostic", "cleanupOutcome", "exitCode",[\s\S]{0,120}?"failureCode", "lastCompletedStage", "outcome"\]/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /\(keys \| sort\) == \["assistantRunId", "lastErrorCode", "ownerVerified",[\s\S]{0,100}?"runState", "status", "stopReason"\]/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /answerDiagnostic: \(if \.answerDiagnostic == null then null else \{[\s\S]{0,400}?stopReason: \.answerDiagnostic\.stopReason,[\s\S]{0,100}?ownerVerified: \.answerDiagnostic\.ownerVerified/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /\.ownerVerified == true/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /MODEL_CAPABILITY_UNAVAILABLE[\s\S]{0,600}?OBSERVATION_NO_PROGRESS/)
   assert.ok(productionOrdinaryUserWorkflow.includes(
     'and (.preparationState | IN("COMPLETED", "DEGRADED"))'))
   assert.ok(productionOrdinaryUserWorkflow.includes(
@@ -2802,6 +2812,12 @@ test('ordinary-user production artifacts retain a bounded public status', () => 
     /service-diagnostics\.log|docker compose[^\n]*logs|Upload private/)
   assert.doesNotMatch(productionOrdinaryUserWorkflow,
     /path:.*(?:diagnostics|result|success-summary|smoke-raw)/)
+  const sanitizer = productionOrdinaryUserWorkflow.slice(
+    productionOrdinaryUserWorkflow.indexOf('name: Prove credentials are absent and rebuild the allowlisted journey artifact'),
+    productionOrdinaryUserWorkflow.indexOf('name: Upload sanitized journey output'),
+  )
+  assert.doesNotMatch(sanitizer,
+    /\.(?:ownerUsername|subjectId|question|shortVerdict|explanation|citations|steps|activities|operation)\b/)
 })
 
 test('ordinary-user production probe isolates deployment authority from repository code', () => {
