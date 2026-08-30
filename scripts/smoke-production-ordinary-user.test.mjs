@@ -6,6 +6,130 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 
+test('sealed Node transport preserves release headers, cookies, failures, and deadlines', async () => {
+  let crossOriginTarget = ''
+  const server = createServer(async (request, response) => {
+    if (request.url === '/release') {
+      response.setHeader('Cache-Control', 'no-store')
+      response.setHeader('Content-Type', 'application/json')
+      response.setHeader('Set-Cookie', 'RULEPILOT_TEST=authenticated; Path=/; HttpOnly')
+      return response.end(JSON.stringify({ commitSha: 'a'.repeat(40), releaseId: 'release-1' }))
+    }
+    if (request.url === '/session') {
+      if (request.headers.cookie !== 'RULEPILOT_TEST=authenticated') {
+        return json(response, 401, { error: 'missing session' })
+      }
+      return json(response, 200, { username: 'player' })
+    }
+    if (request.url === '/failure') return json(response, 503, { error: 'unavailable' })
+    if (request.url === '/cross-origin') {
+      response.statusCode = 302
+      response.setHeader('Location', crossOriginTarget)
+      return response.end()
+    }
+    if (request.url === '/large') {
+      response.write('1234')
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+      return response.end('5678')
+    }
+    if (request.url === '/declared-large') {
+      response.writeHead(200, { 'Content-Length': '1000000' })
+      response.write('x')
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 2_000))
+      return response.end()
+    }
+    if (request.url === '/slow') {
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 250))
+      return json(response, 200, { delayed: true })
+    }
+    if (request.url === '/slow-body') {
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.write('{"delayed":')
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 250))
+      return response.end('true}')
+    }
+    if (request.url === '/timed-body') {
+      response.write('first')
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 200))
+      return response.end('last')
+    }
+    return json(response, 404, { error: 'unexpected request' })
+  })
+  await new Promise(resolvePromise => server.listen(0, '127.0.0.1', resolvePromise))
+  const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-http-'))
+  const cookieJar = join(directory, 'cookies.json')
+  const headers = join(directory, 'headers.txt')
+  try {
+    const address = server.address()
+    assert.equal(typeof address, 'object')
+    const baseUrl = `http://127.0.0.1:${address.port}`
+    crossOriginTarget = `http://localhost:${address.port}/release`
+    const client = resolve('scripts/smoke-production-http.mjs')
+    const release = await spawnResult(process.execPath, [client,
+      '--dump-header', headers,
+      '--cookie-jar', cookieJar,
+      `${baseUrl}/release`])
+    assert.equal(release.code, 0, release.stderr)
+    assert.equal(JSON.parse(release.stdout).commitSha, 'a'.repeat(40))
+    assert.match(await readFile(headers, 'utf8'), /^HTTP\/1\.1 200 OK\r?\n/im)
+    assert.match(await readFile(headers, 'utf8'), /^cache-control: no-store\r?$/im)
+
+    const session = await spawnResult(process.execPath, [client,
+      '--fail-with-body', '--cookie', cookieJar, '--cookie-jar', cookieJar,
+      `${baseUrl}/session`])
+    assert.equal(session.code, 0, session.stderr)
+    assert.equal(JSON.parse(session.stdout).username, 'player')
+
+    const failed = await spawnResult(process.execPath, [client,
+      '--fail-with-body', `${baseUrl}/failure`])
+    assert.equal(failed.code, 22)
+    assert.equal(JSON.parse(failed.stdout).error, 'unavailable')
+
+    const crossOrigin = await spawnResult(process.execPath, [client,
+      '--location', '--cookie', cookieJar, '--cookie-jar', cookieJar,
+      `${baseUrl}/cross-origin`])
+    assert.equal(crossOrigin.code, 47)
+    assert.match(crossOrigin.stderr, /cannot follow a cross-origin redirect/)
+
+    const tooLarge = await spawnResult(process.execPath, [client,
+      '--max-filesize', '5', `${baseUrl}/large`])
+    assert.equal(tooLarge.code, 63)
+    assert.match(tooLarge.stderr, /exceeded the allowed file size/)
+
+    const declaredLargeStartedAt = performance.now()
+    const declaredTooLarge = await spawnResult(process.execPath, [client,
+      '--max-filesize', '5', `${baseUrl}/declared-large`])
+    const declaredLargeElapsed = performance.now() - declaredLargeStartedAt
+    assert.equal(declaredTooLarge.code, 63)
+    assert.ok(declaredLargeElapsed < 1_500,
+      `declared oversized response took ${declaredLargeElapsed.toFixed(0)}ms to reject`)
+
+    const timedOut = await spawnResult(process.execPath, [client,
+      '--max-time', '0.05', `${baseUrl}/slow`])
+    assert.equal(timedOut.code, 28)
+    assert.match(timedOut.stderr, /exhausted its total timeout/)
+
+    const bodyTimedOut = await spawnResult(process.execPath, [client,
+      '--max-time', '0.05', `${baseUrl}/slow-body`])
+    assert.equal(bodyTimedOut.code, 28)
+    assert.match(bodyTimedOut.stderr, /exhausted its total timeout/)
+
+    const timedBody = await spawnResult(process.execPath, [client,
+      '--output', '/dev/null', '--write-out', '%{time_total}', `${baseUrl}/timed-body`])
+    assert.equal(timedBody.code, 0, timedBody.stderr)
+    assert.ok(Number(timedBody.stdout) >= 0.18, `reported only ${timedBody.stdout}s`)
+
+    const rejectedProtocol = await spawnResult(process.execPath, [client,
+      '--proto', '=https', `${baseUrl}/release`])
+    assert.equal(rejectedProtocol.code, 2)
+    assert.match(rejectedProtocol.stderr, /HTTPS-only protocol policy/)
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolvePromise => server.close(resolvePromise))
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('writes a controlled public failure status even when input validation stops before the journey', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-smoke-status-'))
   const publicStatus = join(directory, 'public-status.json')
@@ -240,6 +364,7 @@ test('discovers and deletes only the uniquely titled upload when the accepted PO
         '--timeout-seconds', '5'],
       {
         ...process.env,
+        RULEPILOT_SMOKE_NODE_BINARY: process.execPath,
         RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
         RULEPILOT_SMOKE_CLEANUP_TIMEOUT_SECONDS: '5',
         RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
@@ -490,6 +615,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       [resolve('scripts/smoke-production-ordinary-user.sh'),
         '--base-url', `http://127.0.0.1:${address.port}`,
         '--pdf', pdf,
+        '--http-client', resolve('scripts/smoke-production-http.mjs'),
         '--official-source-url', 'https://example.com/lantern-relay-rules.pdf',
         '--navigation-mode', 'api',
         '--navigation-file', navigation,
@@ -497,6 +623,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         '--timeout-seconds', '10'],
       {
         ...process.env,
+        RULEPILOT_SMOKE_NODE_BINARY: process.execPath,
         RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
         RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
       },
@@ -995,6 +1122,7 @@ test('recovers the exact official import identity and cleans only its document w
       [resolve('scripts/smoke-production-ordinary-user.sh'),
         '--base-url', `http://127.0.0.1:${address.port}`,
         '--source-mode', 'official_image_gallery',
+        '--http-client', resolve('scripts/smoke-production-http.mjs'),
         '--official-source-url', canonicalSource,
         '--expected-title', 'dune: imperium',
         '--uploaded-title', 'Dune: Imperium',
@@ -1007,6 +1135,7 @@ test('recovers the exact official import identity and cleans only its document w
         '--timeout-seconds', '5'],
       {
         ...process.env,
+        RULEPILOT_SMOKE_NODE_BINARY: process.execPath,
         RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
         RULEPILOT_SMOKE_CLEANUP_TIMEOUT_SECONDS: '5',
         RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
@@ -1239,6 +1368,7 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
       [resolve('scripts/smoke-production-ordinary-user.sh'),
         '--base-url', `http://127.0.0.1:${address.port}`,
         '--source-mode', 'official_image_gallery',
+        '--http-client', resolve('scripts/smoke-production-http.mjs'),
         '--official-source-url', canonicalSource,
         '--expected-title', 'dune: imperium',
         '--uploaded-title', 'Dune: Imperium',
@@ -1251,7 +1381,11 @@ test('imports one fresh ordered image gallery, reuses its automatic Teaching han
         '--question', '游戏什么时候结束？胜利点相同时如何决胜？请标出规则书页码。',
         '--result-file', retainedResult,
         '--timeout-seconds', '10'],
-      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_NODE_BINARY: process.execPath,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+      },
     )
     assert.equal(result.code, 0, result.stderr)
     const summary = JSON.parse(result.stdout)

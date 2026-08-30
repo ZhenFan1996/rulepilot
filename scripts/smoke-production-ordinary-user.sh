@@ -124,7 +124,7 @@ Usage: RULEPILOT_SMOKE_PASSWORD=... smoke-production-ordinary-user.sh \
   [--preparation-mode text|visual] [--navigation-mode all|api] \
   [--visual-expectation any|required|forbidden] \
   [--question SOURCE-GROUNDED-QUESTION] \
-  [--navigation-file FILE] [--result-file FILE]
+  [--http-client FILE] [--navigation-file FILE] [--result-file FILE]
 
 Runs the authenticated source -> processing -> teaching plan -> illustrated lesson
 journey and removes only the fresh canary document before exiting.
@@ -149,6 +149,7 @@ preparation_mode=text
 navigation_mode=all
 visual_expectation=any
 question="How many victory points is each lit dock worth during final scoring?"
+http_client=
 navigation_file=
 result_file=
 
@@ -220,6 +221,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--question)
 			question=${2:-}
+			shift 2
+			;;
+		--http-client)
+			http_client=${2:-}
 			shift 2
 			;;
 		--navigation-file)
@@ -324,7 +329,22 @@ if [ -z "${RULEPILOT_SMOKE_PASSWORD:-}" ]; then
 	echo "RULEPILOT_SMOKE_PASSWORD is required" >&2
 	exit 2
 fi
-for command_name in curl jq mktemp; do
+if [ -n "$http_client" ]; then
+	if [ ! -f "$http_client" ] || [ -L "$http_client" ] || [ ! -r "$http_client" ]; then
+		echo "--http-client must be one readable regular file" >&2
+		exit 2
+	fi
+	if [ -z "${RULEPILOT_SMOKE_NODE_BINARY:-}" ] \
+		|| [[ "$RULEPILOT_SMOKE_NODE_BINARY" != /* ]] \
+		|| [ ! -x "$RULEPILOT_SMOKE_NODE_BINARY" ]; then
+		echo "RULEPILOT_SMOKE_NODE_BINARY must name one absolute executable for --http-client" >&2
+		exit 2
+	fi
+elif ! command -v curl >/dev/null 2>&1; then
+	echo "curl is required when --http-client is omitted" >&2
+	exit 2
+fi
+for command_name in jq mktemp; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		echo "$command_name is required" >&2
 		exit 2
@@ -359,13 +379,21 @@ remaining_forward_seconds() {
 	printf '%s' "$remaining"
 }
 
+request_http() {
+	if [ -n "$http_client" ]; then
+		"$RULEPILOT_SMOKE_NODE_BINARY" "$http_client" "$@"
+	else
+		curl "$@"
+	fi
+}
+
 forward_curl() {
 	local remaining connect_timeout
 	remaining=$(remaining_forward_seconds) || return 1
 	connect_timeout=5
 	if [ "$remaining" -lt "$connect_timeout" ]; then connect_timeout=$remaining; fi
 	local curl_status
-	curl --connect-timeout "$connect_timeout" --max-time "$remaining" "$@" || {
+	request_http --connect-timeout "$connect_timeout" --max-time "$remaining" "$@" || {
 		curl_status=$?
 		if [ "$curl_status" -eq 28 ] || [ "$SECONDS" -ge "$forward_deadline" ]; then
 			echo "HTTP request exhausted the remaining ${timeout_seconds}s total forward-work budget" >&2
@@ -383,7 +411,7 @@ sleep_for_forward_poll() {
 }
 
 cleanup_curl() {
-	curl --connect-timeout 5 --max-time 10 "$@"
+	request_http --connect-timeout 5 --max-time 10 "$@"
 }
 
 probe_navigation() {
@@ -925,7 +953,7 @@ cleanup() {
 		wait_for_cancelled_run "$lesson_run_id"
 		wait_for_cancelled_run "$preparation_run_id"
 		if [ "$cleanup_document" = true ] && [ -n "$document_id" ]; then
-			if curl --fail-with-body --silent --show-error --output /dev/null \
+			if request_http --fail-with-body --silent --show-error --output /dev/null \
 				--connect-timeout 5 --max-time 60 \
 				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 				--request DELETE --header "$csrf_header: $csrf_token" \

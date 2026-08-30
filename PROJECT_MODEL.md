@@ -54,8 +54,11 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家偏好推荐游�
 
 生产环境把推荐决策和其公开资料搜索都显式固定为 `qwen3.8-flash`，避免继承通用 Qwen 角色的较慢默认模型；
 公开资料 adapter 让模型在内置 web search 后直接提交 typed function result，并记录内部搜索次数、source ownership
-和总耗时。公网 Caddy 明确协商 X25519 / P-256，避免仅支持传统 TLS group 的 LibreSSL 客户端在 Caddy 默认混合
-后量子 group 上于 HTTP 前断连；部署后同时用 OpenSSL group 探测、普通 curl 和真实浏览器验收。
+和总耗时。公网验收统一使用封存的 Node HTTP runtime：线上对照已证明同一 GitHub runner 的 system curl / Python
+会在取得完整 HTTP 响应前被连接重置，而 Node 与真实浏览器可以持续读取同一 exact release；禁用代理、固定
+X25519、TLS 1.2、HTTP/1.1、ALPN 和直连 IP 都没有让 system curl 恢复，曾经实际部署的 server-side curve
+allow-list 也没有消除 reset。因此这类失败属于 observer transport 兼容边界，不能再归因成已证实的 Caddy
+曲线回归，也不能用观察器网络故障否定主机内发布守卫已经验证的健康候选。
 
 ## 模块职责
 
@@ -301,15 +304,19 @@ whole-run owner 才能把整轮
    硬边界就不应被调用次数误判为失败。随后选择其中一张卡，证明相同 BGG 身份被绑定到
    game/edition，并且只恢复
    该 edition 的既有旅程或在同 edition discovery 边界停下。首个进度、持久化终态与页面渲染分别记录延迟。
-   普通用户 canary 使用私有上传
-   验证规则书、动态 preparation、正文先持久化后在同一 `TEACHING` run 内可选追加的局部图示、局部
-   unavailable 页面和引用答疑，并在结束
-   后清理测试数据。
+   普通用户 canary 使用私有上传或显式授权的官方图片规则书，验证来源身份、动态 preparation、正文先持久化后
+   在同一 `TEACHING` run 内可选追加的局部图示、局部 unavailable 页面和引用答疑，并在结束后清理测试数据。
+   它的 preflight、publisher 下载和完整登录用户 journey 共用封存的 Node transport；至少一次真实并发导航探测
+   才能发布成功 artifact，不能用 `requestCount=0` 冒充健康。
 4. canary 的 sanitizer 总会先删除原始输出和凭据并生成有界诊断 artifact；独立 final success gate 再要求
    `completed`/`SUCCEEDED` 的完整验收合同。测试被 skip、报告不完整或 sanitizer 只成功保存失败诊断时，workflow
    仍然必须红，不能把“有诊断可下载”误当成产品链路成功。生产 SSH 只出现在固定 bootstrap 边界；repo-owned
    canary 代码运行前必须删掉 key 并通过 `env -i` 只接收其最小玩家或管理员权限。容器化 canary 还必须显式
    把 bootstrap 写入的固定 `known_hosts` 传给 OpenSSH，不能假定容器进程的 `$HOME` 与系统用户目录相同。
+   普通用户 canary 在任何公网请求前先落盘 `not-started` 状态：三次仍没有完整 HTTP 响应是
+   `PUBLIC_RELEASE_UNAVAILABLE + cleanup NOT_REQUIRED`；拿到完整响应但 SHA、release ID 或独立 `no-store`
+   不一致是不可重试的 `PUBLIC_RELEASE_MISMATCH`。只有 journey 真正创建对象后取消或删除失败，才允许报告
+   `cleanup FAILED`；探针尚未开始不能再退化成虚假的 `status-unavailable + cleanup FAILED`。
 5. 推荐 canary 把三个不同时间合同分开：20 秒只判断玩家是否及时看到完整可用卡片；155 秒诊断窗观察到
    两分钟 Agent deadline、五秒 SSE 收尾和额外三十秒 stale-turn recovery eligibility 后，才判断生命周期是否
    没有收敛；它本身不重放请求，也不把“已经可恢复”冒充成“已经执行恢复”。
