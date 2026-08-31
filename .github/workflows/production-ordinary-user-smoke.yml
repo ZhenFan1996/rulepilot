@@ -625,14 +625,17 @@ jobs:
                 def is_answer_diagnostic:
                   . == null or (
                     type == "object"
-                    and (keys | sort) == ["assistantRunId", "lastErrorCode", "ownerVerified",
-                      "runState", "status", "stopReason"]
+                    and (keys | sort) == ["assistantRunId", "completionRejectionCode",
+                      "lastErrorCode", "ownerVerified", "runState", "status", "stopReason"]
                     and (.status | is_answer_status)
                     and (.assistantRunId | type == "string"
                       and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
                     and (.runState | is_run_state)
                     and (.lastErrorCode == null or (.lastErrorCode | type == "string"
                       and test("^[A-Z][A-Z0-9_]{2,63}$")))
+                    and (.completionRejectionCode == null
+                      or (.completionRejectionCode | type == "string"
+                        and test("^[A-Z][A-Z0-9_]{2,63}$")))
                     and (.stopReason == null or (.stopReason | IN("MODEL_CAPABILITY_UNAVAILABLE",
                       "MODEL_REQUEST_TIMEOUT", "MODEL_REQUEST_UNAVAILABLE", "TIMEOUT",
                       "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
@@ -677,6 +680,7 @@ jobs:
                       runState: .answerDiagnostic.runState,
                       lastErrorCode: .answerDiagnostic.lastErrorCode,
                       stopReason: .answerDiagnostic.stopReason,
+                      completionRejectionCode: .answerDiagnostic.completionRejectionCode,
                       ownerVerified: .answerDiagnostic.ownerVerified
                     } end)}
               ' "$raw_status" > "$sanitized_status"; then

@@ -110,8 +110,9 @@ class BoundedNativeToolAgentTest {
                                 "CITATION_NOT_OBSERVED", "/citationIds/0", "identity is outside this run",
                                 Set.of("evidence-1"))
                         : TerminalValidation.accepted());
+        RecordingInvocations audited = new RecordingInvocations(null);
 
-        var result = agent(model, List.of(tool("search_rule_evidence")), new RecordingInvocations(null))
+        var result = agent(model, List.of(tool("search_rule_evidence")), audited)
                 .run(request(Set.of("search_rule_evidence"), contract));
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
@@ -132,6 +133,49 @@ class BoundedNativeToolAgentTest {
                                 "currentSchema",
                                 "evidence-1")
                         .doesNotContain(rejected, "<rejected-candidate>"));
+        assertThat(audited.operations).contains("nativeCompletionRejection|CITATION_NOT_OBSERVED");
+    }
+
+    @Test
+    void stopsWhenTheSameRejectedTerminalIsReturnedAgain() {
+        String rejected = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Move.\"}";
+        QueueModel model = new QueueModel(finalTurn(rejected), finalTurn(rejected));
+        RecordingInvocations audited = new RecordingInvocations(null);
+        TerminalContract contract = TerminalContract.json(
+                "{\"type\":\"object\",\"required\":[\"kind\",\"shortVerdict\"]}",
+                (candidate, observations) -> TerminalValidation.rejected(
+                        "TERMINAL_FIELD_INVALID", "/citationIds", "citationIds is required", Set.of()));
+
+        var result = agent(model, List.of(tool("search_rule_evidence")), audited)
+                .run(request(Set.of("search_rule_evidence"), contract));
+
+        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
+        assertThat(result.reason()).isEqualTo("COMPLETION_NO_PROGRESS");
+        assertThat(model.requests).hasValue(2);
+        assertThat(audited.operations).contains(
+                "nativeCompletionRejection|TERMINAL_FIELD_INVALID",
+                "nativeToolFallback|COMPLETION_NO_PROGRESS");
+    }
+
+    @Test
+    void replacesAnUnsafeTerminalCodeBeforePersistingTheDiagnosticOperation() {
+        String rejected = "{\"kind\":\"RULE_ANSWER\"}";
+        String accepted = "{\"kind\":\"CHAT\",\"shortVerdict\":\"Hello.\"}";
+        QueueModel model = new QueueModel(finalTurn(rejected), finalTurn(accepted));
+        RecordingInvocations audited = new RecordingInvocations(null);
+        TerminalContract contract = TerminalContract.json(
+                "{\"type\":\"object\",\"required\":[\"kind\"]}",
+                (candidate, observations) -> candidate.equals(rejected)
+                        ? TerminalValidation.rejected(
+                                "private-code\nsecret", "/kind", "test-only unsafe code", Set.of())
+                        : TerminalValidation.accepted());
+
+        var result = agent(model, List.of(tool("search_rule_evidence")), audited)
+                .run(request(Set.of("search_rule_evidence"), contract));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(audited.operations).contains("nativeCompletionRejection|TERMINAL_REJECTED");
+        assertThat(audited.operations).noneMatch(operation -> operation.contains("private-code"));
     }
 
     @Test

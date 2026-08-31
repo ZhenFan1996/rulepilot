@@ -23,13 +23,17 @@ validate_public_status() {
 		def is_answer_diagnostic:
 			. == null or (
 				type == "object"
-				and (keys | sort == ["assistantRunId", "lastErrorCode", "ownerVerified", "runState", "status", "stopReason"])
+				and (keys | sort == ["assistantRunId", "completionRejectionCode", "lastErrorCode",
+					"ownerVerified", "runState", "status", "stopReason"])
 				and (.status | is_answer_status)
 				and (.assistantRunId | type == "string"
 					and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
 				and (.runState | is_run_state)
 				and (.lastErrorCode == null or (.lastErrorCode | type == "string"
 					and test("^[A-Z][A-Z0-9_]{2,63}$")))
+				and (.completionRejectionCode == null
+					or (.completionRejectionCode | type == "string"
+						and test("^[A-Z][A-Z0-9_]{2,63}$")))
 				and (.stopReason == null or (.stopReason | IN("MODEL_CAPABILITY_UNAVAILABLE",
 					"MODEL_REQUEST_TIMEOUT", "MODEL_REQUEST_UNAVAILABLE", "TIMEOUT", "STEP_BUDGET",
 					"TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
@@ -456,10 +460,10 @@ validate_rule_answer_response() {
 		echo "Rule answer did not include a player-facing verdict" >&2
 		return 1
 	fi
-	if ! jq -e '.answer.explanation | type == "string" and length > 0' \
+	if ! jq -e '.answer.explanation | type == "string"' \
 		>/dev/null <<<"$response"; then
-		record_failure_cause ANSWER_EXPLANATION_EMPTY
-		echo "Rule answer did not include a player-facing explanation" >&2
+		record_failure_cause ANSWER_RESPONSE_INVALID
+		echo "Rule answer explanation was not a JSON string" >&2
 		return 1
 	fi
 	if ! jq -e '(.answer.citations | type == "array") and (.answer.citations | length > 0)' \
@@ -669,8 +673,15 @@ latest_question_run() {
 			| select(type == "string")
 			| capture("^nativeToolFallback\\|(?<reason>MODEL_CAPABILITY_UNAVAILABLE|MODEL_REQUEST_TIMEOUT|MODEL_REQUEST_UNAVAILABLE|TIMEOUT|STEP_BUDGET|TOOL_BUDGET|MODEL_BUDGET|TOKEN_BUDGET|CANCELLED|EXECUTION_FAILED|TOOL_ALLOWLIST_UNAVAILABLE|COMPLETION_NO_PROGRESS|ACTION_NO_PROGRESS|OBSERVATION_BUDGET_EXHAUSTED|OBSERVATION_BUDGET_EXCEEDED|OBSERVATION_NO_PROGRESS)$")
 			| .reason] | last // null) as $stopReason
+		| ([.activities[]?
+			| select(.type == "VALIDATION" and .outcome == "REJECTED")
+			| .operation
+			| select(type == "string")
+			| capture("^nativeCompletionRejection\\|(?<code>[A-Z][A-Z0-9_]{2,63})$")
+			| .code] | last // null) as $completionRejectionCode
 		| {id: .run.id, state: .run.state, lastErrorCode: .run.lastErrorCode,
-			stopReason: $stopReason, ownerVerified: true}
+			stopReason: $stopReason, completionRejectionCode: $completionRejectionCode,
+			ownerVerified: true}
 	' <<<"$body"
 }
 
@@ -712,6 +723,7 @@ request_rule_answer() {
 		answer_diagnostic_json=$(jq -cn --arg status "$answer_status" --argjson run "$latest_run" '
 			{status: $status, assistantRunId: $run.id, runState: $run.state,
 			 lastErrorCode: $run.lastErrorCode, stopReason: $run.stopReason,
+			 completionRejectionCode: $run.completionRejectionCode,
 			 ownerVerified: $run.ownerVerified}
 		')
 		if { [ "$answer_status" = ANSWERED ] \

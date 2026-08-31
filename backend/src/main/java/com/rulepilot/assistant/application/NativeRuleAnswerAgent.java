@@ -52,11 +52,11 @@ public class NativeRuleAnswerAgent {
     static final String TERMINAL_SCHEMA = """
             {
               "type": "object",
-              "required": ["kind", "shortVerdict", "explanation"],
+              "required": ["kind", "shortVerdict"],
               "properties": {
                 "kind": {"type": "string", "enum": ["CHAT", "RULE_ANSWER", "CLARIFICATION"]},
                 "shortVerdict": {"type": "string"},
-                "explanation": {"type": "string", "description": "Optional additional player-facing explanation. Leave empty when shortVerdict already gives the complete useful answer."},
+                "explanation": {"type": ["string", "null"], "description": "Optional additional player-facing explanation. Leave empty when shortVerdict already gives the complete useful answer."},
                 "clarification": {"type": ["string", "null"]},
                 "citationIds": {
                   "type": "array",
@@ -336,7 +336,7 @@ public class NativeRuleAnswerAgent {
         return new Candidate(
                 kind,
                 requiredString(root, "shortVerdict", true),
-                requiredString(root, "explanation", false),
+                optionalStringOrEmpty(root, "explanation"),
                 optionalString(root, "clarification"),
                 stringArray(root, "citationIds"),
                 stringArray(root, "exceptions"),
@@ -361,6 +361,11 @@ public class NativeRuleAnswerAgent {
                     "TERMINAL_FIELD_INVALID", "/" + field, field + " must be a JSON string or null.");
         }
         return value.textValue();
+    }
+
+    private String optionalStringOrEmpty(JsonNode root, String field) {
+        String value = optionalString(root, field);
+        return value == null ? "" : value;
     }
 
     private List<String> stringArray(JsonNode root, String field) {

@@ -137,7 +137,7 @@ class NativeRuleAnswerAgentTest {
         RuleEvidenceHit evidence = new RuleEvidenceHit(
                 evidenceId, versionId, "MOVEMENT", "Fuel movement", excerpt, 6, 6, 1.0);
         String terminal = """
-                {"kind":"RULE_ANSWER","shortVerdict":"Pay 2 fuel, then move one space.","explanation":"",
+                {"kind":"RULE_ANSWER","shortVerdict":"Pay 2 fuel, then move one space.",
                  "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
                 """.formatted(evidenceId, evidenceId).strip();
         AtomicInteger decisions = new AtomicInteger();
@@ -160,6 +160,38 @@ class NativeRuleAnswerAgentTest {
             assertThat(citation.pageFrom()).isEqualTo(6);
             assertThat(citation.excerpt()).isEqualTo(excerpt);
         });
+    }
+
+    @Test
+    void normalizesANullOptionalExplanationToEmptyPlayerProse() {
+        String terminal = """
+                {"kind":"CHAT","shortVerdict":"Hello!","explanation":null}
+                """.strip();
+        NativeRuleAnswerAgent answers = answers(
+                new StubNativeAgent(terminal, List.of(), 0), emptyLookup());
+
+        var outcome = answers.answer(
+                "Hello", new QuestionContext(versionId), "player", null, runId);
+
+        assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(outcome.answer().explanation()).isEmpty();
+    }
+
+    @Test
+    void rejectsANonStringExplanationWhenTheOptionalFieldIsPresent() {
+        NativeRuleAnswerAgent answers = answers(
+                new StubNativeAgent("unused", List.of(), 0), emptyLookup());
+
+        TerminalValidation result = answers.validateTerminal(
+                """
+                {"kind":"CHAT","shortVerdict":"Hello!","explanation":7}
+                """,
+                List.of(),
+                new QuestionContext(versionId));
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.code()).isEqualTo("TERMINAL_FIELD_INVALID");
+        assertThat(result.path()).isEqualTo("/explanation");
     }
 
     @Test

@@ -175,6 +175,7 @@ test('public status validator rejects contradictory or expanded workflow artifac
     runState: 'DEGRADED',
     lastErrorCode: 'QUESTION_AGENT_FAILED',
     stopReason: 'TIMEOUT',
+    completionRejectionCode: null,
     ownerVerified: true,
   }
   const validSuccess = {
@@ -202,6 +203,14 @@ test('public status validator rejects contradictory or expanded workflow artifac
     }))
     assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
     await writeFile(publicStatus, JSON.stringify({ ...validDoubleFailure, answerDiagnostic: validAnswerDiagnostic }))
+    assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
+    await writeFile(publicStatus, JSON.stringify({
+      ...validDoubleFailure,
+      answerDiagnostic: {
+        ...validAnswerDiagnostic,
+        completionRejectionCode: 'TERMINAL_FIELD_INVALID',
+      },
+    }))
     assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
     for (const [status, stopReason] of [
       ['MODEL_TIMEOUT', 'MODEL_REQUEST_TIMEOUT'],
@@ -235,6 +244,10 @@ test('public status validator rejects contradictory or expanded workflow artifac
       { ...validDoubleFailure, rawModelOutput: 'must never become public' },
       { ...validDoubleFailure, answerDiagnostic: { status: 'MODEL_TIMEOUT' } },
       { ...validDoubleFailure, answerDiagnostic: { ...validAnswerDiagnostic, lastErrorCode: 'AI' } },
+      {
+        ...validDoubleFailure,
+        answerDiagnostic: { ...validAnswerDiagnostic, completionRejectionCode: 'terminal-field-invalid' },
+      },
       { ...validDoubleFailure, answerDiagnostic: { ...validAnswerDiagnostic, stopReason: 'MODEL_TEXT_REPAIR' } },
       { ...validDoubleFailure, answerDiagnostic: { ...validAnswerDiagnostic, ownerVerified: false } },
       { ...validSuccess, answerDiagnostic: null },
@@ -244,7 +257,8 @@ test('public status validator rejects contradictory or expanded workflow artifac
         ...validDoubleFailure,
         answerDiagnostic: {
           ...validAnswerDiagnostic,
-          ownerUsername: 'player',
+          completionRejectionPath: '$.explanation',
+          completionRejectionReason: 'private model validation reason',
         },
       },
     ]
@@ -466,6 +480,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let answerRunState = 'COMPLETED'
   let answerLastErrorCode = null
   let answerStopReason = null
+  let answerCompletionRejectionCode = null
   let answerRequested = false
   let answerRunDoesNotAdvance = false
   let navigationFails = false
@@ -478,6 +493,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     runState: 'COMPLETED',
     lastErrorCode: null,
     stopReason: null,
+    completionRejectionCode: null,
     ownerVerified: true,
   }
   const server = createServer(async (request, response) => {
@@ -642,7 +658,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
           language: 'en',
           status: answerStatus,
           shortVerdict: 'Each lit dock is worth three victory points.',
-          explanation: 'Final scoring awards three points for every dock you lit.',
+          explanation: '',
           citations: answerHasCitations ? [{
             heading: 'GAME END AND SCORING',
             pageFrom: 4,
@@ -679,9 +695,23 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         activities: [
           { type: 'MODEL', outcome: 'SUCCEEDED', operation: 'privateAnswerOperation', input: expectedQuestion },
           { type: 'VALIDATION', outcome: 'REJECTED', operation: 'explanationRepair|TIMEOUT' },
+          { type: 'VALIDATION', outcome: 'REJECTED', operation: 'nativeCompletionRejection|invalid-code' },
+          { type: 'MODEL', outcome: 'REJECTED', operation: 'nativeCompletionRejection|PRIVATE_MODEL_CODE' },
+          { type: 'VALIDATION', outcome: 'SUCCEEDED', operation: 'nativeCompletionRejection|PRIVATE_SUCCESS_CODE' },
           ...answerStopReason == null ? [] : [{
             type: 'VALIDATION', outcome: 'REJECTED',
             operation: `nativeToolFallback|${answerStopReason}`,
+          }],
+          ...answerCompletionRejectionCode == null ? [] : [{
+            type: 'VALIDATION', outcome: 'REJECTED',
+            operation: `nativeCompletionRejection|${answerCompletionRejectionCode}`,
+            path: '$.explanation',
+            reason: 'private model validation reason',
+            rawCandidate: 'private raw candidate',
+            question: expectedQuestion,
+            evidence: 'private evidence excerpt',
+            ownerUsername: 'player',
+            subjectId: '22222222-2222-2222-2222-222222222222',
           }],
         ],
       })
@@ -874,13 +904,15 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(deleted, true)
     answerHasCitations = true
 
-    for (const [status, stopReason] of [
-      ['MODEL_TIMEOUT', 'MODEL_REQUEST_TIMEOUT'],
-      ['MODEL_UNAVAILABLE', 'MODEL_REQUEST_UNAVAILABLE'],
+    for (const [status, stopReason, completionRejectionCode] of [
+      ['MODEL_TIMEOUT', 'MODEL_REQUEST_TIMEOUT', null],
+      ['MODEL_UNAVAILABLE', 'MODEL_REQUEST_UNAVAILABLE', null],
+      ['INVALID_MODEL_OUTPUT', 'COMPLETION_NO_PROGRESS', 'TERMINAL_FIELD_INVALID'],
     ]) {
       answerStatus = status
       answerRunState = 'DEGRADED'
       answerStopReason = stopReason
+      answerCompletionRejectionCode = completionRejectionCode
       deleted = false
       planStarted = false
       const unpublishedAnswerStatus = join(directory, `unpublished-${status.toLowerCase()}-status.json`)
@@ -910,17 +942,19 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
           runState: 'DEGRADED',
           lastErrorCode: null,
           stopReason,
+          completionRejectionCode,
           ownerVerified: true,
         },
       })
       const unpublishedPublicText = await readFile(unpublishedAnswerStatus, 'utf8')
       assert.doesNotMatch(unpublishedPublicText,
-        /ownerUsername|subjectId|private model progress|privateAnswerOperation|victory points|player/)
+        /ownerUsername|subjectId|"path"|"reason"|rawCandidate|"question"|"evidence"|private model progress|privateAnswerOperation|victory points|player/)
       assert.equal(deleted, true)
     }
     answerStatus = 'ANSWERED'
     answerRunState = 'COMPLETED'
     answerStopReason = null
+    answerCompletionRejectionCode = null
 
     answerRunDoesNotAdvance = true
     deleted = false
