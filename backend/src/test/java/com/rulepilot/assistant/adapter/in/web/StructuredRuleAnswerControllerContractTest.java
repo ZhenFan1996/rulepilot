@@ -119,6 +119,7 @@ class StructuredRuleAnswerControllerContractTest {
     void returnsCompleteRejectedPayloadsToTheSameAgentWithoutInventingAReviewerStage() {
         List<String> recoverableOperations = List.of(
                 "nativeCompletionRequirement",
+                "nativeCompletionRejection|TERMINAL_FIELD_INVALID",
                 "nativeEmptyCompletion",
                 "nativeCompletionProtocol",
                 "nativeActionProtocol",

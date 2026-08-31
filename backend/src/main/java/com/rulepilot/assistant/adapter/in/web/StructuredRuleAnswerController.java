@@ -345,7 +345,8 @@ public class StructuredRuleAnswerController {
     }
 
     private static boolean isTerminalRepair(String operation) {
-        return operation.equals("nativeCompletionRequirement")
+        return operation.startsWith("nativeCompletionRejection|")
+                || operation.equals("nativeCompletionRequirement")
                 || operation.equals("nativeEmptyCompletion")
                 || operation.equals("nativeCompletionProtocol")
                 || operation.equals("nativeActionProtocol")

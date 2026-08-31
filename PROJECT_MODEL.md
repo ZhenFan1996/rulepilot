@@ -133,11 +133,11 @@ NativeRuleAnswerAgent
 
 - `CHAT`：普通对话可一次调用、零工具，无引用。
 - `CLARIFICATION`：模型提出一个完整、自然的澄清问题，无伪造引用。
-- `RULE_ANSWER`：模型按需搜索 relationship/context/page/visual/image/crop 工具；发布时只能引用同一 run 内成功 `read_rule_pages` 返回的 canonical evidence identity。
+- `RULE_ANSWER`：模型按需搜索 relationship/context/page/visual/image/crop 工具；发布时只能引用同一 run 内 source-bearing `search_rule_evidence` 或 `read_rule_pages` 返回的 canonical evidence identity。
 
 同一 turn 中互不依赖的 read actions 使用虚拟线程并行。单个 sibling 的 provider/tool Runtime failure 只形成 correlated `TOOL_EXECUTION_FAILED` observation；成功 sibling 保留。只有取消、deadline、持久化资源控制或 owner boundary 才中断整批。
 
-发布边界验证当前文档版本、精确页快照、引用身份和硬数字。硬数字由模型在 `numericClaims` 中逐 literal 指向一个已引用证据 ID；自然解释、结论、例外和澄清全部由模型生成并原样发布。
+发布边界验证当前文档版本、精确页快照、引用身份和硬数字。硬数字由模型在 `numericClaims` 中逐 literal 指向一个已引用证据 ID；自然解释、结论、例外和澄清全部由模型生成并原样发布。`shortVerdict` 是唯一必需的玩家结论；`explanation` 只是可选补充，省略或返回 `null` 时归一为空字符串，不会把已经完整的短答案变成协议失败。
 
 非法工具参数或终态的完整原 payload 只在前一条 assistant message 中保留一次；correction 将 `code/path/reason/currentSchema`、允许工具名或 evidence IDs 返回同一 Agent。additive unknown 字段被忽略。应用不要求玩家因为 `INVALID_MODEL_OUTPUT` 改写问题，也不以本地模板修补答案。
 
@@ -152,7 +152,7 @@ NativeRuleAnswerAgent
 | `repair-required` | 认证、输入、来源、所有权、版本、持久化、身份或引用硬边界不成立 | 先修复前置事实；无变化重试既不安全也不会成功 |
 | `internal-correction` | typed JSON、工具参数、协议或计划候选不合法 | 不是玩家请求失败；完整候选和精确诊断回到同一 Agent 整包重生 |
 
-`internal-correction` 只有在完全相同的拒绝重复、资源停止或 provider 无法继续时才转成最终停止。前端不解析自由文本来判断分类，不展示已退休的 `nextAction`，也不承诺“自动重试一次”或固定分钟数。
+`internal-correction` 只有在完全相同的拒绝重复、资源停止或 provider 无法继续时才转成最终停止。持久化活动只记录格式受限的 terminal rejection code；生产 canary 可以公开 nullable `completionRejectionCode`，但不会公开 path、reason、原候选、问题、证据、owner 或 subject。前端不解析自由文本来判断分类，不展示已退休的 `nextAction`，也不承诺“自动重试一次”或固定分钟数。
 
 ## 持久化、并发与恢复
 

@@ -168,7 +168,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                     recordDiagnostic(
                             request.scope().runId(),
                             ActivityType.VALIDATION,
-                            emptyCompletion ? "nativeEmptyCompletion" : "nativeCompletionProtocol",
+                            "nativeCompletionRejection|" + diagnosticTerminalCode(terminalRejection.code()),
                             ActivityOutcome.REJECTED,
                             emptyCompletion
                                     ? "native model returned neither a tool call nor a terminal status"
@@ -734,6 +734,23 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                     "OBSERVATION_NO_PROGRESS" -> reason;
             default -> "EXECUTION_FAILED";
         };
+    }
+
+    private String diagnosticTerminalCode(String code) {
+        if (code == null || code.length() < 3 || code.length() > 64 || !isUppercaseAscii(code.charAt(0))) {
+            return "TERMINAL_REJECTED";
+        }
+        for (int index = 1; index < code.length(); index++) {
+            char value = code.charAt(index);
+            if (!isUppercaseAscii(value) && !(value >= '0' && value <= '9') && value != '_') {
+                return "TERMINAL_REJECTED";
+            }
+        }
+        return code;
+    }
+
+    private boolean isUppercaseAscii(char value) {
+        return value >= 'A' && value <= 'Z';
     }
 
     private int estimateTokens(String value) {

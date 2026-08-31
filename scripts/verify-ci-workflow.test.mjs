@@ -2853,9 +2853,11 @@ test('ordinary-user production artifacts retain a bounded public status', () => 
   assert.match(productionOrdinaryUserWorkflow,
     /\(keys \| sort\) == \["answerDiagnostic", "cleanupOutcome", "exitCode",[\s\S]{0,120}?"failureCode", "lastCompletedStage", "outcome"\]/)
   assert.match(productionOrdinaryUserWorkflow,
-    /\(keys \| sort\) == \["assistantRunId", "lastErrorCode", "ownerVerified",[\s\S]{0,100}?"runState", "status", "stopReason"\]/)
+    /\(keys \| sort\) == \["assistantRunId", "completionRejectionCode",[\s\S]{0,140}?"lastErrorCode", "ownerVerified", "runState", "status", "stopReason"\]/)
   assert.match(productionOrdinaryUserWorkflow,
-    /answerDiagnostic: \(if \.answerDiagnostic == null then null else \{[\s\S]{0,400}?stopReason: \.answerDiagnostic\.stopReason,[\s\S]{0,100}?ownerVerified: \.answerDiagnostic\.ownerVerified/)
+    /answerDiagnostic: \(if \.answerDiagnostic == null then null else \{[\s\S]{0,400}?stopReason: \.answerDiagnostic\.stopReason,[\s\S]{0,120}?completionRejectionCode: \.answerDiagnostic\.completionRejectionCode,[\s\S]{0,100}?ownerVerified: \.answerDiagnostic\.ownerVerified/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /\.completionRejectionCode == null[\s\S]{0,160}?test\("\^\[A-Z\]\[A-Z0-9_\]\{2,63\}\$"\)/)
   assert.match(productionOrdinaryUserWorkflow,
     /\.ownerVerified == true/)
   assert.match(productionOrdinaryUserWorkflow,
@@ -2911,7 +2913,7 @@ test('ordinary-user production artifacts retain a bounded public status', () => 
     productionOrdinaryUserWorkflow.indexOf('name: Upload sanitized journey output'),
   )
   assert.doesNotMatch(sanitizer,
-    /\.(?:ownerUsername|subjectId|question|shortVerdict|explanation|citations|steps|activities|operation)\b/)
+    /\.(?:ownerUsername|subjectId|question|shortVerdict|explanation|citations|steps|activities|operation|path|reason|rawCandidate|evidence)\b/)
 })
 
 test('ordinary-user production probe isolates deployment authority from repository code', () => {
