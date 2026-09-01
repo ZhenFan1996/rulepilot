@@ -68,6 +68,7 @@ export type RecommendationReplyPart = {
   subject: string
   text: string
   sourceIndexes: number[]
+  publisherDescriptionGrounded?: boolean
 }
 
 export type CandidateFitClaim = {

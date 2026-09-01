@@ -592,7 +592,8 @@ public class BggRecommendationAgentController {
             String claimType,
             String subject,
             String text,
-            List<Integer> sourceIndexes) {
+            List<Integer> sourceIndexes,
+            boolean publisherDescriptionGrounded) {
         static RecommendationReplyPartResponse from(
                 BoardGameRecommendationAgent.RecommendationReplyPart part) {
             return new RecommendationReplyPartResponse(
@@ -600,7 +601,9 @@ public class BggRecommendationAgentController {
                     part.claim().type().name().toLowerCase(Locale.ROOT),
                     part.claim().subject(),
                     part.claim().text(),
-                    part.claim().sourceIndexes());
+                    part.claim().sourceIndexes(),
+                    part.claim().evidence().stream()
+                            .anyMatch(observation -> "publisherDescription".equals(observation.attribute())));
         }
     }
 

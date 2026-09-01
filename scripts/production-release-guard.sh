@@ -9,9 +9,6 @@ readonly WATCHDOG_READY_ATTEMPTS=100
 readonly WATCHDOG_READY_POLL_SECONDS=0.05
 readonly ROLLBACK_READY_TIMEOUT_SECONDS=360
 readonly ROLLBACK_READY_POLL_SECONDS=2
-readonly QUALIFIED_MAIN_REMOTE=https://github.com/ZhenFan1996/rulepilot.git
-readonly QUALIFIED_MAIN_VERIFY_ATTEMPTS=3
-readonly QUALIFIED_MAIN_VERIFY_RETRY_SECONDS=1
 readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen
 readonly EXPECTED_RECOMMENDATION_MODEL=qwen3.7-plus
 
@@ -28,27 +25,15 @@ require_candidate_release_id() {
 	[[ "$1" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] || fail "Invalid candidate release id"
 }
 
-require_current_qualified_main() {
+require_qualified_main_proof() {
 	local release_id=$1
-	local candidate_sha remote_line remote_sha remote_ref extra attempt
+	local qualified_main_sha=$2
+	local candidate_sha
 	require_candidate_release_id "$release_id"
 	candidate_sha=${release_id%%-*}
-	for ((attempt = 1; attempt <= QUALIFIED_MAIN_VERIFY_ATTEMPTS; attempt++)); do
-		if remote_line=$(GIT_TERMINAL_PROMPT=0 timeout 20s git ls-remote \
-			--exit-code "$QUALIFIED_MAIN_REMOTE" refs/heads/main); then
-			break
-		fi
-		if (( attempt == QUALIFIED_MAIN_VERIFY_ATTEMPTS )); then
-			fail "Could not verify the current qualified main revision after ${QUALIFIED_MAIN_VERIFY_ATTEMPTS} attempts"
-		fi
-		printf 'Qualified main revision lookup failed on attempt %s/%s; retrying.\n' \
-			"$attempt" "$QUALIFIED_MAIN_VERIFY_ATTEMPTS" >&2
-		sleep "$QUALIFIED_MAIN_VERIFY_RETRY_SECONDS"
-	done
-	read -r remote_sha remote_ref extra <<< "$remote_line"
-	[[ -z "${extra:-}" && "$remote_sha" =~ ^[0-9a-f]{40}$ && "$remote_ref" == refs/heads/main ]] \
-		|| fail "Current qualified main revision response is invalid"
-	[[ "$candidate_sha" == "$remote_sha" ]] \
+	[[ "$qualified_main_sha" =~ ^[0-9a-f]{40}$ ]] \
+		|| fail "Qualified main revision proof is invalid"
+	[[ "$candidate_sha" == "$qualified_main_sha" ]] \
 		|| fail "Candidate release is no longer the current qualified main revision"
 }
 
@@ -597,7 +582,7 @@ release_active_transaction_held() {
 }
 
 checkpoint() (
-	local application_root release_id releases_root current_release previous_release_id
+	local application_root release_id qualified_main_sha releases_root current_release previous_release_id
 	local api_container worker_container frontend_container api_image worker_image frontend_image
 	local start_status state_dir
 	local checkpoint_claimed=false
@@ -633,12 +618,13 @@ checkpoint() (
 	trap cleanup_unpublished_checkpoint EXIT
 	application_root=$(resolve_application_root "$1")
 	release_id=$2
+	qualified_main_sha=$3
 	require_candidate_release_id "$release_id"
 	exec 9>"$application_root/deployment.lock"
 	flock -x 9
-	# workflow_run events and their reruns can arrive out of order. Recheck the public repository while holding the
-	# production mutation lock so a previously qualified but now stale commit can never move the runtime backward.
-	require_current_qualified_main "$release_id"
+	# workflow_run events and their reruns can arrive out of order. The sealed deploy runner resolves current main
+	# immediately before this call and hands its exact read-only proof to the network-isolated production host.
+	require_qualified_main_proof "$release_id" "$qualified_main_sha"
 	state_dir=$(guard_directory "$application_root" "$release_id")
 	# Recover at most one abandoned armed transaction before reading the active release. A successful takeover can
 	# move current back to that transaction's checkpoint, which is the only correct baseline for this new checkpoint.
@@ -1143,8 +1129,8 @@ start_watchdog() {
 
 case "${1:-}" in
 	checkpoint)
-		[[ $# -eq 3 ]] || fail "Usage: $0 checkpoint APPLICATION_ROOT RELEASE_ID"
-		checkpoint "$2" "$3"
+		[[ $# -eq 4 ]] || fail "Usage: $0 checkpoint APPLICATION_ROOT RELEASE_ID QUALIFIED_MAIN_SHA"
+		checkpoint "$2" "$3" "$4"
 		;;
 	start)
 		[[ $# -eq 4 ]] || fail "Usage: $0 start APPLICATION_ROOT RELEASE_ID PREVIOUS_RELEASE_ID"

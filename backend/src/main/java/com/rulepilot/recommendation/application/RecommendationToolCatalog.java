@@ -160,7 +160,7 @@ final class RecommendationToolCatalog {
         String complexity = "{\"type\":\"object\",\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5},\"maximum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5}}}";
         return new ToolSpec(
                 SEARCH_TOOL,
-                "Search and verify BGG candidates from the one complete current-turn contract. requestedCount is exactly how many new titles the player asked for; includeTypes and excludeTypes are separate and may be empty; requiredInteraction is COOPERATIVE or TEAM only for an explicit positive play mode and otherwise ANY; requiredMechanics contains other literal BGG mechanism labels explicitly required by the player; requiredTitle is optional and must be omitted unless the current player turn names a title or title fragment. experienceQuestion is optional and replaces a later research decision: set it only when this new recommendation hinges on a subjective experience dimension absent from structured BGG facts.",
+                "Search and verify BGG candidates from the one complete current-turn contract. requestedCount is exactly how many new titles the player asked for; includeTypes and excludeTypes are separate and may be empty; requiredInteraction is COOPERATIVE or TEAM only for an explicit positive play mode and otherwise ANY; requiredMechanics contains other literal BGG mechanism labels explicitly required by the player; requiredTitle is optional and must be omitted unless the current player turn names a title or title fragment. For generic discovery, descriptionQuery optionally carries concise English theme or experience concepts explicitly requested by the player; it ranks matching BGG descriptions ahead of the ordinary catalog fallback without weakening hard filters, and must be omitted for a named-title lookup. experienceQuestion is optional and replaces a later research decision: set it only when this new recommendation hinges on a subjective experience dimension absent from structured BGG facts.",
                 "{\"type\":\"object\",\"properties\":{"
                         + "\"evidence\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(currentTurnEvidenceIds)
@@ -173,6 +173,7 @@ final class RecommendationToolCatalog {
                         + mechanics
                         + ",\"requiredInteraction\":{\"type\":\"string\",\"enum\":[\"ANY\",\"COOPERATIVE\",\"TEAM\"]}"
                         + ",\"requiredTitle\":{\"type\":\"object\",\"properties\":{\"match\":{\"type\":\"string\",\"enum\":[\"EXACT\",\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"match\",\"value\"]},"
+                        + "\"descriptionQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},"
                         + "\"experienceQuestion\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":500},"
                         + "\"players\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},\"maxMinutes\":{\"type\":\"integer\",\"minimum\":5,\"maximum\":1440},\"complexity\":"
                         + complexity
