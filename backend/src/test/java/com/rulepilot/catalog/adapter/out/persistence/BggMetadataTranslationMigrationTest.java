@@ -27,7 +27,7 @@ class BggMetadataTranslationMigrationTest {
             .withPassword("rulepilot-test");
 
     @Test
-    void migratesDeployedV105TranslationsAndRestoresTheLegacySchema() {
+    void preservesTheDeployedV105ChecksumAndLegacyWriteCompatibility() {
         enableProductionExtensions();
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
@@ -37,13 +37,16 @@ class BggMetadataTranslationMigrationTest {
                 .migrate();
         JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
+        assertThat(jdbc.queryForObject(
+                        "SELECT checksum FROM flyway_schema_history WHERE version = '105'", Integer.class))
+                .isEqualTo(1069875422);
         String payload = "{\"chineseName\":\"回填游戏\"}";
         Instant translatedAt = Instant.parse("2026-08-24T08:00:00Z");
         jdbc.update(
                 """
                 INSERT INTO bgg_metadata_translation (
-                    bgg_id, source_sha256, locale, contract_version, payload, payload_bytes, translated_at)
-                VALUES (?, ?, 'zh-CN', 4, CAST(? AS jsonb), ?, ?)
+                    bgg_id, source_sha256, locale, payload, payload_bytes, translated_at)
+                VALUES (?, ?, 'zh-CN', CAST(? AS jsonb), ?, ?)
                 """,
                 104,
                 "a".repeat(64),
