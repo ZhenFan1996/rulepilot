@@ -187,7 +187,8 @@ class TeachingRichLessonPaidCanaryTest {
                         model, provider.name(), provider.model(), false));
         when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
         when(configuration.usesFake(Role.TEACHING, OWNER)).thenReturn(false);
-        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, OWNER)).thenReturn(false);
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, OWNER))
+                .thenReturn("deepseek".equals(provider.name()));
         return configuration;
     }
 
