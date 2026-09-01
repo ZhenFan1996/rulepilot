@@ -23,11 +23,13 @@ const labels = computed(() => cardLocale.value === 'zh-CN'
   ? {
       introduce: '介绍一下', select: '选这款，找规则书', details: '查看完整资料', source: '来源', noCover: '封面加载中', cover: '的 BGG 封面',
       whyFit: '为什么选它', verifiedFact: '已核对资料', tradeoff: '需要留意',
+      fitUnavailable: '这款候选的资料卡已核对，但本轮没有形成可安全发布的个别理由。可以点“介绍一下”继续。',
       players: (min: number, max: number) => `${min}–${max} 人`, minutes: (min: number, max: number) => min === max ? `约 ${max} 分钟` : `${min}–${max} 分钟`, weight: (value: number) => `复杂度 ${value.toFixed(1)}`, designer: (value: string) => `设计：${value}`,
     }
   : {
       introduce: 'Tell me more', select: 'Choose and find rulebook', details: 'View full details', source: 'Source', noCover: 'Cover loading', cover: ' BGG cover',
       whyFit: 'Why it fits', verifiedFact: 'Verified detail', tradeoff: 'Tradeoff',
+      fitUnavailable: 'This candidate card was verified, but this turn did not produce a safe candidate-specific reason. Choose “Tell me more” to continue.',
       players: (min: number, max: number) => `${min}–${max} players`, minutes: (min: number, max: number) => min === max ? `About ${max} min` : `${min}–${max} min`, weight: (value: number) => `Weight ${value.toFixed(1)}`, designer: (value: string) => `By ${value}`,
     })
 
@@ -90,6 +92,13 @@ function replyPartLabel(role: NonNullable<RecommendedGame['replyParts']>[number]
         <dd class="text-ink/65">{{ part.text }}</dd>
       </div>
     </dl>
+    <p
+      v-else
+      data-testid="recommendation-reason-unavailable"
+      class="mt-3 border-t border-ink/8 pt-3 text-xs leading-5 text-ink/52"
+    >
+      {{ labels.fitUnavailable }}
+    </p>
 
     <div class="mt-3 flex flex-wrap gap-3">
       <button type="button" :disabled="loading" class="min-h-11 rounded-lg bg-felt px-4 text-sm font-semibold text-white disabled:opacity-40" @click="$emit('select', entry.game)">{{ labels.select }}</button>
