@@ -49,6 +49,7 @@ import org.springframework.stereotype.Component;
 public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingOutlineModel.class);
+    private static final String BASE_OUTPUT_LOCALE = "zh-CN";
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -57,7 +58,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private static final String ACTION_SCHEMA = """
             One JSON object matching exactly one action:
             {"action":"read_pages","pageNumbers":[1],"reason":"..."}
-            {"action":"publish_chapter","chapter":{"key":"kebab-case","title":"...","objective":"...","sourcePageNumbers":[1],"visualEvidenceRecommended":false,"afterChapterIds":[]},"reason":"..."}
+            {"action":"publish_chapter","chapter":{"key":"kebab-case","title":"player-facing title in outputLocale","objective":"player-facing objective in outputLocale","sourcePageNumbers":[1],"visualEvidenceRecommended":false,"afterChapterIds":[]},"reason":"..."}
             {"action":"complete","gameTitle":"printed source title","premise":"natural Simplified-Chinese orientation","coveredChapterIds":["chapter-id"],"unresolvedTopics":[],"reason":"..."}
             """;
 
@@ -285,24 +286,22 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         if (options == null) {
             return prompt.options(ChatOptions.builder().temperature(temperature));
         }
-        options.model(selected.modelName());
+        options.model(selected.modelName()).temperature(temperature);
         return prompt.options(options);
     }
 
     private OpenAiChatOptions.Builder providerOptions(RuntimeModelConfiguration.ResolvedModel selected) {
+        if (!(selected.model().getOptions() instanceof OpenAiChatOptions defaults)) return null;
+        OpenAiChatOptions.Builder options = defaults.mutate();
         if (selected.deepSeekNonThinkingGeneration()) {
-            return OpenAiChatOptions.builder()
-                    .temperature(temperature)
-                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
+            return options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
                     .extraBody(Map.of("thinking", Map.of("type", "disabled")));
         }
         if ("qwen".equals(selected.provider())) {
-            return OpenAiChatOptions.builder()
-                    .temperature(temperature)
-                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
+            return options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
                     .extraBody(Map.of("enable_thinking", false));
         }
-        return null;
+        return options;
     }
 
     boolean usesFake(Role role, String owner) {
@@ -358,6 +357,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     .map(page -> new ReadPage(page.pageNumber(), page.text()))
                     .toList();
             return new AgentView(
+                    BASE_OUTPUT_LOCALE,
                     request.learningGoalForPrompt(),
                     available,
                     read,
@@ -573,6 +573,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private record ReadPage(int pageNumber, String text) {}
 
     private record AgentView(
+            String outputLocale,
             String learningGoal,
             List<PagePreview> availablePages,
             List<ReadPage> readRulePages,

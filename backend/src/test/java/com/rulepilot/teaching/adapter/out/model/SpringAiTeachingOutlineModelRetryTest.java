@@ -15,7 +15,9 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import java.net.SocketTimeoutException;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -24,6 +26,8 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
+import org.springframework.ai.openai.OpenAiChatOptions;
 
 class SpringAiTeachingOutlineModelRetryTest {
 
@@ -114,6 +118,7 @@ class SpringAiTeachingOutlineModelRetryTest {
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(fixture.chatModel, times(2)).call(prompts.capture());
         assertThat(promptText(prompts.getAllValues().get(1)))
+                .contains("\"outputLocale\":\"zh-CN\"")
                 .contains("\"unreadAvailablePageIds\":[2]")
                 .contains("\"publishedChapters\":[{");
     }
@@ -128,6 +133,51 @@ class SpringAiTeachingOutlineModelRetryTest {
                 .isInstanceOf(OutlineGenerationException.class)
                 .hasRootCauseMessage("read timed out");
         verify(fixture.chatModel, times(1)).call(any(Prompt.class));
+    }
+
+    @Test
+    void deepSeekActionsPreserveTheConfiguredRequestBoundaryAndDisableThinking() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        Duration configuredTimeout = Duration.ofMinutes(5);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .model("deepseek-test-model")
+                .timeout(configuredTimeout)
+                .build();
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.resolvedModelFor(Role.TEACHING, "player"))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "deepseek", "deepseek-test-model", true));
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                response("""
+                        {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
+                        "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
+                        "afterChapterIds":[]},"reason":"Page 1 supports it"}
+                        """),
+                response("""
+                        {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动。",
+                        "coveredChapterIds":["play-turn"],"unresolvedTopics":[],"reason":"done"}
+                        """));
+        SpringAiTeachingOutlineModel subject = new SpringAiTeachingOutlineModel(
+                configuration,
+                mock(VersionedAgentPrompts.class),
+                0.1,
+                "Choose one action as JSON.",
+                "Goal={learningGoal}\nState={state}");
+
+        assertThat(subject.organize(onePageRequest()).topics()).singleElement();
+
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(prompts.capture());
+        assertThat(prompts.getAllValues()).allSatisfy(prompt -> {
+            assertThat(prompt.getOptions()).isInstanceOf(OpenAiChatOptions.class);
+            OpenAiChatOptions options = (OpenAiChatOptions) prompt.getOptions();
+            assertThat(options.getTimeout()).isEqualTo(configuredTimeout);
+            assertThat(options.getExtraBody()).containsEntry("thinking", Map.of("type", "disabled"));
+            assertThat(options.getResponseFormat().getType()).isEqualTo(ResponseFormat.Type.JSON_OBJECT);
+        });
     }
 
     private static String promptText(Prompt prompt) {
