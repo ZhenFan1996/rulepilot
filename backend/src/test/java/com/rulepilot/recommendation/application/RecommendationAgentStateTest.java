@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 class RecommendationAgentStateTest {
 
     @Test
-    void retainsEveryRestoredAndFreshlyVerifiedCandidate() {
+    void retainsEveryRestoredCandidateWithoutExposingUnpublishedOnesToTheAgent() {
         List<Game> restoredNewestFirst = java.util.stream.IntStream.rangeClosed(1, 12)
                 .mapToObj(this::game)
                 .toList();
@@ -39,8 +39,7 @@ class RecommendationAgentStateTest {
                 java.util.stream.IntStream.rangeClosed(1, 13).boxed().toList());
         assertThat(state.verifiedForAgent())
                 .extracting(value -> value.ranking().bggId())
-                .startsWith(13)
-                .containsExactly(13, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+                .containsExactly(13);
     }
 
     private Game game(int id) {

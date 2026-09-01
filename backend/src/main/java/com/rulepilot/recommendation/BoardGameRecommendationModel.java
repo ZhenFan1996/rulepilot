@@ -77,7 +77,8 @@ public interface BoardGameRecommendationModel {
     }
 
     enum ToolChoice {
-        AUTO
+        AUTO,
+        REQUIRED
     }
 
     record Request(
@@ -95,7 +96,7 @@ public interface BoardGameRecommendationModel {
                     || tools == null
                     || tools.isEmpty()
                     || maxOutputTokens != null && maxOutputTokens < 1
-                    || toolChoice != ToolChoice.AUTO) {
+                    || toolChoice == null) {
                 throw new IllegalArgumentException("recommendation model request is invalid");
             }
             messages = List.copyOf(messages);

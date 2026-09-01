@@ -5,6 +5,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import java.util.List;
 import java.util.Map;
@@ -115,13 +116,15 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             }
             builder.toolChoice(openAiToolChoice(request, selected.provider()));
             if ("qwen".equals(selected.provider())) {
-                builder.parallelToolCalls(true);
+                builder.parallelToolCalls(request.toolChoice() == ToolChoice.AUTO);
             }
             options = builder;
         } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {
             GoogleGenAiChatOptions.Builder builder = defaults.mutate();
             builder.toolChoice(new GoogleGenAiChatOptions.ToolChoice(
-                    GoogleGenAiChatOptions.ToolChoice.Mode.AUTO,
+                    request.toolChoice() == ToolChoice.REQUIRED
+                            ? GoogleGenAiChatOptions.ToolChoice.Mode.ANY
+                            : GoogleGenAiChatOptions.ToolChoice.Mode.AUTO,
                     request.tools().stream().map(ToolSpec::name).toList()));
             options = builder;
         } else if (model.getOptions() instanceof ToolCallingChatOptions defaults) {
@@ -137,7 +140,9 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     }
 
     private Object openAiToolChoice(Request request, String provider) {
-        return "auto";
+        return request.toolChoice() == ToolChoice.REQUIRED && !"qwen".equals(provider)
+                ? "required"
+                : "auto";
     }
 
     private Turn turn(ChatResponse response) {
@@ -189,8 +194,13 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         org.springframework.ai.chat.metadata.Usage usage = response.getMetadata() == null
                 ? null
                 : response.getMetadata().getUsage();
+        AssistantMessage output = response.getResult().getOutput();
+        int assistantTextCharacters = output.getText() == null ? 0 : output.getText().length();
+        int toolArgumentCharacters = output.getToolCalls().stream()
+                .mapToInt(call -> call.arguments() == null ? 0 : call.arguments().length())
+                .sum();
         LOGGER.info(
-                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, firstTextMs={}, inputCharacters={}, promptTokens={}, completionTokens={}",
+                "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, firstTextMs={}, inputCharacters={}, assistantTextCharacters={}, toolArgumentCharacters={}, promptTokens={}, completionTokens={}",
                 operation,
                 selected.provider(),
                 selected.modelName(),
@@ -198,6 +208,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 elapsedMs,
                 firstTextMs,
                 inputCharacters,
+                assistantTextCharacters,
+                toolArgumentCharacters,
                 usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),
                 usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
     }

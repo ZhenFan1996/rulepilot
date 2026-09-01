@@ -107,7 +107,7 @@ final class RecommendationActions {
         try {
             JsonNode arguments = actionJson.readTree(call.argumentsJson());
             return switch (call.name()) {
-                case SEARCH_TOOL -> search(arguments, state, request, progress);
+                case SEARCH_TOOL -> search(arguments, state, request, locale, progress);
                 case DISCOVER_TOOL -> discover(arguments, state, request, locale, progress);
                 case RESEARCH_TOOL -> research(arguments, state, locale, progress);
                 case COMPARE_TOOL -> compare(arguments, state, locale);
@@ -219,22 +219,48 @@ final class RecommendationActions {
             JsonNode arguments,
             RecommendationAgentState state,
             ConversationRequest request,
+            String locale,
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(
                 arguments,
-                Set.of("evidence", "includeTypes", "excludeTypes"));
+                Set.of("evidence", "includeTypes", "excludeTypes", "requestedCount"));
         String evidenceId = text(arguments.path("evidence"));
         evidenceReview.requireCurrentTurnUserEvidence(evidenceId, request);
         String evidenceText = evidenceReview.evidenceText(evidenceId, request);
         int evidenceTurn = evidenceReview.evidenceTurn(evidenceId, request);
         List<BggGameType> includeTypes = gameTypes(arguments.path("includeTypes"));
         List<BggGameType> excludeTypes = gameTypes(arguments.path("excludeTypes"));
+        int requestedCount = integer(
+                arguments.path("requestedCount"),
+                1,
+                Integer.MAX_VALUE,
+                "RESULT_COUNT_OUT_OF_RANGE");
+        List<String> mechanics = arguments.has("requiredMechanics")
+                ? boundedTaxonomy(arguments.path("requiredMechanics"))
+                : List.of();
+        BoardGameRecommendationAgent.InteractionPreference requiredInteraction = arguments.has("requiredInteraction")
+                ? enumValue(
+                        BoardGameRecommendationAgent.InteractionPreference.class,
+                        arguments.path("requiredInteraction"),
+                        "INTERACTION_MODE_INVALID")
+                : BoardGameRecommendationAgent.InteractionPreference.ANY;
+        if (requiredInteraction == BoardGameRecommendationAgent.InteractionPreference.COMPETITIVE) {
+            throw new InvalidAction(
+                    "INTERACTION_MODE_INVALID",
+                    "Competitive intensity is not a positive BGG taxonomy gate; use experienceQuestion when it matters.");
+        }
+        List<String> catalogMechanics = java.util.stream.Stream.concat(
+                        mechanics.stream(), requiredInteractionMechanics(requiredInteraction).stream())
+                .distinct()
+                .toList();
         if (includeTypes.stream().anyMatch(excludeTypes::contains)) {
             throw new InvalidAction(
                     "SEARCH_TYPE_CONFLICT",
                     "The same BGG product type cannot be both included and excluded.");
         }
-        TitleFilter title = arguments.has("title") ? titleFilter(arguments.path("title")) : null;
+        TitleFilter title = arguments.has("requiredTitle")
+                ? titleFilter(arguments.path("requiredTitle"))
+                : null;
         Integer players = arguments.has("players")
                 ? integer(arguments.path("players"), 1, 20, "PLAYERS_OUT_OF_RANGE")
                 : null;
@@ -243,6 +269,9 @@ final class RecommendationActions {
                 : null;
         ConstraintRange<BigDecimal> complexity = arguments.has("complexity")
                 ? complexityConstraint(arguments.path("complexity"), evidenceText, evidenceTurn)
+                : null;
+        String experienceQuestion = arguments.has("experienceQuestion")
+                ? experienceQuestion(arguments.path("experienceQuestion"))
                 : null;
         RecommendationProfile selectionProfile = new RecommendationProfile(
                 players == null
@@ -253,11 +282,13 @@ final class RecommendationActions {
                         : ConstraintRange.hard(null, maxMinutes, evidenceText, evidenceTurn),
                 complexity,
                 includeTypes.size() == 1 ? includeTypes.getFirst() : BggGameType.ALL,
-                BoardGameRecommendationAgent.InteractionPreference.ANY);
+                requiredInteraction);
         CatalogSearch search = new CatalogSearch(
                 includeTypes,
                 excludeTypes,
+                catalogMechanics,
                 title,
+                requestedCount,
                 players,
                 maxMinutes,
                 complexity,
@@ -289,7 +320,7 @@ final class RecommendationActions {
                         () -> tools.searchCatalog(
                                 includeTypes,
                                 List.of(),
-                                List.of(),
+                                catalogMechanics,
                                 List.of(),
                                 List.of(),
                                 List.of(),
@@ -343,8 +374,11 @@ final class RecommendationActions {
         appliedContract.put("evidence", evidenceId);
         appliedContract.put("includeTypes", includeTypes);
         appliedContract.put("excludeTypes", excludeTypes);
+        appliedContract.put("requestedCount", requestedCount);
+        if (!mechanics.isEmpty()) appliedContract.put("requiredMechanics", mechanics);
+        appliedContract.put("requiredInteraction", requiredInteraction);
         if (title != null) {
-            appliedContract.put("title", Map.of("match", title.match(), "value", title.value()));
+            appliedContract.put("requiredTitle", Map.of("match", title.match(), "value", title.value()));
         }
         if (players != null) appliedContract.put("players", players);
         if (maxMinutes != null) appliedContract.put("maxMinutes", maxMinutes);
@@ -354,9 +388,24 @@ final class RecommendationActions {
             if (complexity.maximum() != null) range.put("maximum", complexity.maximum());
             appliedContract.put("complexity", range);
         }
+        if (experienceQuestion != null) appliedContract.put("experienceQuestion", experienceQuestion);
         List<Integer> verifiedIds = candidates.stream()
                 .map(game -> game.ranking().bggId())
                 .toList();
+        Map<String, Object> experienceResearch = null;
+        if (experienceQuestion != null && !verifiedIds.isEmpty()) {
+            List<Integer> researchIds = verifiedIds.stream()
+                    .limit(properties.resultCount())
+                    .toList();
+            experienceResearch = state.webResearchAvailable
+                    ? researchCandidates(researchIds, experienceQuestion, state, locale, progress)
+                    : Map.of(
+                            "status", ToolStatus.UNAVAILABLE.name(),
+                            "code", "RESEARCH_NOT_AVAILABLE",
+                            "guidance",
+                                    "No attributed experience read is available. Use verified structured facts and state any remaining experience uncertainty; do not invent it.",
+                            "researchedBggIds", List.of());
+        }
         Map<String, Object> observation = new LinkedHashMap<>();
         observation.put(
                 "status",
@@ -364,12 +413,15 @@ final class RecommendationActions {
         observation.put("code", terminal.code());
         observation.put("appliedSearchContract", appliedContract);
         observation.put("verifiedCandidateBggIds", verifiedIds);
+        if (experienceResearch != null) observation.put("experienceResearch", experienceResearch);
         observation.put("canTerminateNow", !verifiedIds.isEmpty());
         observation.put(
                 "guidance",
                 verifiedIds.isEmpty()
-                        ? "No verified candidate matched this typed search contract. Finish transparently or submit a materially different current-turn search contract."
-                        : "These candidate IDs are verified. Decide whether they answer the request now, whether another available read would materially improve the answer, or whether to finish transparently. When ready, recommend_games publishes one complete terminal response.");
+                        ? "No verified candidate matched this complete current-turn search contract. Finish transparently without naming an unverified game; do not search again in this turn."
+                        : experienceResearch == null
+                                ? "These candidate IDs are verified. Decide whether the available observations are enough for recommend_games or one genuinely distinct available read would materially improve the answer."
+                                : "The catalog and the one bounded experience read have settled. Finish with recommend_games from the returned evidence, and state any experience dimension that remains unknown instead of opening another research stage.");
         if (!verifiedIds.isEmpty()) {
             observation.put(
                     "terminalAction",
@@ -378,6 +430,16 @@ final class RecommendationActions {
                             "verifiedCandidateBggIds", verifiedIds));
         }
         return preparePublication(runtime.observation(observation), state, candidates);
+    }
+
+    private List<String> requiredInteractionMechanics(
+            BoardGameRecommendationAgent.InteractionPreference interaction) {
+        return switch (interaction) {
+            case COOPERATIVE -> List.of("Cooperative Game");
+            case TEAM -> List.of("Team-Based Game");
+            case ANY -> List.of();
+            case COMPETITIVE -> throw new IllegalArgumentException("competitive interaction is not a positive gate");
+        };
     }
 
     private ConstraintRange<BigDecimal> complexityConstraint(
@@ -518,6 +580,16 @@ final class RecommendationActions {
         if (ids.stream().anyMatch(id -> !state.verified.containsKey(id))) {
             throw new InvalidAction("GAME_NOT_VERIFIED");
         }
+        return ActionOutcome.observation(runtime.observation(
+                researchCandidates(ids, question, state, locale, progress)));
+    }
+
+    private Map<String, Object> researchCandidates(
+            List<Integer> ids,
+            String question,
+            RecommendationAgentState state,
+            String locale,
+            BiConsumer<ProgressStage, ProgressFocus> progress) {
         progress.accept(
                 ProgressStage.RESEARCHING_GAME_FIT,
                 new ProgressFocus(
@@ -579,7 +651,7 @@ final class RecommendationActions {
             }
             start = end;
         }
-        String observation = runtime.observation(Map.of(
+        Map<String, Object> observation = Map.of(
                 "status", status.name(),
                 "code", code,
                 "guidance", researchedIds.isEmpty()
@@ -592,10 +664,10 @@ final class RecommendationActions {
                         "pageBudget", pageBudget,
                         "pagesAttempted", attemptedPages,
                         "pagesCompleted", completedPages),
-                "researchedBggIds", List.copyOf(researchedIds)));
+                "researchedBggIds", List.copyOf(researchedIds));
         state.actions.add("RESEARCH_GAME_FIT");
         if (!webResearchAvailable) state.disableWebResearch(code);
-        return ActionOutcome.observation(observation);
+        return observation;
     }
 
     Map<String, CandidateObservation> narrativeObservations(Game game, Research research) {
@@ -805,6 +877,14 @@ final class RecommendationActions {
         return value;
     }
 
+    private String experienceQuestion(JsonNode node) {
+        String value = text(node);
+        if (value.codePointCount(0, value.length()) > 500) {
+            throw new InvalidAction("EXPERIENCE_QUESTION_INVALID");
+        }
+        return value;
+    }
+
     private String playerFacingText(JsonNode node) {
         if (!node.isTextual()) throw new InvalidAction("TEXT_ARGUMENT_REQUIRED");
         String value = node.asText();
@@ -825,6 +905,15 @@ final class RecommendationActions {
         List<String> distinct = values.stream().distinct().toList();
         if (distinct.size() < minimumItems) throw new InvalidAction("STRING_LIST_INVALID");
         return distinct;
+    }
+
+    private List<String> boundedTaxonomy(JsonNode node) {
+        List<String> values = strings(node, 0);
+        if (values.size() > 8
+                || values.stream().anyMatch(value -> value.codePointCount(0, value.length()) > 80)) {
+            throw new InvalidAction("CATALOG_TAXONOMY_INVALID");
+        }
+        return values;
     }
 
     private List<String> strings(JsonNode node, int minimumItems) {

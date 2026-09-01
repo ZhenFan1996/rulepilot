@@ -27,12 +27,12 @@ class BggMetadataTranslationMigrationTest {
             .withPassword("rulepilot-test");
 
     @Test
-    void backfillsV104TranslationsWithoutChangingTheLegacySchema() {
+    void migratesDeployedV105TranslationsAndRestoresTheLegacySchema() {
         enableProductionExtensions();
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
-                .target(MigrationVersion.fromVersion("104"))
+                .target(MigrationVersion.fromVersion("105"))
                 .load()
                 .migrate();
         JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(
@@ -42,8 +42,8 @@ class BggMetadataTranslationMigrationTest {
         jdbc.update(
                 """
                 INSERT INTO bgg_metadata_translation (
-                    bgg_id, source_sha256, locale, payload, payload_bytes, translated_at)
-                VALUES (?, ?, 'zh-CN', CAST(? AS jsonb), ?, ?)
+                    bgg_id, source_sha256, locale, contract_version, payload, payload_bytes, translated_at)
+                VALUES (?, ?, 'zh-CN', 4, CAST(? AS jsonb), ?, ?)
                 """,
                 104,
                 "a".repeat(64),

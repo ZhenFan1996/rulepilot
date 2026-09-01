@@ -8,6 +8,7 @@ import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -176,10 +177,39 @@ class BoardGameRecommendationSelector {
                     observation(observations, "bggType")));
         }
 
-        // Interaction fit remains an Agent judgment over the candidate's supplied BGG taxonomy and descriptions.
-        // Inferring competitive/cooperative/team status from a hand-maintained mechanics vocabulary made absence of
-        // one label look like positive evidence for another mode and silently overrode the Agent's tool decision.
+        if (profile.interaction() == InteractionPreference.COOPERATIVE
+                || profile.interaction() == InteractionPreference.TEAM) {
+            String requiredMechanic = profile.interaction() == InteractionPreference.COOPERATIVE
+                    ? "Cooperative Game"
+                    : "Team-Based Game";
+            CandidateClaim.Relation relation = details.mechanics().contains(requiredMechanic)
+                    ? CandidateClaim.Relation.SATISFIED
+                    : CandidateClaim.Relation.CONFLICT;
+            assessments.add(fitAssessment(
+                    bggId,
+                    "interaction",
+                    ConstraintRange.Strength.HARD,
+                    relation,
+                    interactionFitText(profile.interaction(), relation, chinese),
+                    observation(observations, "interaction")));
+        }
+
+        // Competitive intensity has no positive, universal BGG taxonomy label. It remains an attributed experience
+        // question instead of treating the absence of a cooperative label as evidence of competition.
         return List.copyOf(assessments);
+    }
+
+    private String interactionFitText(
+            InteractionPreference interaction,
+            CandidateClaim.Relation relation,
+            boolean chinese) {
+        String mode = interaction == InteractionPreference.COOPERATIVE
+                ? chinese ? "纯合作" : "cooperative"
+                : chinese ? "团队制" : "team-based";
+        return chinese
+                ? "候选的 BGG 机制标签与" + mode + "硬条件" + relationSuffix(relation, true)
+                : "Candidate BGG mechanics versus the " + mode + " hard constraint"
+                        + relationSuffix(relation, false);
     }
 
     List<CandidateObservation> observations(Game game) {
@@ -216,6 +246,11 @@ class BoardGameRecommendationSelector {
         }
         addTaxonomy(values, bggId, "categories", details.categories());
         addTaxonomy(values, bggId, "mechanics", details.mechanics());
+        if (details.mechanics().contains("Cooperative Game")) {
+            values.add(taxonomy(bggId, "interaction", InteractionPreference.COOPERATIVE.name()));
+        } else if (details.mechanics().contains("Team-Based Game")) {
+            values.add(taxonomy(bggId, "interaction", InteractionPreference.TEAM.name()));
+        }
         addTaxonomy(values, bggId, "families", details.families());
         if (details.minimumAge() != null) {
             values.add(metadata(bggId, "minimumAge", details.minimumAge().toString()));

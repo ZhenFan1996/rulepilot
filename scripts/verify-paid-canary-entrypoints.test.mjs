@@ -92,9 +92,10 @@ test('the shared gate precedes credential loading, provider commands, and full v
   }
 })
 
-test('recommendation canary executes the real greeting and adaptive publication journeys', () => {
+test('recommendation canary executes greeting, natural follow-up, and playful recommendation journeys', () => {
   assert.match(recommendation, /repliesToAGreetingNaturallyWithoutUnneededExternalWork/)
-  assert.match(recommendation, /publishesAComplexTitleBoundedSlateWithAdaptiveResearch/)
+  assert.match(recommendation, /followsUpAndReplacesGamesInAWorkerPlacementConversation/)
+  assert.match(recommendation, /publishesForAnOrdinaryMoodBasedRequest/)
   assert.doesNotMatch(recommendation, /RULEPILOT_RECOMMENDATION_CANARY_SCENARIO/)
   assert.doesNotMatch(recommendation, /sanitized diagnostics/)
 })

@@ -13,7 +13,7 @@ readonly QUALIFIED_MAIN_REMOTE=https://github.com/ZhenFan1996/rulepilot.git
 readonly QUALIFIED_MAIN_VERIFY_ATTEMPTS=3
 readonly QUALIFIED_MAIN_VERIFY_RETRY_SECONDS=1
 readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen
-readonly EXPECTED_RECOMMENDATION_MODEL=qwen3.8-flash
+readonly EXPECTED_RECOMMENDATION_MODEL=qwen3.7-plus
 
 fail() {
 	printf '%s\n' "$*" >&2

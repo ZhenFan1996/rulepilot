@@ -308,13 +308,15 @@ rulepilot:
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
+      max-output-tokens: ${BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS:2000}
       timeout: ${AGENT_TIMEOUT:PT2M}
       web-research:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
         api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}
         base-url: ${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}
-        model: ${WEB_SEARCH_MODEL:qwen3.7-plus}
-        timeout: ${BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT:PT25S}
+        model: ${WEB_SEARCH_MODEL:qwen3.8-flash}
+        # Optional experience evidence must not consume a quarter of the complete player-facing turn budget.
+        timeout: ${BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT:PT5S}
         cache-ttl: ${BGG_RECOMMENDATION_WEB_RESEARCH_CACHE_TTL:P7D}
         hourly-limit: ${BGG_RECOMMENDATION_WEB_RESEARCH_HOURLY_LIMIT:60}
         provider-concurrency: ${BGG_RECOMMENDATION_WEB_RESEARCH_PROVIDER_CONCURRENCY:2}
