@@ -1,11 +1,15 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const privateOutputDirectory = process.env.RULEPILOT_PRODUCTION_PLAYWRIGHT_OUTPUT_DIR
+  ?? 'test-results'
+
 export default defineConfig({
   testDir: './e2e',
   testMatch: 'production-recommendation-journey.spec.ts',
   forbidOnly: true,
   retries: 0,
   workers: 1,
+  outputDir: privateOutputDirectory,
   reporter: 'list',
   use: {
     baseURL: process.env.RULEPILOT_PRODUCTION_BASE_URL,

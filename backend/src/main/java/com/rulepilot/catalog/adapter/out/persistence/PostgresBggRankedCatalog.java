@@ -1,13 +1,24 @@
 package com.rulepilot.catalog.adapter.out.persistence;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataResult;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataStatus;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataValue;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataCriterion;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataDimension;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.SelectionEligibility;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
 import com.rulepilot.catalog.application.BggRankedCatalogRepository;
+import com.rulepilot.catalog.application.BggRankedCatalogRepository.RecommendationCandidate;
+import com.rulepilot.catalog.application.BggRankedCatalogRepository.RecommendationCandidatePage;
 import com.rulepilot.catalog.application.BggRankedCatalogRepository.SelectionCandidate;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -19,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -65,9 +77,11 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
             "websearch_to_tsquery('english'::regconfig, regexp_replace(:textQuery, '\\s+', ' OR ', 'g'))";
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final ObjectMapper json;
 
-    public PostgresBggRankedCatalog(NamedParameterJdbcTemplate jdbc) {
+    public PostgresBggRankedCatalog(NamedParameterJdbcTemplate jdbc, ObjectMapper json) {
         this.jdbc = jdbc;
+        this.json = json;
     }
 
     @Override
@@ -205,6 +219,19 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 .addValue("offset", filters.offset());
         List<String> clauses = new ArrayList<>();
         clauses.add(typeFilter(filters.types()));
+        // Recommendation browsing can publish only games with a complete local discovery record. Apply that
+        // invariant before LIMIT/OFFSET so an unavailable high-ranked row cannot consume a result slot and turn a
+        // satisfiable three-card request into a false shortfall after service hydration.
+        clauses.add("""
+                EXISTS (
+                    SELECT 1
+                    FROM bgg_metadata_cache usable_details
+                    WHERE usable_details.cache_kind = 'DISCOVERY'
+                      AND usable_details.bgg_id = g.bgg_id
+                      AND usable_details.stale_until > NOW()
+                      AND jsonb_typeof(usable_details.payload) = 'object'
+                )
+                """.strip());
         addMetadataFilters(clauses, parameters, "categories", "category", filters.categories());
         addMetadataFilters(clauses, parameters, "mechanics", "mechanic", filters.mechanics());
         addMetadataFilters(clauses, parameters, "designers", "designer", filters.designers());
@@ -256,6 +283,217 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
         return jdbc.query(sql, parameters, this::mapGame);
     }
 
+    @Override
+    public Optional<RecommendationCandidatePage> findRecommendationCandidates(
+            CatalogFilters filters,
+            SelectionEligibility eligibility) {
+        if (filters == null || eligibility == null) {
+            throw new IllegalArgumentException("BGG recommendation candidate query is required");
+        }
+        MapSqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue("limit", filters.maximum())
+                .addValue("offset", filters.offset());
+        List<String> clauses = new ArrayList<>();
+        clauses.add(typeFilter(filters.types()));
+        // The joined payload is both the value constrained here and the value returned to the application. Keeping
+        // selection, count, hydration, and LIMIT in one statement prevents a later cache read from losing a card or
+        // turning a bounded ranking window into a false catalog-exhaustion claim.
+        clauses.add("jsonb_typeof(discovery.payload) = 'object'");
+        clauses.add("jsonb_typeof(discovery.payload->'bggId') = 'number'");
+        clauses.add("(discovery.payload->>'bggId')::integer = g.bgg_id");
+        clauses.add("jsonb_typeof(discovery.payload->'name') = 'string'");
+        clauses.add("jsonb_typeof(discovery.payload->'categories') = 'array'");
+        clauses.add("jsonb_typeof(discovery.payload->'mechanics') = 'array'");
+        clauses.add("jsonb_typeof(discovery.payload->'families') = 'array'");
+        clauses.add("jsonb_typeof(discovery.payload->'designers') = 'array'");
+        clauses.add("jsonb_typeof(discovery.payload->'publishers') = 'array'");
+        addJoinedMetadataFilters(
+                clauses, parameters, "categories", "category", filters.categories());
+        addJoinedMetadataFilters(
+                clauses, parameters, "mechanics", "mechanic", filters.mechanics());
+        addJoinedMetadataFilters(
+                clauses, parameters, "designers", "designer", filters.designers());
+        addJoinedMetadataFilters(
+                clauses, parameters, "publishers", "publisher", filters.publishers());
+        addJoinedMetadataFilters(
+                clauses, parameters, "families", "family", filters.families());
+        if (filters.minimumPublicationYear() != null) {
+            clauses.add("g.publication_year >= :minimumPublicationYear");
+            parameters.addValue("minimumPublicationYear", filters.minimumPublicationYear());
+        }
+        if (filters.maximumPublicationYear() != null) {
+            clauses.add("g.publication_year <= :maximumPublicationYear");
+            parameters.addValue("maximumPublicationYear", filters.maximumPublicationYear());
+        }
+        if (filters.minimumAverageRating() != null) {
+            clauses.add("g.average_rating >= :minimumAverageRating");
+            parameters.addValue("minimumAverageRating", filters.minimumAverageRating());
+        }
+        if (filters.minimumRatingsCount() != null) {
+            clauses.add("g.users_rated >= :minimumRatingsCount");
+            parameters.addValue("minimumRatingsCount", filters.minimumRatingsCount());
+        }
+        addSelectionEligibility(clauses, parameters, eligibility);
+
+        String textMatches = "";
+        String textJoin = "";
+        String relevanceProjection = "NULL::real AS relevance";
+        if (filters.textQuery() != null) {
+            parameters.addValue("textQuery", filters.textQuery());
+            textMatches = """
+                    text_matches AS MATERIALIZED (
+                        SELECT cache.bgg_id,
+                               max(ts_rank_cd(%s, %s)) AS relevance
+                        FROM bgg_metadata_cache cache
+                        WHERE cache.cache_kind IN ('DISCOVERY', 'GAME')
+                          AND cache.stale_until > NOW()
+                          AND %s @@ %s
+                        GROUP BY cache.bgg_id
+                    ),
+                    """.formatted(
+                    TEXT_SEARCH_VECTOR,
+                    TEXT_SEARCH_QUERY,
+                    TEXT_SEARCH_VECTOR,
+                    TEXT_SEARCH_QUERY);
+            textJoin = " LEFT JOIN text_matches text_match ON text_match.bgg_id = g.bgg_id ";
+            relevanceProjection = "text_match.relevance AS relevance";
+        }
+        String sql = """
+                WITH %s eligible AS MATERIALIZED (
+                    SELECT %s,
+                           discovery.payload::text AS discovery_payload,
+                           %s
+                    FROM bgg_ranked_game g
+                    JOIN bgg_metadata_cache discovery
+                      ON discovery.cache_kind = 'DISCOVERY'
+                     AND discovery.bgg_id = g.bgg_id
+                     AND discovery.stale_until > NOW()
+                    %s
+                    WHERE %s
+                ),
+                candidate_page AS (
+                    SELECT *
+                    FROM eligible
+                    ORDER BY %s
+                    LIMIT :limit OFFSET :offset
+                )
+                SELECT totals.available_count, candidate_page.*
+                FROM (SELECT count(*)::integer AS available_count FROM eligible) totals
+                LEFT JOIN candidate_page ON TRUE
+                ORDER BY %s
+                """.formatted(
+                textMatches,
+                QUALIFIED_COLUMNS,
+                relevanceProjection,
+                textJoin,
+                String.join(" AND ", clauses),
+                candidateOrder(filters.sort()),
+                candidateOrder(filters.sort()));
+        return Optional.of(jdbc.query(sql, parameters, result -> {
+            int availableCount = 0;
+            int rowNumber = 0;
+            List<RecommendationCandidate> candidates = new ArrayList<>();
+            while (result.next()) {
+                availableCount = result.getInt("available_count");
+                if (result.getObject("bgg_id") == null) continue;
+                RankedGame ranking = mapGame(result, rowNumber++);
+                DiscoveryGame details = readDiscovery(result.getString("discovery_payload"));
+                candidates.add(new RecommendationCandidate(ranking, details));
+            }
+            return new RecommendationCandidatePage(availableCount, candidates);
+        }));
+    }
+
+    @Override
+    public CanonicalMetadataResult canonicalizeMetadata(List<CatalogMetadataCriterion> criteria) {
+        if (criteria == null || criteria.isEmpty() || criteria.size() > 8) {
+            throw new IllegalArgumentException("BGG canonical metadata criteria are invalid");
+        }
+        MapSqlParameterSource parameters = new MapSqlParameterSource();
+        String requestedRows = IntStream.range(0, criteria.size())
+                .mapToObj(index -> {
+                    CatalogMetadataCriterion criterion = criteria.get(index);
+                    parameters
+                            .addValue("canonicalOrdinal" + index, index)
+                            .addValue("canonicalDimension" + index, criterion.dimension().name())
+                            .addValue("canonicalField" + index, metadataField(criterion.dimension()))
+                            .addValue("canonicalValue" + index, criterion.value());
+                    return "(:canonicalOrdinal" + index
+                            + ", :canonicalDimension" + index
+                            + ", :canonicalField" + index
+                            + ", :canonicalValue" + index + ")";
+                })
+                .collect(java.util.stream.Collectors.joining(", "));
+        List<CanonicalMatchRow> rows = jdbc.query(
+                """
+                WITH requested(ordinal, dimension, field_name, requested_value) AS (
+                    VALUES %s
+                )
+                SELECT requested.ordinal,
+                       requested.dimension,
+                       requested.requested_value,
+                       matched.canonical_value
+                FROM requested
+                LEFT JOIN LATERAL (
+                    SELECT DISTINCT metadata_value.value AS canonical_value
+                    FROM bgg_metadata_cache cache
+                    CROSS JOIN LATERAL jsonb_array_elements_text(
+                        CASE WHEN jsonb_typeof(cache.payload -> requested.field_name) = 'array'
+                             THEN cache.payload -> requested.field_name ELSE '[]'::jsonb END
+                    ) AS metadata_value(value)
+                    WHERE cache.cache_kind = 'DISCOVERY'
+                      AND cache.stale_until > NOW()
+                      AND lower(metadata_value.value) = lower(requested.requested_value)
+                ) matched ON TRUE
+                ORDER BY requested.ordinal, matched.canonical_value
+                """.formatted(requestedRows),
+                parameters,
+                (result, row) -> new CanonicalMatchRow(
+                        result.getInt("ordinal"),
+                        CatalogMetadataDimension.valueOf(result.getString("dimension")),
+                        result.getString("requested_value"),
+                        result.getString("canonical_value")));
+        Map<Integer, List<String>> matches = rows.stream()
+                .filter(row -> row.canonicalValue() != null)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        CanonicalMatchRow::ordinal,
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.mapping(
+                                CanonicalMatchRow::canonicalValue,
+                                java.util.stream.Collectors.toList())));
+        List<CanonicalMetadataValue> values = IntStream.range(0, criteria.size())
+                .mapToObj(index -> canonicalMetadataValue(criteria.get(index), matches.getOrDefault(index, List.of())))
+                .toList();
+        return new CanonicalMetadataResult(true, values);
+    }
+
+    private CanonicalMetadataValue canonicalMetadataValue(
+            CatalogMetadataCriterion criterion, List<String> matches) {
+        if (matches.isEmpty()) {
+            return new CanonicalMetadataValue(
+                    criterion.dimension(), criterion.value(), "", CanonicalMetadataStatus.NOT_FOUND);
+        }
+        if (matches.size() > 1) {
+            return new CanonicalMetadataValue(
+                    criterion.dimension(), criterion.value(), "", CanonicalMetadataStatus.AMBIGUOUS);
+        }
+        return new CanonicalMetadataValue(
+                criterion.dimension(),
+                criterion.value(),
+                matches.getFirst(),
+                CanonicalMetadataStatus.CANONICAL);
+    }
+
+    private String metadataField(CatalogMetadataDimension dimension) {
+        return switch (dimension) {
+            case CATEGORY -> "categories";
+            case MECHANIC -> "mechanics";
+            case FAMILY -> "families";
+            case DESIGNER -> "designers";
+            case PUBLISHER -> "publishers";
+        };
+    }
+
     private String metadataOrder(CatalogSort sort) {
         return switch (sort) {
             case RANK -> "g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC";
@@ -263,6 +501,16 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
             case POPULARITY -> "g.users_rated DESC, g.overall_rank ASC NULLS LAST, g.bgg_id ASC";
             case NEWEST -> "g.publication_year DESC NULLS LAST, g.overall_rank ASC NULLS LAST, g.bgg_id ASC";
             case RELEVANCE -> "g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC";
+        };
+    }
+
+    private String candidateOrder(CatalogSort sort) {
+        return switch (sort) {
+            case RANK -> "overall_rank ASC NULLS LAST, users_rated DESC, bgg_id ASC";
+            case RATING -> "bayes_average DESC NULLS LAST, users_rated DESC, bgg_id ASC";
+            case POPULARITY -> "users_rated DESC, overall_rank ASC NULLS LAST, bgg_id ASC";
+            case NEWEST -> "publication_year DESC NULLS LAST, overall_rank ASC NULLS LAST, bgg_id ASC";
+            case RELEVANCE -> "relevance DESC NULLS LAST, overall_rank ASC NULLS LAST, users_rated DESC, bgg_id ASC";
         };
     }
 
@@ -300,13 +548,109 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                             CASE WHEN jsonb_typeof(cache.payload->'%s') = 'array'
                                  THEN cache.payload->'%s' ELSE '[]'::jsonb END
                         ) metadata_value
-                        WHERE cache.cache_kind IN ('DISCOVERY', 'GAME')
+                        WHERE cache.cache_kind = 'DISCOVERY'
                           AND cache.stale_until > NOW()
                           AND lower(metadata_value) = lower(:%s)
                     )
                     """.formatted(jsonField, jsonField, parameter).strip());
         }
     }
+
+    private void addJoinedMetadataFilters(
+            List<String> clauses,
+            MapSqlParameterSource parameters,
+            String jsonField,
+            String parameterPrefix,
+            List<String> values) {
+        if (values == null) return;
+        int index = 0;
+        for (String value : values) {
+            if (value == null || value.isBlank() || value.length() > 120 || index == 5) {
+                throw new IllegalArgumentException("BGG metadata filters are invalid");
+            }
+            String parameter = "candidate" + parameterPrefix + index++;
+            parameters.addValue(parameter, value.strip());
+            clauses.add("""
+                    EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements_text(discovery.payload->'%s') metadata_value
+                        WHERE lower(metadata_value) = lower(:%s)
+                    )
+                    """.formatted(jsonField, parameter).strip());
+        }
+    }
+
+    private void addSelectionEligibility(
+            List<String> clauses,
+            MapSqlParameterSource parameters,
+            SelectionEligibility eligibility) {
+        if (!eligibility.unavailableBggIds().isEmpty()) {
+            clauses.add("g.bgg_id NOT IN (:unavailableBggIds)");
+            parameters.addValue("unavailableBggIds", eligibility.unavailableBggIds());
+        }
+        String minPlayers = numericDiscoveryValue("minPlayers");
+        String maxPlayers = numericDiscoveryValue("maxPlayers");
+        if (eligibility.playerCountConstrained()) {
+            clauses.add(minPlayers + " IS NOT NULL");
+            clauses.add(maxPlayers + " IS NOT NULL");
+            if (eligibility.minimumPlayers() != null) {
+                clauses.add(minPlayers + " <= :selectionMinimumPlayers");
+                parameters.addValue("selectionMinimumPlayers", eligibility.minimumPlayers());
+            }
+            if (eligibility.maximumPlayers() != null) {
+                clauses.add(maxPlayers + " >= :selectionMaximumPlayers");
+                parameters.addValue("selectionMaximumPlayers", eligibility.maximumPlayers());
+            }
+        }
+        String playingTime = numericDiscoveryValue("playingTimeMinutes");
+        String minimumPlayTime = "COALESCE(" + numericDiscoveryValue("minimumPlayTimeMinutes") + ", "
+                + playingTime + ")";
+        String maximumPlayTime = "COALESCE(" + numericDiscoveryValue("maximumPlayTimeMinutes") + ", "
+                + playingTime + ")";
+        if (eligibility.durationConstrained()) {
+            clauses.add(minimumPlayTime + " IS NOT NULL");
+            clauses.add(maximumPlayTime + " IS NOT NULL");
+            if (eligibility.minimumDurationMinutes() != null) {
+                clauses.add(minimumPlayTime + " >= :selectionMinimumDuration");
+                parameters.addValue("selectionMinimumDuration", eligibility.minimumDurationMinutes());
+            }
+            if (eligibility.maximumDurationMinutes() != null) {
+                clauses.add(maximumPlayTime + " <= :selectionMaximumDuration");
+                parameters.addValue("selectionMaximumDuration", eligibility.maximumDurationMinutes());
+            }
+        }
+        String complexity = numericDiscoveryValue("averageWeight");
+        if (eligibility.complexityConstrained()) {
+            clauses.add(complexity + " IS NOT NULL");
+            if (eligibility.minimumComplexity() != null) {
+                clauses.add(complexity + " >= :selectionMinimumComplexity");
+                parameters.addValue("selectionMinimumComplexity", eligibility.minimumComplexity());
+            }
+            if (eligibility.maximumComplexity() != null) {
+                clauses.add(complexity + " <= :selectionMaximumComplexity");
+                parameters.addValue("selectionMaximumComplexity", eligibility.maximumComplexity());
+            }
+        }
+    }
+
+    private String numericDiscoveryValue(String field) {
+        return "(CASE WHEN jsonb_typeof(discovery.payload->'" + field + "') = 'number' THEN "
+                + "(discovery.payload->>'" + field + "')::numeric END)";
+    }
+
+    private DiscoveryGame readDiscovery(String payload) throws SQLException {
+        try {
+            return json.readValue(payload, DiscoveryGame.class);
+        } catch (JsonProcessingException exception) {
+            throw new SQLException("Stored BGG discovery payload could not be decoded", exception);
+        }
+    }
+
+    private record CanonicalMatchRow(
+            int ordinal,
+            CatalogMetadataDimension dimension,
+            String requestedValue,
+            String canonicalValue) {}
 
     @Override
     public List<SelectionCandidate> searchSelections(String query, int maximum) {
@@ -381,8 +725,8 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 SELECT g.bgg_id, g.source_name, g.publication_year,
                        COALESCE(NULLIF(discovery.payload->>'chineseName', ''), match.chinese_alias, '') AS chinese_name,
                        COALESCE(NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS thumbnail_url,
-                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''), NULLIF(game_cache.payload->>'imageUrl', ''),
-                                NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS image_url
+                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''),
+                                NULLIF(game_cache.payload->>'imageUrl', ''), '') AS image_url
                 FROM best_matches match
                 JOIN bgg_ranked_game g ON g.bgg_id = match.bgg_id
                 LEFT JOIN bgg_metadata_cache discovery
@@ -403,8 +747,8 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 SELECT g.bgg_id, g.source_name, g.publication_year,
                        COALESCE(NULLIF(discovery.payload->>'chineseName', ''), chinese_alias.alias, '') AS chinese_name,
                        COALESCE(NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS thumbnail_url,
-                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''), NULLIF(game_cache.payload->>'imageUrl', ''),
-                                NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS image_url
+                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''),
+                                NULLIF(game_cache.payload->>'imageUrl', ''), '') AS image_url
                 FROM bgg_ranked_game g
                 LEFT JOIN bgg_metadata_cache discovery
                   ON discovery.cache_kind = 'DISCOVERY' AND discovery.bgg_id = g.bgg_id

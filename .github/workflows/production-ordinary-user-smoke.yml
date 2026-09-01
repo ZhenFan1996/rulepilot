@@ -156,12 +156,13 @@ jobs:
             sleep 1
           done
 
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
-          mkdir -p "$artifact_dir"
+          private_dir="$RUNNER_TEMP/rulepilot-private-ordinary-user-${GITHUB_RUN_ID}"
+          mkdir -p "$private_dir"
+          chmod 700 "$private_dir"
           smoke_args=(
             --base-url http://127.0.0.1:18080
             --pdf "$RUNNER_TEMP/rulebook.pdf"
-            --result-file "$artifact_dir/result.json"
+            --result-file "$private_dir/result.json"
           )
           preparation_mode=$(<"$RUNNER_TEMP/preparation-mode")
           if [[ "$preparation_mode" == visual ]]; then
@@ -177,52 +178,65 @@ jobs:
           fi
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
             bash scripts/smoke-production-ordinary-user.sh "${smoke_args[@]}" \
-              > "$artifact_dir/summary.json" 2> "$artifact_dir/diagnostics.log"
-          chmod -R go-rwx "$artifact_dir"
+              > "$private_dir/summary.json" 2> "$private_dir/diagnostics.log"
+          chmod -R go-rwx "$private_dir"
 
-      - name: Collect bounded service diagnostics after a failed journey
-        if: failure()
+      - name: Create non-sensitive smoke measurements
+        if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
-          diagnostic_file="$artifact_dir/service-diagnostics.log"
-          mkdir -p "$artifact_dir"
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_SSH_PORT" \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            'bash -s' -- "$DEPLOY_PATH" > "$diagnostic_file" 2>&1 <<'REMOTE' || true
-          set -Eeuo pipefail
-          application_root=$1
-          active_release=$(readlink -f "${application_root}/current")
-          if [[ "$active_release" != "${application_root}/releases/"* ]]; then
-            echo "Refusing to inspect an active release outside ${application_root}/releases" >&2
-            exit 1
+          umask 077
+          private_result="$RUNNER_TEMP/rulepilot-private-ordinary-user-${GITHUB_RUN_ID}/result.json"
+          public_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
+          mkdir -p "$public_dir"
+          if [[ -s "$private_result" ]]; then
+            jq -e '{
+              schemaVersion: 1,
+              generatedAt,
+              completed: (.completed // false),
+              stage,
+              preparation: {
+                state: (.summary.preparationState // .preparationState // null),
+                planSectionCount: (.summary.sectionCount // .planSectionCount // 0)
+              },
+              lesson: {
+                runState: (.summary.lessonState // null),
+                status: (.summary.lessonStatus // null),
+                visualStepCount: (.summary.visualStepCount // 0),
+                focusedVisualStepCount: (.summary.focusedVisualStepCount // 0),
+                visualEnrichmentState: (.summary.visualEnrichmentState // null)
+              },
+              answer: {
+                status: (.summary.answerStatus // .answerStatus // null),
+                citationCount: (.summary.answerCitationCount // .answerCitationCount // 0)
+              },
+              navigation: (.summary.navigation // {
+                requestCount: 0, failureCount: 0, averageMs: 0, maxMs: 0
+              }),
+              titleVerified: (.summary.titleVerified // false)
+            }' "$private_result" > "$public_dir/summary.json"
+          else
+            printf '%s\n' \
+              '{"schemaVersion":1,"completed":false,"stage":"workflow-failed-before-result"}' \
+              > "$public_dir/summary.json"
           fi
-          cd "$active_release"
-          compose=(
-            docker compose --env-file .env
-            -f infra/compose.yml
-            -f infra/compose.deployment.yml
-            -f infra/compose.production.yml
-          )
-          echo "Active production services:"
-          "${compose[@]}" ps api worker
-          echo "API logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color api
-          echo "Worker logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color worker
-          REMOTE
-          chmod 600 "$diagnostic_file"
+          chmod 600 "$public_dir/summary.json"
 
-      - name: Upload private diagnostic output
+      - name: Upload non-sensitive smoke measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: production-ordinary-user-smoke-${{ github.run_id }}
-          path: .artifacts/production-ordinary-user-smoke
+          path: .artifacts/production-ordinary-user-smoke/summary.json
           if-no-files-found: warn
           retention-days: 1
+
+      - name: Delete private smoke evidence from the runner
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf -- "$RUNNER_TEMP/rulepilot-private-ordinary-user-${GITHUB_RUN_ID}"
+          rm -rf -- "$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
+          rm -f -- "$HOME/.ssh/id_ed25519" "$RUNNER_TEMP/rulebook.pdf"

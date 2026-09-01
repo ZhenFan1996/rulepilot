@@ -3,7 +3,10 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.modelconfig.ModelAccountQuotaFailures;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -76,6 +79,19 @@ public class BudgetedAgentInvocations implements AuditedAgentInvocations {
         try {
             result = invocation.get();
         } catch (RuntimeException exception) {
+            if (ModelAccountQuotaFailures.find(exception) != null) {
+                try {
+                    execution.complete(
+                            reservation,
+                            ActivityOutcome.REJECTED,
+                            0,
+                            elapsedMillis(started),
+                            "Model account quota exhausted");
+                } catch (RuntimeException auditFailure) {
+                    exception.addSuppressed(auditFailure);
+                }
+                throw new AgentExecutionStoppedException(StopReason.ACCOUNT_QUOTA, exception);
+            }
             try {
                 execution.complete(
                         reservation, ActivityOutcome.FAILED, 0, elapsedMillis(started),

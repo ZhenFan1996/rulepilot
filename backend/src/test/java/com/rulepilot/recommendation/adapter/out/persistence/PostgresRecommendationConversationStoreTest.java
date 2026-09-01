@@ -10,6 +10,9 @@ import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionCriterion;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionDimension;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
@@ -287,6 +290,11 @@ class PostgresRecommendationConversationStoreTest {
                 .isTrue();
 
         ConversationResponse response = response("我记住了这组条件。");
+        CatalogSelectionIntent catalogIntent = new CatalogSelectionIntent(List.of(new CatalogSelectionCriterion(
+                CatalogSelectionDimension.MECHANIC,
+                "Network Building",
+                "我想玩网络建设",
+                1)));
         ConversationState completedState = new ConversationState(
                 RecommendationProfile.empty(),
                 List.of(
@@ -294,7 +302,8 @@ class PostgresRecommendationConversationStoreTest {
                         new DialogueMessage("assistant", "我记住了这组条件。")),
                 List.of(),
                 List.of(301),
-                List.of(response.games().getFirst().game()));
+                List.of(response.games().getFirst().game()),
+                catalogIntent);
         assertThat(store.completeTurn(
                         conversationId,
                         "alice",
@@ -323,6 +332,31 @@ class PostgresRecommendationConversationStoreTest {
         assertThat(restored.activeClientTurnId()).isNull();
         assertThat(restored.activeClaimAttemptId()).isNull();
         assertThat(restored.updatedAt()).isEqualTo(startedAt.plusSeconds(2));
+    }
+
+    @Test
+    void restoresAConversationWrittenBeforeCatalogSelectionIntentExisted() {
+        UUID conversationId = UUID.randomUUID();
+        Instant createdAt = Instant.parse("2026-08-15T09:00:00Z");
+        store.createNew(
+                conversationId,
+                "alice",
+                state(List.of(new DialogueMessage("user", "旧会话还没有目录意图字段。"))),
+                createdAt);
+        jdbc.getJdbcTemplate().update(
+                "update recommendation_conversation set state_json = state_json - 'catalogSelectionIntent' where id = ?",
+                conversationId);
+
+        var restored = new PostgresRecommendationConversationStore(
+                        jdbc,
+                        new ObjectMapper().findAndRegisterModules())
+                .findOwned(conversationId, "alice")
+                .orElseThrow();
+
+        assertThat(restored.state().transcript())
+                .extracting(DialogueMessage::text)
+                .containsExactly("旧会话还没有目录意图字段。");
+        assertThat(restored.state().catalogSelectionIntent().active()).isFalse();
     }
 
     @Test

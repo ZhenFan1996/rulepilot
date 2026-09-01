@@ -5,6 +5,7 @@ import com.rulepilot.modelconfig.ModelAccountQuota;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -24,13 +25,25 @@ public class PostgresModelAccountQuota implements ModelAccountQuota {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final long defaultMonthlyTokenLimit;
+    private final Duration reservationTimeout;
 
     public PostgresModelAccountQuota(
             NamedParameterJdbcTemplate jdbc,
-            @Value("${rulepilot.models.default-monthly-token-limit:200000}") long defaultMonthlyTokenLimit) {
+            @Value("${rulepilot.models.default-monthly-token-limit:200000}") long defaultMonthlyTokenLimit,
+            @Value("${rulepilot.models.request-timeout:PT2M}") Duration requestTimeout,
+            @Value("${rulepilot.models.reservation-timeout:PT15M}") Duration reservationTimeout) {
         if (defaultMonthlyTokenLimit < 0) throw new IllegalArgumentException("Default model quota cannot be negative");
+        if (requestTimeout == null || requestTimeout.isZero() || requestTimeout.isNegative()) {
+            throw new IllegalArgumentException("Model request timeout must be positive");
+        }
+        if (reservationTimeout == null
+                || reservationTimeout.compareTo(requestTimeout) <= 0
+                || reservationTimeout.compareTo(Duration.ofDays(1)) > 0) {
+            throw new IllegalArgumentException("Model reservation timeout must exceed the request timeout and be at most one day");
+        }
         this.jdbc = jdbc;
         this.defaultMonthlyTokenLimit = defaultMonthlyTokenLimit;
+        this.reservationTimeout = reservationTimeout;
     }
 
     @Override
@@ -40,6 +53,7 @@ public class PostgresModelAccountQuota implements ModelAccountQuota {
         ensureQuotaRow(checked.username(), checked.requestedAt());
         if (checked.credentialSource() == CredentialSource.PLATFORM) {
             Quota quota = lockQuota(checked.username());
+            releaseExpiredReservations(checked.username(), checked.requestedAt());
             Totals totals = totals(checked.username(), checked.periodStart());
             if (!quota.platformAccessEnabled()
                     || checked.reservedTokens() > quota.monthlyTokenLimit() - totals.charged() - totals.reserved()) {
@@ -205,6 +219,25 @@ public class PostgresModelAccountQuota implements ModelAccountQuota {
                             result.getLong("monthly_token_limit"),
                             result.getLong("revision"));
                 });
+    }
+
+    private void releaseExpiredReservations(String username, Instant requestedAt) {
+        jdbc.update(
+                """
+                UPDATE model_usage_ledger
+                SET charged_tokens = 0,
+                    status = 'RELEASED',
+                    outcome = 'RESERVATION_EXPIRED',
+                    settled_at = :releasedAt
+                WHERE username = :username
+                  AND credential_source = 'PLATFORM'
+                  AND status = 'RESERVED'
+                  AND created_at <= :expiresBefore
+                """,
+                new MapSqlParameterSource()
+                        .addValue("username", username)
+                        .addValue("releasedAt", Timestamp.from(requestedAt))
+                        .addValue("expiresBefore", Timestamp.from(requestedAt.minus(reservationTimeout))));
     }
 
     private Totals totals(String username, LocalDate periodStart) {

@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
@@ -44,7 +45,7 @@ final class TeachingSectionModelRequestFactory {
                 plannedUnits.isEmpty()
                         ? planned.retrievalQueries()
                         : plannedUnits.stream()
-                                .flatMap(unit -> unit.sourceIdentifiers().stream())
+                                .flatMap(unit -> unit.requiredRuleIdentifiers().stream())
                                 .distinct()
                                 .toList(),
                 plannedUnits.stream()
@@ -57,25 +58,40 @@ final class TeachingSectionModelRequestFactory {
 
     private TeachingLessonModel.TeachingUnitInput boundTeachingUnit(
             TeachingUnitContract.Unit unit, List<RuleEvidence> evidence) {
-        if (!unit.sourcePages().isEmpty()) {
-            List<java.util.UUID> ownedEvidenceIds = evidence.stream()
-                    .filter(candidate -> java.util.stream.IntStream
-                            .rangeClosed(candidate.pageFrom(), candidate.pageTo())
-                            .anyMatch(unit.sourcePages()::contains))
-                    .map(RuleEvidence::chunkId)
-                    .distinct()
-                    .toList();
-            if (ownedEvidenceIds.isEmpty()) {
-                throw new IllegalArgumentException(
-                        "retrieval did not bind planned teaching source pages " + unit.sourcePages());
-            }
+        if (!unit.typed()) return legacyBoundTeachingUnit(unit, evidence);
+
+        if (unit.availability() == SourceCoverageAvailability.UNRESOLVED) {
             return new TeachingLessonModel.TeachingUnitInput(
-                    unit.unitId(), unit.sourceIdentifiers(), ownedEvidenceIds);
+                    unit.unitId(), unit.sourceIdentifiers(), List.of(), unit.roles(), unit.availability());
         }
         List<java.util.UUID> ownedEvidenceIds = evidence.stream()
+                .filter(candidate -> java.util.stream.IntStream
+                        .rangeClosed(candidate.pageFrom(), candidate.pageTo())
+                        .anyMatch(unit.sourcePages()::contains))
                 .map(RuleEvidence::chunkId)
                 .distinct()
                 .toList();
+        if (unit.availability() == SourceCoverageAvailability.SOURCED && ownedEvidenceIds.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "retrieval did not bind planned teaching source pages " + unit.sourcePages());
+        }
+        return new TeachingLessonModel.TeachingUnitInput(
+                unit.unitId(), unit.sourceIdentifiers(), ownedEvidenceIds, unit.roles(), unit.availability());
+    }
+
+    private TeachingLessonModel.TeachingUnitInput legacyBoundTeachingUnit(
+            TeachingUnitContract.Unit unit, List<RuleEvidence> evidence) {
+        List<java.util.UUID> ownedEvidenceIds = evidence.stream()
+                .filter(candidate -> unit.sourcePages().isEmpty()
+                        || java.util.stream.IntStream.rangeClosed(candidate.pageFrom(), candidate.pageTo())
+                                .anyMatch(unit.sourcePages()::contains))
+                .map(RuleEvidence::chunkId)
+                .distinct()
+                .toList();
+        if (!unit.sourcePages().isEmpty() && ownedEvidenceIds.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "retrieval did not bind planned teaching source pages " + unit.sourcePages());
+        }
         return new TeachingLessonModel.TeachingUnitInput(
                 unit.unitId(), unit.sourceIdentifiers(), ownedEvidenceIds);
     }

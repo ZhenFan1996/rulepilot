@@ -4,6 +4,8 @@ import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.CatalogGameSelectionLookup;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CandidateSet;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataResult;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataCriterion;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
@@ -140,10 +142,7 @@ public class BggRankedCatalogService
 
     @Override
     public Optional<GameSelection> find(int bggId) {
-        if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
-        Optional<GameSelection> local = repository.findSelectionsByIds(List.of(bggId)).stream()
-                .findFirst()
-                .map(this::selectionGame);
+        Optional<GameSelection> local = findStored(bggId);
         if (local.isPresent()) return local;
         return browseIds(List.of(bggId)).stream().findFirst().map(game -> {
             DiscoveryGame details = game.details();
@@ -155,6 +154,14 @@ public class BggRankedCatalogService
                     details == null ? "" : details.thumbnailUrl(),
                     details == null ? "" : details.imageUrl());
         });
+    }
+
+    @Override
+    public Optional<GameSelection> findStored(int bggId) {
+        if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
+        return repository.findSelectionsByIds(List.of(bggId)).stream()
+                .findFirst()
+                .map(this::selectionGame);
     }
 
     @Override
@@ -206,7 +213,15 @@ public class BggRankedCatalogService
 
     @Override
     public CandidateSet searchGames(BoardGameRecommendationCatalog.CatalogFilters filters) {
+        return searchGames(filters, BoardGameRecommendationCatalog.SelectionEligibility.none());
+    }
+
+    @Override
+    public CandidateSet searchGames(
+            BoardGameRecommendationCatalog.CatalogFilters filters,
+            BoardGameRecommendationCatalog.SelectionEligibility eligibility) {
         if (filters == null) throw new IllegalArgumentException("BGG catalog filters are required");
+        if (eligibility == null) throw new IllegalArgumentException("BGG selection eligibility is required");
         var checkedFilters = new BoardGameRecommendationCatalog.CatalogFilters(
                 filters.types(),
                 checkedMetadataFilters(filters.categories(), "category"),
@@ -222,6 +237,15 @@ public class BggRankedCatalogService
                 filters.sort(),
                 filters.maximum(),
                 filters.offset());
+        var atomicCandidates = repository.findRecommendationCandidates(checkedFilters, eligibility);
+        if (atomicCandidates.isPresent()) {
+            var page = atomicCandidates.orElseThrow();
+            List<BoardGameRecommendationCatalog.Game> games = page.candidates().stream()
+                    .map(candidate -> new BrowseGame(candidate.ranking(), null, candidate.details()))
+                    .map(this::recommendationGame)
+                    .toList();
+            return new CandidateSet(gameCount(), page.availableCount(), games);
+        }
         List<RankedGame> ranked = repository.findByMetadataFilters(checkedFilters);
         if (ranked.isEmpty()) return new CandidateSet(gameCount(), List.of());
 
@@ -235,6 +259,14 @@ public class BggRankedCatalogService
                 .map(this::recommendationGame)
                 .toList();
         return new CandidateSet(gameCount(), games);
+    }
+
+    @Override
+    public CanonicalMetadataResult canonicalizeMetadata(List<CatalogMetadataCriterion> criteria) {
+        if (criteria == null || criteria.isEmpty() || criteria.size() > 8) {
+            throw new IllegalArgumentException("BGG canonical metadata criteria are invalid");
+        }
+        return repository.canonicalizeMetadata(criteria);
     }
 
     private String checkedTextQuery(String value) {

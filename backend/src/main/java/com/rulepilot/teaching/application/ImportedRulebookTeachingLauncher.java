@@ -1,10 +1,17 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.document.RulebookTeachingHandoffs;
 import com.rulepilot.document.RulebookTeachingHandoffs.ReadyHandoff;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -24,17 +31,28 @@ public class ImportedRulebookTeachingLauncher {
     private final RulebookTeachingHandoffs handoffs;
     private final TeachingPlanLauncher plans;
     private final int batchSize;
+    private final Optional<PrivateAgentTraceService> privateTraces;
 
+    @Autowired
     public ImportedRulebookTeachingLauncher(
             RulebookTeachingHandoffs handoffs,
             TeachingPlanLauncher plans,
-            @Value("${rulepilot.teaching.import-handoff.batch-size}") int batchSize) {
+            @Value("${rulepilot.teaching.import-handoff.batch-size}") int batchSize,
+            Optional<PrivateAgentTraceService> privateTraces) {
         if (batchSize < 1 || batchSize > 20) {
             throw new IllegalArgumentException("imported rulebook teaching handoff batch size is invalid");
         }
         this.handoffs = handoffs;
         this.plans = plans;
         this.batchSize = batchSize;
+        this.privateTraces = privateTraces == null ? Optional.empty() : privateTraces;
+    }
+
+    public ImportedRulebookTeachingLauncher(
+            RulebookTeachingHandoffs handoffs,
+            TeachingPlanLauncher plans,
+            int batchSize) {
+        this(handoffs, plans, batchSize, Optional.empty());
     }
 
     @Scheduled(
@@ -82,8 +100,18 @@ public class ImportedRulebookTeachingLauncher {
 
     private void launch(ReadyHandoff handoff) {
         try {
-            var launched = plans.launch(
-                    handoff.documentVersionId(), handoff.learningGoal(), handoff.ownerUsername());
+            CaptureHandle capture = PrivateAgentTraceCapture.recover(
+                    privateTraces,
+                    new ResourceRef(ResourceType.DOCUMENT_VERSION, handoff.documentVersionId()),
+                    handoff.ownerUsername());
+            var launched = capture.enabled()
+                    ? plans.launch(
+                            handoff.documentVersionId(),
+                            handoff.learningGoal(),
+                            handoff.ownerUsername(),
+                            capture)
+                    : plans.launch(
+                            handoff.documentVersionId(), handoff.learningGoal(), handoff.ownerUsername());
             handoffs.markLaunched(handoff.importJobId(), launched.assistantRunId());
         } catch (RuntimeException failure) {
             handoffs.markFailed(handoff.importJobId(), failureCode(failure));

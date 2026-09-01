@@ -17,6 +17,9 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import java.time.Instant;
@@ -345,6 +348,52 @@ class TeachingSourcePageEvidenceRefinerTest {
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.INVALID);
         assertThat(result.evidence()).isEmpty();
+    }
+
+    @Test
+    void keepsASourcedUnitComposableWhenASiblingMissingSourceHasNoEvidenceChunk() {
+        RuleEvidence sourcedRule = evidence(
+                UUID.randomUUID(), 2, "R-action lets the current player choose and resolve one action.");
+        List<SourceCoverageSlotDraft> slots = List.of(
+                new SourceCoverageSlotDraft(
+                        "sourced-slot",
+                        SourceCoverageRole.LEGAL_ACTION,
+                        "R-action",
+                        List.of(2),
+                        "mixed-topic",
+                        "sourced-unit",
+                        SourceCoverageAvailability.SOURCED),
+                new SourceCoverageSlotDraft(
+                        "missing-slot",
+                        SourceCoverageRole.ENDING,
+                        "External ending procedure",
+                        List.of(1),
+                        "mixed-topic",
+                        "missing-unit",
+                        SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE));
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "Test game",
+                "Teach the available rule and localize the unavailable source.",
+                List.of(new PlannedSection(
+                        1,
+                        "mixed-topic",
+                        "Available action",
+                        "Teach the sourced action without reconstructing the external ending procedure.",
+                        true,
+                        false,
+                        TeachingUnitContract.encodeUnits(slots),
+                        List.of(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG),
+                        List.of(1, 2))),
+                "player",
+                Instant.now());
+
+        var result = refiner(scopes(), tools(List.of(sourcedRule)), new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, verified(1, sourcedRule));
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.evidence()).containsExactly(sourcedRule);
     }
 
     private TeachingSourcePageEvidenceRefiner refiner(

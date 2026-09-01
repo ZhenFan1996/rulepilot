@@ -2,6 +2,8 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeToolAgent;
@@ -78,14 +80,28 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+        return locateGuideWithResult(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public LocateGuideResult locateGuideWithResult(
+            VisualLocationRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
         if (!hasAgentContext(request)
                 || !agent.supports(Role.VISUAL, request.modelConfigurationOwner())) {
-            return fallback.locateGuideWithResult(request);
+            return capture != null && capture.enabled()
+                    ? fallback.locateGuideWithResult(request, capture, context)
+                    : fallback.locateGuideWithResult(request);
         }
         var scope = scopes.create(
                 request.modelConfigurationOwner(), request.documentVersionId(), request.runId());
-        if (scope.isEmpty()) return fallback.locateGuideWithResult(request);
-        NativeToolAgent.RunResult result = agent.run(new RunRequest(
+        if (scope.isEmpty()) {
+            return capture != null && capture.enabled()
+                    ? fallback.locateGuideWithResult(request, capture, context)
+                    : fallback.locateGuideWithResult(request);
+        }
+        RunRequest runRequest = new RunRequest(
                 Role.VISUAL,
                 scope.get(),
                 SYSTEM_PROMPT,
@@ -97,7 +113,10 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                 Set.of(),
                 6,
                 "",
-                Map.of("crop_rule_page_image", visualResultBudget(request))));
+                Map.of("crop_rule_page_image", visualResultBudget(request)));
+        NativeToolAgent.RunResult result = capture != null && capture.enabled()
+                ? agent.run(runRequest, capture)
+                : agent.run(runRequest);
         if (result.status() != RunStatus.COMPLETED) {
             return LocateGuideResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
         }

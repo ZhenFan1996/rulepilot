@@ -7,6 +7,8 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import java.util.List;
@@ -166,6 +168,99 @@ class TeachingPlannedUnitCoveragePolicyTest {
                 units, List.of(gamma), unsupported))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must cite direct evidence");
+    }
+
+    @Test
+    void allowsAMissingSiblingToStayLocalWhileTheSourcedUnitIsTaught() {
+        List<TeachingUnitInput> units = List.of(
+                typedUnit(
+                        "sourced-action",
+                        "R-alpha",
+                        alpha.chunkId(),
+                        SourceCoverageRole.LEGAL_ACTION,
+                        SourceCoverageAvailability.SOURCED),
+                typedUnit(
+                        "missing-ending",
+                        "External ending procedure",
+                        beta.chunkId(),
+                        SourceCoverageRole.ENDING,
+                        SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE));
+        SectionDraft availableLesson = draft(List.of(step(
+                "完成有来源的行动",
+                "按 R-alpha 作出选择并完成结算。",
+                List.of(alpha.chunkId()),
+                List.of("sourced-action"))));
+
+        assertThatCode(() -> TeachingPlannedUnitCoveragePolicy.validate(
+                        units, List.of(alpha, beta), availableLesson))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsAMissingSourceBoundaryThatBorrowsAnotherUnitsEvidence() {
+        List<TeachingUnitInput> units = List.of(
+                typedUnit(
+                        "sourced-action",
+                        "R-alpha",
+                        alpha.chunkId(),
+                        SourceCoverageRole.LEGAL_ACTION,
+                        SourceCoverageAvailability.SOURCED),
+                typedUnit(
+                        "missing-ending",
+                        "External ending procedure",
+                        beta.chunkId(),
+                        SourceCoverageRole.ENDING,
+                        SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE));
+        SectionDraft borrowedEvidence = draft(List.of(
+                step(
+                        "完成有来源的行动",
+                        "按 R-alpha 作出选择并完成结算。",
+                        List.of(alpha.chunkId()),
+                        List.of("sourced-action")),
+                step(
+                        "外部结束规则",
+                        "结束程序由外部来源定义。",
+                        List.of(alpha.chunkId()),
+                        List.of("missing-ending"))));
+
+        assertThatThrownBy(() -> TeachingPlannedUnitCoveragePolicy.validate(
+                        units, List.of(alpha, beta), borrowedEvidence))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("missing-ending", "must cite direct evidence");
+    }
+
+    @Test
+    void rejectsPresentingAnUnresolvedUnitAsARuleClaim() {
+        TeachingUnitInput unresolved = new TeachingUnitInput(
+                "unresolved-score",
+                List.of("Unresolved scoring relation"),
+                List.of(),
+                List.of(SourceCoverageRole.SCORING),
+                SourceCoverageAvailability.UNRESOLVED);
+        SectionDraft invented = draft(List.of(step(
+                "结算未解析关系",
+                "按未解析的计分关系完成结算。",
+                List.of(alpha.chunkId()),
+                List.of("unresolved-score"))));
+
+        assertThatThrownBy(() -> TeachingPlannedUnitCoveragePolicy.validate(
+                        List.of(unresolved), List.of(alpha), invented))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unresolved", "cannot be presented as a rule claim");
+    }
+
+    private TeachingUnitInput typedUnit(
+            String unitId,
+            String identifier,
+            UUID directEvidenceId,
+            SourceCoverageRole role,
+            SourceCoverageAvailability availability) {
+        return new TeachingUnitInput(
+                unitId,
+                List.of(identifier),
+                List.of(directEvidenceId),
+                List.of(role),
+                availability);
     }
 
     private SectionDraft draft(List<StepDraft> steps) {

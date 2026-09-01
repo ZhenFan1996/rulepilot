@@ -41,6 +41,7 @@ public class PublicLessonReader {
     public Optional<PublicLesson> find(UUID teachingPlanId) {
         return plans.findById(teachingPlanId).flatMap(plan -> lessons.findLatestByPlan(plan.id())
                 .filter(PublicLessonReader::isPubliclyReadable)
+                .map(PublicLessonReader::publicProjection)
                 .flatMap(lesson -> rulebooks
                 .findReference(plan.documentVersionId())
                 .map(rulebook -> new PublicLesson(
@@ -51,6 +52,16 @@ public class PublicLessonReader {
                         cover(rulebook),
                         gameIdentity(plan.gameTitle(), rulebook),
                 lesson))));
+    }
+
+    private static IllustratedLesson publicProjection(IllustratedLesson lesson) {
+        return new IllustratedLesson(
+                lesson.id(),
+                lesson.teachingPlanId(),
+                lesson.status(),
+                PlayerFacingLessonLanguagePolicy.publiclyReadableSections(lesson),
+                lesson.generatorVersion(),
+                lesson.createdAt());
     }
 
     static boolean isPubliclyReadable(IllustratedLesson lesson) {

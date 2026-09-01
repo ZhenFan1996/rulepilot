@@ -1,5 +1,11 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
@@ -58,6 +64,25 @@ final class VisualLessonStepLocator {
             LessonStep step,
             String modelConfigurationOwner,
             UUID runId) {
+        return locate(
+                understanding,
+                documentVersionId,
+                section,
+                step,
+                modelConfigurationOwner,
+                runId,
+                CaptureHandle.noop());
+    }
+
+    Result locate(
+            RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            LessonStep step,
+            String modelConfigurationOwner,
+            UUID runId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         Set<Integer> citedPages = new LinkedHashSet<>(step.sourcePages());
         List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
                 understanding, citedPages, terms(section, step), visualPageFacts.find(documentVersionId, citedPages));
@@ -83,14 +108,17 @@ final class VisualLessonStepLocator {
                 .filter(candidate -> attachedPages.contains(candidate.pageNumber()))
                 .toList();
         List<Claim> claims = claims(step);
-        var guide = locator.locateGuideWithResult(new VisualRegionLocator.VisualLocationRequest(
+        var request = new VisualRegionLocator.VisualLocationRequest(
                 section.title() + " · " + step.heading(),
                 claims,
                 attachedCandidates,
                 pages,
                 modelConfigurationOwner,
                 runId == null ? null : documentVersionId,
-                runId));
+                runId);
+        var guide = trace.enabled()
+                ? locator.locateGuideWithResult(request, trace, visualModelContext(runId))
+                : locator.locateGuideWithResult(request);
         if (guide.regions().isEmpty()) return Result.rejected(outcomeFor(guide.diagnostic()));
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
         VisualLessonEnricher.Outcome rejected = null;
@@ -165,6 +193,15 @@ final class VisualLessonStepLocator {
             case PROVIDER_FAILURE -> VisualLessonEnricher.Outcome.MODEL_PROVIDER_FAILURE;
             case FOUND -> throw new IllegalArgumentException("found visual location cannot be rejected");
         };
+    }
+
+    private TraceEventContext visualModelContext(UUID runId) {
+        return TraceEventContext.create(
+                java.time.Instant.now(),
+                JourneyStage.TEACHING,
+                UUID.randomUUID(),
+                runId,
+                runId == null ? null : new ResourceRef(ResourceType.VISUAL_RUN, runId));
     }
 
     record Result(VisualRegionLocator.LocatedRegion region, VisualLessonEnricher.Outcome rejection) {

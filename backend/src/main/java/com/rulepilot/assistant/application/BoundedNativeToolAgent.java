@@ -3,6 +3,19 @@ package com.rulepilot.assistant.application;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.rulepilot.agenttrace.AgentTraceEvent;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.MediaDescriptor;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
@@ -10,15 +23,20 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool.ObservationStatus;
 import com.rulepilot.assistant.NativeToolAgent;
 import com.rulepilot.assistant.NativeToolModel;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.assistant.NativeToolModel.ConversationMessage;
 import com.rulepilot.assistant.NativeToolModel.ModelRequest;
 import com.rulepilot.assistant.NativeToolModel.ModelTurn;
 import com.rulepilot.assistant.NativeToolModel.ModelToolCall;
 import java.time.Instant;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -63,8 +81,14 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
 
     @Override
     public RunResult run(RunRequest request) {
+        return run(request, CaptureHandle.noop());
+    }
+
+    @Override
+    public RunResult run(RunRequest request, CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         if (!model.supports(request.role(), request.scope().ownerUsername())) {
-            return fallback(request, "MODEL_CAPABILITY_UNAVAILABLE", 0, 0, List.of());
+            return fallback(trace, request, "MODEL_CAPABILITY_UNAVAILABLE", 0, 0, List.of());
         }
         NativeAgentConversation conversation = new NativeAgentConversation(
                 request.systemPrompt(), request.playerRequest(), MAX_CONTEXT_CHARACTERS);
@@ -80,12 +104,12 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             // cannot expand the evidence search because the registry advertises no tools in final-response mode.
             if (iteration > request.maxIterations() && !finalResponseOnly) break;
             if (Instant.now().isAfter(request.scope().deadlineAt())) {
-                return fallback(request, "TIMEOUT", iteration - 1, toolCalls, observations);
+                return fallback(trace, request, "TIMEOUT", iteration - 1, toolCalls, observations);
             }
             try {
                 execution.assertStepAllowed(request.scope().runId(), iteration);
             } catch (RuntimeException exception) {
-                return fallback(request, stopReason(exception), iteration - 1, toolCalls, observations);
+                return fallback(trace, request, stopReason(exception), iteration - 1, toolCalls, observations);
             }
 
             List<String> missingCompletionTools = missingCompletionTools(request, observations);
@@ -111,14 +135,26 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             if (!finalResponseOnly
                     && !toolsAllowedThisTurn.isEmpty()
                     && advertisedTools.size() != toolsAllowedThisTurn.size()) {
-                return fallback(request, "TOOL_ALLOWLIST_UNAVAILABLE", iteration - 1, toolCalls, observations);
+                return fallback(trace, request, "TOOL_ALLOWLIST_UNAVAILABLE", iteration - 1, toolCalls, observations);
             }
+            UUID modelOperationId = UUID.randomUUID();
+            TraceEventContext modelContext = context(request, modelOperationId, request.scope().runId());
             try {
                 List<ConversationMessage> messages = conversation.messages();
+                int currentIteration = iteration;
                 int estimatedInputTokens = estimateTokens(messages.stream()
                         .map(ConversationMessage::content)
                         .reduce("", (left, right) -> left + right));
-                int currentIteration = iteration;
+                capture(trace, () -> trace.modelCallStarted(new ModelCallStarted(
+                                modelContext,
+                                model.providerId(request.role(), request.scope().ownerUsername()),
+                                model.modelId(request.role(), request.scope().ownerUsername()),
+                                currentIteration,
+                                "native-tool-loop-v1",
+                                "native-model-turn-v1",
+                                "",
+                                estimatedInputTokens,
+                                request.maxOutputTokens())));
                 turn = audited.invoke(
                         request.scope().runId(),
                         ActivityType.MODEL,
@@ -135,10 +171,28 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                         advertisedTools,
                                         request.maxOutputTokens()))),
                         ModelTurn::completionTokens);
+                ModelTurn capturedTurn = turn;
+                capture(trace, () -> trace.modelTurn(new AgentTraceEvent.ModelTurn(
+                                nextEvent(modelContext),
+                                model.providerId(request.role(), request.scope().ownerUsername()),
+                                model.modelId(request.role(), request.scope().ownerUsername()),
+                                currentIteration,
+                                capturedTurn.text(),
+                                capturedTurn.toolCalls().stream()
+                                        .map(call -> new AgentTraceEvent.ModelToolCall(
+                                                call.id(), call.name(), call.argumentsJson()))
+                                        .toList(),
+                                capturedTurn.toolCalls().isEmpty() ? "STOP" : "TOOL_CALLS",
+                                capturedTurn.promptTokens(),
+                                capturedTurn.completionTokens(),
+                                capturedTurn.text().isBlank() && capturedTurn.toolCalls().isEmpty())));
             } catch (NativeAgentConversation.ContextLimitException exception) {
-                return fallback(request, "CONTEXT_LIMIT", iteration - 1, toolCalls, observations);
+                captureModelFailure(trace, modelContext, "CONTEXT_LIMIT");
+                return fallback(trace, request, "CONTEXT_LIMIT", iteration - 1, toolCalls, observations);
             } catch (RuntimeException exception) {
-                return fallback(request, stopReason(exception), iteration, toolCalls, observations);
+                String reason = stopReason(exception);
+                captureModelFailure(trace, modelContext, reason);
+                return fallback(trace, request, reason, iteration, toolCalls, observations);
             }
 
             if (turn.toolCalls().isEmpty()) {
@@ -150,10 +204,10 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             "nativeCompletionRequirement",
                             ActivityOutcome.REJECTED,
                             "native completion missing required observation");
-                    if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    if (!recorded) return fallback(trace, request, "AUDIT_FAILED", iteration, toolCalls, observations);
                     if (iteration >= request.maxIterations()) {
                         return fallback(
-                                request, "COMPLETION_REQUIREMENT_UNMET", iteration, toolCalls, observations);
+                                trace, request, "COMPLETION_REQUIREMENT_UNMET", iteration, toolCalls, observations);
                     }
                     conversation.appendAssistant(turn.text(), List.of(), advertisedTools);
                     conversation.appendApplicationInstruction(
@@ -175,9 +229,10 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             emptyCompletion
                                     ? "native model returned neither a tool call nor a terminal status"
                                     : "native model returned a nonconforming terminal status");
-                    if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    if (!recorded) return fallback(trace, request, "AUDIT_FAILED", iteration, toolCalls, observations);
                     if (terminalProtocolRepairAttempted || iteration >= request.maxIterations()) {
                         return fallback(
+                                trace,
                                 request,
                                 emptyCompletion ? "EMPTY_MODEL_RESULT" : "COMPLETION_PROTOCOL_REJECTED",
                                 iteration,
@@ -200,6 +255,17 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             }
 
             if (finalResponseOnly) {
+                for (ModelToolCall call : turn.toolCalls()) {
+                    TraceEventContext rejectedContext = context(request, UUID.randomUUID(), modelOperationId);
+                    captureToolCall(
+                            trace,
+                            rejectedContext,
+                            call,
+                            advertisedTools,
+                            ToolArgumentValidation.REJECTED,
+                            canonicalArguments(call.argumentsJson()));
+                    captureToolFailure(trace, rejectedContext, "TOOL_REQUESTED_AFTER_FINALIZATION");
+                }
                 boolean recorded = recordDiagnostic(
                         request.scope().runId(),
                         ActivityType.VALIDATION,
@@ -207,6 +273,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                         ActivityOutcome.REJECTED,
                         "native model requested a tool after the observation budget entered final response mode");
                 return fallback(
+                        trace,
                         request,
                         recorded ? "TOOL_REQUESTED_AFTER_FINALIZATION" : "AUDIT_FAILED",
                         iteration,
@@ -217,38 +284,66 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             conversation.appendAssistant(turn.text(), turn.toolCalls(), advertisedTools);
             boolean requiredToolContractRepair = false;
             for (ModelToolCall call : turn.toolCalls()) {
+                UUID toolOperationId = UUID.randomUUID();
+                TraceEventContext toolContext = context(request, toolOperationId, modelOperationId);
                 List<String> stillMissingCompletionTools = missingCompletionTools(request, observations);
                 boolean mustReserveThisSlot = toolsAllowedThisTurn.contains(call.name())
                         && !stillMissingCompletionTools.isEmpty()
                         && !stillMissingCompletionTools.contains(call.name())
                         && request.maxToolCalls() - toolCalls <= stillMissingCompletionTools.size();
                 if (mustReserveThisSlot) {
+                    captureToolCall(
+                            trace,
+                            toolContext,
+                            call,
+                            advertisedTools,
+                            ToolArgumentValidation.REJECTED,
+                            canonicalArguments(call.argumentsJson()));
                     boolean recorded = recordDiagnostic(
                             request.scope().runId(),
                             ActivityType.VALIDATION,
                             "nativeRequiredToolBudgetReservation",
                             ActivityOutcome.REJECTED,
                             "optional native tool call rejected to preserve required confirmation budget");
-                    if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
-                    conversation.appendTool(call, "{\"status\":\"ERROR\",\"code\":\"TOOL_BUDGET_RESERVED\","
-                            + "\"data\":{},\"evidenceCount\":0}");
+                    if (!recorded) return fallback(trace, request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    String observation = "{\"status\":\"ERROR\",\"code\":\"TOOL_BUDGET_RESERVED\","
+                            + "\"data\":{},\"evidenceCount\":0}";
+                    captureObservation(trace, toolContext, call, observation, "TOOL_BUDGET_RESERVED", 0, List.of());
+                    conversation.appendTool(call, observation);
                     requiredToolContractRepair = true;
                     continue;
                 }
                 if (toolCalls >= request.maxToolCalls()) {
+                    captureToolCall(
+                            trace,
+                            toolContext,
+                            call,
+                            advertisedTools,
+                            ToolArgumentValidation.REJECTED,
+                            canonicalArguments(call.argumentsJson()));
+                    captureToolFailure(trace, toolContext, "TOOL_CALL_LIMIT");
                     if (!request.terminalContract().required()
                             && completionRequirementsSatisfied(request, observations)) {
                         return completedAtToolLimit(request, iteration, toolCalls, observations);
                     }
-                    return fallback(request, "TOOL_CALL_LIMIT", iteration, toolCalls, observations);
+                    return fallback(trace, request, "TOOL_CALL_LIMIT", iteration, toolCalls, observations);
                 }
                 String failureKey = call.name() + "\n" + call.argumentsJson();
                 if (failedCallCounts.getOrDefault(failureKey, 0) > 0) {
+                    captureToolCall(
+                            trace,
+                            toolContext,
+                            call,
+                            advertisedTools,
+                            ToolArgumentValidation.REJECTED,
+                            canonicalArguments(call.argumentsJson()));
+                    captureToolFailure(trace, toolContext, "TOOL_CIRCUIT_OPEN");
                     boolean recorded = recordDiagnostic(
                             request.scope().runId(), ActivityType.VALIDATION,
                             "nativeCircuit|" + boundedOperationName(call.name()),
                             ActivityOutcome.REJECTED, "repeated failed native tool call rejected");
                     return fallback(
+                            trace,
                             request,
                             recorded ? "TOOL_CIRCUIT_OPEN" : "AUDIT_FAILED",
                             iteration,
@@ -257,9 +352,12 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 }
 
                 NativeAgentToolRegistry.ToolExecution toolExecution;
+                boolean advertisedSchemaAccepted = false;
+                String canonicalArguments = canonicalArguments(call.argumentsJson());
                 try {
                     var toolSpec = tools.specification(request.role(), call.name());
                     conversation.assertAdvertisedSchema(call, toolSpec);
+                    advertisedSchemaAccepted = true;
                     toolExecution = audited.invoke(
                             request.scope().runId(),
                             ActivityType.TOOL,
@@ -273,8 +371,16 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                             request.role(), call.name(), call.argumentsJson(), request.scope())),
                             result -> estimateTokens(observationJson(result)));
                 } catch (NativeAgentConversation.StaleSchemaException exception) {
+                    captureToolCall(
+                            trace,
+                            toolContext,
+                            call,
+                            advertisedTools,
+                            ToolArgumentValidation.REJECTED,
+                            canonicalArguments);
                     if (!reserveRemainingCallsForRequiredTools || iteration == request.maxIterations()) {
-                        return fallback(request, "TOOL_SCHEMA_STALE", iteration, toolCalls, observations);
+                        captureToolFailure(trace, toolContext, "TOOL_SCHEMA_STALE");
+                        return fallback(trace, request, "TOOL_SCHEMA_STALE", iteration, toolCalls, observations);
                     }
                     boolean recorded = recordDiagnostic(
                             request.scope().runId(),
@@ -282,14 +388,35 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             "nativeRequiredToolContractRepair",
                             ActivityOutcome.REJECTED,
                             "native model selected a tool outside the required-only portfolio");
-                    if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
-                    conversation.appendTool(call, "{\"status\":\"ERROR\",\"code\":\"TOOL_NOT_ADVERTISED\","
-                            + "\"data\":{},\"evidenceCount\":0}");
+                    if (!recorded) return fallback(trace, request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    String observation = "{\"status\":\"ERROR\",\"code\":\"TOOL_NOT_ADVERTISED\","
+                            + "\"data\":{},\"evidenceCount\":0}";
+                    captureObservation(trace, toolContext, call, observation, "TOOL_NOT_ADVERTISED", 0, List.of());
+                    conversation.appendTool(call, observation);
                     requiredToolContractRepair = true;
                     continue;
                 } catch (RuntimeException exception) {
-                    return fallback(request, stopReason(exception), iteration, toolCalls, observations);
+                    captureToolCall(
+                            trace,
+                            toolContext,
+                            call,
+                            advertisedTools,
+                            advertisedSchemaAccepted && !canonicalArguments.isBlank()
+                                    ? ToolArgumentValidation.ACCEPTED
+                                    : ToolArgumentValidation.REJECTED,
+                            canonicalArguments);
+                    captureToolFailure(trace, toolContext, stopReason(exception));
+                    return fallback(trace, request, stopReason(exception), iteration, toolCalls, observations);
                 }
+                captureToolCall(
+                        trace,
+                        toolContext,
+                        call,
+                        advertisedTools,
+                        argumentsAccepted(toolExecution, canonicalArguments)
+                                ? ToolArgumentValidation.ACCEPTED
+                                : ToolArgumentValidation.REJECTED,
+                        canonicalArguments);
                 toolCalls++;
                 observations.add(new ObservationRecord(
                         iteration,
@@ -307,12 +434,21 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                         "code=" + toolExecution.observation().code()
                                 + " evidenceCount=" + toolExecution.observation().evidenceCount());
                 if (!observationRecorded) {
-                    return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    return fallback(trace, request, "AUDIT_FAILED", iteration, toolCalls, observations);
                 }
                 if (toolExecution.observation().status() == ObservationStatus.ERROR) {
                     failedCallCounts.merge(failureKey, 1, Integer::sum);
                 }
-                conversation.appendTool(call, observationJson(toolExecution));
+                String modelVisibleObservation = observationJson(toolExecution);
+                captureObservation(
+                        trace,
+                        toolContext,
+                        call,
+                        modelVisibleObservation,
+                        toolExecution.observation().code(),
+                        toolExecution.observation().evidenceCount(),
+                        mediaDescriptors(toolExecution.observation().media()));
+                conversation.appendTool(call, modelVisibleObservation);
                 if (!toolExecution.observation().media().isEmpty()) {
                     conversation.appendVisual(
                             "Visual observations returned by " + call.name()
@@ -339,7 +475,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 return completedAfterRequiredEvidence(request, iteration, toolCalls, observations);
             }
         }
-        return fallback(request, "ITERATION_LIMIT", request.maxIterations(), toolCalls, observations);
+        return fallback(trace, request, "ITERATION_LIMIT", request.maxIterations(), toolCalls, observations);
     }
 
     private boolean finalResponseTriggered(
@@ -442,6 +578,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     }
 
     private RunResult fallback(
+            CaptureHandle trace,
             RunRequest request,
             String reason,
             int iterations,
@@ -450,6 +587,15 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         recordDiagnostic(
                 request.scope().runId(), ActivityType.VALIDATION, "nativeToolFallback",
                 ActivityOutcome.REJECTED, "native tool loop returned deterministic fallback");
+        capture(trace, () -> {
+            TraceEventContext failureContext = context(request, UUID.randomUUID(), request.scope().runId());
+            trace.bindingOrFailure(new BindingOrFailure(
+                    failureContext,
+                    LifecycleSignal.FALLBACK,
+                    reason,
+                    resource(request),
+                    null));
+        });
         return new RunResult(
                 RunStatus.FALLBACK,
                 request.fallbackText().strip(),
@@ -469,6 +615,154 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                     "schemaHash", execution.specification().schemaHash()));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("native tool observation serialization failed", exception);
+        }
+    }
+
+    private void captureObservation(
+            CaptureHandle trace,
+            TraceEventContext context,
+            ModelToolCall call,
+            String modelVisibleObservation,
+            String statusCode,
+            int evidenceCount,
+            List<MediaDescriptor> media) {
+        capture(trace, () -> trace.toolObservation(new AgentTraceEvent.ToolObservation(
+                        nextEvent(context),
+                        call.id(),
+                        call.name(),
+                        modelVisibleObservation,
+                        statusCode,
+                        evidenceCount,
+                        false,
+                        media)));
+    }
+
+    private void captureToolCall(
+            CaptureHandle trace,
+            TraceEventContext context,
+            ModelToolCall call,
+            List<NativeToolModel.ToolSpec> advertisedTools,
+            ToolArgumentValidation validation,
+            String canonicalArguments) {
+        capture(trace, () -> {
+            NativeToolModel.ToolSpec spec = advertisedTools.stream()
+                    .filter(candidate -> candidate.name().equals(call.name()))
+                    .findFirst()
+                    .orElse(null);
+            trace.toolCall(new AgentTraceEvent.ToolCall(
+                    nextEvent(context),
+                    call.id(),
+                    call.name(),
+                    call.argumentsJson(),
+                    canonicalArguments,
+                    spec == null ? "unadvertised-v1" : spec.schemaVersion(),
+                    spec == null ? sha256("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)) : spec.schemaHash(),
+                    validation));
+        });
+    }
+
+    private void captureToolFailure(CaptureHandle trace, TraceEventContext context, String code) {
+        capture(trace, () -> trace.bindingOrFailure(new BindingOrFailure(
+                        nextEvent(context),
+                        LifecycleSignal.FAILURE,
+                        code,
+                        context.resource(),
+                        null)));
+    }
+
+    private void captureModelFailure(CaptureHandle trace, TraceEventContext context, String code) {
+        capture(trace, () -> trace.bindingOrFailure(new BindingOrFailure(
+                        nextEvent(context),
+                        LifecycleSignal.FAILURE,
+                        code,
+                        context.resource(),
+                        null)));
+    }
+
+    private boolean argumentsAccepted(
+            NativeAgentToolRegistry.ToolExecution execution, String canonicalArguments) {
+        return !canonicalArguments.isBlank()
+                && !Set.of("INVALID_ARGUMENT", "SCOPE_REJECTED", "TOOL_NOT_ALLOWED")
+                        .contains(execution.observation().code());
+    }
+
+    private String canonicalArguments(String rawArguments) {
+        try {
+            JsonNode parsed = objectMapper.readTree(rawArguments);
+            return parsed == null ? "" : objectMapper.writeValueAsString(canonical(parsed));
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            return "";
+        }
+    }
+
+    private JsonNode canonical(JsonNode value) {
+        if (value.isObject()) {
+            ObjectNode object = objectMapper.createObjectNode();
+            List<String> fields = new java.util.ArrayList<>();
+            value.fieldNames().forEachRemaining(fields::add);
+            fields.stream().sorted().forEach(field -> object.set(field, canonical(value.path(field))));
+            return object;
+        }
+        if (value.isArray()) {
+            ArrayNode array = objectMapper.createArrayNode();
+            value.forEach(element -> array.add(canonical(element)));
+            return array;
+        }
+        return value.deepCopy();
+    }
+
+    private void capture(CaptureHandle trace, Runnable emission) {
+        if (trace == null || !trace.enabled()) return;
+        try {
+            emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never alter the native-agent result.
+        }
+    }
+
+    private List<MediaDescriptor> mediaDescriptors(
+            List<com.rulepilot.assistant.NativeAgentTool.ToolMedia> media) {
+        return media.stream()
+                .limit(4)
+                .map(value -> new MediaDescriptor(
+                        value.mediaType(),
+                        value.label(),
+                        value.width(),
+                        value.height(),
+                        value.content().length,
+                        sha256(value.content())))
+                .toList();
+    }
+
+    private TraceEventContext context(RunRequest request, UUID operationId, UUID parentOperationId) {
+        return TraceEventContext.create(
+                Instant.now(), stage(request), operationId, parentOperationId, resource(request));
+    }
+
+    private TraceEventContext nextEvent(TraceEventContext context) {
+        return TraceEventContext.create(
+                Instant.now(),
+                context.stage(),
+                context.operationId(),
+                context.parentOperationId(),
+                context.resource());
+    }
+
+    private JourneyStage stage(RunRequest request) {
+        return request.role() == com.rulepilot.assistant.NativeAgentTool.Role.ANSWER
+                ? JourneyStage.ANSWER
+                : JourneyStage.TEACHING;
+    }
+
+    private ResourceRef resource(RunRequest request) {
+        return new ResourceRef(ResourceType.ASSISTANT_RUN, request.scope().runId());
+    }
+
+    private String sha256(byte[] content) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
     }
 

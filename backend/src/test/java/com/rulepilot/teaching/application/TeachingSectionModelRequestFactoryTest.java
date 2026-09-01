@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
@@ -41,6 +44,84 @@ class TeachingSectionModelRequestFactoryTest {
             assertThat(unit.sourceIdentifiers()).containsExactly("opaque-source-name");
             assertThat(unit.directEvidenceIds()).containsExactly(evidence.chunkId());
         });
+    }
+
+    @Test
+    void typedMixedChapterBindsOnlyEachUnitsOwnedPagesAndKeepsUnresolvedEvidenceEmpty() {
+        UUID versionId = UUID.randomUUID();
+        List<SourceCoverageSlotDraft> slots = List.of(
+                new SourceCoverageSlotDraft(
+                        "sourced-slot",
+                        SourceCoverageRole.LEGAL_ACTION,
+                        "R-action",
+                        List.of(2),
+                        "mixed-topic",
+                        "sourced-unit",
+                        SourceCoverageAvailability.SOURCED),
+                new SourceCoverageSlotDraft(
+                        "missing-slot",
+                        SourceCoverageRole.ENDING,
+                        "External ending procedure",
+                        List.of(1),
+                        "mixed-topic",
+                        "missing-unit",
+                        SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE),
+                new SourceCoverageSlotDraft(
+                        "unresolved-slot",
+                        SourceCoverageRole.SCORING,
+                        "Unresolved scoring relation",
+                        List.of(),
+                        "mixed-topic",
+                        "unresolved-unit",
+                        SourceCoverageAvailability.UNRESOLVED));
+        TeachingPlan.PlannedSection section = new TeachingPlan.PlannedSection(
+                1,
+                "mixed-topic",
+                "可讲规则与局部缺口",
+                "讲清有来源的行动，并局部化其他来源状态。",
+                true,
+                false,
+                TeachingUnitContract.encodeUnits(slots),
+                List.of("source_contract_v1", "source_contract_unsourced"),
+                List.of(1, 2));
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(), versionId, "Game", "Premise", List.of(section), "player", Instant.now());
+        RuleEvidence missingDeclaration = new RuleEvidence(
+                UUID.randomUUID(), versionId, "REFERENCE", "External ending", "See the external ending sheet.", 1, 1);
+        RuleEvidence sourcedRule = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Action", "Choose and resolve one action.", 2, 2);
+        RuleEvidence unrelated = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Other", "Unrelated context.", 9, 9);
+
+        var request = new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty())
+                .create(
+                        plan,
+                        section,
+                        List.of(),
+                        List.of(missingDeclaration, sourcedRule, unrelated),
+                        false,
+                        false);
+
+        assertThat(request.requiredRuleIntents()).containsExactly("R-action");
+        assertThat(request.teachingUnits()).hasSize(3);
+        assertThat(request.teachingUnits().get(0)).satisfies(unit -> {
+            assertThat(unit.availability()).isEqualTo(SourceCoverageAvailability.SOURCED);
+            assertThat(unit.roles()).containsExactly(SourceCoverageRole.LEGAL_ACTION);
+            assertThat(unit.directEvidenceIds()).containsExactly(sourcedRule.chunkId());
+        });
+        assertThat(request.teachingUnits().get(1)).satisfies(unit -> {
+            assertThat(unit.availability()).isEqualTo(SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE);
+            assertThat(unit.roles()).containsExactly(SourceCoverageRole.ENDING);
+            assertThat(unit.directEvidenceIds()).containsExactly(missingDeclaration.chunkId());
+        });
+        assertThat(request.teachingUnits().get(2)).satisfies(unit -> {
+            assertThat(unit.availability()).isEqualTo(SourceCoverageAvailability.UNRESOLVED);
+            assertThat(unit.roles()).containsExactly(SourceCoverageRole.SCORING);
+            assertThat(unit.directEvidenceIds()).isEmpty();
+        });
+        assertThat(request.teachingUnits())
+                .flatExtracting(unit -> unit.directEvidenceIds())
+                .doesNotContain(unrelated.chunkId());
     }
 
     @Test

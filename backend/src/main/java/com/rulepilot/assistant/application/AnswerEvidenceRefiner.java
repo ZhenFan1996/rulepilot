@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.AnswerEvidenceRetriever;
@@ -25,5 +26,24 @@ public interface AnswerEvidenceRefiner {
             AnswerQuestionPlan questionPlan,
             AnswerEvidenceRetriever.Result deterministic) {
         return refine(assistantRunId, question, context, username, gameSessionId, deterministic);
+    }
+
+    default AnswerEvidenceRetriever.Result refine(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            AnswerQuestionPlan questionPlan,
+            AnswerEvidenceRetriever.Result deterministic,
+            CaptureHandle capture) {
+        return refine(
+                assistantRunId,
+                question,
+                context,
+                username,
+                gameSessionId,
+                questionPlan,
+                deterministic);
     }
 }

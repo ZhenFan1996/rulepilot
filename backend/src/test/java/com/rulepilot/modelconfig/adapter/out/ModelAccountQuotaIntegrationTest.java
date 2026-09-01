@@ -10,6 +10,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import java.security.SecureRandom;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import org.flywaydb.core.Flyway;
@@ -51,7 +52,7 @@ class ModelAccountQuotaIntegrationTest {
 
     @Test
     void reservesPlatformQuotaAtomicallyWhilePersonalUsageDoesNotConsumeIt() {
-        var quota = new PostgresModelAccountQuota(jdbc(), 200_000);
+        var quota = quota();
         Instant now = Instant.parse("2026-08-21T08:00:00Z");
         quota.updateLimit("alice", true, 100, "admin", now);
 
@@ -78,7 +79,7 @@ class ModelAccountQuotaIntegrationTest {
 
     @Test
     void disabledPlatformAccessStillAllowsPersonalCredentials() {
-        var quota = new PostgresModelAccountQuota(jdbc(), 200_000);
+        var quota = quota();
         Instant now = Instant.parse("2026-09-01T00:00:00Z");
         quota.updateLimit("alice", false, 1_000, "admin", now);
 
@@ -134,6 +135,35 @@ class ModelAccountQuotaIntegrationTest {
                         .doesNotContain("platform-secret"));
     }
 
+    @Test
+    void reclaimsAnExpiredPlatformReservationButKeepsAFreshReservationAtomic() {
+        var quota = quota();
+        Instant reservedAt = Instant.parse("2026-12-01T00:00:00Z");
+        quota.updateLimit("alice", true, 16_000, "admin", reservedAt);
+        var abandoned = quota.reserve(request(ModelAccountQuota.CredentialSource.PLATFORM, 16_000, reservedAt));
+
+        assertThatThrownBy(() -> quota.reserve(request(
+                        ModelAccountQuota.CredentialSource.PLATFORM,
+                        16_000,
+                        reservedAt.plus(Duration.ofMinutes(14)))))
+                .isInstanceOf(AccountQuotaExceededException.class);
+
+        Instant recoveredAt = reservedAt.plus(Duration.ofMinutes(16));
+        var recovered = quota.reserve(request(
+                ModelAccountQuota.CredentialSource.PLATFORM, 16_000, recoveredAt));
+        var expiredRow = jdbc().getJdbcTemplate().queryForMap(
+                "SELECT status, outcome, settled_at FROM model_usage_ledger WHERE reservation_id = ?",
+                abandoned.id());
+
+        assertThat(expiredRow)
+                .containsEntry("status", "RELEASED")
+                .containsEntry("outcome", "RESERVATION_EXPIRED");
+        assertThat(expiredRow.get("settled_at")).isNotNull();
+        assertThat(quota.usage("alice", LocalDate.of(2026, 12, 1)).platformTokensReserved())
+                .isEqualTo(16_000);
+        quota.release(recovered.id(), "CANCELLED", recoveredAt.plusSeconds(1));
+    }
+
     private static ModelAccountQuota.Request request(
             ModelAccountQuota.CredentialSource source, long reservedTokens, Instant now) {
         return new ModelAccountQuota.Request(
@@ -150,6 +180,11 @@ class ModelAccountQuotaIntegrationTest {
     private static NamedParameterJdbcTemplate jdbc() {
         return new NamedParameterJdbcTemplate(new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
+    }
+
+    private static PostgresModelAccountQuota quota() {
+        return new PostgresModelAccountQuota(
+                jdbc(), 200_000, Duration.ofMinutes(2), Duration.ofMinutes(15));
     }
 
     private static void enableProductionExtensions() {

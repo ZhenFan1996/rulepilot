@@ -1,5 +1,13 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
@@ -21,6 +29,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.core.task.TaskRejectedException;
@@ -41,6 +50,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
     private final CatalogEditionLookup catalog;
     private final RulebookTeachingEvidenceFreshness teachingEvidenceFreshness;
     private final Clock clock;
+    private final Optional<PrivateAgentTraceService> privateTraces;
 
     @Autowired
     public OfficialRulebookImportJobService(
@@ -50,7 +60,8 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             @Qualifier("officialRulebookImportExecutor") TaskExecutor executor,
             CatalogEditionLanguageConfirmation editionLanguages,
             CatalogEditionLookup catalog,
-            RulebookTeachingEvidenceFreshness teachingEvidenceFreshness) {
+            RulebookTeachingEvidenceFreshness teachingEvidenceFreshness,
+            ObjectProvider<PrivateAgentTraceService> privateTraces) {
         this(
                 jobs,
                 documents,
@@ -59,7 +70,8 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 editionLanguages,
                 catalog,
                 teachingEvidenceFreshness,
-                Clock.systemUTC());
+                Clock.systemUTC(),
+                Optional.ofNullable(privateTraces.getIfAvailable()));
     }
 
     OfficialRulebookImportJobService(
@@ -108,6 +120,28 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             CatalogEditionLookup catalog,
             RulebookTeachingEvidenceFreshness teachingEvidenceFreshness,
             Clock clock) {
+        this(
+                jobs,
+                documents,
+                imports,
+                executor,
+                editionLanguages,
+                catalog,
+                teachingEvidenceFreshness,
+                clock,
+                Optional.empty());
+    }
+
+    private OfficialRulebookImportJobService(
+            OfficialRulebookImportJobRepository jobs,
+            RuleDocumentRepository documents,
+            OfficialRulebookImportService imports,
+            TaskExecutor executor,
+            CatalogEditionLanguageConfirmation editionLanguages,
+            CatalogEditionLookup catalog,
+            RulebookTeachingEvidenceFreshness teachingEvidenceFreshness,
+            Clock clock,
+            Optional<PrivateAgentTraceService> privateTraces) {
         this.jobs = jobs;
         this.documents = documents;
         this.imports = imports;
@@ -116,9 +150,14 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         this.catalog = catalog;
         this.teachingEvidenceFreshness = teachingEvidenceFreshness;
         this.clock = clock;
+        this.privateTraces = privateTraces == null ? Optional.empty() : privateTraces;
     }
 
     public Launch enqueue(Command command, String ownerUsername) {
+        return enqueue(command, ownerUsername, CaptureHandle.noop());
+    }
+
+    public Launch enqueue(Command command, String ownerUsername, CaptureHandle capture) {
         Command checked = command.checked();
         String owner = checkedOwner(ownerUsername);
         var active = jobs.findActiveOwnedBySource(owner, checked.officialSourceUrl());
@@ -141,13 +180,18 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         }
         confirmCatalogLanguageAfterPlayerReview(checked, identityReview);
         if (active.isPresent()) {
-            return reusedLaunch(active.orElseThrow(), checked);
+            Launch launch = reusedLaunch(active.orElseThrow(), checked);
+            bindImportTrace(capture, launch.job());
+            return launch;
         }
         if (checked.startTeaching()) {
             var completed = jobs.findCompletedOwnedBySourceAndEdition(
                     owner, checked.officialSourceUrl(), checked.editionId());
             if (completed.isPresent()) {
-                return reusedLaunch(completed.orElseThrow(), checked);
+                Launch launch = reusedLaunch(completed.orElseThrow(), checked);
+                bindImportTrace(capture, launch.job());
+                bindCompletedDocumentTrace(capture, launch.job());
+                return launch;
             }
         }
         Instant now = Instant.now(clock);
@@ -155,10 +199,13 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 UUID.randomUUID(), owner, checked.editionId(), checked.title(), checked.sourceType(),
                 checked.officialSourceUrl(), checked.startTeaching(), checked.learningGoal(), now);
         jobs.insert(job);
+        bindImportTrace(capture, job);
+        CaptureHandle workerCapture = recoverImportTrace(job, capture);
         try {
-            executor.execute(() -> execute(job));
+            executor.execute(() -> execute(job, workerCapture));
         } catch (TaskRejectedException exception) {
             jobs.fail(job.id(), "IMPORT_QUEUE_FULL", Instant.now(clock));
+            traceFailure(capture, job, "IMPORT_QUEUE_FULL");
             return new Launch(requireOwned(job.id(), owner), false);
         }
         return new Launch(job, false);
@@ -419,7 +466,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         return requireOwned(job.id(), job.ownerUsername());
     }
 
-    private void execute(OfficialRulebookImportJob job) {
+    private void execute(OfficialRulebookImportJob job, CaptureHandle capture) {
         try {
             jobs.updateProgress(job.id(), OfficialRulebookImportJob.Stage.CONNECTING, 0, null, Instant.now(clock));
             var result = imports.importRulebook(
@@ -431,9 +478,62 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     job.ownerUsername(),
                     new PersistedImportProgress(job.id()));
             jobs.complete(job.id(), result.version().id(), result.duplicate(), Instant.now(clock));
+            bindDocumentTrace(capture, job, result.version().id());
         } catch (RuntimeException exception) {
-            jobs.fail(job.id(), failureCode(exception), Instant.now(clock));
+            String code = failureCode(exception);
+            jobs.fail(job.id(), code, Instant.now(clock));
+            traceFailure(capture, job, code);
         }
+    }
+
+    private void bindImportTrace(CaptureHandle capture, OfficialRulebookImportJob job) {
+        if (capture == null || !capture.enabled()) return;
+        ResourceRef resource = new ResourceRef(ResourceType.IMPORT_JOB, job.id());
+        if (!capture.bind(resource)) return;
+        capture.bindingOrFailure(new BindingOrFailure(
+                TraceEventContext.create(
+                        Instant.now(clock), JourneyStage.IMPORT, job.id(), null, resource),
+                LifecycleSignal.BINDING,
+                "IMPORT_JOB_BOUND",
+                null,
+                resource));
+    }
+
+    private void bindCompletedDocumentTrace(CaptureHandle capture, OfficialRulebookImportJob job) {
+        if (job.documentVersionId() != null) bindDocumentTrace(capture, job, job.documentVersionId());
+    }
+
+    private void bindDocumentTrace(CaptureHandle capture, OfficialRulebookImportJob job, UUID documentVersionId) {
+        if (capture == null || !capture.enabled() || documentVersionId == null) return;
+        ResourceRef parent = new ResourceRef(ResourceType.IMPORT_JOB, job.id());
+        ResourceRef document = new ResourceRef(ResourceType.DOCUMENT_VERSION, documentVersionId);
+        if (!capture.bind(document)) return;
+        capture.bindingOrFailure(new BindingOrFailure(
+                TraceEventContext.create(
+                        Instant.now(clock), JourneyStage.IMPORT, documentVersionId, job.id(), parent),
+                LifecycleSignal.BINDING,
+                "DOCUMENT_VERSION_BOUND",
+                parent,
+                document));
+    }
+
+    private CaptureHandle recoverImportTrace(OfficialRulebookImportJob job, CaptureHandle fallback) {
+        if (privateTraces.isEmpty()) return fallback == null ? CaptureHandle.noop() : fallback;
+        CaptureHandle recovered = privateTraces.orElseThrow().recover(
+                new ResourceRef(ResourceType.IMPORT_JOB, job.id()), job.ownerUsername());
+        return recovered.enabled() ? recovered : fallback == null ? CaptureHandle.noop() : fallback;
+    }
+
+    private void traceFailure(CaptureHandle capture, OfficialRulebookImportJob job, String code) {
+        if (capture == null || !capture.enabled()) return;
+        ResourceRef resource = new ResourceRef(ResourceType.IMPORT_JOB, job.id());
+        capture.bindingOrFailure(new BindingOrFailure(
+                TraceEventContext.create(
+                        Instant.now(clock), JourneyStage.IMPORT, job.id(), null, resource),
+                LifecycleSignal.FAILURE,
+                code,
+                resource,
+                null));
     }
 
     /** Keeps UI progress fresh without putting one database transaction in every network read loop. */

@@ -1,11 +1,17 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
@@ -65,7 +71,8 @@ final class TeachingSectionDraftComposer {
                 assistantRunId,
                 sectionIndex,
                 includeVisualEvidence,
-                true);
+                true,
+                CaptureHandle.noop());
     }
 
     TeachingSectionDraftCandidate compose(
@@ -77,6 +84,29 @@ final class TeachingSectionDraftComposer {
             int sectionIndex,
             boolean includeVisualEvidence,
             boolean allowValidationRevision) {
+        return compose(
+                plan,
+                planned,
+                priorSections,
+                evidence,
+                assistantRunId,
+                sectionIndex,
+                includeVisualEvidence,
+                allowValidationRevision,
+                CaptureHandle.noop());
+    }
+
+    TeachingSectionDraftCandidate compose(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            List<RuleEvidence> evidence,
+            UUID assistantRunId,
+            int sectionIndex,
+            boolean includeVisualEvidence,
+            boolean allowValidationRevision,
+            CaptureHandle capture) {
+        capture = PrivateAgentTraceCapture.failOpen(capture);
         TeachingLessonModel.SectionRequest modelRequest = requestFactory.create(
                 plan,
                 planned,
@@ -86,26 +116,24 @@ final class TeachingSectionDraftComposer {
                 model.supportsVisualEvidence(plan.createdBy()));
         if (!modelRequest.pageImages().isEmpty()) {
             log.info(
-                    "Teaching topic {} selected visual evidence pages {}",
-                    planned.topicKey(),
-                    modelRequest.pageImages().stream()
-                            .map(TeachingLessonModel.PageImageInput::pageNumber)
-                            .toList());
+                    "Teaching section {} selected {} visual evidence page(s)",
+                    planned.position(),
+                    modelRequest.pageImages().size());
         }
         SectionDraft draft;
         try {
-            draft = composeModelDraft(assistantRunId, planned, modelRequest);
+            draft = composeModelDraft(assistantRunId, planned, modelRequest, capture);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException visualCompositionFailure) {
             if (canFallbackToCitedText(modelRequest, evidence)) {
                 log.warn(
-                        "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
-                        planned.topicKey(),
-                        visualCompositionFailure.getMessage());
+                        "Visual teaching composition for section {} is unavailable; continuing with cited text (failureType={})",
+                        planned.position(),
+                        visualCompositionFailure.getClass().getSimpleName());
                 recordVisualTextFallback(assistantRunId, planned);
                 return fallbackToTextDraft(
-                        plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, 0);
+                        plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, 0, capture);
             }
             throw visualCompositionFailure;
         }
@@ -142,11 +170,10 @@ final class TeachingSectionDraftComposer {
                 List<String> feedback = draftRecoveryPolicy.repairFeedback(
                         diagnostic, hasPageImages, false);
                 log.info(
-                        "Teaching topic {} structural repair {}/{}: {}",
-                        planned.topicKey(),
+                        "Teaching section {} structural repair {}/{} requested",
+                        planned.position(),
                         repair + 1,
-                        maxRepairAttempts,
-                        feedback.getFirst());
+                        maxRepairAttempts);
                 SectionDraft draftToRevise = draft;
                 try {
                     draft = reviseModelDraft(
@@ -157,18 +184,26 @@ final class TeachingSectionDraftComposer {
                             feedback,
                             "reviseTeachingSection",
                             "repairTeachingSectionRevisionContract",
-                            "Teaching section revised from validation feedback");
+                            "Teaching section revised from validation feedback",
+                            capture);
                 } catch (AgentExecutionStoppedException stopped) {
                     throw stopped;
                 } catch (RuntimeException visualRepairFailure) {
                     if (canFallbackToCitedText(modelRequest, evidence)) {
                         log.warn(
-                                "Visual teaching repair for topic {} is unavailable; continuing with cited text: {}",
-                                planned.topicKey(),
-                                visualRepairFailure.getMessage());
+                                "Visual teaching repair for section {} is unavailable; continuing with cited text (failureType={})",
+                                planned.position(),
+                                visualRepairFailure.getClass().getSimpleName());
                         recordVisualTextFallback(assistantRunId, planned);
                         return fallbackToTextDraft(
-                                plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, repair + 1);
+                                plan,
+                                planned,
+                                evidence,
+                                modelRequest,
+                                assistantRunId,
+                                sectionIndex,
+                                repair + 1,
+                                capture);
                     }
                     throw visualRepairFailure;
                 }
@@ -190,7 +225,8 @@ final class TeachingSectionDraftComposer {
             TeachingLessonModel.SectionRequest visualRequest,
             UUID assistantRunId,
             int sectionIndex,
-            int validationAttempt) {
+            int validationAttempt,
+            CaptureHandle capture) {
         TeachingLessonModel.SectionRequest textOnlyRequest = withoutPageImages(visualRequest);
         SectionDraft textOnlyDraft = composeModelDraft(
                 assistantRunId,
@@ -198,7 +234,8 @@ final class TeachingSectionDraftComposer {
                 textOnlyRequest,
                 "fallbackToTextTeachingSection",
                 "repairTextTeachingSectionContract",
-                "Visual teaching section recomposed as complete grounded text");
+                "Visual teaching section recomposed as complete grounded text",
+                capture);
         textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
         for (int repair = 0; ; repair++) {
             try {
@@ -234,7 +271,8 @@ final class TeachingSectionDraftComposer {
                         List.of(diagnostic),
                         "reviseTextTeachingSection",
                         "repairTextTeachingSectionRevisionContract",
-                        "Text fallback revised from validation feedback");
+                        "Text fallback revised from validation feedback",
+                        capture);
                 textOnlyDraft = candidateValidator.mergeRepairPreservingValidatedFields(
                         plan,
                         planned,
@@ -273,13 +311,22 @@ final class TeachingSectionDraftComposer {
             UUID runId,
             TeachingPlan.PlannedSection planned,
             TeachingLessonModel.SectionRequest request) {
+        return composeModelDraft(runId, planned, request, CaptureHandle.noop());
+    }
+
+    private SectionDraft composeModelDraft(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request,
+            CaptureHandle capture) {
         return composeModelDraft(
                 runId,
                 planned,
                 request,
                 "composeTeachingSection",
                 "repairTeachingSectionContract",
-                "Teaching section model output received");
+                "Teaching section model output received",
+                capture);
     }
 
     private SectionDraft composeModelDraft(
@@ -289,7 +336,26 @@ final class TeachingSectionDraftComposer {
             String primaryOperation,
             String repairOperation,
             String successSummary) {
+        return composeModelDraft(
+                runId,
+                planned,
+                request,
+                primaryOperation,
+                repairOperation,
+                successSummary,
+                CaptureHandle.noop());
+    }
+
+    private SectionDraft composeModelDraft(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request,
+            String primaryOperation,
+            String repairOperation,
+            String successSummary,
+            CaptureHandle capture) {
         InputTokenProfile primaryProfile = model.compositionInputProfile(request);
+        TraceEventContext traceContext = modelContext(runId);
         try {
             return invocations.invoke(
                     runId,
@@ -297,7 +363,9 @@ final class TeachingSectionDraftComposer {
                     operationName(primaryOperation, planned.position()),
                     primaryProfile.totalTokens(),
                     profiledSummary(successSummary, primaryProfile),
-                    () -> model.composeInvocation(request),
+                    () -> capture.enabled()
+                            ? model.composeInvocation(request, capture, traceContext, 1)
+                            : model.composeInvocation(request),
                     result -> outputTokens(request, result),
                     result -> profiledSummary(successSummary, primaryProfile, result))
                     .draft();
@@ -310,7 +378,9 @@ final class TeachingSectionDraftComposer {
                         operationName(repairOperation, planned.position()),
                         repairProfile.totalTokens(),
                         profiledSummary("Teaching section structured output repaired", repairProfile),
-                        () -> model.repairCompositionContractInvocation(request),
+                        () -> capture.enabled()
+                                ? model.repairCompositionContractInvocation(request, capture, traceContext, 2)
+                                : model.repairCompositionContractInvocation(request),
                         result -> outputTokens(request, result),
                         result -> profiledSummary(
                                 "Teaching section structured output repaired", repairProfile, result))
@@ -331,7 +401,30 @@ final class TeachingSectionDraftComposer {
             String primaryOperation,
             String repairOperation,
             String successSummary) {
+        return reviseModelDraft(
+                runId,
+                planned,
+                request,
+                previousDraft,
+                feedback,
+                primaryOperation,
+                repairOperation,
+                successSummary,
+                CaptureHandle.noop());
+    }
+
+    SectionDraft reviseModelDraft(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request,
+            SectionDraft previousDraft,
+            List<String> feedback,
+            String primaryOperation,
+            String repairOperation,
+            String successSummary,
+            CaptureHandle capture) {
         InputTokenProfile primaryProfile = model.revisionInputProfile(request, previousDraft, feedback);
+        TraceEventContext traceContext = modelContext(runId);
         try {
             return invocations.invoke(
                     runId,
@@ -339,7 +432,10 @@ final class TeachingSectionDraftComposer {
                     operationName(primaryOperation, planned.position()),
                     primaryProfile.totalTokens(),
                     profiledSummary(successSummary, primaryProfile),
-                    () -> model.reviseInvocation(request, previousDraft, feedback),
+                    () -> capture.enabled()
+                            ? model.reviseInvocation(
+                                    request, previousDraft, feedback, capture, traceContext, 1)
+                            : model.reviseInvocation(request, previousDraft, feedback),
                     result -> outputTokens(request, result),
                     result -> profiledSummary(successSummary, primaryProfile, result))
                     .draft();
@@ -352,7 +448,10 @@ final class TeachingSectionDraftComposer {
                         operationName(repairOperation, planned.position()),
                         repairProfile.totalTokens(),
                         profiledSummary("Teaching section revision structured output repaired", repairProfile),
-                        () -> model.repairRevisionContractInvocation(request, previousDraft, feedback),
+                        () -> capture.enabled()
+                                ? model.repairRevisionContractInvocation(
+                                        request, previousDraft, feedback, capture, traceContext, 2)
+                                : model.repairRevisionContractInvocation(request, previousDraft, feedback),
                         result -> outputTokens(request, result),
                         result -> profiledSummary(
                                 "Teaching section revision structured output repaired", repairProfile, result))
@@ -436,5 +535,14 @@ final class TeachingSectionDraftComposer {
 
     private String operationName(String operation, int sectionPosition) {
         return operation + "|" + sectionPosition;
+    }
+
+    private TraceEventContext modelContext(UUID runId) {
+        return TraceEventContext.create(
+                java.time.Instant.now(),
+                JourneyStage.TEACHING,
+                UUID.randomUUID(),
+                runId,
+                new ResourceRef(ResourceType.TEACHING_RUN, runId));
     }
 }

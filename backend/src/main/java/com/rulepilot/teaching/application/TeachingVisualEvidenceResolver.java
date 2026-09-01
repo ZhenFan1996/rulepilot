@@ -1,10 +1,16 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
@@ -47,6 +53,21 @@ final class TeachingVisualEvidenceResolver {
             TeachingPlan.PlannedSection planned,
             List<RuleEvidence> retrieved,
             UUID assistantRunId) {
+        return resolve(
+                plan,
+                planned,
+                retrieved,
+                assistantRunId,
+                CaptureHandle.noop());
+    }
+
+    List<RuleEvidence> resolve(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> retrieved,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         boolean visualPlaceholder = TeachingVisualEvidenceSelector.hasVisualPageEvidence(retrieved);
         boolean progressiveSourceBinding = ProgressiveVisualTeachingPlanPolicy.isProgressive(plan);
         if ((!visualPlaceholder && !progressiveSourceBinding) || planned.sourcePageNumbers().isEmpty()) return retrieved;
@@ -62,20 +83,24 @@ final class TeachingVisualEvidenceResolver {
                     this::evidenceTokens);
             if (!pageEvidence.isEmpty()) {
                 log.info(
-                        "Teaching topic {} is bound to visual source pages {}",
-                        planned.topicKey(),
-                        planned.sourcePageNumbers());
+                        "Teaching section {} is bound to {} visual source page(s)",
+                        planned.position(),
+                        planned.sourcePageNumbers().size());
                 List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), pageEvidence, List.of());
                 if (!TeachingVisualEvidenceSelector.hasVisualPageEvidence(enriched)
                         || !visualCatalog.available(plan.createdBy())) {
                     return enriched;
                 }
-                return enrichRequiredPageFacts(plan, planned, pageEvidence, enriched, assistantRunId);
+                return enrichRequiredPageFacts(
+                        plan, planned, pageEvidence, enriched, assistantRunId, trace);
             }
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException failure) {
-            log.warn("Visual page-bound evidence read failed for topic {}: {}", planned.topicKey(), failure.getMessage());
+            log.warn(
+                    "Visual page-bound evidence read failed for section {} (failureType={})",
+                    planned.position(),
+                    failure.getClass().getSimpleName());
         }
         return retrieved;
     }
@@ -84,6 +109,15 @@ final class TeachingVisualEvidenceResolver {
             TeachingPlan plan,
             int completedSections,
             UUID assistantRunId) {
+        prefetchRemaining(plan, completedSections, assistantRunId, CaptureHandle.noop());
+    }
+
+    void prefetchRemaining(
+            TeachingPlan plan,
+            int completedSections,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         if (!ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
                 || completedSections < 1
                 || completedSections >= plan.sections().size()
@@ -117,7 +151,12 @@ final class TeachingVisualEvidenceResolver {
                     "prefetchProgressiveVisualPages|" + (completedSections + 1),
                     pageInputs.size() * 600,
                     progressivePrefetchSummary(plan.createdBy(), pageInputs.size()),
-                    () -> visualCatalog.summarizeForTeaching(request),
+                    () -> trace.enabled()
+                            ? visualCatalog.summarizeForTeaching(
+                                    request,
+                                    trace,
+                                    visualModelContext(assistantRunId))
+                            : visualCatalog.summarizeForTeaching(request),
                     result -> estimateTokens(result.toString()));
             List<VisualRulebookPageFacts.PageFact> interpreted = catalog.pages().stream()
                     .filter(summary -> requested.contains(summary.pageNumber()))
@@ -127,17 +166,17 @@ final class TeachingVisualEvidenceResolver {
             if (!interpreted.isEmpty()) {
                 persistInterpretedFacts(plan.documentVersionId(), interpreted);
                 log.info(
-                        "Progressive Teaching continuation stored visual facts for document {} pages {}",
+                        "Progressive Teaching continuation stored visual facts for document {} (pageCount={})",
                         plan.documentVersionId(),
-                        interpreted.stream().map(VisualRulebookPageFacts.PageFact::pageNumber).toList());
+                        interpreted.size());
             }
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException failure) {
             log.warn(
-                    "Progressive Teaching visual prefetch failed for plan {}; section-level recovery remains available",
+                    "Progressive Teaching visual prefetch failed for plan {} (failureType={}); section-level recovery remains available",
                     plan.id(),
-                    failure);
+                    failure.getClass().getSimpleName());
         }
     }
 
@@ -188,7 +227,8 @@ final class TeachingVisualEvidenceResolver {
             TeachingPlan.PlannedSection planned,
             List<RuleEvidence> pageEvidence,
             List<RuleEvidence> enriched,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         boolean progressive = ProgressiveVisualTeachingPlanPolicy.isProgressive(plan);
         Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
         pageEvidence.stream()
@@ -208,9 +248,19 @@ final class TeachingVisualEvidenceResolver {
                         "inspectRequiredVisualPage|" + planned.position() + "|" + image.pageNumber(),
                         800,
                         requiredPageInterpretationSummary(plan),
-                        () -> progressive
-                                ? visualCatalog.summarizeForTeaching(request)
-                                : visualCatalog.summarize(request),
+                        () -> capture.enabled()
+                                ? progressive
+                                        ? visualCatalog.summarizeForTeaching(
+                                                request,
+                                                capture,
+                                                visualModelContext(assistantRunId))
+                                        : visualCatalog.summarize(
+                                                request,
+                                                capture,
+                                                visualModelContext(assistantRunId))
+                                : progressive
+                                        ? visualCatalog.summarizeForTeaching(request)
+                                        : visualCatalog.summarize(request),
                         result -> estimateTokens(result.toString()));
                 interpreted.addAll(catalog.pages().stream()
                         .map(summary -> {
@@ -227,18 +277,17 @@ final class TeachingVisualEvidenceResolver {
                 throw stopped;
             } catch (RuntimeException failure) {
                 log.warn(
-                        "Required visual page interpretation failed for topic {} page {}: {}",
-                        planned.topicKey(),
-                        image.pageNumber(),
-                        failure.getMessage());
+                        "Required visual page interpretation failed for section {} (failureType={})",
+                        planned.position(),
+                        failure.getClass().getSimpleName());
             }
         }
         if (interpreted.isEmpty()) return enriched;
         persistInterpretedFacts(plan.documentVersionId(), interpreted);
         log.info(
-                "Teaching topic {} added on-demand visual facts for pages {}",
-                planned.topicKey(),
-                interpreted.stream().map(VisualRulebookPageFacts.PageFact::pageNumber).toList());
+                "Teaching section {} added on-demand visual facts for {} page(s)",
+                planned.position(),
+                interpreted.size());
         return enrichPageFacts(plan.documentVersionId(), pageEvidence, interpreted);
     }
 
@@ -311,5 +360,16 @@ final class TeachingVisualEvidenceResolver {
 
     private String operationName(String operation, int sectionPosition) {
         return operation + "|" + sectionPosition;
+    }
+
+    private TraceEventContext visualModelContext(UUID assistantRunId) {
+        return TraceEventContext.create(
+                java.time.Instant.now(),
+                JourneyStage.TEACHING,
+                UUID.randomUUID(),
+                assistantRunId,
+                assistantRunId == null
+                        ? null
+                        : new ResourceRef(ResourceType.TEACHING_RUN, assistantRunId));
     }
 }

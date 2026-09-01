@@ -136,10 +136,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-real-rulebook-experience"
-          mkdir -p "$artifact_dir"
-          printf '{"stage":"preflight"}\n' > "$artifact_dir/status.json"
-          chmod 600 "$artifact_dir/status.json"
+          private_dir="$RUNNER_TEMP/rulepilot-private-real-rulebook-${GITHUB_RUN_ID}"
+          mkdir -p "$private_dir"
+          chmod 700 "$private_dir"
+          printf '{"stage":"preflight"}\n' > "$private_dir/status.json"
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
@@ -217,19 +217,22 @@ jobs:
                 done
               sleep 5
             done' \
-            > "$artifact_dir/server-resources.tsv" \
-            2> "$artifact_dir/server-resources-diagnostics.log" &
+            > "$private_dir/server-resources.tsv" \
+            2> "$private_dir/server-resources-diagnostics.log" &
           server_resource_pid=$!
 
           RULEPILOT_PRODUCTION_EXPERIENCE=true \
           RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
           RULEPILOT_EXPERIENCE_COMPLETION_FILE="$RUNNER_TEMP/concurrent-generation-finished" \
-          RULEPILOT_EXPERIENCE_BROWSER_REPORT="$artifact_dir/browser-navigation.json" \
+          RULEPILOT_EXPERIENCE_BROWSER_REPORT="$private_dir/browser-navigation.json" \
+          RULEPILOT_PRODUCTION_PLAYWRIGHT_OUTPUT_DIR="$private_dir/playwright-test-results" \
+          RULEPILOT_PRODUCTION_PLAYWRIGHT_REPORT_DIR="$private_dir/playwright-html-report" \
           RULEPILOT_EXPERIENCE_USER_A="$player_username" \
           RULEPILOT_EXPERIENCE_PASSWORD_A="$player_password" \
           RULEPILOT_EXPERIENCE_USER_B="$admin_username" \
           RULEPILOT_EXPERIENCE_PASSWORD_B="$admin_password" \
-            npm --prefix frontend exec -- playwright test --config frontend/playwright.production.config.ts &
+            npm --prefix frontend exec -- playwright test --config frontend/playwright.production.config.ts \
+              > "$private_dir/browser-probe.log" 2>&1 &
           browser_pid=$!
 
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
@@ -243,9 +246,9 @@ jobs:
               --preparation-mode visual \
               --visual-expectation required \
               --navigation-mode api \
-              --navigation-file "$artifact_dir/user-a-navigation.tsv" \
-              --result-file "$artifact_dir/user-a-result.json" \
-              > "$artifact_dir/user-a-summary.json" 2> "$artifact_dir/user-a-diagnostics.log" &
+              --navigation-file "$private_dir/user-a-navigation.tsv" \
+              --result-file "$private_dir/user-a-result.json" \
+              > "$private_dir/user-a-summary.json" 2> "$private_dir/user-a-diagnostics.log" &
           child_pids+=("$!")
 
           RULEPILOT_SMOKE_PASSWORD="$admin_password" \
@@ -258,9 +261,9 @@ jobs:
               --official-source-url "$RULEBOOK_B_URL" \
               --visual-expectation required \
               --navigation-mode api \
-              --navigation-file "$artifact_dir/user-b-navigation.tsv" \
-              --result-file "$artifact_dir/user-b-result.json" \
-              > "$artifact_dir/user-b-summary.json" 2> "$artifact_dir/user-b-diagnostics.log" &
+              --navigation-file "$private_dir/user-b-navigation.tsv" \
+              --result-file "$private_dir/user-b-result.json" \
+              > "$private_dir/user-b-summary.json" 2> "$private_dir/user-b-diagnostics.log" &
           child_pids+=("$!")
 
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
@@ -273,9 +276,9 @@ jobs:
               --official-source-url "$RULEBOOK_C_URL" \
               --visual-expectation required \
               --navigation-mode api \
-              --navigation-file "$artifact_dir/user-c-navigation.tsv" \
-              --result-file "$artifact_dir/user-c-result.json" \
-              > "$artifact_dir/user-c-summary.json" 2> "$artifact_dir/user-c-diagnostics.log" &
+              --navigation-file "$private_dir/user-c-navigation.tsv" \
+              --result-file "$private_dir/user-c-result.json" \
+              > "$private_dir/user-c-summary.json" 2> "$private_dir/user-c-diagnostics.log" &
           child_pids+=("$!")
 
           RULEPILOT_SMOKE_PASSWORD="$admin_password" \
@@ -288,9 +291,9 @@ jobs:
               --official-source-url "$RULEBOOK_D_URL" \
               --visual-expectation required \
               --navigation-mode api \
-              --navigation-file "$artifact_dir/user-d-navigation.tsv" \
-              --result-file "$artifact_dir/user-d-result.json" \
-              > "$artifact_dir/user-d-summary.json" 2> "$artifact_dir/user-d-diagnostics.log" &
+              --navigation-file "$private_dir/user-d-navigation.tsv" \
+              --result-file "$private_dir/user-d-result.json" \
+              > "$private_dir/user-d-summary.json" 2> "$private_dir/user-d-diagnostics.log" &
           child_pids+=("$!")
 
           set +e
@@ -316,27 +319,91 @@ jobs:
           fi
           printf '{"userA":%d,"userB":%d,"userC":%d,"userD":%d,"browser":%d}\n' \
             "$user_a_status" "$user_b_status" "$user_c_status" "$user_d_status" \
-            "$browser_status" > "$artifact_dir/status.json"
-          if [[ -d frontend/test-results ]]; then
-            mkdir -p "$artifact_dir/playwright-test-results"
-            find frontend/test-results -type f -name '*.png' \
-              -exec cp {} "$artifact_dir/playwright-test-results/" \; || true
-          fi
+            "$browser_status" > "$private_dir/status.json"
           kill "$server_resource_pid" 2>/dev/null || true
           wait "$server_resource_pid" 2>/dev/null || true
           server_resource_pid=
-          chmod -R go-rwx "$artifact_dir"
+          chmod -R go-rwx "$private_dir"
           [[ "$user_a_status" == 0 \
             && "$user_b_status" == 0 \
             && "$user_c_status" == 0 \
             && "$user_d_status" == 0 \
             && "$browser_status" == 0 ]]
 
-      - name: Upload private diagnostic output
+      - name: Create non-sensitive concurrency measurements
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          private_dir="$RUNNER_TEMP/rulepilot-private-real-rulebook-${GITHUB_RUN_ID}"
+          public_dir="$GITHUB_WORKSPACE/.artifacts/production-real-rulebook-experience"
+          mkdir -p "$private_dir" "$public_dir"
+          status_file="$private_dir/status.json"
+          if [[ ! -s "$status_file" ]]; then
+            printf '%s\n' \
+              '{"stage":"workflow-failed-before-exercise","userA":null,"userB":null,"userC":null,"userD":null,"browser":null}' \
+              > "$status_file"
+          fi
+          session_measurements="$private_dir/session-measurements.ndjson"
+          : > "$session_measurements"
+          shopt -s nullglob
+          for result_file in "$private_dir"/user-*-result.json; do
+            jq -c '{
+              completed: (.completed // false),
+              stage,
+              preparation: {
+                state: (.summary.preparationState // .preparationState // null),
+                planSectionCount: (.summary.sectionCount // .planSectionCount // 0)
+              },
+              lesson: {
+                runState: (.summary.lessonState // null),
+                status: (.summary.lessonStatus // null),
+                visualStepCount: (.summary.visualStepCount // 0),
+                focusedVisualStepCount: (.summary.focusedVisualStepCount // 0),
+                visualEnrichmentState: (.summary.visualEnrichmentState // null)
+              },
+              answer: {
+                status: (.summary.answerStatus // .answerStatus // null),
+                citationCount: (.summary.answerCitationCount // .answerCitationCount // 0)
+              },
+              navigation: (.summary.navigation // {
+                requestCount: 0, failureCount: 0, averageMs: 0, maxMs: 0
+              }),
+              titleVerified: (.summary.titleVerified // false)
+            }' "$result_file" >> "$session_measurements"
+          done
+          jq -s --slurpfile outcomes "$status_file" '{
+            schemaVersion: 1,
+            completed: (
+              ($outcomes[0].userA == 0)
+              and ($outcomes[0].userB == 0)
+              and ($outcomes[0].userC == 0)
+              and ($outcomes[0].userD == 0)
+              and ($outcomes[0].browser == 0)
+            ),
+            outcomes: $outcomes[0],
+            completedSessionCount: ([.[] | select(.completed == true)] | length),
+            sessions: .
+          }' "$session_measurements" > "$public_dir/summary.json"
+          chmod 600 "$public_dir/summary.json"
+
+      - name: Upload non-sensitive concurrency measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: production-real-rulebook-experience-${{ github.run_id }}
-          path: .artifacts/production-real-rulebook-experience
+          path: .artifacts/production-real-rulebook-experience/summary.json
           if-no-files-found: warn
           retention-days: 1
+
+      - name: Delete private concurrency evidence from the runner
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf -- "$RUNNER_TEMP/rulepilot-private-real-rulebook-${GITHUB_RUN_ID}"
+          rm -rf -- "$GITHUB_WORKSPACE/.artifacts/production-real-rulebook-experience"
+          rm -rf -- "$GITHUB_WORKSPACE/frontend/test-results"
+          rm -rf -- "$GITHUB_WORKSPACE/frontend/playwright-production-report"
+          rm -f -- "$HOME/.ssh/id_ed25519" "$RUNNER_TEMP"/rulebook-{a,b,c,d}.pdf

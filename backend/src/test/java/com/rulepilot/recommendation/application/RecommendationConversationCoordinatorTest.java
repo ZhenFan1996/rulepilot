@@ -10,7 +10,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionCriterion;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionDimension;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
@@ -79,6 +85,48 @@ class RecommendationConversationCoordinatorTest {
                 .extracting(message -> message.role() + ":" + message.text())
                 .containsExactly("user:想找四人游戏", "assistant:我核对好了。");
         verify(agent, times(1)).conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any());
+    }
+
+    @Test
+    void recordsAnOwnedReplayLifecycleWithoutCallingTheAgentAgain() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
+                .thenReturn(response("Stored answer."));
+        RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
+        UUID clientTurnId = UUID.randomUUID();
+        ConversationRequest request = request("Same request");
+        var completed = coordinator.converse(
+                new SessionTurn(null, 0, clientTurnId, request),
+                "en",
+                "alice",
+                ignored -> {});
+        CaptureHandle capture = mock(CaptureHandle.class);
+        when(capture.enabled()).thenReturn(true);
+        UUID traceTurnOperationId = UUID.randomUUID();
+
+        var replayed = coordinator.converse(
+                new SessionTurn(completed.conversationId(), 0, clientTurnId, request),
+                "en",
+                "alice",
+                ignored -> {},
+                ignored -> {},
+                capture,
+                traceTurnOperationId);
+
+        var events = org.mockito.ArgumentCaptor.forClass(BindingOrFailure.class);
+        verify(capture, times(2)).bindingOrFailure(events.capture());
+        assertThat(events.getAllValues())
+                .filteredOn(event -> event.signal() == LifecycleSignal.REPLAY)
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.code()).isEqualTo("RECOMMENDATION_TURN_REPLAYED");
+                    assertThat(event.context().operationId()).isEqualTo(traceTurnOperationId);
+                    assertThat(event.context().resource().id()).isEqualTo(traceTurnOperationId);
+                    assertThat(event.parentResource().id()).isEqualTo(completed.conversationId());
+                    assertThat(event.childResource().id()).isEqualTo(traceTurnOperationId);
+                });
+        assertThat(replayed.replayed()).isTrue();
+        verify(agent, times(1)).conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any());
     }
 
     @Test
@@ -211,10 +259,16 @@ class RecommendationConversationCoordinatorTest {
     void keepsTheLastSettledCatalogCheckpointWhenFinalCompositionFails() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         Game verified = verifiedGame(62);
+        CatalogSelectionIntent intent = new CatalogSelectionIntent(List.of(new CatalogSelectionCriterion(
+                CatalogSelectionDimension.MECHANIC,
+                "Network Building",
+                "我想玩网络建设",
+                1)));
         when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
                 .thenAnswer(invocation -> {
                     Consumer<TurnCheckpoint> checkpoints = invocation.getArgument(5);
-                    checkpoints.accept(new TurnCheckpoint(RecommendationProfile.empty(), List.of(verified)));
+                    checkpoints.accept(new TurnCheckpoint(
+                            RecommendationProfile.empty(), intent, List.of(verified)));
                     throw new IllegalStateException("final composition failed after catalog read");
                 });
         InMemoryStore store = new InMemoryStore();
@@ -241,6 +295,7 @@ class RecommendationConversationCoordinatorTest {
         assertThat(recovered.state().knownGames())
                 .extracting(BoardGameRecommendationAgent.KnownGame::bggId)
                 .containsExactly(62);
+        assertThat(recovered.state().catalogSelectionIntent()).isEqualTo(intent);
     }
 
     @Test

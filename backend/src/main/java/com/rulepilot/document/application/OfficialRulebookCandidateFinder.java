@@ -1,6 +1,8 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import java.util.List;
+import java.util.UUID;
 
 public interface OfficialRulebookCandidateFinder {
 
@@ -8,9 +10,22 @@ public interface OfficialRulebookCandidateFinder {
 
     List<Candidate> find(Request request);
 
+    /** Captures one authenticated discovery turn without making private diagnostics a product dependency. */
+    default List<Candidate> find(Request request, CaptureHandle capture, UUID parentOperationId) {
+        return find(request);
+    }
+
     /** One bounded recovery pass after ordinary search and source-page inspection produced no downloadable PDF. */
     default List<Candidate> findAfterSourcePages(Request request, List<Candidate> observedSourcePages) {
         return List.of();
+    }
+
+    default List<Candidate> findAfterSourcePages(
+            Request request,
+            List<Candidate> observedSourcePages,
+            CaptureHandle capture,
+            UUID parentOperationId) {
+        return findAfterSourcePages(request, observedSourcePages);
     }
 
     record Request(

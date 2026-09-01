@@ -3,6 +3,9 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import java.util.List;
 import java.util.UUID;
@@ -35,6 +38,34 @@ class TeachingEvidenceRetrievalPolicyTest {
                 .containsExactly("setup", "starting cards");
         assertThat(TeachingEvidenceRetrievalPolicy.queries(planned, 3))
                 .containsExactly("setup", "starting cards");
+    }
+
+    @Test
+    void neverTurnsAnUnresolvedTypedSourceIntoARetrievalQuery() {
+        List<SourceCoverageSlotDraft> slots = List.of(
+                new SourceCoverageSlotDraft(
+                        "sourced-slot", SourceCoverageRole.CORE_LOOP, "R-loop", List.of(2),
+                        "mixed-topic", "sourced-unit", SourceCoverageAvailability.SOURCED),
+                new SourceCoverageSlotDraft(
+                        "missing-slot", SourceCoverageRole.ENDING, "External ending", List.of(3),
+                        "mixed-topic", "missing-unit", SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE),
+                new SourceCoverageSlotDraft(
+                        "unresolved-slot", SourceCoverageRole.SCORING, "Unresolved scoring", List.of(),
+                        "mixed-topic", "unresolved-unit", SourceCoverageAvailability.UNRESOLVED));
+        PlannedSection planned = new PlannedSection(
+                1,
+                "mixed-topic",
+                "Mixed source state",
+                "Teach what the typed source inventory supports.",
+                true,
+                false,
+                TeachingUnitContract.encodeUnits(slots),
+                List.of("source_contract_v1"),
+                List.of(2, 3));
+
+        assertThat(TeachingEvidenceRetrievalPolicy.queries(planned, 3))
+                .containsExactly("R-loop", "External ending")
+                .doesNotContain("Unresolved scoring");
     }
 
     @Test

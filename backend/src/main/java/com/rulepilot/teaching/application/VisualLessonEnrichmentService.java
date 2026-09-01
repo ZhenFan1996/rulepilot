@@ -1,5 +1,16 @@
 package com.rulepilot.teaching.application;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantRunMode;
@@ -7,13 +18,16 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.ingestion.RulebookUnderstandingRebuilder;
+import com.rulepilot.teaching.domain.IllustratedLesson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import java.util.UUID;
+import java.util.List;
 import java.util.function.Consumer;
 
 /** Best-effort post-publication visual work. A failure never changes the base lesson. */
@@ -22,6 +36,7 @@ import java.util.function.Consumer;
 public class VisualLessonEnrichmentService {
 
     private static final Logger log = LoggerFactory.getLogger(VisualLessonEnrichmentService.class);
+    private static final ObjectMapper TRACE_JSON = new ObjectMapper().findAndRegisterModules();
     private final TeachingPlanRepository plans;
     private final IllustratedLessonRepository lessons;
     private final VisualLessonEnricher enricher;
@@ -103,18 +118,25 @@ public class VisualLessonEnrichmentService {
             publisher.publish(enrich(plan.documentVersionId(), lesson, plan.createdBy()));
         } catch (RuntimeException failure) {
             log.warn(
-                    "Visual lesson enrichment failed for plan {} ({}): {}",
+                    "Visual lesson enrichment failed for plan {} (failureType={})",
                     teachingPlanId,
-                    failure.getClass().getSimpleName(),
-                    failure.getMessage());
+                    failure.getClass().getSimpleName());
         }
     }
 
     public void enrichLatest(UUID teachingPlanId, RunSnapshot run) {
+        enrichLatest(teachingPlanId, run, CaptureHandle.noop());
+    }
+
+    public void enrichLatest(
+            UUID teachingPlanId,
+            RunSnapshot run,
+            CaptureHandle capture) {
         if (runs == null || activities == null) {
             enrichLatest(teachingPlanId);
             return;
         }
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         RunSnapshot current = run;
         log.info("Starting observable visual enrichment run {} for teaching plan {}", current.id(), teachingPlanId);
         try {
@@ -149,27 +171,40 @@ public class VisualLessonEnrichmentService {
             }
             UUID runId = current.id();
             VisualLessonEnricher.EnrichmentResult result = enrichWithReport(
-                    plan.documentVersionId(), lesson, plan.createdBy(), runId, visualProgress(runId, plan.createdBy()));
+                    plan.documentVersionId(),
+                    lesson,
+                    plan.createdBy(),
+                    runId,
+                    visualProgress(runId, plan.createdBy(), trace),
+                    trace);
             if (!runIsActive(runId, plan.createdBy())) {
                 log.info("Stopped visual enrichment run {} after cancellation", runId);
+                captureFailure(trace, runId, "VISUAL_ENRICHMENT_CANCELLED");
                 return;
             }
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.VERIFYING_EVIDENCE,
                     "Checking that every selected crop has cited rule evidence");
             publisher.publish(result.lesson());
+            capturePublication(
+                    trace,
+                    runId,
+                    result.lesson(),
+                    "VISUAL_ENRICHMENT_READY",
+                    citations(result.lesson()));
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.MEDIA_PACKAGING,
                     "Publishing accepted local rulebook crops");
             runs.advance(current.id(), current.revision(), AssistantRunState.COMPLETED, "Visual enrichment finished");
         } catch (VisualEnrichmentCancelled cancelled) {
             log.info("Stopped visual enrichment run {} after cancellation", current.id());
+            captureFailure(trace, current.id(), "VISUAL_ENRICHMENT_CANCELLED");
         } catch (RuntimeException failure) {
             log.warn(
-                    "Observable visual lesson enrichment failed for plan {} ({}): {}",
+                    "Observable visual lesson enrichment failed for plan {} (failureType={})",
                     teachingPlanId,
-                    failure.getClass().getSimpleName(),
-                    failure.getMessage());
+                    failure.getClass().getSimpleName());
+            captureFailure(trace, current == null ? run.id() : current.id(), "VISUAL_ENRICHMENT_FAILED");
             if (current != null && !current.state().terminal()) {
                 try {
                     runs.fail(current.id(), current.revision(), "VISUAL_ENRICHMENT_FAILED", "Visual enrichment stopped safely");
@@ -186,9 +221,17 @@ public class VisualLessonEnrichmentService {
      * page facts are read and replaced.
      */
     public void extractIconGlossaryOnly(UUID teachingPlanId, RunSnapshot run) {
+        extractIconGlossaryOnly(teachingPlanId, run, CaptureHandle.noop());
+    }
+
+    public void extractIconGlossaryOnly(
+            UUID teachingPlanId,
+            RunSnapshot run,
+            CaptureHandle capture) {
         if (runs == null || iconGlossary == null) {
             throw new IllegalStateException("rulebook icon glossary runs are unavailable");
         }
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         RunSnapshot current = run;
         try {
             current = runs.advance(
@@ -197,7 +240,15 @@ public class VisualLessonEnrichmentService {
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.RETRIEVING,
                     "Identifying rule icons and their directly printed explanations");
-            iconGlossary.extract(teachingPlanId, current.ownerUsername(), current.id());
+            var glossary = trace.enabled()
+                    ? iconGlossary.extract(teachingPlanId, current.ownerUsername(), current.id(), trace)
+                    : iconGlossary.extract(teachingPlanId, current.ownerUsername(), current.id());
+            capturePublication(
+                    trace,
+                    current.id(),
+                    glossary,
+                    "ICON_GLOSSARY_" + glossary.status().name(),
+                    List.of());
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.VERIFYING_EVIDENCE,
                     "Checking icon meanings against visible rulebook labels");
@@ -209,11 +260,10 @@ public class VisualLessonEnrichmentService {
                     "Rulebook icon quick reference finished");
         } catch (RuntimeException failure) {
             log.warn(
-                    "Rulebook icon glossary remained partial for plan {} ({}): {}",
+                    "Rulebook icon glossary remained partial for plan {} (failureType={})",
                     teachingPlanId,
-                    failure.getClass().getSimpleName(),
-                    failure.getMessage(),
-                    failure);
+                    failure.getClass().getSimpleName());
+            captureFailure(trace, current == null ? run.id() : current.id(), "ICON_GLOSSARY_FAILED");
             if (current != null && !current.state().terminal()) {
                 try {
                     runs.fail(
@@ -281,19 +331,64 @@ public class VisualLessonEnrichmentService {
             String modelConfigurationOwner,
             UUID runId,
             VisualLessonEnricher.VisualProgressListener progress) {
+        return enrichWithReport(
+                documentVersionId,
+                lesson,
+                modelConfigurationOwner,
+                runId,
+                progress,
+                CaptureHandle.noop());
+    }
+
+    private VisualLessonEnricher.EnrichmentResult enrichWithReport(
+            UUID documentVersionId,
+            com.rulepilot.teaching.domain.IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            UUID runId,
+            VisualLessonEnricher.VisualProgressListener progress,
+            CaptureHandle capture) {
         try {
-            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, runId, progress);
+            return capture != null && capture.enabled()
+                    ? enricher.enrichWithProgress(
+                            documentVersionId,
+                            lesson,
+                            modelConfigurationOwner,
+                            runId,
+                            progress,
+                            capture)
+                    : enricher.enrichWithProgress(
+                            documentVersionId,
+                            lesson,
+                            modelConfigurationOwner,
+                            runId,
+                            progress);
         } catch (IllegalArgumentException missingUnderstanding) {
             if (!"rulebook understanding does not exist".equals(missingUnderstanding.getMessage())) {
                 throw missingUnderstanding;
             }
             log.info("Rebuilding layout evidence for legacy document {} before visual enrichment", documentVersionId);
             understandingRebuilder.rebuild(documentVersionId);
-            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, runId, progress);
+            return capture != null && capture.enabled()
+                    ? enricher.enrichWithProgress(
+                            documentVersionId,
+                            lesson,
+                            modelConfigurationOwner,
+                            runId,
+                            progress,
+                            capture)
+                    : enricher.enrichWithProgress(
+                            documentVersionId,
+                            lesson,
+                            modelConfigurationOwner,
+                            runId,
+                            progress);
         }
     }
 
-    private VisualLessonEnricher.VisualProgressListener visualProgress(UUID runId, String ownerUsername) {
+    private VisualLessonEnricher.VisualProgressListener visualProgress(
+            UUID runId,
+            String ownerUsername,
+            CaptureHandle capture) {
         return new VisualLessonEnricher.VisualProgressListener() {
             @Override
             public void targetStarted(VisualLessonEnricher.VisualTarget target) {
@@ -331,8 +426,74 @@ public class VisualLessonEnrichmentService {
                     com.rulepilot.teaching.domain.IllustratedLesson lesson) {
                 if (!runIsActive(runId, ownerUsername)) throw new VisualEnrichmentCancelled();
                 publisher.publish(lesson);
+                capturePublication(
+                        capture,
+                        runId,
+                        lesson,
+                        "VISUAL_ENRICHMENT_PROGRESS",
+                        citations(lesson));
             }
         };
+    }
+
+    private void capturePublication(
+            CaptureHandle capture,
+            UUID runId,
+            Object published,
+            String statusCode,
+            List<UUID> citations) {
+        if (!capture.enabled()) return;
+        ResourceRef resource = visualRun(runId);
+        try {
+            capture.publication(new Publication(
+                    traceContext(UUID.randomUUID(), runId, resource),
+                    PublicationChannel.TEACHING_LESSON,
+                    TRACE_JSON.writeValueAsString(published),
+                    statusCode,
+                    citations));
+        } catch (JsonProcessingException | RuntimeException traceFailure) {
+            capture.bindingOrFailure(new BindingOrFailure(
+                    traceContext(UUID.randomUUID(), runId, resource),
+                    LifecycleSignal.GAP,
+                    "VISUAL_PUBLICATION_TRACE_GAP",
+                    resource,
+                    null));
+        }
+    }
+
+    private void captureFailure(CaptureHandle capture, UUID runId, String code) {
+        if (!capture.enabled()) return;
+        ResourceRef resource = visualRun(runId);
+        capture.bindingOrFailure(new BindingOrFailure(
+                traceContext(UUID.randomUUID(), runId, resource),
+                LifecycleSignal.FAILURE,
+                code,
+                resource,
+                null));
+    }
+
+    private List<UUID> citations(IllustratedLesson lesson) {
+        return lesson.sections().stream()
+                .flatMap(section -> java.util.stream.Stream.concat(
+                        section.visualSourceChunkIds().stream(),
+                        section.steps().stream().flatMap(step -> java.util.stream.Stream.concat(
+                                step.sourceChunkIds().stream(),
+                                step.ruleFacts().stream().flatMap(fact -> fact.sourceChunkIds().stream())))))
+                .distinct()
+                .limit(200)
+                .toList();
+    }
+
+    private ResourceRef visualRun(UUID runId) {
+        return new ResourceRef(ResourceType.VISUAL_RUN, runId);
+    }
+
+    private TraceEventContext traceContext(
+            UUID operationId,
+            UUID parentOperationId,
+            ResourceRef resource) {
+        return TraceEventContext.create(
+                java.time.Instant.now(), JourneyStage.TEACHING, operationId, parentOperationId, resource);
     }
 
     private String visualStepOperation(VisualLessonEnricher.VisualTarget target) {

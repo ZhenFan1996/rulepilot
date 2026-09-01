@@ -34,9 +34,29 @@ class PlayerFacingLessonLanguagePolicyTest {
                 .isFalse();
     }
 
-    private IllustratedLesson lesson(LessonStatus status, LessonSection section) {
+    @Test
+    void keepsSupportedContentPublicWhenAnotherSectionHasOnlyALocalEvidenceGap() {
+        IllustratedLesson mixed = lesson(
+                LessonStatus.DRAFT_READY,
+                section(EvidenceStatus.SUPPORTED, "完成当前有来源的行动。", true),
+                section(EvidenceStatus.INSUFFICIENT_EVIDENCE, "外部规则暂不可用。", false));
+
+        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(mixed)).isTrue();
+        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(lesson(
+                        LessonStatus.DRAFT_READY,
+                        section(EvidenceStatus.INSUFFICIENT_EVIDENCE, "局部缺口一。", false),
+                        section(EvidenceStatus.INSUFFICIENT_EVIDENCE, "局部缺口二。", false))))
+                .isFalse();
+        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(lesson(
+                        LessonStatus.DRAFT_READY,
+                        section(EvidenceStatus.SUPPORTED, "看似可读但没有引用。", false),
+                        section(EvidenceStatus.INSUFFICIENT_EVIDENCE, "局部缺口。", false))))
+                .isFalse();
+    }
+
+    private IllustratedLesson lesson(LessonStatus status, LessonSection... sections) {
         return new IllustratedLesson(
-                UUID.randomUUID(), UUID.randomUUID(), status, List.of(section), "test", Instant.now());
+                UUID.randomUUID(), UUID.randomUUID(), status, List.of(sections), "test", Instant.now());
     }
 
     private LessonSection section(EvidenceStatus status, String text, boolean cited) {

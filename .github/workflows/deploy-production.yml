@@ -197,7 +197,10 @@ jobs:
           deepseek_enabled=false
           deepseek_key_present=false
           model_credential_key_present=false
-          managed_runtime_keys=' TEACHING_PROVIDER TEACHING_MODEL_PROVIDER VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_TEMPERATURE BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
+          private_agent_trace_key_present=false
+          private_agent_trace_key=''
+          private_agent_trace_allowed_user=''
+          managed_runtime_keys=' TEACHING_PROVIDER TEACHING_MODEL_PROVIDER VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_TEMPERATURE BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY RULEPILOT_PRIVATE_AGENT_TRACE_ENABLED RULEPILOT_PRIVATE_AGENT_TRACE_ALLOWED_USERS RULEPILOT_PRIVATE_AGENT_TRACE_ENCRYPTION_KEY_VERSION RULEPILOT_PRIVATE_AGENT_TRACE_CAPTURE_DURATION RULEPILOT_PRIVATE_AGENT_TRACE_RETENTION RULEPILOT_PRIVATE_AGENT_TRACE_MAX_BYTES RULEPILOT_PRIVATE_AGENT_TRACE_MAX_EVENT_BYTES '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
@@ -217,6 +220,13 @@ jobs:
             elif [[ "$line" == MODEL_CREDENTIAL_ENCRYPTION_KEY=* ]]; then
               printf '%s\n' "$line"
               [[ -n "${line#MODEL_CREDENTIAL_ENCRYPTION_KEY=}" ]] && model_credential_key_present=true
+            elif [[ "$line" == RULEPILOT_USER_USERNAME=* ]]; then
+              printf '%s\n' "$line"
+              private_agent_trace_allowed_user=${line#RULEPILOT_USER_USERNAME=}
+            elif [[ "$line" == RULEPILOT_PRIVATE_AGENT_TRACE_ENCRYPTION_KEY=* ]]; then
+              printf '%s\n' "$line"
+              private_agent_trace_key=${line#RULEPILOT_PRIVATE_AGENT_TRACE_ENCRYPTION_KEY=}
+              [[ -n "$private_agent_trace_key" ]] && private_agent_trace_key_present=true
             elif [[ "$managed_runtime_keys" == *" ${line%%=*} "* ]]; then
               continue
             else
@@ -236,6 +246,35 @@ jobs:
           fi
           if [[ "$model_credential_key_present" != true ]]; then
             printf 'MODEL_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32 | tr -d '\n')" >> "$temporary_env"
+          fi
+          private_agent_trace_allowed_user=${private_agent_trace_allowed_user#\"}
+          private_agent_trace_allowed_user=${private_agent_trace_allowed_user%\"}
+          private_agent_trace_allowed_user=${private_agent_trace_allowed_user#\'}
+          private_agent_trace_allowed_user=${private_agent_trace_allowed_user%\'}
+          if [[ -z "$private_agent_trace_allowed_user" \
+            || ${#private_agent_trace_allowed_user} -gt 120 \
+            || "$private_agent_trace_allowed_user" == *,* ]]; then
+            echo "Production player username cannot safely authorize private Agent tracing" >&2
+            exit 1
+          fi
+          if [[ "$private_agent_trace_key_present" != true ]]; then
+            printf 'RULEPILOT_PRIVATE_AGENT_TRACE_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32 | tr -d '\n')" >> "$temporary_env"
+          else
+            private_agent_trace_key=${private_agent_trace_key#\"}
+            private_agent_trace_key=${private_agent_trace_key%\"}
+            private_agent_trace_key=${private_agent_trace_key#\'}
+            private_agent_trace_key=${private_agent_trace_key%\'}
+            if ! private_agent_trace_key_bytes=$(
+              printf '%s' "$private_agent_trace_key" | base64 --decode 2>/dev/null | wc -c
+            ); then
+              echo "Existing private Agent trace encryption key is not valid base64" >&2
+              exit 1
+            fi
+            private_agent_trace_key_bytes=${private_agent_trace_key_bytes//[[:space:]]/}
+            if [[ "$private_agent_trace_key_bytes" != 32 ]]; then
+              echo "Existing private Agent trace encryption key must decode to exactly 32 bytes" >&2
+              exit 1
+            fi
           fi
           printf '%s\n' \
             'TEACHING_PROVIDER=spring-ai' \
@@ -271,10 +310,19 @@ jobs:
             'RULEBOOK_DISCOVERY_MODEL=qwen3.7-max' \
             'RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL=PT10M' \
             'RULEBOOK_DISCOVERY_HOURLY_LIMIT=30' \
-            'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' >> "$temporary_env"
+            'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' \
+            'RULEPILOT_PRIVATE_AGENT_TRACE_ENABLED=true' \
+            'RULEPILOT_PRIVATE_AGENT_TRACE_ENCRYPTION_KEY_VERSION=1' \
+            'RULEPILOT_PRIVATE_AGENT_TRACE_CAPTURE_DURATION=PT2H' \
+            'RULEPILOT_PRIVATE_AGENT_TRACE_RETENTION=PT24H' \
+            'RULEPILOT_PRIVATE_AGENT_TRACE_MAX_BYTES=32MB' \
+            'RULEPILOT_PRIVATE_AGENT_TRACE_MAX_EVENT_BYTES=512KB' >> "$temporary_env"
+          printf 'RULEPILOT_PRIVATE_AGENT_TRACE_ALLOWED_USERS=%s\n' \
+            "$private_agent_trace_allowed_user" >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"
           unset token
+          unset private_agent_trace_key private_agent_trace_key_bytes private_agent_trace_allowed_user
           echo "Synchronized managed production integration configuration."
           REMOTE
 
@@ -370,9 +418,9 @@ jobs:
               -f infra/compose.production.yml ps -q postgres 2>/dev/null || true)
             if [[ -n "$postgres_container" ]]; then
               echo "PostgreSQL runtime state:"
-              docker inspect --format '{{json .State}}' "$postgres_container" || true
-              echo "Recent PostgreSQL logs:"
-              docker logs --tail 120 "$postgres_container" || true
+              docker inspect --format \
+                'status={{.State.Status}} running={{.State.Running}} exitCode={{.State.ExitCode}} oomKilled={{.State.OOMKilled}} errorPresent={{ne .State.Error ""}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                "$postgres_container" || true
             fi
             api_container=$(docker compose --env-file .env \
               -f infra/compose.yml \
@@ -380,9 +428,9 @@ jobs:
               -f infra/compose.production.yml ps -q api 2>/dev/null || true)
             if [[ -n "$api_container" ]]; then
               echo "API runtime state:"
-              docker inspect --format '{{json .State}}' "$api_container" || true
-              echo "Recent API logs:"
-              docker logs --tail 160 "$api_container" || true
+              docker inspect --format \
+                'status={{.State.Status}} running={{.State.Running}} exitCode={{.State.ExitCode}} oomKilled={{.State.OOMKilled}} errorPresent={{ne .State.Error ""}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                "$api_container" || true
             fi
             if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
               echo "Restoring API and worker from the current release after failed activation."
@@ -471,7 +519,7 @@ jobs:
           RULEPILOT_PUBLIC_URL: https://rulepilot.cn
         run: node scripts/verify-production-availability.mjs
 
-      - name: Collect bounded production diagnostics after a failed verification
+      - name: Collect safe production state after a failed verification
         if: failure()
         shell: bash
         run: |
@@ -502,6 +550,11 @@ jobs:
           )
           echo "Active production services:"
           "${compose[@]}" ps api worker frontend gateway
-          echo "API logs from the last 10 minutes (bounded to 250 lines):"
-          "${compose[@]}" logs --since 10m --tail 250 --no-color api
+          api_container=$("${compose[@]}" ps -q api 2>/dev/null || true)
+          if [[ -n "$api_container" ]]; then
+            echo "API runtime state:"
+            docker inspect --format \
+              'status={{.State.Status}} running={{.State.Running}} exitCode={{.State.ExitCode}} oomKilled={{.State.OOMKilled}} errorPresent={{ne .State.Error ""}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+              "$api_container" || true
+          fi
           REMOTE

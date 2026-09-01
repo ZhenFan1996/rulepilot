@@ -600,12 +600,10 @@ if [ -n "$result_file" ]; then
 	mkdir -p "$(dirname "$result_file")"
 	jq -n \
 		--arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-		--arg username "$username" \
-		--arg sourceUrl "$official_source_url" \
-		--argjson preparationRun "$preparation_result" \
-		--argjson plan "$plan" \
-		'{generatedAt: $generatedAt, stage: "plan", username: $username,
-		  sourceUrl: $sourceUrl, preparationRun: $preparationRun, plan: $plan}' > "$result_file"
+		--arg preparationState "$preparation_state" \
+		--argjson sectionCount "$plan_section_count" \
+		'{schemaVersion: 1, generatedAt: $generatedAt, stage: "plan",
+		  preparationState: $preparationState, planSectionCount: $sectionCount}' > "$result_file"
 	chmod 600 "$result_file"
 fi
 if ! jq -e --arg expected "$expected_title" '
@@ -677,7 +675,11 @@ answer_response=$(curl --fail-with-body --silent --show-error \
 	"$base_url/api/v1/document-versions/$version_id/answers")
 if [ -n "$result_file" ]; then
 	answer_checkpoint="${result_file}.answer.tmp"
-	jq --argjson answer "$answer_response" '.stage = "answer" | .answer = $answer' \
+	jq --arg answerStatus "$(jq -er '.answer.status' <<<"$answer_response")" \
+		--argjson answerCitationCount "$(jq -er '.answer.citations | length' <<<"$answer_response")" \
+		'.stage = "answer"
+		| .answerStatus = $answerStatus
+		| .answerCitationCount = $answerCitationCount' \
 		"$result_file" > "$answer_checkpoint"
 	mv "$answer_checkpoint" "$result_file"
 	chmod 600 "$result_file"
@@ -712,7 +714,6 @@ if [ "$navigation_failures" -gt 0 ]; then
 fi
 
 summary=$(jq -n \
-	--arg title "$actual_title" \
 	--arg preparationState "$preparation_state" \
 	--arg lessonState "$lesson_state" \
 	--arg lessonStatus "$lesson_status" \
@@ -723,7 +724,7 @@ summary=$(jq -n \
 	--argjson focusedVisualStepCount "$focused_visual_step_count" \
 	--arg visualEnrichmentState "$(jq -r '.run.state // "NOT_STARTED"' <<<"$visual_result")" \
 	--argjson navigation "$navigation" \
-	'{title: $title, preparationState: $preparationState, lessonState: $lessonState,
+	'{titleVerified: true, preparationState: $preparationState, lessonState: $lessonState,
 	  lessonStatus: $lessonStatus, answerStatus: $answerStatus,
 	  sectionCount: $sectionCount, answerCitationCount: $answerCitationCount,
 	  visualStepCount: $visualStepCount, focusedVisualStepCount: $focusedVisualStepCount,
@@ -734,18 +735,9 @@ if [ -n "$result_file" ]; then
 	mkdir -p "$(dirname "$result_file")"
 	jq -n \
 		--arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-		--arg username "$username" \
-		--arg sourceUrl "$official_source_url" \
 		--argjson summary "$summary" \
-		--argjson preparationRun "$preparation_result" \
-		--argjson plan "$plan" \
-		--argjson lessonRun "$lesson_result" \
-		--argjson visualRun "$visual_result" \
-		--argjson lesson "$lesson" \
-		--argjson answer "$answer_response" \
-		'{generatedAt: $generatedAt, stage: "lesson", username: $username, sourceUrl: $sourceUrl,
-		  summary: $summary, preparationRun: $preparationRun, plan: $plan,
-		  lessonRun: $lessonRun, visualRun: $visualRun, lesson: $lesson, answer: $answer}' > "$result_file"
+		'{schemaVersion: 1, generatedAt: $generatedAt, stage: "completed",
+		  completed: true, summary: $summary}' > "$result_file"
 	chmod 600 "$result_file"
 fi
 

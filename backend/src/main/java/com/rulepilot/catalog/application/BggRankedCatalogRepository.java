@@ -4,6 +4,11 @@ import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataResult;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataCriterion;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.SelectionEligibility;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -68,7 +73,7 @@ public interface BggRankedCatalogRepository {
     }
 
     default List<RankedGame> findByMetadataFilters(
-            com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters filters) {
+            CatalogFilters filters) {
         return findByMetadataFilters(
                 filters.types(),
                 filters.categories(),
@@ -76,6 +81,21 @@ public interface BggRankedCatalogRepository {
                 filters.designers(),
                 filters.maximum(),
                 filters.offset());
+    }
+
+    /**
+     * Atomically selects and hydrates recommendation rows from the same authoritative DISCOVERY snapshot. An empty
+     * Optional means this repository does not implement the optimized projection; a present empty page means the
+     * query was authoritative and found no eligible games.
+     */
+    default Optional<RecommendationCandidatePage> findRecommendationCandidates(
+            CatalogFilters filters,
+            SelectionEligibility eligibility) {
+        return Optional.empty();
+    }
+
+    default CanonicalMetadataResult canonicalizeMetadata(List<CatalogMetadataCriterion> criteria) {
+        return CanonicalMetadataResult.unsupported();
     }
 
     default List<SelectionCandidate> searchSelections(String query, int maximum) {
@@ -102,6 +122,23 @@ public interface BggRankedCatalogRepository {
         public ExactNameMatch {
             if (matchedName == null || matchedName.isBlank() || game == null) {
                 throw new IllegalArgumentException("exact BGG name match is invalid");
+            }
+        }
+    }
+
+    record RecommendationCandidate(RankedGame ranking, DiscoveryGame details) {
+        public RecommendationCandidate {
+            if (ranking == null || details == null || ranking.bggId() != details.bggId()) {
+                throw new IllegalArgumentException("BGG recommendation candidate is invalid");
+            }
+        }
+    }
+
+    record RecommendationCandidatePage(int availableCount, List<RecommendationCandidate> candidates) {
+        public RecommendationCandidatePage {
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            if (availableCount < candidates.size()) {
+                throw new IllegalArgumentException("BGG recommendation candidate page count is invalid");
             }
         }
     }

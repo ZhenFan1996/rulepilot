@@ -23,7 +23,7 @@ final class TeachingEvidenceRetrievalPolicy {
     }
 
     static List<String> queries(TeachingPlan.PlannedSection topic, int limit) {
-        return TeachingUnitContract.sourceIdentifiers(topic.retrievalQueries()).stream()
+        return TeachingUnitContract.retrievalIdentifiers(topic.retrievalQueries()).stream()
                 .map(String::strip)
                 .filter(query -> !query.isBlank())
                 .distinct()

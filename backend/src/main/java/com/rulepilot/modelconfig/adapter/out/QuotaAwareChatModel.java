@@ -4,7 +4,6 @@ import com.rulepilot.modelconfig.ModelAccountQuota;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -48,52 +47,61 @@ public final class QuotaAwareChatModel implements ChatModel {
 
     @Override
     public ChatResponse call(Prompt prompt) {
-        ModelAccountQuota.Reservation reservation = reserve();
+        ReservationLifecycle lifecycle = new ReservationLifecycle(reserve());
         try {
             ChatResponse response = delegate.call(prompt);
             TokenUsage usage = responseUsage(response, promptCharacters(prompt), responseCharacters(response));
-            quota.settle(
-                    reservation.id(),
-                    new ModelAccountQuota.Usage(usage.prompt(), usage.completion(), "SUCCESS"),
-                    Instant.now(clock));
+            lifecycle.settle(usage.prompt(), usage.completion());
             return response;
         } catch (RuntimeException exception) {
-            quota.release(reservation.id(), "PROVIDER_FAILED", Instant.now(clock));
+            releaseAfterFailure(lifecycle, exception, "PROVIDER_FAILED");
             throw exception;
         }
     }
 
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
-        ModelAccountQuota.Reservation reservation = reserve();
-        AtomicBoolean finished = new AtomicBoolean();
-        AtomicLong reportedPromptTokens = new AtomicLong(-1);
-        AtomicLong reportedCompletionTokens = new AtomicLong(-1);
-        AtomicLong completionCharacters = new AtomicLong();
-        return delegate.stream(prompt)
-                .doOnNext(response -> {
-                    completionCharacters.addAndGet(responseCharacters(response));
-                    Usage usage = response == null || response.getMetadata() == null
-                            ? null
-                            : response.getMetadata().getUsage();
-                    if (usage != null && usage.getPromptTokens() != null) {
-                        reportedPromptTokens.set(usage.getPromptTokens());
-                    }
-                    if (usage != null && usage.getCompletionTokens() != null) {
-                        reportedCompletionTokens.set(usage.getCompletionTokens());
-                    }
-                })
-                .doOnComplete(() -> settleStream(
-                        reservation,
-                        finished,
-                        reportedPromptTokens.get() >= 0
-                                ? reportedPromptTokens.get()
-                                : estimateTokens(promptCharacters(prompt)),
-                        reportedCompletionTokens.get() >= 0
-                                ? reportedCompletionTokens.get()
-                                : estimateTokens(completionCharacters.get())))
-                .doOnError(ignored -> releaseStream(reservation, finished, "PROVIDER_FAILED"))
-                .doOnCancel(() -> releaseStream(reservation, finished, "CANCELLED"));
+        return Flux.defer(() -> {
+            ReservationLifecycle lifecycle = new ReservationLifecycle(reserve());
+            AtomicLong reportedPromptTokens = new AtomicLong(-1);
+            AtomicLong reportedCompletionTokens = new AtomicLong(-1);
+            AtomicLong completionCharacters = new AtomicLong();
+            return Flux.defer(() -> {
+                        Flux<ChatResponse> provider = delegate.stream(prompt);
+                        return provider == null
+                                ? Flux.error(new IllegalStateException("chat model returned no stream"))
+                                : provider;
+                    })
+                    .doOnNext(response -> {
+                        completionCharacters.addAndGet(responseCharacters(response));
+                        Usage usage = response == null || response.getMetadata() == null
+                                ? null
+                                : response.getMetadata().getUsage();
+                        if (usage != null && usage.getPromptTokens() != null) {
+                            reportedPromptTokens.set(usage.getPromptTokens());
+                        }
+                        if (usage != null && usage.getCompletionTokens() != null) {
+                            reportedCompletionTokens.set(usage.getCompletionTokens());
+                        }
+                    })
+                    .doOnComplete(() -> lifecycle.settle(
+                            reportedPromptTokens.get() >= 0
+                                    ? reportedPromptTokens.get()
+                                    : estimateTokens(promptCharacters(prompt)),
+                            reportedCompletionTokens.get() >= 0
+                                    ? reportedCompletionTokens.get()
+                                    : estimateTokens(completionCharacters.get())))
+                    .doOnError(failure -> releaseAfterFailure(lifecycle, failure, "PROVIDER_FAILED"))
+                    .doFinally(signal -> {
+                        try {
+                            lifecycle.release(signal == reactor.core.publisher.SignalType.CANCEL
+                                    ? "CANCELLED"
+                                    : "PROVIDER_FAILED");
+                        } catch (RuntimeException ignored) {
+                            // The persistent reservation timeout is the recovery boundary when cleanup storage fails.
+                        }
+                    });
+        });
     }
 
     @Override
@@ -118,22 +126,12 @@ public final class QuotaAwareChatModel implements ChatModel {
                 Instant.now(clock)));
     }
 
-    private void settleStream(
-            ModelAccountQuota.Reservation reservation,
-            AtomicBoolean finished,
-            long promptTokens,
-            long completionTokens) {
-        if (!finished.compareAndSet(false, true)) return;
-        quota.settle(
-                reservation.id(),
-                new ModelAccountQuota.Usage(promptTokens, completionTokens, "SUCCESS"),
-                Instant.now(clock));
-    }
-
-    private void releaseStream(
-            ModelAccountQuota.Reservation reservation, AtomicBoolean finished, String outcome) {
-        if (!finished.compareAndSet(false, true)) return;
-        quota.release(reservation.id(), outcome, Instant.now(clock));
+    private void releaseAfterFailure(ReservationLifecycle lifecycle, Throwable failure, String outcome) {
+        try {
+            lifecycle.release(outcome);
+        } catch (RuntimeException releaseFailure) {
+            failure.addSuppressed(releaseFailure);
+        }
     }
 
     private TokenUsage responseUsage(ChatResponse response, long promptCharacters, long completionCharacters) {
@@ -170,6 +168,30 @@ public final class QuotaAwareChatModel implements ChatModel {
 
     private long estimateTokens(long characters) {
         return Math.max(1, (characters + 3) / 4);
+    }
+
+    private final class ReservationLifecycle {
+        private final ModelAccountQuota.Reservation reservation;
+        private boolean terminal;
+
+        private ReservationLifecycle(ModelAccountQuota.Reservation reservation) {
+            this.reservation = reservation;
+        }
+
+        private synchronized void settle(long promptTokens, long completionTokens) {
+            if (terminal) return;
+            quota.settle(
+                    reservation.id(),
+                    new ModelAccountQuota.Usage(promptTokens, completionTokens, "SUCCESS"),
+                    Instant.now(clock));
+            terminal = true;
+        }
+
+        private synchronized void release(String outcome) {
+            if (terminal) return;
+            quota.release(reservation.id(), outcome, Instant.now(clock));
+            terminal = true;
+        }
     }
 
     private record TokenUsage(long prompt, long completion) {}

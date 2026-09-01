@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.application;
 
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -81,13 +82,35 @@ public interface RecommendationConversationStore {
             List<DialogueMessage> transcript,
             List<KnownGame> knownGames,
             List<Integer> shownBggIds,
-            List<Game> verifiedGames) {
+            List<Game> verifiedGames,
+            CatalogSelectionIntent catalogSelectionIntent) {
         public ConversationState(
                 RecommendationProfile profile,
                 List<DialogueMessage> transcript,
                 List<KnownGame> knownGames,
                 List<Integer> shownBggIds) {
-            this(profile, transcript, knownGames, shownBggIds, List.of());
+            this(
+                    profile,
+                    transcript,
+                    knownGames,
+                    shownBggIds,
+                    List.of(),
+                    CatalogSelectionIntent.empty());
+        }
+
+        public ConversationState(
+                RecommendationProfile profile,
+                List<DialogueMessage> transcript,
+                List<KnownGame> knownGames,
+                List<Integer> shownBggIds,
+                List<Game> verifiedGames) {
+            this(
+                    profile,
+                    transcript,
+                    knownGames,
+                    shownBggIds,
+                    verifiedGames,
+                    CatalogSelectionIntent.empty());
         }
 
         public ConversationState {
@@ -96,6 +119,9 @@ public interface RecommendationConversationStore {
             knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
             shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
             verifiedGames = verifiedGames == null ? List.of() : List.copyOf(verifiedGames);
+            catalogSelectionIntent = catalogSelectionIntent == null
+                    ? CatalogSelectionIntent.empty()
+                    : catalogSelectionIntent;
         }
     }
 

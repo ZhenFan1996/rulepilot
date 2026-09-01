@@ -4,6 +4,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelToolCall;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolCall;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolObservation;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.document.application.OfficialRulebookCandidateFinder;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -52,6 +64,11 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     private static final Logger LOGGER = LoggerFactory.getLogger(ResponsesApiOfficialRulebookCandidateFinder.class);
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final int MAX_RESPONSE_BYTES = 256_000;
+    private static final int MAX_TRACED_WEB_SEARCH_CALLS = 24;
+    private static final String TRACE_OUTPUT_SCHEMA =
+            "{\"type\":\"object\",\"required\":[\"candidates\"],\"properties\":{\"candidates\":{\"type\":\"array\"}}}";
+    private static final String TRACE_WEB_SEARCH_SCHEMA =
+            "{\"type\":\"object\",\"additionalProperties\":true}";
     private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
 
     private final Call.Factory calls;
@@ -183,10 +200,24 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
 
     @Override
     public List<Candidate> find(OfficialRulebookCandidateFinder.Request request) {
+        return find(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public List<Candidate> find(
+            OfficialRulebookCandidateFinder.Request request,
+            CaptureHandle capture,
+            java.util.UUID parentOperationId) {
         if (!configured() || request == null) return List.of();
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         try {
-            return search(request, prompt(request), "initial");
+            return search(request, prompt(request), "initial", trace, parentOperationId);
         } catch (IOException | RuntimeException exception) {
+            captureLifecycle(
+                    trace,
+                    parentOperationId,
+                    LifecycleSignal.GAP,
+                    "RULEBOOK_DISCOVERY_REQUEST_PREPARATION_FAILED");
             LOGGER.warn(
                     "Official rulebook discovery is temporarily unavailable ({})",
                     exception.getClass().getSimpleName());
@@ -197,12 +228,32 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     @Override
     public List<Candidate> findAfterSourcePages(
             OfficialRulebookCandidateFinder.Request request, List<Candidate> observedSourcePages) {
+        return findAfterSourcePages(request, observedSourcePages, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public List<Candidate> findAfterSourcePages(
+            OfficialRulebookCandidateFinder.Request request,
+            List<Candidate> observedSourcePages,
+            CaptureHandle capture,
+            java.util.UUID parentOperationId) {
         if (!configured() || request == null || observedSourcePages == null || observedSourcePages.isEmpty()) {
             return List.of();
         }
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         try {
-            return search(request, refinementPrompt(request, observedSourcePages), "source-page-recovery");
+            return search(
+                    request,
+                    refinementPrompt(request, observedSourcePages),
+                    "source-page-recovery",
+                    trace,
+                    parentOperationId);
         } catch (IOException | RuntimeException exception) {
+            captureLifecycle(
+                    trace,
+                    parentOperationId,
+                    LifecycleSignal.GAP,
+                    "RULEBOOK_DISCOVERY_RECOVERY_PREPARATION_FAILED");
             LOGGER.warn(
                     "Official rulebook source-page recovery is temporarily unavailable ({})",
                     exception.getClass().getSimpleName());
@@ -211,14 +262,39 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     }
 
     private List<Candidate> search(
-            OfficialRulebookCandidateFinder.Request request, String input, String strategy) {
+            OfficialRulebookCandidateFinder.Request request,
+            String input,
+            String strategy,
+            CaptureHandle capture,
+            java.util.UUID parentOperationId) {
         try {
             String cacheKey = "rulepilot:rulebook-discovery:v6:" + strategy + ":" + digest(model + "\n" + input);
             Optional<List<Candidate>> cached = cached(cacheKey);
-            if (cached.isPresent()) return cached.orElseThrow();
-            if (!permits.tryAcquire()) return List.of();
+            if (cached.isPresent()) {
+                captureLifecycle(
+                        capture,
+                        parentOperationId,
+                        LifecycleSignal.REPLAY,
+                        "RULEBOOK_DISCOVERY_CACHE_REUSED");
+                return cached.orElseThrow();
+            }
+            if (!permits.tryAcquire()) {
+                captureLifecycle(
+                        capture,
+                        parentOperationId,
+                        LifecycleSignal.GAP,
+                        "RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY_EXHAUSTED");
+                return List.of();
+            }
             try {
-                if (!acquireHourlyAllowance()) return List.of();
+                if (!acquireHourlyAllowance()) {
+                    captureLifecycle(
+                            capture,
+                            parentOperationId,
+                            LifecycleSignal.GAP,
+                            "RULEBOOK_DISCOVERY_PROVIDER_BUDGET_EXHAUSTED");
+                    return List.of();
+                }
                 Map<String, Object> requestBody = new LinkedHashMap<>();
                 requestBody.put("model", model);
                 requestBody.put("input", input);
@@ -245,16 +321,28 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                         .header("Accept", "text/event-stream, application/json")
                         .post(RequestBody.create(body, JSON))
                         .build();
+                TraceAttempt traceAttempt = beginModelTrace(capture, parentOperationId, input, strategy);
                 try (Response response = calls.newCall(httpRequest).execute()) {
                     if (!response.isSuccessful()) {
+                        captureModelFailure(
+                                traceAttempt,
+                                "RULEBOOK_DISCOVERY_PROVIDER_HTTP_" + response.code());
                         LOGGER.warn("Official rulebook discovery returned status {}", response.code());
                         return List.of();
                     }
-                    JsonNode responseBody = responseBody(response, request);
-                    List<Candidate> result = parse(responseBody, request);
+                    ProviderResponse providerResponse = responseBody(response, request);
+                    captureModelResponse(traceAttempt, providerResponse);
+                    List<Candidate> result = parse(providerResponse.body(), request);
                     cache(cacheKey, result);
-                    logUsage(input, responseBody);
+                    logUsage(input, providerResponse.body());
                     return result;
+                } catch (IOException | RuntimeException exception) {
+                    captureModelFailure(
+                            traceAttempt,
+                            exception instanceof IOException
+                                    ? "RULEBOOK_DISCOVERY_PROVIDER_IO_FAILED"
+                                    : "RULEBOOK_DISCOVERY_PROVIDER_FAILED");
+                    throw exception;
                 }
             } finally {
                 permits.release();
@@ -267,7 +355,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         }
     }
 
-    private JsonNode responseBody(
+    private ProviderResponse responseBody(
             Response response, OfficialRulebookCandidateFinder.Request request) throws IOException {
         String contentType = response.header("Content-Type", "").toLowerCase(Locale.ROOT);
         if (contentType.contains("text/event-stream")) return streamedResponseBody(response, request);
@@ -275,13 +363,14 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         if (bytes.length > MAX_RESPONSE_BYTES) {
             throw new IOException("rulebook discovery response exceeded the byte budget");
         }
-        return json.readTree(bytes);
+        return new ProviderResponse(json.readTree(bytes), "RESPONSE_RECEIVED", false);
     }
 
-    private JsonNode streamedResponseBody(
+    private ProviderResponse streamedResponseBody(
             Response response, OfficialRulebookCandidateFinder.Request request) throws IOException {
         ArrayNode observedOutput = json.createArrayNode();
         JsonNode completedResponse = null;
+        boolean endedAfterTrustedSource = false;
         int observedBytes = 0;
         StringBuilder eventData = new StringBuilder();
         try (var reader = new BufferedReader(
@@ -302,6 +391,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                         if ("web_search_call".equals(event.path("item").path("type").asText())
                                 && containsTrustedDirectPdf(observedOutput, request)) {
                             LOGGER.info("Official rulebook discovery completed from an observed trusted PDF source");
+                            endedAfterTrustedSource = true;
                             break;
                         }
                     } else if ("response.completed".equals(event.path("type").asText())
@@ -333,11 +423,14 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                     exception.getClass().getSimpleName());
         }
         if (completedResponse != null && completedResponse.path("output").isArray()) {
-            return completedResponse;
+            return new ProviderResponse(completedResponse, "COMPLETED", false);
         }
         ObjectNode partialResponse = json.createObjectNode();
         partialResponse.set("output", observedOutput);
-        return partialResponse;
+        return new ProviderResponse(
+                partialResponse,
+                endedAfterTrustedSource ? "EARLY_SOURCE_COMPLETION" : "PARTIAL_STREAM",
+                !endedAfterTrustedSource);
     }
 
     private boolean containsTrustedDirectPdf(
@@ -357,6 +450,177 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         } catch (IOException exception) {
             LOGGER.warn("Official rulebook discovery returned a malformed stream event");
             return null;
+        }
+    }
+
+    private TraceAttempt beginModelTrace(
+            CaptureHandle capture,
+            java.util.UUID parentOperationId,
+            String input,
+            String strategy) {
+        TraceAttempt attempt = new TraceAttempt(
+                PrivateAgentTraceCapture.failOpen(capture),
+                java.util.UUID.randomUUID(),
+                parentOperationId);
+        capture(attempt.capture(), () -> attempt.capture().modelCallStarted(new ModelCallStarted(
+                traceContext(attempt.operationId(), attempt.parentOperationId()),
+                "responses-api",
+                model,
+                1,
+                "official-rulebook-discovery-" + strategy + "-v1",
+                "official-rulebook-candidates-v1",
+                digest(TRACE_OUTPUT_SCHEMA),
+                Math.max(0, (input.length() + 3) / 4),
+                500)));
+        return attempt;
+    }
+
+    private void captureModelResponse(TraceAttempt attempt, ProviderResponse response) {
+        if (attempt == null || response == null || response.body() == null || !attempt.capture().enabled()) return;
+        try {
+            String rawResponse = json.writeValueAsString(response.body());
+            List<ObservedWebSearch> searches = observedWebSearches(response.body());
+            List<ModelToolCall> rawToolCalls = searches.stream()
+                    .limit(MAX_TRACED_WEB_SEARCH_CALLS)
+                    .map(search -> new ModelToolCall(search.callId(), "web_search", search.rawArgumentsJson()))
+                    .toList();
+            capture(attempt.capture(), () -> attempt.capture().modelTurn(new ModelTurn(
+                    traceContext(attempt.operationId(), attempt.parentOperationId()),
+                    "responses-api",
+                    model,
+                    1,
+                    rawResponse,
+                    rawToolCalls,
+                    response.finishStatus(),
+                    nonNegativeInt(response.body().path("usage").path("input_tokens")),
+                    nonNegativeInt(response.body().path("usage").path("output_tokens")),
+                    response.partialFailed())));
+            for (ObservedWebSearch search : searches.stream()
+                    .limit(MAX_TRACED_WEB_SEARCH_CALLS)
+                    .toList()) {
+                java.util.UUID toolOperationId = java.util.UUID.randomUUID();
+                capture(attempt.capture(), () -> attempt.capture().toolCall(new ToolCall(
+                        traceContext(toolOperationId, attempt.operationId()),
+                        search.callId(),
+                        "web_search",
+                        search.rawArgumentsJson(),
+                        search.argumentsValid() ? search.rawArgumentsJson() : "",
+                        "responses-built-in-web-search-v1",
+                        digest(TRACE_WEB_SEARCH_SCHEMA),
+                        search.argumentsValid()
+                                ? ToolArgumentValidation.ACCEPTED
+                                : ToolArgumentValidation.REJECTED)));
+                capture(attempt.capture(), () -> attempt.capture().toolObservation(new ToolObservation(
+                        traceContext(toolOperationId, attempt.operationId()),
+                        search.callId(),
+                        "web_search",
+                        search.observationJson(),
+                        "OBSERVED",
+                        search.evidenceCount(),
+                        false,
+                        List.of())));
+            }
+            if (searches.size() > MAX_TRACED_WEB_SEARCH_CALLS) {
+                captureLifecycle(
+                        attempt.capture(),
+                        attempt.operationId(),
+                        LifecycleSignal.GAP,
+                        "RULEBOOK_DISCOVERY_WEB_SEARCH_TRACE_LIMIT_REACHED");
+            }
+            if (searches.isEmpty()) {
+                captureLifecycle(
+                        attempt.capture(),
+                        attempt.operationId(),
+                        LifecycleSignal.GAP,
+                        "RULEBOOK_DISCOVERY_WEB_SEARCH_NOT_OBSERVED");
+            }
+        } catch (IOException | RuntimeException exception) {
+            captureLifecycle(
+                    attempt.capture(),
+                    attempt.operationId(),
+                    LifecycleSignal.GAP,
+                    "RULEBOOK_DISCOVERY_MODEL_RESPONSE_CAPTURE_FAILED");
+        }
+    }
+
+    private List<ObservedWebSearch> observedWebSearches(JsonNode root) {
+        JsonNode output = root.path("output");
+        if (!output.isArray()) return List.of();
+        List<ObservedWebSearch> result = new ArrayList<>();
+        int ordinal = 0;
+        for (JsonNode item : output) {
+            if (!"web_search_call".equals(item.path("type").asText())) continue;
+            ordinal++;
+            JsonNode action = item.path("action");
+            String arguments = writeTraceJson(action.isMissingNode() ? json.nullNode() : action);
+            String observation = writeTraceJson(item);
+            String providerCallId = item.path("id").isTextual()
+                    ? item.path("id").asText().strip()
+                    : "";
+            String callId = providerCallId.isBlank() || providerCallId.length() > 240
+                    ? "web-search-" + ordinal + "-" + digest(observation).substring(0, 16)
+                    : providerCallId;
+            int evidenceCount = action.path("sources").isArray()
+                    ? action.path("sources").size()
+                    : 0;
+            result.add(new ObservedWebSearch(
+                    callId,
+                    arguments,
+                    observation,
+                    evidenceCount,
+                    action.isObject()));
+        }
+        return List.copyOf(result);
+    }
+
+    private String writeTraceJson(JsonNode value) {
+        try {
+            return json.writeValueAsString(value);
+        } catch (IOException exception) {
+            throw new IllegalStateException("provider response could not be serialized for private trace", exception);
+        }
+    }
+
+    private void captureModelFailure(TraceAttempt attempt, String code) {
+        if (attempt == null) return;
+        capture(attempt.capture(), () -> attempt.capture().bindingOrFailure(new BindingOrFailure(
+                traceContext(attempt.operationId(), attempt.parentOperationId()),
+                LifecycleSignal.FAILURE,
+                code,
+                null,
+                null)));
+    }
+
+    private void captureLifecycle(
+            CaptureHandle capture,
+            java.util.UUID operationId,
+            LifecycleSignal signal,
+            String code) {
+        if (capture == null || operationId == null || signal == null) return;
+        capture(capture, () -> capture.bindingOrFailure(new BindingOrFailure(
+                traceContext(operationId, null),
+                signal,
+                code,
+                null,
+                null)));
+    }
+
+    private TraceEventContext traceContext(
+            java.util.UUID operationId,
+            java.util.UUID parentOperationId) {
+        return TraceEventContext.create(
+                clock.instant(),
+                JourneyStage.IMPORT,
+                operationId,
+                parentOperationId,
+                null);
+    }
+
+    private void capture(CaptureHandle capture, Runnable emission) {
+        try {
+            if (capture != null && capture.enabled()) emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never alter the bounded provider result.
         }
     }
 
@@ -745,4 +1009,21 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         }
         return value;
     }
+
+    private record TraceAttempt(
+            CaptureHandle capture,
+            java.util.UUID operationId,
+            java.util.UUID parentOperationId) {}
+
+    private record ProviderResponse(
+            JsonNode body,
+            String finishStatus,
+            boolean partialFailed) {}
+
+    private record ObservedWebSearch(
+            String callId,
+            String rawArgumentsJson,
+            String observationJson,
+            int evidenceCount,
+            boolean argumentsValid) {}
 }

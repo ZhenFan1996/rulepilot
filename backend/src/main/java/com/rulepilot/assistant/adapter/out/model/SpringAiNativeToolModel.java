@@ -102,6 +102,11 @@ public class SpringAiNativeToolModel implements NativeToolModel {
     }
 
     @Override
+    public String modelId(Role role, String ownerUsername) {
+        return models.modelNameFor(modelRole(role), ownerUsername);
+    }
+
+    @Override
     public boolean supports(Role role, String ownerUsername) {
         RuntimeModelConfiguration.Role configuredRole = modelRole(role);
         return role != Role.VISUAL

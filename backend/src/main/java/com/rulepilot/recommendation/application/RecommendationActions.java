@@ -21,8 +21,13 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataStatus;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataValue;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataCriterion;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataDimension;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.SelectionEligibility;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
@@ -36,6 +41,9 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionCriterion;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionDimension;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Clarification;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ClarificationOption;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ComparisonAxis;
@@ -53,12 +61,14 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
+import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CanonicalMetadataObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.DiscoveryObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ReferenceObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ResearchObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.TitleHypothesis;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
 import com.rulepilot.recommendation.application.RecommendationEvidenceReview.PreferenceUpdatePlan;
+import com.rulepilot.recommendation.application.RecommendationEvidenceReview.UserEvidence;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
 import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
 import java.math.BigDecimal;
@@ -144,7 +154,10 @@ final class RecommendationActions {
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation action {} failed ({})", call.name(), exception.getClass().getSimpleName());
             if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
-            return rejected(state, "ACTION_UNAVAILABLE", "The action failed. Choose another useful action or respond transparently.");
+            state.actions.add("REJECTED_ACTION:ACTION_UNAVAILABLE");
+            return ActionOutcome.executionRejected(runtime.error(
+                    "ACTION_UNAVAILABLE",
+                    "The action failed. Choose another useful action or respond transparently."));
         }
     }
 
@@ -293,7 +306,11 @@ final class RecommendationActions {
         List<ComparisonCandidate> candidates = games.stream()
                 .map(game -> new ComparisonCandidate(
                         game,
-                        selector.fitClaims(game, preferencePlan.profile(), runtime.chinese(locale))))
+                        selector.fitClaims(
+                                game,
+                                preferencePlan.profile(),
+                                state.catalogSelectionIntent,
+                                runtime.chinese(locale))))
                 .toList();
         List<ComparisonAxis> axes = subjects.stream()
                 .map(subject -> new ComparisonAxis(
@@ -615,21 +632,55 @@ final class RecommendationActions {
                         "sort",
                         "limit",
                         "offset",
-                        "preferenceUpdates"));
+                        "preferenceUpdates",
+                        "catalogIntentUpdate"));
         PreferenceUpdatePlan preferencePlan =
                 evidenceReview.planPreferenceUpdates(arguments, state.profile, request);
         DiscoveryPurpose purpose = arguments.has("purpose")
                 ? enumValue(DiscoveryPurpose.class, arguments.path("purpose"), "CATALOG_PURPOSE_INVALID")
                 : DiscoveryPurpose.SELECTABLE_CARDS;
+        CatalogIntentPlan catalogIntentPlan = planCatalogIntent(arguments, state, request);
+        if (purpose == DiscoveryPurpose.IDENTITY_ONLY && catalogIntentPlan.updatePresent()) {
+            throw new InvalidAction("IDENTITY_CATALOG_INTENT_INVALID");
+        }
+        CatalogSelectionIntent requestedIntent = purpose == DiscoveryPurpose.SELECTABLE_CARDS
+                ? catalogIntentPlan.intent()
+                : CatalogSelectionIntent.empty();
+        progress.accept(ProgressStage.SEARCHING_BGG_CATALOG);
+        CatalogSelectionIntent queryIntent = requestedIntent;
+        if (catalogIntentPlan.requiresCanonicalization()) {
+            state.catalogCalls++;
+            CanonicalMetadataObservation canonicalObservation = runtime.withinDeadline(
+                    state,
+                    () -> tools.canonicalizeMetadata(requestedIntent.requiredCriteria().stream()
+                            .map(RecommendationActions::catalogMetadataCriterion)
+                            .toList()));
+            queryIntent = canonicalCatalogIntent(requestedIntent, canonicalObservation);
+        }
         List<BggGameType> requestedTypes = optionalGameTypeHints(arguments, state);
         List<BggGameType> types = preferencePlan.profile().type() == BggGameType.ALL
                 ? requestedTypes
                 : List.of(preferencePlan.profile().type());
-        List<String> categories = optionalStrings(arguments, "categories", 5, 120);
-        List<String> mechanics = optionalStrings(arguments, "mechanics", 5, 120);
-        List<String> designers = optionalStrings(arguments, "designers", 3, 120);
-        List<String> publishers = optionalStrings(arguments, "publishers", 5, 120);
-        List<String> families = optionalStrings(arguments, "families", 5, 120);
+        List<String> categories = mergedCatalogFilters(
+                optionalStrings(arguments, "categories", 5, 120),
+                queryIntent,
+                CatalogSelectionDimension.CATEGORY);
+        List<String> mechanics = mergedCatalogFilters(
+                optionalStrings(arguments, "mechanics", 5, 120),
+                queryIntent,
+                CatalogSelectionDimension.MECHANIC);
+        List<String> designers = mergedCatalogFilters(
+                optionalStrings(arguments, "designers", 3, 120),
+                queryIntent,
+                CatalogSelectionDimension.DESIGNER);
+        List<String> publishers = mergedCatalogFilters(
+                optionalStrings(arguments, "publishers", 5, 120),
+                queryIntent,
+                CatalogSelectionDimension.PUBLISHER);
+        List<String> families = mergedCatalogFilters(
+                optionalStrings(arguments, "families", 5, 120),
+                queryIntent,
+                CatalogSelectionDimension.FAMILY);
         Integer minimumPublicationYear = arguments.has("minimumPublicationYear")
                 ? integer(arguments.path("minimumPublicationYear"), 1, 2100, "PUBLICATION_YEAR_INVALID")
                 : null;
@@ -678,17 +729,22 @@ final class RecommendationActions {
         int limit = arguments.has("limit")
                 ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
                 : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
-        int eligibilityLimit = limit;
+        int eligibilityLimit = purpose == DiscoveryPurpose.SELECTABLE_CARDS
+                ? Math.min(MAX_VERIFIED_GAMES, Math.max(limit, properties.resultCount()))
+                : limit;
         Set<Integer> unavailableCandidateIds = new LinkedHashSet<>(state.excludedIds);
-        unavailableCandidateIds.addAll(state.previouslyShownIds);
-        int requestedCandidateCount = Math.max(eligibilityLimit, properties.resultCount());
-        int catalogLimit = Math.min(
-                runtime.maximumRecommendationResults(),
-                requestedCandidateCount
-                        + Math.min(
-                                Math.max(properties.resultCount(), unavailableCandidateIds.size()),
-                                runtime.maximumRecommendationResults()));
-        progress.accept(ProgressStage.SEARCHING_BGG_CATALOG);
+        // A comparison reference is evidence for the decision, never a selectable recommendation candidate.
+        // Its ownership role survives preference changes and must be excluded before the catalog applies LIMIT.
+        unavailableCandidateIds.addAll(state.comparisonReferenceIds);
+        boolean selectionViewChanges = preferencePlan.profileUpdated()
+                || !state.sameCatalogSelection(queryIntent);
+        if (!selectionViewChanges) unavailableCandidateIds.addAll(state.previouslyShownIds);
+        SelectionEligibility selectionEligibility = selectionEligibility(
+                preferencePlan.profile(), unavailableCandidateIds);
+        // The catalog applies the same deterministic hard gates before LIMIT and returns that exact DISCOVERY
+        // payload. The selector below repeats them at the publication boundary, while the model sees only the
+        // bounded eligible slate it needs for this turn.
+        int catalogLimit = eligibilityLimit;
         state.catalogCalls++;
         CatalogObservation result = runtime.withinDeadline(
                 state,
@@ -706,9 +762,15 @@ final class RecommendationActions {
                         textQuery,
                         sort,
                         catalogLimit,
-                        offset));
+                        offset,
+                        selectionEligibility));
         List<Game> eligible = result.succeeded()
-                ? selector.eligible(result.games(), preferencePlan.profile(), unavailableCandidateIds, eligibilityLimit)
+                ? selector.eligible(
+                        result.games(),
+                        preferencePlan.profile(),
+                        queryIntent,
+                        unavailableCandidateIds,
+                        eligibilityLimit)
                 : List.of();
         List<String> verifiedIdentityNames = purpose == DiscoveryPurpose.IDENTITY_ONLY && !designers.isEmpty()
                 ? result.games().stream()
@@ -738,6 +800,13 @@ final class RecommendationActions {
         appliedFilters.put("textQuery", textQuery);
         appliedFilters.put("sort", sort);
         appliedFilters.put("offset", offset);
+        appliedFilters.put(
+                "requiredSelectionCriteria",
+                queryIntent.requiredCriteria().stream()
+                        .map(criterion -> Map.of(
+                                "dimension", criterion.dimension().name(),
+                                "value", criterion.value()))
+                        .toList());
         String observation = runtime.observation(Map.of(
                 "status", result.succeeded() ? "SUCCESS" : "ERROR",
                 "code", result.code(),
@@ -747,8 +816,19 @@ final class RecommendationActions {
                                 : "This exact BGG filter query produced no hard-gate-eligible game. If its filters came from a metaphor, mood, or subjective wish rather than literal player-supplied BGG labels, remove all of those inferred filters and browse one varied slate now. Otherwise use materially different verified filters, another capability, or finish transparently; never repeat the same query or guess titles."
                         : "These games match the supplied BGG filters and their listed observations are verified. Finish when the slate is useful, or make one materially different structured query only when the open request still needs it.",
                 "appliedFilters", appliedFilters,
+                "availableCount", result.availableCount(),
                 "verifiedBggIds", eligible.stream().map(game -> game.ranking().bggId()).toList()));
-        evidenceReview.commitPreferenceUpdates(preferencePlan, state);
+        if (result.succeeded()) {
+            evidenceReview.commitPreferenceUpdates(preferencePlan, state);
+            if (catalogIntentPlan.updatePresent()) {
+                state.replaceCatalogSelectionIntent(queryIntent);
+            }
+            if (purpose == DiscoveryPurpose.SELECTABLE_CARDS) {
+                // Preference and catalog-intent commits can deliberately clear derived selection state. Record
+                // the authoritative count only after those resets so the final publication guard sees this read.
+                state.lastSelectableAvailableCount = result.availableCount();
+            }
+        }
         state.catalogBrowseAttempted = true;
         state.discoveryPurpose = purpose;
         state.actions.add("SEARCH_BGG_CATALOG");
@@ -762,6 +842,28 @@ final class RecommendationActions {
             state.actions.add("CATALOG_IDENTITY_VERIFIED");
         }
         return ActionOutcome.observation(observation);
+    }
+
+    private SelectionEligibility selectionEligibility(
+            BoardGameRecommendationAgent.RecommendationProfile profile,
+            Set<Integer> unavailableBggIds) {
+        var playerCount = profile.playerCount() != null && profile.playerCount().hard()
+                ? profile.playerCount()
+                : null;
+        var duration = profile.durationMinutes() != null && profile.durationMinutes().hard()
+                ? profile.durationMinutes()
+                : null;
+        var complexity = profile.complexity() != null && profile.complexity().hard()
+                ? profile.complexity()
+                : null;
+        return new SelectionEligibility(
+                playerCount == null ? null : playerCount.minimum(),
+                playerCount == null ? null : playerCount.maximum(),
+                duration == null ? null : duration.minimum(),
+                duration == null ? null : duration.maximum(),
+                complexity == null ? null : complexity.minimum(),
+                complexity == null ? null : complexity.maximum(),
+                List.copyOf(unavailableBggIds));
     }
 
     private ActionOutcome discover(
@@ -867,6 +969,127 @@ final class RecommendationActions {
         state.discoveryPurpose = purpose;
         state.actions.add("DISCOVER_CANDIDATES");
         return ActionOutcome.observation(observation);
+    }
+
+    private CatalogIntentPlan planCatalogIntent(
+            JsonNode arguments,
+            RecommendationAgentState state,
+            ConversationRequest request) {
+        if (!arguments.has("catalogIntentUpdate")) {
+            return CatalogIntentPlan.unchanged(state.catalogSelectionIntent);
+        }
+        JsonNode update = arguments.path("catalogIntentUpdate");
+        requireObject(update, Set.of("operation"), Set.of("evidence", "criteria"));
+        CatalogIntentOperation operation = enumValue(
+                CatalogIntentOperation.class,
+                update.path("operation"),
+                "CATALOG_INTENT_OPERATION_INVALID");
+        if (operation == CatalogIntentOperation.CLEAR) {
+            if (!update.has("evidence") || update.has("criteria")) {
+                throw new InvalidAction("CATALOG_INTENT_CLEAR_INVALID");
+            }
+            evidenceReview.userEvidence(text(update.path("evidence"), 1, 16), request);
+            return new CatalogIntentPlan(CatalogSelectionIntent.empty(), true, false);
+        }
+        if (update.has("evidence") || !update.has("criteria") || !update.path("criteria").isArray()) {
+            throw new InvalidAction("CATALOG_INTENT_CRITERIA_REQUIRED");
+        }
+        JsonNode criteria = update.path("criteria");
+        if (criteria.isEmpty() || criteria.size() > 8) {
+            throw new InvalidAction("CATALOG_INTENT_CRITERIA_INVALID");
+        }
+        List<CatalogSelectionCriterion> parsed = new ArrayList<>();
+        Set<String> unique = new LinkedHashSet<>();
+        for (JsonNode criterion : criteria) {
+            requireObject(criterion, Set.of("dimension", "value", "evidence"), Set.of());
+            CatalogSelectionDimension dimension = enumValue(
+                    CatalogSelectionDimension.class,
+                    criterion.path("dimension"),
+                    "CATALOG_INTENT_DIMENSION_INVALID");
+            String value = text(criterion.path("value"), 1, 120);
+            UserEvidence evidence = evidenceReview.userEvidence(
+                    text(criterion.path("evidence"), 1, 16),
+                    request);
+            if (!unique.add(dimension.name() + "\u0000" + value.toLowerCase(Locale.ROOT))) {
+                throw new InvalidAction("CATALOG_INTENT_CRITERIA_INVALID");
+            }
+            parsed.add(new CatalogSelectionCriterion(
+                    dimension,
+                    value,
+                    evidence.text(),
+                    evidence.turn()));
+        }
+        return new CatalogIntentPlan(new CatalogSelectionIntent(parsed), true, true);
+    }
+
+    private List<String> mergedCatalogFilters(
+            List<String> explicitFilters,
+            CatalogSelectionIntent intent,
+            CatalogSelectionDimension dimension) {
+        LinkedHashMap<String, String> values = new LinkedHashMap<>();
+        explicitFilters.forEach(value -> values.putIfAbsent(value.toLowerCase(Locale.ROOT), value));
+        intent.requiredCriteria().stream()
+                .filter(criterion -> criterion.dimension() == dimension)
+                .map(CatalogSelectionCriterion::value)
+                .forEach(value -> values.putIfAbsent(value.toLowerCase(Locale.ROOT), value));
+        int maximum = dimension == CatalogSelectionDimension.DESIGNER ? 3 : 5;
+        if (values.size() > maximum) throw new InvalidAction("CATALOG_FILTERS_TOO_MANY");
+        return List.copyOf(values.values());
+    }
+
+    private CatalogSelectionIntent canonicalCatalogIntent(
+            CatalogSelectionIntent requested,
+            CanonicalMetadataObservation observation) {
+        if (!observation.succeeded()) {
+            throw new InvalidAction(
+                    "CATALOG_INTENT_VALIDATION_UNAVAILABLE",
+                    "The BGG taxonomy lookup is unavailable, so the exact selection direction cannot be committed safely. Finish transparently or try later; never silently relax it.");
+        }
+        List<CanonicalMetadataValue> values = observation.result().values();
+        if (values.size() != requested.requiredCriteria().size()) {
+            throw new InvalidAction("CATALOG_INTENT_VALIDATION_UNAVAILABLE");
+        }
+        List<CatalogSelectionCriterion> canonical = new ArrayList<>();
+        for (int index = 0; index < values.size(); index++) {
+            CatalogSelectionCriterion criterion = requested.requiredCriteria().get(index);
+            CanonicalMetadataValue value = values.get(index);
+            if (value.dimension() != catalogMetadataDimension(criterion.dimension())
+                    || !value.requestedValue().equals(criterion.value())) {
+                throw new InvalidAction("CATALOG_INTENT_VALIDATION_UNAVAILABLE");
+            }
+            if (value.status() == CanonicalMetadataStatus.NOT_FOUND) {
+                throw new InvalidAction(
+                        "CATALOG_INTENT_NOT_CANONICAL",
+                        "An exact BGG selection criterion is not a canonical catalog value. Correct the typed value or finish transparently; never silently relax it.");
+            }
+            if (value.status() == CanonicalMetadataStatus.AMBIGUOUS) {
+                throw new InvalidAction(
+                        "CATALOG_INTENT_AMBIGUOUS",
+                        "An exact BGG selection criterion maps to more than one authoritative spelling. Correct it or finish transparently; never guess.");
+            }
+            canonical.add(new CatalogSelectionCriterion(
+                    criterion.dimension(),
+                    value.canonicalValue(),
+                    criterion.sourceText(),
+                    criterion.confirmedTurn()));
+        }
+        return new CatalogSelectionIntent(canonical);
+    }
+
+    private static CatalogMetadataCriterion catalogMetadataCriterion(CatalogSelectionCriterion criterion) {
+        return new CatalogMetadataCriterion(
+                catalogMetadataDimension(criterion.dimension()),
+                criterion.value());
+    }
+
+    private static CatalogMetadataDimension catalogMetadataDimension(CatalogSelectionDimension dimension) {
+        return switch (dimension) {
+            case CATEGORY -> CatalogMetadataDimension.CATEGORY;
+            case MECHANIC -> CatalogMetadataDimension.MECHANIC;
+            case FAMILY -> CatalogMetadataDimension.FAMILY;
+            case DESIGNER -> CatalogMetadataDimension.DESIGNER;
+            case PUBLISHER -> CatalogMetadataDimension.PUBLISHER;
+        };
     }
 
     private CatalogObservation searchDesignerGames(
@@ -1033,6 +1256,11 @@ final class RecommendationActions {
                 state.maximumRecommendationResults,
                 "SELECTION_COUNT_INVALID");
         int expectedSelectionCount = Math.min(requestedCount, availableCount);
+        if (availableCount < requestedCount && state.lastSelectableAvailableCount > availableCount) {
+            throw new InvalidAction(
+                    "MORE_VERIFIED_CANDIDATES_AVAILABLE",
+                    "The catalog reports more eligible games than are currently verified. Browse from the beginning of the current filtered result before claiming a shortfall.");
+        }
         if (selections.isEmpty()
                 || selections.size() > state.maximumRecommendationResults
                 || selections.size() != expectedSelectionCount) {
@@ -1057,7 +1285,8 @@ final class RecommendationActions {
             if (state.comparisonReferenceIds.contains(id)) {
                 throw new InvalidAction("FINAL_ID_IS_COMPARISON_REFERENCE");
             }
-            if (!state.targetGameIds.contains(id) && !selector.eligible(game, state.profile)) {
+            if (!state.targetGameIds.contains(id)
+                    && !selector.eligible(game, state.profile, state.catalogSelectionIntent)) {
                 throw new InvalidAction("FINAL_ID_FAILS_HARD_GATES");
             }
             selected.add(game);
@@ -1101,6 +1330,7 @@ final class RecommendationActions {
         List<RecommendedGame> games = selector.present(
                 selected,
                 state.profile,
+                state.catalogSelectionIntent,
                 references,
                 runtime.chinese(locale),
                 state.research).stream()
@@ -1644,21 +1874,26 @@ final class RecommendationActions {
             ConversationResponse response,
             String observation,
             boolean rejected,
-            boolean settledRead) {
+            boolean settledRead,
+            boolean argumentsAccepted) {
         static ActionOutcome terminal(ConversationResponse response) {
-            return new ActionOutcome(response, "", false, false);
+            return new ActionOutcome(response, "", false, false, true);
         }
 
         static ActionOutcome terminalRead(ConversationResponse response) {
-            return new ActionOutcome(response, "", false, true);
+            return new ActionOutcome(response, "", false, true, true);
         }
 
         static ActionOutcome observation(String observation) {
-            return new ActionOutcome(null, observation, false, true);
+            return new ActionOutcome(null, observation, false, true, true);
         }
 
         static ActionOutcome rejected(String observation) {
-            return new ActionOutcome(null, observation, true, false);
+            return new ActionOutcome(null, observation, true, false, false);
+        }
+
+        static ActionOutcome executionRejected(String observation) {
+            return new ActionOutcome(null, observation, true, false, true);
         }
     }
 
@@ -1668,6 +1903,20 @@ final class RecommendationActions {
             String completeMessage) {}
 
     private record TargetCompletion(String playerReply, String reason) {}
+
+    private record CatalogIntentPlan(
+            CatalogSelectionIntent intent,
+            boolean updatePresent,
+            boolean requiresCanonicalization) {
+        private static CatalogIntentPlan unchanged(CatalogSelectionIntent current) {
+            return new CatalogIntentPlan(current, false, false);
+        }
+    }
+
+    private enum CatalogIntentOperation {
+        REPLACE,
+        CLEAR
+    }
 
     private enum IdentityKind {
         DESIGNER,

@@ -7,12 +7,17 @@ on:
         description: Natural opening from a player who does not know what to play yet
         required: true
         type: string
-        default: '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
+        default: '这周末想和朋友开一局，但我完全不知道该玩什么。你会先问我什么，帮我一起缩小范围？'
       selection_prompt:
         description: Natural refinement that asks the Agent to select a ranked recommendation slate
         required: true
         type: string
-        default: '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后还想接着找规则书、听讲解。'
+        default: '想清楚了：我们三个人，想玩两小时左右的德式重策，最好是 DBG 为主。请直接给我三款，把你最推荐的一款放第一；选好后我们还想找规则书、听讲解。'
+      expected_mechanic:
+        description: Canonical BGG mechanic that every selected card must satisfy for this evaluation input
+        required: true
+        type: string
+        default: 'Deck, Bag, and Pool Building'
       rule_question:
         description: Question asked after the cited lesson becomes readable
         required: true
@@ -27,7 +32,7 @@ on:
         description: Fail if production reuses an existing imported rulebook
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -53,6 +58,7 @@ jobs:
       RULEPILOT_PUBLIC_URL: https://rulepilot.cn
       RULEPILOT_RECOMMENDATION_OPENING_PROMPT: ${{ inputs.opening_prompt }}
       RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: ${{ inputs.selection_prompt }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_MECHANIC: ${{ inputs.expected_mechanic }}
       RULEPILOT_RECOMMENDATION_RULE_QUESTION: ${{ inputs.rule_question }}
       RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: ${{ inputs.rule_follow_up }}
       RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT: ${{ inputs.require_fresh_import }}
@@ -92,10 +98,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          mkdir -p "$artifact_dir"
-          chmod 700 "$artifact_dir"
-          printf '{"completed":false,"stage":"preflight"}\n' > "$artifact_dir/journey.json"
+          private_dir="$RUNNER_TEMP/rulepilot-private-journey-${GITHUB_RUN_ID}"
+          mkdir -p "$private_dir"
+          chmod 700 "$private_dir"
+          printf '{"completed":false,"stage":"preflight"}\n' > "$private_dir/journey.json"
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
@@ -138,58 +144,150 @@ jobs:
           echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
 
+          trace_export="$RUNNER_TEMP/rulepilot-agent-trace-${GITHUB_RUN_ID}.zip"
+          trap 'rm -f "$trace_export"' EXIT
+
           RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true \
           RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
           RULEPILOT_RECOMMENDATION_USER="$player_username" \
           RULEPILOT_RECOMMENDATION_PASSWORD="$player_password" \
-          RULEPILOT_RECOMMENDATION_REPORT="$artifact_dir/journey.json" \
+          RULEPILOT_RECOMMENDATION_REPORT="$private_dir/journey.json" \
+          RULEPILOT_AGENT_TRACE_EXPORT="$trace_export" \
+          RULEPILOT_PRODUCTION_PLAYWRIGHT_OUTPUT_DIR="$private_dir/playwright-test-results" \
             npm --prefix frontend exec -- playwright test \
-              --config frontend/playwright.recommendation-production.config.ts
-          chmod -R go-rwx "$artifact_dir"
+              --config frontend/playwright.recommendation-production.config.ts \
+              > "$private_dir/browser-probe.log" 2>&1
+          test -s "$trace_export"
+          unzip -p "$trace_export" manifest.json | jq -e '
+            .complete == true
+            and .state == "SEALED"
+            and .sensitive == true
+            and (.eventCount > 0)
+            and (.stages | (
+              index("IMPORT") != null
+              and index("RECOMMENDATION") != null
+              and index("TEACHING") != null
+              and index("ANSWER") != null
+            ))
+          ' >/dev/null
+          unzip -p "$trace_export" events.ndjson | jq -s -e '
+            ([.[] | select(.event.kind == "MODEL_TURN") | .event.context.stage] | unique) as $stages
+            | ([.[] | select(
+                .event.kind == "BINDING_OR_FAILURE"
+                and .event.context.stage == "IMPORT"
+                and .event.signal == "REPLAY"
+                and .event.code == "RULEBOOK_DISCOVERY_CACHE_REUSED"
+              )] | length > 0) as $importReplay
+            | all(["RECOMMENDATION", "TEACHING", "ANSWER"][];
+                . as $stage | $stages | index($stage) != null)
+              and (($stages | index("IMPORT") != null) or $importReplay)
+          ' >/dev/null
+          chmod -R go-rwx "$private_dir"
 
-      - name: Collect bounded API diagnostics after a failed journey
-        if: failure()
+      - name: Create non-sensitive journey measurements
+        if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          diagnostic_file="$artifact_dir/api-diagnostics.log"
-          mkdir -p "$artifact_dir"
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_SSH_PORT" \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            'bash -s' -- "$DEPLOY_PATH" > "$diagnostic_file" 2>&1 <<'REMOTE' || true
-          set -Eeuo pipefail
-          application_root=$1
-          active_release=$(readlink -f "${application_root}/current")
-          if [[ "$active_release" != "${application_root}/releases/"* ]]; then
-            echo "Refusing to inspect an active release outside ${application_root}/releases" >&2
-            exit 1
+          umask 077
+          private_report="$RUNNER_TEMP/rulepilot-private-journey-${GITHUB_RUN_ID}/journey.json"
+          public_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
+          mkdir -p "$public_dir"
+          if [[ -s "$private_report" ]]; then
+            jq -e '{
+              schemaVersion: 1,
+              generatedAt,
+              completed,
+              journeyReachedEnd,
+              stage,
+              failedChecks: (.failedChecks // [] | map(select(type == "string"))),
+              trace: {
+                started: .privateAgentTraceStarted,
+                state: .privateAgentTraceState,
+                integrity: .privateAgentTraceIntegrity,
+                incompleteReason: .privateAgentTraceIncompleteReason,
+                eventCount: .privateAgentTraceEventCount,
+                storedBytes: .privateAgentTraceStoredBytes,
+                exported: .privateAgentTraceExported,
+                deletedAfterExport: .privateAgentTraceDeletedAfterExport
+              },
+              latencyMs: {
+                opening: .openGuidanceMs,
+                recommendation: .recommendationMs,
+                discovery: .discoveryMs,
+                import: .importMs,
+                firstCitedLesson: .firstCitedLessonMs,
+                completeLesson: .lessonCompletionMs,
+                firstAnswer: .answerMs,
+                followUpAnswer: .followUpAnswerMs
+              },
+              recommendation: {
+                terminalObserved: .recommendationTerminalObserved,
+                requestCount: .recommendationSelectionRequestCount,
+                sloMet: .recommendationSloMet,
+                exactCardinalityWithinSlo: .recommendationExactCardinalityWithinSlo,
+                contractMet: .recommendationContractMet,
+                resultUsable: .recommendationResultUsable,
+                hardMechanicFitVerified: .recommendationHardMechanicFitVerified,
+                structuredCardCount: .recommendationStructuredCardCount,
+                renderedCardCount: .recommendationCardCount
+              },
+              import: {
+                requestCount: .importRequestCount,
+                reused: .importReused,
+                duplicate: .importDuplicate,
+                editionIdentityPreserved: (
+                  .candidateEditionMatchesSelection
+                  and .importEditionMatchesSelection
+                  and .documentEditionMatchesSelection
+                )
+              },
+              teaching: {
+                documentProgressComplete: .documentProgressComplete,
+                publishedSectionCount: .teachingPublishedSectionCount,
+                lessonSectionCount: .lessonSectionCount,
+                citedDraftSectionCount: .citedDraftSectionCount,
+                insufficientSectionCount: .insufficientSectionCount,
+                citedLessonStep: .citedLessonStep
+              },
+              answers: {
+                firstStatus: .answerStatus,
+                firstCitationCount: .answerCitationCount,
+                followUpStatus: .followUpAnswerStatus,
+                followUpCitationCount: .followUpCitationCount,
+                sessionPreserved: .answerSessionPreserved
+              },
+              ui: {
+                routeStayedOnDiscover: .routeStayedOnDiscover,
+                detailsDialogOpenedAndClosed: .detailsDialogOpenedAndClosed,
+                recommendationRestored: .recommendationRestored,
+                answerRestored: .answerRestored,
+                pageErrorCount: .pageErrorCount
+              }
+            }' "$private_report" > "$public_dir/summary.json"
+          else
+            printf '%s\n' \
+              '{"schemaVersion":1,"completed":false,"journeyReachedEnd":false,"stage":"workflow-failed-before-report","failedChecks":["REPORT_UNAVAILABLE"]}' \
+              > "$public_dir/summary.json"
           fi
-          cd "$active_release"
-          compose=(
-            docker compose --env-file .env
-            -f infra/compose.yml
-            -f infra/compose.deployment.yml
-            -f infra/compose.production.yml
-          )
-          echo "Active production services:"
-          "${compose[@]}" ps api worker
-          echo "API logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color api
-          echo "Worker logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color worker
-          REMOTE
-          chmod 600 "$diagnostic_file"
+          chmod 600 "$public_dir/summary.json"
 
-      - name: Upload private journey measurements
+      - name: Upload non-sensitive journey measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: production-recommendation-journey-${{ github.run_id }}
-          path: .artifacts/production-recommendation-journey
+          path: .artifacts/production-recommendation-journey/summary.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
+
+      - name: Delete private journey evidence from the runner
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf -- "$RUNNER_TEMP/rulepilot-private-journey-${GITHUB_RUN_ID}"
+          rm -rf -- "$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
+          rm -rf -- "$GITHUB_WORKSPACE/frontend/test-results"
+          rm -rf -- "$GITHUB_WORKSPACE/frontend/playwright-report"
+          rm -f -- "$HOME/.ssh/id_ed25519"

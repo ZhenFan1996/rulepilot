@@ -9,6 +9,9 @@ import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionCriterion;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionDimension;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -34,17 +37,38 @@ class BoardGameRecommendationSelector {
             RecommendationProfile profile,
             Set<Integer> excludedBggIds,
             int maximum) {
+        return eligible(
+                source,
+                profile,
+                CatalogSelectionIntent.empty(),
+                excludedBggIds,
+                maximum);
+    }
+
+    List<Game> eligible(
+            List<Game> source,
+            RecommendationProfile profile,
+            CatalogSelectionIntent catalogSelectionIntent,
+            Set<Integer> excludedBggIds,
+            int maximum) {
         List<Game> allowed = source.stream()
                 .filter(game -> game != null && game.details() != null)
                 .filter(game -> !excludedBggIds.contains(game.ranking().bggId()))
-                .filter(game -> eligible(game, profile))
+                .filter(game -> eligible(game, profile, catalogSelectionIntent))
                 .toList();
         return allowed.stream().limit(maximum).toList();
     }
 
     boolean eligible(Game game, RecommendationProfile profile) {
+        return eligible(game, profile, CatalogSelectionIntent.empty());
+    }
+
+    boolean eligible(
+            Game game,
+            RecommendationProfile profile,
+            CatalogSelectionIntent catalogSelectionIntent) {
         if (game == null || game.ranking() == null || game.details() == null) return false;
-        return fitAssessments(game, profile, false).stream()
+        return fitAssessments(game, profile, catalogSelectionIntent, false).stream()
                 .filter(FitAssessment::hardGate)
                 .allMatch(assessment -> assessment.claim().relation() == CandidateClaim.Relation.SATISFIED);
     }
@@ -52,6 +76,22 @@ class BoardGameRecommendationSelector {
     List<RecommendedGame> present(
             List<Game> selected,
             RecommendationProfile profile,
+            List<Game> references,
+            boolean chinese,
+            com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research research) {
+        return present(
+                selected,
+                profile,
+                CatalogSelectionIntent.empty(),
+                references,
+                chinese,
+                research);
+    }
+
+    List<RecommendedGame> present(
+            List<Game> selected,
+            RecommendationProfile profile,
+            CatalogSelectionIntent catalogSelectionIntent,
             List<Game> references,
             boolean chinese,
             com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research research) {
@@ -64,7 +104,7 @@ class BoardGameRecommendationSelector {
                         List.of(),
                         List.of(),
                         List.of(),
-                        fitClaims(game, profile, chinese)))
+                        fitClaims(game, profile, catalogSelectionIntent, chinese)))
                 .toList();
     }
 
@@ -89,10 +129,24 @@ class BoardGameRecommendationSelector {
     }
 
     List<CandidateClaim> fitClaims(Game game, RecommendationProfile profile, boolean chinese) {
-        return fitAssessments(game, profile, chinese).stream().map(FitAssessment::claim).toList();
+        return fitClaims(game, profile, CatalogSelectionIntent.empty(), chinese);
     }
 
-    private List<FitAssessment> fitAssessments(Game game, RecommendationProfile profile, boolean chinese) {
+    List<CandidateClaim> fitClaims(
+            Game game,
+            RecommendationProfile profile,
+            CatalogSelectionIntent catalogSelectionIntent,
+            boolean chinese) {
+        return fitAssessments(game, profile, catalogSelectionIntent, chinese).stream()
+                .map(FitAssessment::claim)
+                .toList();
+    }
+
+    private List<FitAssessment> fitAssessments(
+            Game game,
+            RecommendationProfile profile,
+            CatalogSelectionIntent catalogSelectionIntent,
+            boolean chinese) {
         if (game == null || game.ranking() == null || game.details() == null) return List.of();
         List<CandidateObservation> observations = observations(game);
         List<FitAssessment> assessments = new ArrayList<>();
@@ -195,10 +249,68 @@ class BoardGameRecommendationSelector {
                     observation(observations, "bggType")));
         }
 
+        for (CatalogSelectionCriterion criterion : catalogSelectionIntent.requiredCriteria()) {
+            List<String> actualValues = catalogValues(details, criterion.dimension());
+            CandidateClaim.Relation relation = actualValues.isEmpty()
+                    ? CandidateClaim.Relation.UNKNOWN
+                    : actualValues.stream().anyMatch(value -> value.equalsIgnoreCase(criterion.value()))
+                            ? CandidateClaim.Relation.SATISFIED
+                            : CandidateClaim.Relation.CONFLICT;
+            String attribute = catalogAttribute(criterion.dimension());
+            assessments.add(fitAssessment(
+                    bggId,
+                    attribute,
+                    ConstraintRange.Strength.HARD,
+                    relation,
+                    catalogFitText(criterion, relation, chinese),
+                    observation(observations, attribute)));
+        }
+
         // Interaction fit remains an Agent judgment over the candidate's supplied BGG taxonomy and descriptions.
         // Inferring competitive/cooperative/team status from a hand-maintained mechanics vocabulary made absence of
         // one label look like positive evidence for another mode and silently overrode the Agent's tool decision.
         return List.copyOf(assessments);
+    }
+
+    private List<String> catalogValues(Details details, CatalogSelectionDimension dimension) {
+        return switch (dimension) {
+            case CATEGORY -> details.categories();
+            case MECHANIC -> details.mechanics();
+            case FAMILY -> details.families();
+            case DESIGNER -> details.designers();
+            case PUBLISHER -> details.publishers();
+        };
+    }
+
+    private String catalogAttribute(CatalogSelectionDimension dimension) {
+        return switch (dimension) {
+            case CATEGORY -> "categories";
+            case MECHANIC -> "mechanics";
+            case FAMILY -> "families";
+            case DESIGNER -> "designers";
+            case PUBLISHER -> "publishers";
+        };
+    }
+
+    private String catalogFitText(
+            CatalogSelectionCriterion criterion,
+            CandidateClaim.Relation relation,
+            boolean chinese) {
+        String label = criterion.dimension().name().toLowerCase(java.util.Locale.ROOT);
+        if (chinese) {
+            return switch (relation) {
+                case SATISFIED -> "BGG 元数据满足明确的 " + label + " 条件：“" + criterion.value() + "”。";
+                case CONFLICT -> "BGG 元数据不满足明确的 " + label + " 条件：“" + criterion.value() + "”。";
+                case UNKNOWN -> "BGG 元数据没有足够信息确认 " + label + " 条件：“" + criterion.value() + "”。";
+                case OBSERVED -> throw new IllegalArgumentException("catalog fit cannot be observational");
+            };
+        }
+        return switch (relation) {
+            case SATISFIED -> "BGG metadata satisfies the explicit " + label + " criterion: “" + criterion.value() + "”.";
+            case CONFLICT -> "BGG metadata does not satisfy the explicit " + label + " criterion: “" + criterion.value() + "”.";
+            case UNKNOWN -> "BGG metadata cannot verify the explicit " + label + " criterion: “" + criterion.value() + "”.";
+            case OBSERVED -> throw new IllegalArgumentException("catalog fit cannot be observational");
+        };
     }
 
     List<CandidateObservation> observations(Game game) {

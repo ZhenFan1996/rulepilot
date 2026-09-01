@@ -1,5 +1,18 @@
 package com.rulepilot.recommendation.adapter.in.web;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.AgentTraceEvent.UserTurn;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
@@ -27,7 +40,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import jakarta.servlet.http.HttpSession;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -42,38 +57,209 @@ import org.springframework.web.bind.annotation.RestController;
 @Profile("!test")
 public class BggRecommendationAgentController {
 
+    private static final ObjectMapper TRACE_JSON = new ObjectMapper().findAndRegisterModules();
+
     private final BoardGameRecommendationAgent agent;
     private final BggRecommendationPresentation presentation;
     private final RecommendationConversationCoordinator conversations;
+    private final ObjectProvider<PrivateAgentTraceService> traceServices;
 
     @Autowired
     public BggRecommendationAgentController(
             BoardGameRecommendationAgent agent,
             BggRecommendationPresentation presentation,
-            RecommendationConversationCoordinator conversations) {
+            RecommendationConversationCoordinator conversations,
+            ObjectProvider<PrivateAgentTraceService> traceServices) {
         this.agent = agent;
         this.presentation = presentation;
         this.conversations = conversations;
+        this.traceServices = traceServices;
+    }
+
+    public BggRecommendationAgentController(
+            BoardGameRecommendationAgent agent,
+            BggRecommendationPresentation presentation,
+            RecommendationConversationCoordinator conversations) {
+        this(agent, presentation, conversations, null);
     }
 
     BggRecommendationAgentController(
             BoardGameRecommendationAgent agent,
             BggRecommendationPresentation presentation) {
-        this(agent, presentation, null);
+        this(agent, presentation, null, null);
     }
 
     @PostMapping("/api/v1/bgg/recommendation-agent")
     RecommendationConversationResponse converse(
             @RequestBody RecommendationConversationRequest request,
             @RequestParam(defaultValue = "en") String locale,
-            Principal principal) {
+            Principal principal,
+            HttpSession session) {
+        CaptureHandle trace = currentTrace(principal, session);
+        UUID turnOperationId = UUID.randomUUID();
+        ConversationRequest command = request.toCommand();
+        captureUserTurn(trace, request, command.message(), locale, turnOperationId);
         if (request.clientTurnId() != null && conversations != null) {
-            TurnResult result = conversations.converse(
-                    request.toSessionTurn(), locale, principal.getName(), ignored -> {});
-            return present(result, presentation);
+            TurnResult result = trace.enabled()
+                    ? conversations.converse(
+                            request.toSessionTurn(command),
+                            locale,
+                            principal.getName(),
+                            ignored -> {},
+                            ignored -> {},
+                            trace,
+                            turnOperationId)
+                    : conversations.converse(
+                            request.toSessionTurn(command), locale, principal.getName(), ignored -> {});
+            RecommendationConversationResponse presented = present(result, presentation);
+            capturePublication(trace, presented, turnOperationId);
+            return presented;
         }
-        ConversationResponse response = agent.converse(request.toCommand(), locale, principal.getName());
-        return present(response, locale, presentation);
+        ConversationResponse response = trace.enabled()
+                ? agent.converse(
+                        command,
+                        locale,
+                        principal.getName(),
+                        ignored -> {},
+                        ignored -> {},
+                        trace,
+                        turnOperationId)
+                : agent.converse(command, locale, principal.getName());
+        RecommendationConversationResponse presented = present(response, locale, presentation);
+        capturePublication(trace, presented, turnOperationId);
+        return presented;
+    }
+
+    RecommendationConversationResponse converse(
+            RecommendationConversationRequest request,
+            String locale,
+            Principal principal) {
+        return converse(request, locale, principal, null);
+    }
+
+    private CaptureHandle currentTrace(Principal principal, HttpSession session) {
+        if (traceServices == null || session == null) return CaptureHandle.noop();
+        try {
+            PrivateAgentTraceService service = traceServices.getIfAvailable();
+            if (service == null) return CaptureHandle.noop();
+            CaptureHandle capture = service.current(principal, session);
+            return capture == null || !capture.enabled() ? CaptureHandle.noop() : capture;
+        } catch (RuntimeException ignored) {
+            return CaptureHandle.noop();
+        }
+    }
+
+    static void capturePublication(
+            CaptureHandle capture,
+            RecommendationConversationResponse response,
+            UUID turnOperationId) {
+        if (response == null) return;
+        capturePublication(
+                capture,
+                response,
+                response.outcome(),
+                PublicationChannel.RECOMMENDATION,
+                turnOperationId);
+    }
+
+    static void captureUserTurn(
+            CaptureHandle capture,
+            RecommendationConversationRequest request,
+            String userText,
+            String locale,
+            UUID turnOperationId) {
+        if (capture == null || request == null || turnOperationId == null) return;
+        try {
+            if (!capture.enabled()) return;
+            ResourceRef turn = new ResourceRef(ResourceType.RECOMMENDATION_TURN, turnOperationId);
+            capture.bind(turn);
+            capture.userTurn(new UserTurn(
+                    TraceEventContext.create(
+                            Instant.now(),
+                            JourneyStage.RECOMMENDATION,
+                            turnOperationId,
+                            null,
+                            turn),
+                    userText,
+                    TRACE_JSON.writeValueAsString(request),
+                    traceLocale(locale)));
+        } catch (JsonProcessingException | RuntimeException ignored) {
+            // The authenticated request remains authoritative when optional capture is unavailable.
+            captureLifecycle(
+                    capture,
+                    turnOperationId,
+                    LifecycleSignal.GAP,
+                    "RECOMMENDATION_USER_TURN_CAPTURE_FAILED");
+        }
+    }
+
+    static void captureLifecycle(
+            CaptureHandle capture,
+            UUID turnOperationId,
+            LifecycleSignal signal,
+            String code) {
+        if (capture == null || turnOperationId == null || signal == null) return;
+        try {
+            if (!capture.enabled()) return;
+            ResourceRef turn = new ResourceRef(ResourceType.RECOMMENDATION_TURN, turnOperationId);
+            capture.bindingOrFailure(new BindingOrFailure(
+                    TraceEventContext.create(
+                            Instant.now(),
+                            JourneyStage.RECOMMENDATION,
+                            turnOperationId,
+                            null,
+                            turn),
+                    signal,
+                    code,
+                    turn,
+                    null));
+        } catch (RuntimeException ignored) {
+            // Product failure handling remains authoritative when optional capture is unavailable.
+        }
+    }
+
+    static void captureErrorPublication(
+            CaptureHandle capture,
+            Object playerFacingError,
+            String statusCode,
+            UUID turnOperationId) {
+        capturePublication(
+                capture,
+                playerFacingError,
+                statusCode,
+                PublicationChannel.FALLBACK,
+                turnOperationId);
+    }
+
+    private static void capturePublication(
+            CaptureHandle capture,
+            Object playerFacing,
+            String statusCode,
+            PublicationChannel channel,
+            UUID turnOperationId) {
+        if (capture == null || playerFacing == null || turnOperationId == null) return;
+        try {
+            if (!capture.enabled()) return;
+            ResourceRef turn = new ResourceRef(ResourceType.RECOMMENDATION_TURN, turnOperationId);
+            capture.publication(new Publication(
+                    TraceEventContext.create(
+                            Instant.now(),
+                            JourneyStage.RECOMMENDATION,
+                            UUID.randomUUID(),
+                            turnOperationId,
+                            turn),
+                    channel,
+                    TRACE_JSON.writeValueAsString(playerFacing),
+                    statusCode,
+                    List.of()));
+        } catch (JsonProcessingException | RuntimeException ignored) {
+            // The exact web publication remains authoritative when optional capture is unavailable.
+        }
+    }
+
+    private static String traceLocale(String locale) {
+        String value = locale == null ? "" : locale.strip().toLowerCase(Locale.ROOT);
+        return value.equals("zh") || value.equals("zh-cn") || value.equals("zh-hans") ? "zh-CN" : "en";
     }
 
     @GetMapping("/api/v1/bgg/recommendation-agent/session")

@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeToolAgent;
 import com.rulepilot.assistant.NativeToolAgent.TerminalContract;
@@ -138,6 +139,27 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             UUID gameSessionId,
             AnswerQuestionPlan questionPlan,
             AnswerEvidenceRetriever.Result deterministic) {
+        return refine(
+                assistantRunId,
+                question,
+                context,
+                username,
+                gameSessionId,
+                questionPlan,
+                deterministic,
+                CaptureHandle.noop());
+    }
+
+    @Override
+    public AnswerEvidenceRetriever.Result refine(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            AnswerQuestionPlan questionPlan,
+            AnswerEvidenceRetriever.Result deterministic,
+            CaptureHandle capture) {
         if (!AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, questionPlan, deterministic)) {
             return deterministic;
         }
@@ -150,7 +172,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         String providerId = nativeAgent.providerId(Role.ANSWER, username);
         RuleAnswerRateLimiter.Permit permit = rateLimiter.acquireModel(username, gameSessionId, providerId);
         try {
-            result = nativeAgent.run(new RunRequest(
+            RunRequest request = new RunRequest(
                     Role.ANSWER,
                     scope.get(),
                     SYSTEM_PROMPT,
@@ -167,7 +189,8 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     requiresSourceAuthoredAdvice(questionPlan)
                             ? Map.of("read_rule_pages", 1)
                             : Map.of(),
-                    !requiresCompleteListCertification(questionPlan)));
+                    !requiresCompleteListCertification(questionPlan));
+            result = capture.enabled() ? nativeAgent.run(request, capture) : nativeAgent.run(request);
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",

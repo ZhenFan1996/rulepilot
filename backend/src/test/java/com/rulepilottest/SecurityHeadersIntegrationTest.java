@@ -85,6 +85,10 @@ class SecurityHeadersIntegrationTest {
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/v1/bgg/catalog"))
                 .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/bgg/catalog/covers/42/image"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/bgg/catalog/covers/42/thumbnail"))
+                .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/bgg/recommendation-agent"))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/v1/bgg/recommendation-agent").with(csrf()))

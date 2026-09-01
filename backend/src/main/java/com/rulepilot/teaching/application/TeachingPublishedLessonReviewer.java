@@ -1,5 +1,8 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
@@ -48,6 +51,16 @@ final class TeachingPublishedLessonReviewer {
             List<LessonSection> sections,
             UUID assistantRunId,
             Runnable progressPublisher) {
+        review(plan, candidates, sections, assistantRunId, progressPublisher, CaptureHandle.noop());
+    }
+
+    void review(
+            TeachingPlan plan,
+            List<TeachingSectionDraftCandidate> candidates,
+            List<LessonSection> sections,
+            UUID assistantRunId,
+            Runnable progressPublisher,
+            CaptureHandle capture) {
         reviewBatch(
                 plan,
                 candidates,
@@ -56,7 +69,8 @@ final class TeachingPublishedLessonReviewer {
                 progressPublisher,
                 MAX_POST_PUBLICATION_REVIEW_PASSES,
                 new CorrectionBudget(),
-                false);
+                false,
+                capture);
     }
 
     private boolean reviewBatch(
@@ -67,11 +81,18 @@ final class TeachingPublishedLessonReviewer {
             Runnable progressPublisher,
             int remainingPasses,
             CorrectionBudget correctionBudget,
-            boolean acceptanceRequired) {
+            boolean acceptanceRequired,
+            CaptureHandle capture) {
         LessonReviewPlanner.LessonReviewBatch batch = LessonReviewPlanner.plan(plan, candidates, assistantRunId);
         GeneratedContentCritic.Review review;
         try {
-            review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, plan.createdBy());
+            review = critic.review(
+                    batch.request(),
+                    ReviewRisk.HIGH_IMPACT,
+                    plan.createdBy(),
+                    capture,
+                    new ResourceRef(ResourceType.TEACHING_RUN, assistantRunId),
+                    assistantRunId);
         } catch (AgentExecutionStoppedException stopped) {
             if (acceptanceRequired) {
                 withholdCandidates(
@@ -92,7 +113,9 @@ final class TeachingPublishedLessonReviewer {
             return true;
         } catch (RuntimeException reviewFailure) {
             if (acceptanceRequired) {
-                log.warn("Whole-lesson acceptance review withheld unverified correction: {}", reviewFailure.getMessage());
+                log.warn(
+                        "Whole-lesson acceptance review withheld unverified correction (failureType={})",
+                        reviewFailure.getClass().getSimpleName());
                 withholdCandidates(
                         candidates,
                         sections,
@@ -101,8 +124,8 @@ final class TeachingPublishedLessonReviewer {
                         "POST_PUBLICATION_REVIEW_FAILED_WITHHELD_UNVERIFIED_CORRECTION");
             } else {
                 log.warn(
-                        "Whole-lesson factual review retained only non-quantitative cited drafts: {}",
-                        reviewFailure.getMessage());
+                        "Whole-lesson factual review retained only non-quantitative cited drafts (failureType={})",
+                        reviewFailure.getClass().getSimpleName());
                 resolveInitialReviewFailure(
                         candidates,
                         sections,
@@ -142,11 +165,11 @@ final class TeachingPublishedLessonReviewer {
                     && !correctionBudget.tryStart(reviewCorrectionPolicy, correctionKind);
             if (!issues.isEmpty() && correctionBudgetExhausted) {
                 log.info(
-                        "Whole-lesson review withholds {} defect for topic {} after its correction budget",
+                        "Whole-lesson review withholds {} defect for section {} after its correction budget",
                         correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE
                                 ? "chapter-scope"
                                 : "factual",
-                        candidate.planned().topicKey());
+                        candidate.planned().position());
                 withholdCandidate(
                         candidate,
                         sections,
@@ -165,7 +188,8 @@ final class TeachingPublishedLessonReviewer {
                                 firstClaimPosition(batch, candidate.sectionIndex()),
                                 correctionKind,
                                 correctionBudget,
-                                assistantRunId);
+                                assistantRunId,
+                                capture);
                 sections.set(candidate.sectionIndex(), reviewed.section());
                 if (!issues.isEmpty()) correctedCandidates.add(reviewed);
                 recordPublication(
@@ -189,9 +213,9 @@ final class TeachingPublishedLessonReviewer {
                 return true;
             } catch (RuntimeException correctionFailure) {
                 log.warn(
-                        "Whole-lesson review withheld confirmed defect for topic {}: {}",
-                        candidate.planned().topicKey(),
-                        correctionFailure.getMessage());
+                        "Whole-lesson review withheld confirmed defect for section {} (failureType={})",
+                        candidate.planned().position(),
+                        correctionFailure.getClass().getSimpleName());
                 withholdCandidate(
                         candidate,
                         sections,
@@ -209,7 +233,8 @@ final class TeachingPublishedLessonReviewer {
                     progressPublisher,
                     remainingPasses - 1,
                     correctionBudget,
-                    true);
+                    true,
+                    capture);
         }
         if (!correctedCandidates.isEmpty()) {
             withholdCandidates(
@@ -292,7 +317,8 @@ final class TeachingPublishedLessonReviewer {
             int firstClaimPosition,
             TeachingReviewCorrectionPolicy.CorrectionKind correctionKind,
             CorrectionBudget correctionBudget,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         List<String> feedback = reviewCorrectionPolicy.correctionFeedback(issues);
         SectionDraft corrected = sectionDraftComposer.reviseModelDraft(
                 assistantRunId,
@@ -302,7 +328,8 @@ final class TeachingPublishedLessonReviewer {
                 feedback,
                 "correctTeachingSection",
                 "repairTeachingSectionCorrectionContract",
-                "Published teaching section corrected from whole-lesson review");
+                "Published teaching section corrected from whole-lesson review",
+                capture);
         corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
         EvidenceStatus correctionStatus = EvidenceStatus.CITED_DRAFT;
         LessonSection correctedSection;
@@ -332,7 +359,8 @@ final class TeachingPublishedLessonReviewer {
                     structuralRepair,
                     "repairCorrectedTeachingSection",
                     "repairCorrectedTeachingSectionContract",
-                    "Published teaching correction repaired to the section contract");
+                    "Published teaching correction repaired to the section contract",
+                    capture);
             corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
             validateFlaggedClaimsChanged(candidate.draft(), corrected, issues, firstClaimPosition);
             correctionStatus = EvidenceStatus.CITED_DRAFT;

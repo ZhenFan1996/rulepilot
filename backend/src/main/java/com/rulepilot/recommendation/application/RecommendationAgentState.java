@@ -4,6 +4,7 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.util.ArrayList;
@@ -22,7 +23,9 @@ final class RecommendationAgentState {
     final long startedAtNanos;
     final String modelConfigurationOwner;
     final int maximumRecommendationResults;
+    final RecommendationAgentTrace trace;
     RecommendationProfile profile;
+    CatalogSelectionIntent catalogSelectionIntent;
     final Set<Integer> excludedIds;
     final Set<Integer> previouslyShownIds = new LinkedHashSet<>();
     final Set<Integer> legalIds = new LinkedHashSet<>();
@@ -58,6 +61,7 @@ final class RecommendationAgentState {
     int catalogCalls;
     int webResearchCalls;
     int sourceCount;
+    int lastSelectableAvailableCount = -1;
 
     RecommendationAgentState(
             ConversationRequest request,
@@ -65,12 +69,30 @@ final class RecommendationAgentState {
             String modelConfigurationOwner,
             boolean webResearchConfigured,
             int maximumRecommendationResults) {
+        this(
+                request,
+                startedAtNanos,
+                modelConfigurationOwner,
+                webResearchConfigured,
+                maximumRecommendationResults,
+                null);
+    }
+
+    RecommendationAgentState(
+            ConversationRequest request,
+            long startedAtNanos,
+            String modelConfigurationOwner,
+            boolean webResearchConfigured,
+            int maximumRecommendationResults,
+            RecommendationAgentTrace trace) {
         this.startedAtNanos = startedAtNanos;
         this.modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                 ? null
                 : modelConfigurationOwner.strip();
         this.maximumRecommendationResults = maximumRecommendationResults;
+        this.trace = trace;
         profile = request.profile();
+        catalogSelectionIntent = request.catalogSelectionIntent();
         excludedIds = new LinkedHashSet<>(request.excludedBggIds());
         previouslyShownIds.addAll(request.shownBggIds());
         comparisonSubjectIds.addAll(request.shownBggIds());
@@ -158,9 +180,29 @@ final class RecommendationAgentState {
         catalogBrowseAttempted = false;
         researchAttempted = false;
         research = Research.empty();
+        lastSelectableAvailableCount = -1;
         if (selectionWorkObserved) {
             actions.add("RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE");
         }
+    }
+
+    void replaceCatalogSelectionIntent(CatalogSelectionIntent replacement) {
+        CatalogSelectionIntent next = replacement == null ? CatalogSelectionIntent.empty() : replacement;
+        if (sameCatalogSelection(next)) {
+            actions.add("IGNORED_REDUNDANT_CATALOG_INTENT_UPDATE");
+            return;
+        }
+        catalogSelectionIntent = next;
+        actions.add(next.active() ? "UPDATE_CATALOG_INTENT" : "CLEAR_CATALOG_INTENT");
+        reconsiderSelectionAfterPreferenceUpdate();
+    }
+
+    boolean sameCatalogSelection(CatalogSelectionIntent candidate) {
+        if (catalogSelectionIntent.requiredCriteria().size() != candidate.requiredCriteria().size()) return false;
+        return catalogSelectionIntent.requiredCriteria().stream().allMatch(current ->
+                candidate.requiredCriteria().stream().anyMatch(next ->
+                        next.dimension() == current.dimension()
+                                && next.value().equalsIgnoreCase(current.value())));
     }
 
     long elapsedMs() {

@@ -9,6 +9,11 @@ public class AgentExecutionStoppedException extends RuntimeException {
         this.reason = reason;
     }
 
+    public AgentExecutionStoppedException(StopReason reason, Throwable cause) {
+        super("assistant execution stopped: " + reason.name(), cause);
+        this.reason = reason;
+    }
+
     public StopReason reason() {
         return reason;
     }
@@ -18,6 +23,7 @@ public class AgentExecutionStoppedException extends RuntimeException {
         TOOL_BUDGET,
         MODEL_BUDGET,
         TOKEN_BUDGET,
+        ACCOUNT_QUOTA,
         TIMEOUT,
         CANCELLED
     }

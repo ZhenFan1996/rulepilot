@@ -1,5 +1,11 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
@@ -145,9 +151,9 @@ class VisualRulebookCataloger {
                         "Progressive visual Teaching start timed out; retaining complete preparation");
             }
             log.warn(
-                    "Progressive visual Teaching start was rejected for document {}; retaining complete preparation path",
+                    "Progressive visual Teaching start was rejected for document {}; retaining complete preparation path (failureType={})",
                     documentVersionId,
-                    invalidStart);
+                    invalidStart.getClass().getSimpleName());
             if (assistantRunId != null) {
                 invocations.record(
                         assistantRunId,
@@ -173,6 +179,23 @@ class VisualRulebookCataloger {
             String rulebookTitle,
             String owner,
             UUID assistantRunId) {
+        return catalogAllIconPages(
+                documentVersionId,
+                documentPages,
+                rulebookTitle,
+                owner,
+                assistantRunId,
+                CaptureHandle.noop());
+    }
+
+    List<PageFact> catalogAllIconPages(
+            UUID documentVersionId,
+            List<DocumentProcessing.PageView> documentPages,
+            String rulebookTitle,
+            String owner,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         Set<Integer> requestedPages = documentPages.stream()
                 .map(DocumentProcessing.PageView::pageNumber)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -190,8 +213,14 @@ class VisualRulebookCataloger {
                 .filter(page -> !completePages.contains(page))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         if (!pagesToInspect.isEmpty()) {
-            List<PageFact> inspected =
-                    catalogPageFacts(documentVersionId, pagesToInspect, rulebookTitle, owner, assistantRunId, true);
+            List<PageFact> inspected = catalogPageFacts(
+                    documentVersionId,
+                    pagesToInspect,
+                    rulebookTitle,
+                    owner,
+                    assistantRunId,
+                    true,
+                    trace);
             if (!inspected.isEmpty()) visualFacts.merge(documentVersionId, inspected);
         }
         return visualFacts.find(documentVersionId, requestedPages).stream()
@@ -205,6 +234,23 @@ class VisualRulebookCataloger {
             String rulebookTitle,
             String owner,
             UUID assistantRunId) {
+        return catalogVisualPages(
+                documentVersionId,
+                documentPages,
+                rulebookTitle,
+                owner,
+                assistantRunId,
+                CaptureHandle.noop());
+    }
+
+    List<PageInput> catalogVisualPages(
+            UUID documentVersionId,
+            List<DocumentProcessing.PageView> documentPages,
+            String rulebookTitle,
+            String owner,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         Set<Integer> requestedPages = documentPages.stream()
                 .map(DocumentProcessing.PageView::pageNumber)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -225,7 +271,8 @@ class VisualRulebookCataloger {
         Set<Integer> requiredFacts = new LinkedHashSet<>(missingPages);
         List<PageFact> fresh = requiredFacts.isEmpty()
                 ? List.of()
-                : catalogTeachingPageFacts(documentVersionId, requiredFacts, rulebookTitle, owner, assistantRunId);
+                : catalogTeachingPageFacts(
+                        documentVersionId, requiredFacts, rulebookTitle, owner, assistantRunId, trace);
         if (!cached.isEmpty() && !requiredFacts.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -252,6 +299,25 @@ class VisualRulebookCataloger {
             String rulebookTitle,
             String owner,
             UUID assistantRunId) {
+        return inspectUnownedSparseVisualPages(
+                documentVersionId,
+                outline,
+                documentPages,
+                rulebookTitle,
+                owner,
+                assistantRunId,
+                CaptureHandle.noop());
+    }
+
+    List<PageFact> inspectUnownedSparseVisualPages(
+            UUID documentVersionId,
+            TeachingOutlineModel.OutlineDraft outline,
+            List<DocumentProcessing.PageView> documentPages,
+            String rulebookTitle,
+            String owner,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         Set<Integer> selected = VisualOutlineEvidencePolicy.unownedSparseVisualCoveragePageNumbers(
                 outline, documentPages, visualCoverageProbePages);
         if (selected.isEmpty()) return List.of();
@@ -267,21 +333,22 @@ class VisualRulebookCataloger {
         try {
             fresh = missing.isEmpty()
                     ? List.of()
-                    : catalogTeachingPageFacts(documentVersionId, missing, rulebookTitle, owner, assistantRunId);
+                    : catalogTeachingPageFacts(
+                            documentVersionId, missing, rulebookTitle, owner, assistantRunId, trace);
         } catch (RuntimeException visualFailure) {
             log.warn(
-                    "Sparse-page visual coverage probe skipped for document {} pages {}",
+                    "Sparse-page visual coverage probe skipped for document {} (pageCount={}, failureType={})",
                     documentVersionId,
-                    missing,
-                    visualFailure);
+                    missing.size(),
+                    visualFailure.getClass().getSimpleName());
             return cached;
         }
         if (!fresh.isEmpty()) {
             visualFacts.merge(documentVersionId, fresh);
             log.info(
-                    "Sparse-page visual coverage probe stored document {} pages {}",
+                    "Sparse-page visual coverage probe stored document {} (pageCount={})",
                     documentVersionId,
-                    fresh.stream().map(PageFact::pageNumber).toList());
+                    fresh.size());
         }
         return VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
     }
@@ -296,7 +363,8 @@ class VisualRulebookCataloger {
             Set<Integer> pageNumbers,
             String rulebookTitle,
             String owner,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         List<List<Integer>> batches = VisualRulebookCatalogPolicy.teachingStartupBatches(orderedPages);
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog for teaching");
@@ -309,7 +377,8 @@ class VisualRulebookCataloger {
                 rulebookTitle,
                 assistantRunId,
                 index -> "inspectTeachingVisualPage|" + orderedPages.get(index) + "|" + orderedPages.size(),
-                new LinkedHashSet<>());
+                new LinkedHashSet<>(),
+                capture);
         return visualFacts.find(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
@@ -322,7 +391,8 @@ class VisualRulebookCataloger {
             String rulebookTitle,
             UUID assistantRunId,
             IntFunction<String> operationForIndex,
-            Set<Integer> timedOutPages) {
+            Set<Integer> timedOutPages,
+            CaptureHandle capture) {
         List<Integer> missingPages = new ArrayList<>();
         int parallelism = Math.min(visualRequestParallelism, batches.size());
         for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
@@ -338,7 +408,8 @@ class VisualRulebookCataloger {
                             owner,
                             rulebookTitle,
                             assistantRunId,
-                            operationForIndex.apply(batchIndex))));
+                            operationForIndex.apply(batchIndex),
+                            capture)));
                 }
                 long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
                 for (int offset = 0; offset < futures.size(); offset++) {
@@ -374,10 +445,10 @@ class VisualRulebookCataloger {
                             }
                         }
                         log.warn(
-                                "Teaching-start visual interpretation skipped failed batch {} for document {}",
-                                batch,
+                                "Teaching-start visual interpretation skipped failed batch for document {} (pageCount={}, failureType={})",
                                 documentVersionId,
-                                failedBatch);
+                                batch.size(),
+                                failedBatch.getClass().getSimpleName());
                         missingPages.addAll(batch);
                     }
                 }
@@ -394,7 +465,8 @@ class VisualRulebookCataloger {
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
-            String operation) {
+            String operation,
+            CaptureHandle capture) {
         List<PageImageInput> images = readTeachingPageImages(documentVersionId, batch);
         var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
         return invokeModel(
@@ -402,7 +474,12 @@ class VisualRulebookCataloger {
                 operation,
                 Math.max(1, images.size() * 600),
                 teachingStartupSuccessSummary(owner),
-                () -> visualCatalog.summarizeForTeaching(request),
+                () -> capture.enabled()
+                        ? visualCatalog.summarizeForTeaching(
+                                request,
+                                capture,
+                                visualModelContext(assistantRunId))
+                        : visualCatalog.summarizeForTeaching(request),
                 this::catalogOutputTokens);
     }
 
@@ -445,7 +522,8 @@ class VisualRulebookCataloger {
             String rulebookTitle,
             String owner,
             UUID assistantRunId,
-            boolean allowTileFallback) {
+            boolean allowTileFallback,
+            CaptureHandle capture) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         // A legend must not be bundled with a gameplay page. Vision providers occasionally return a valid summary
         // for only one of two supplied images; treating that partial response as an all-or-nothing pair discarded
@@ -465,7 +543,8 @@ class VisualRulebookCataloger {
                 summaries,
                 "Visual page batch timed out; retaining completed page facts",
                 timedOutPages,
-                allowTileFallback);
+                allowTileFallback,
+                capture);
         List<Integer> retryableFailures = failedPages.stream()
                 .filter(page -> !timedOutPages.contains(page))
                 .toList();
@@ -477,7 +556,8 @@ class VisualRulebookCataloger {
                         rulebookTitle,
                         assistantRunId,
                         summaries,
-                        allowTileFallback);
+                        allowTileFallback,
+                        capture);
         Set<Integer> tileFallbackPages = new LinkedHashSet<>(timedOutPages);
         tileFallbackPages.addAll(retryFailures);
         if (allowTileFallback) {
@@ -488,7 +568,12 @@ class VisualRulebookCataloger {
         }
         if (allowTileFallback && !tileFallbackPages.isEmpty()) {
             summaries.addAll(catalogDensePagesWithTiles(
-                    documentVersionId, List.copyOf(tileFallbackPages), owner, rulebookTitle, assistantRunId));
+                    documentVersionId,
+                    List.copyOf(tileFallbackPages),
+                    owner,
+                    rulebookTitle,
+                    assistantRunId,
+                    capture));
         }
         List<VisualRulebookPageCatalogModel.PageSummary> consolidated = summaries.stream()
                 .sorted(java.util.Comparator.comparingInt(VisualRulebookPageCatalogModel.PageSummary::pageNumber))
@@ -561,7 +646,8 @@ class VisualRulebookCataloger {
             String rulebookTitle,
             UUID assistantRunId,
             List<VisualRulebookPageCatalogModel.PageSummary> summaries,
-            boolean verifyIconBounds) {
+            boolean verifyIconBounds,
+            CaptureHandle capture) {
         if (failedPages.isEmpty()) return List.of();
         List<Integer> retryPages = failedPages.stream().distinct().toList();
         List<List<Integer>> retryBatches = retryPages.stream().map(List::of).toList();
@@ -576,7 +662,8 @@ class VisualRulebookCataloger {
                 summaries,
                 "Visual page retry timed out; the page remains incomplete",
                 retryTimeouts,
-                verifyIconBounds);
+                verifyIconBounds,
+                capture);
     }
 
     private List<VisualRulebookPageCatalogModel.PageSummary> catalogDensePagesWithTiles(
@@ -584,7 +671,8 @@ class VisualRulebookCataloger {
             List<Integer> pageNumbers,
             String owner,
             String rulebookTitle,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         List<VisualRulebookPageCatalogModel.PageSummary> mergedPages = new ArrayList<>();
         for (int pageNumber : pageNumbers.stream().distinct().sorted().toList()) {
             Optional<PageImage> source = pageImages.read(documentVersionId, Set.of(pageNumber)).stream()
@@ -606,7 +694,8 @@ class VisualRulebookCataloger {
                                 owner,
                                 rulebookTitle,
                                 assistantRunId,
-                                "inspectRulebookVisualTile|" + pageNumber + "|" + (tileIndex + 1))));
+                                "inspectRulebookVisualTile|" + pageNumber + "|" + (tileIndex + 1),
+                                capture)));
                     }
                     long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
                     for (int offset = 0; offset < futures.size(); offset++) {
@@ -627,11 +716,10 @@ class VisualRulebookCataloger {
                                         "Dense-page tile timed out; retaining other completed tiles");
                             }
                             log.warn(
-                                    "Visual tile {} skipped for dense rulebook page {} in document {}",
-                                    tileIndex + 1,
-                                    pageNumber,
+                                    "Visual tile skipped for dense rulebook page in document {} (tileIndex={}, failureType={})",
                                     documentVersionId,
-                                    failedTile);
+                                    tileIndex + 1,
+                                    failedTile.getClass().getSimpleName());
                         }
                     }
                 } finally {
@@ -642,7 +730,7 @@ class VisualRulebookCataloger {
                 VisualRulebookPageCatalogModel.PageSummary merged =
                         VisualPageTilePolicy.merge(pageNumber, completed);
                 VisualRulebookPageCatalogModel.PageSummary localized =
-                        localizeIconBounds(documentVersionId, merged, owner, assistantRunId);
+                        localizeIconBounds(documentVersionId, merged, owner, assistantRunId, capture);
                 mergedPages.add(localized);
                 persistCompletedFacts(documentVersionId, List.of(localized));
             }
@@ -655,7 +743,8 @@ class VisualRulebookCataloger {
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
-            String operation) {
+            String operation,
+            CaptureHandle capture) {
         var request = new VisualRulebookPageCatalogModel.CatalogRequest(
                 List.of(tile.image()), owner, rulebookTitle, tile.viewport());
         return invokeModel(
@@ -663,7 +752,9 @@ class VisualRulebookCataloger {
                 operation,
                 800,
                 "Dense rulebook page tile interpreted",
-                () -> visualCatalog.summarize(request),
+                () -> capture.enabled()
+                        ? visualCatalog.summarize(request, capture, iconModelContext(assistantRunId))
+                        : visualCatalog.summarize(request),
                 this::catalogOutputTokens);
     }
 
@@ -682,7 +773,8 @@ class VisualRulebookCataloger {
             List<VisualRulebookPageCatalogModel.PageSummary> summaries,
             String timeoutSummary,
             Set<Integer> timedOutPages,
-            boolean verifyIconBounds) {
+            boolean verifyIconBounds,
+            CaptureHandle capture) {
         List<Integer> failedPages = new ArrayList<>();
         int parallelism = Math.min(visualRequestParallelism, batches.size());
         for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
@@ -698,7 +790,8 @@ class VisualRulebookCataloger {
                             owner,
                             rulebookTitle,
                             assistantRunId,
-                            operationForIndex.apply(batchIndex))));
+                            operationForIndex.apply(batchIndex),
+                            capture)));
                 }
                 long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
                 for (int offset = 0; offset < futures.size(); offset++) {
@@ -710,7 +803,12 @@ class VisualRulebookCataloger {
                         if (verifyIconBounds) {
                             completed = completed.stream()
                                     .map(summary ->
-                                            localizeIconBounds(documentVersionId, summary, owner, assistantRunId))
+                                            localizeIconBounds(
+                                                    documentVersionId,
+                                                    summary,
+                                                    owner,
+                                                    assistantRunId,
+                                                    capture))
                                     .toList();
                         }
                         summaries.addAll(completed);
@@ -725,10 +823,10 @@ class VisualRulebookCataloger {
                                     timeoutSummary);
                         }
                         log.warn(
-                                "Visual page interpretation skipped failed batch {} for document {}",
-                                batches.get(batchIndex),
+                                "Visual page interpretation skipped failed batch for document {} (pageCount={}, failureType={})",
                                 documentVersionId,
-                                failedBatch);
+                                batches.get(batchIndex).size(),
+                                failedBatch.getClass().getSimpleName());
                         failedPages.addAll(batches.get(batchIndex));
                     }
                 }
@@ -743,7 +841,8 @@ class VisualRulebookCataloger {
             UUID documentVersionId,
             VisualRulebookPageCatalogModel.PageSummary summary,
             String owner,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         if (summary.iconOccurrences().isEmpty()) return summary;
         Optional<PageImage> page = pageImages.read(documentVersionId, Set.of(summary.pageNumber())).stream()
                 .filter(candidate -> candidate.pageNumber() == summary.pageNumber())
@@ -757,13 +856,15 @@ class VisualRulebookCataloger {
                             page.get().content()),
                     summary.iconOccurrences(),
                     owner);
-            var localized = localizeIconsWithOneRepair(request, summary.pageNumber(), assistantRunId);
+            var localized = localizeIconsWithOneRepair(
+                    request, summary.pageNumber(), assistantRunId, capture);
             Map<Integer, VisualRulebookPageCatalogModel.IconLocation> locations = localized.locations().stream()
                     .collect(Collectors.toMap(
                             VisualRulebookPageCatalogModel.IconLocation::candidateIndex,
                             java.util.function.Function.identity()));
             Map<Integer, VisualRulebookPageCatalogModel.IconLocation> confirmedLocations =
-                    confirmLocalizedIconCrops(page.get(), summary, locations, owner, assistantRunId);
+                    confirmLocalizedIconCrops(
+                            page.get(), summary, locations, owner, assistantRunId, capture);
             List<com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence> icons =
                     java.util.stream.IntStream.range(0, summary.iconOccurrences().size())
                             .mapToObj(index -> {
@@ -805,10 +906,9 @@ class VisualRulebookCataloger {
                     summary.quantityObservations());
         } catch (RuntimeException localizationFailure) {
             log.warn(
-                    "Icon rectangle verification failed for rulebook page {} in document {}; keeping the page incomplete",
-                    summary.pageNumber(),
+                    "Icon rectangle verification failed for document {}; keeping the page incomplete (failureType={})",
                     documentVersionId,
-                    localizationFailure);
+                    localizationFailure.getClass().getSimpleName());
             return withoutUnverifiedIcons(summary);
         }
     }
@@ -816,7 +916,8 @@ class VisualRulebookCataloger {
     private VisualRulebookPageCatalogModel.IconLocalizationDraft localizeIconsWithOneRepair(
             VisualRulebookPageCatalogModel.IconLocalizationRequest request,
             int pageNumber,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         int estimatedInputTokens = Math.max(400, request.candidates().size() * 80);
         try {
             return invokeModel(
@@ -824,7 +925,12 @@ class VisualRulebookCataloger {
                     "localizeRulebookIcons|" + pageNumber,
                     estimatedInputTokens,
                     "Rulebook icon rectangles verified",
-                    () -> visualCatalog.localizeIcons(request),
+                    () -> capture.enabled()
+                            ? visualCatalog.localizeIcons(
+                                    request,
+                                    capture,
+                                    iconModelContext(assistantRunId))
+                            : visualCatalog.localizeIcons(request),
                     result -> Math.max(1, result.locations().size() * 10));
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
@@ -835,7 +941,12 @@ class VisualRulebookCataloger {
                         "localizeRulebookIcons|" + pageNumber + "|repair",
                         estimatedInputTokens,
                         "Rulebook icon rectangles verified after one repair",
-                        () -> visualCatalog.localizeIcons(request),
+                        () -> capture.enabled()
+                                ? visualCatalog.localizeIcons(
+                                        request,
+                                        capture,
+                                        iconModelContext(assistantRunId))
+                                : visualCatalog.localizeIcons(request),
                         result -> Math.max(1, result.locations().size() * 10));
             } catch (RuntimeException repairFailure) {
                 repairFailure.addSuppressed(firstFailure);
@@ -849,7 +960,8 @@ class VisualRulebookCataloger {
             VisualRulebookPageCatalogModel.PageSummary summary,
             Map<Integer, VisualRulebookPageCatalogModel.IconLocation> locations,
             String owner,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         List<Integer> present = locations.values().stream()
                 .filter(VisualRulebookPageCatalogModel.IconLocation::present)
                 .map(VisualRulebookPageCatalogModel.IconLocation::candidateIndex)
@@ -870,7 +982,12 @@ class VisualRulebookCataloger {
                     "reviewRulebookIconCrops|" + summary.pageNumber() + "|" + batch,
                     Math.max(240, indexes.size() * 40),
                     "Localized rulebook icon crops reviewed",
-                    () -> visualCatalog.reviewIconCrops(request),
+                    () -> capture.enabled()
+                            ? visualCatalog.reviewIconCrops(
+                                    request,
+                                    capture,
+                                    iconModelContext(assistantRunId))
+                            : visualCatalog.reviewIconCrops(request),
                     result -> Math.max(1, result.decisions().size() * 4));
             Set<Integer> returned = review.decisions().stream()
                     .map(VisualRulebookPageCatalogModel.IconCropDecision::candidateIndex)
@@ -901,7 +1018,8 @@ class VisualRulebookCataloger {
                                 assistantRunId,
                                 summary.pageNumber(),
                                 reviewBatch,
-                                "tighten");
+                                "tighten",
+                                capture);
                         if (tightened != null) confirmed.put(decision.candidateIndex(), tightened);
                     });
         }
@@ -916,7 +1034,8 @@ class VisualRulebookCataloger {
             UUID assistantRunId,
             int pageNumber,
             int batch,
-            String pass) {
+            String pass,
+            CaptureHandle capture) {
         var request = new VisualRulebookPageCatalogModel.IconCropReviewRequest(
                 new PageImageInput(page.pageNumber(), page.mediaType(), page.content()),
                 List.of(candidate),
@@ -927,7 +1046,12 @@ class VisualRulebookCataloger {
                 "reviewRulebookIconCrops|" + pageNumber + "|" + batch + "|" + pass,
                 240,
                 "Localized rulebook icon crop reviewed",
-                () -> visualCatalog.reviewIconCrops(request),
+                () -> capture.enabled()
+                        ? visualCatalog.reviewIconCrops(
+                                request,
+                                capture,
+                                iconModelContext(assistantRunId))
+                        : visualCatalog.reviewIconCrops(request),
                 result -> Math.max(1, result.decisions().size() * 4));
         if (review.decisions().size() != 1 || review.decisions().getFirst().candidateIndex() != location.candidateIndex()) {
             throw new IllegalArgumentException("visual icon crop review did not cover the candidate");
@@ -967,7 +1091,8 @@ class VisualRulebookCataloger {
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
-            String operation) {
+            String operation,
+            CaptureHandle capture) {
         List<PageImageInput> images = pageImages.read(documentVersionId, new LinkedHashSet<>(batch)).stream()
                 .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
                 .toList();
@@ -977,7 +1102,9 @@ class VisualRulebookCataloger {
                 operation,
                 Math.max(1, images.size() * 800),
                 "Rulebook visual batch interpreted",
-                () -> visualCatalog.summarize(request),
+                () -> capture.enabled()
+                        ? visualCatalog.summarize(request, capture, iconModelContext(assistantRunId))
+                        : visualCatalog.summarize(request),
                 this::catalogOutputTokens);
     }
 
@@ -1089,5 +1216,27 @@ class VisualRulebookCataloger {
                                 .sum())
                 .sum();
         return Math.max(1, characters / 4);
+    }
+
+    private TraceEventContext visualModelContext(UUID assistantRunId) {
+        return TraceEventContext.create(
+                java.time.Instant.now(),
+                JourneyStage.TEACHING,
+                UUID.randomUUID(),
+                assistantRunId,
+                assistantRunId == null
+                        ? null
+                        : new ResourceRef(ResourceType.ASSISTANT_RUN, assistantRunId));
+    }
+
+    private TraceEventContext iconModelContext(UUID visualRunId) {
+        return TraceEventContext.create(
+                java.time.Instant.now(),
+                JourneyStage.TEACHING,
+                UUID.randomUUID(),
+                visualRunId,
+                visualRunId == null
+                        ? null
+                        : new ResourceRef(ResourceType.VISUAL_RUN, visualRunId));
     }
 }

@@ -6,44 +6,57 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.concurrent.Semaphore;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-/** Keeps external cover availability off the browser's critical path after the first successful fetch. */
+/** Keeps bounded external cover work behind a variant-aware durable cache and concurrency limit. */
 @Service
 @Profile("!test")
 public class DurableCoverThumbnailService {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(DurableCoverThumbnailService.class);
-    private static final String CACHE_FORMAT_VERSION = "catalog-cover-v2-hires";
+    public static final String CACHE_FORMAT_VERSION = "catalog-cover-v3-profiled-jpeg";
+    private static final int DEFAULT_MAX_CONCURRENT_FETCHES = 4;
 
     private final CoverThumbnailCache cache;
     private final CoverImageFetcher fetcher;
+    private final Semaphore fetchPermits;
     private final ConcurrentHashMap<String, CompletableFuture<Thumbnail>> inFlight = new ConcurrentHashMap<>();
 
     public DurableCoverThumbnailService(CoverThumbnailCache cache, CoverImageFetcher fetcher) {
-        this.cache = cache;
-        this.fetcher = fetcher;
+        this(cache, fetcher, DEFAULT_MAX_CONCURRENT_FETCHES);
     }
 
-    public Thumbnail thumbnailFor(String sourceUrl) {
+    DurableCoverThumbnailService(CoverThumbnailCache cache, CoverImageFetcher fetcher, int maximumConcurrentFetches) {
+        if (maximumConcurrentFetches < 1 || maximumConcurrentFetches > 16) {
+            throw new IllegalArgumentException("cover fetch concurrency must be between one and sixteen");
+        }
+        this.cache = Objects.requireNonNull(cache, "cover cache is required");
+        this.fetcher = Objects.requireNonNull(fetcher, "cover fetcher is required");
+        this.fetchPermits = new Semaphore(maximumConcurrentFetches, true);
+    }
+
+    public String formatVersion() {
+        return CACHE_FORMAT_VERSION;
+    }
+
+    public Thumbnail thumbnailFor(String sourceUrl, Profile profile) {
         URI source = trustedSource(sourceUrl);
-        String cacheKey = digest(CACHE_FORMAT_VERSION + '\n' + source.toASCIIString());
-        Optional<Thumbnail> cached = cached(cacheKey);
-        if (cached.isPresent()) return cached.get();
+        Profile checkedProfile = Objects.requireNonNull(profile, "cover profile is required");
+        String cacheKey = cacheKey(source, checkedProfile);
+        Optional<Thumbnail> cached = cache.find(cacheKey);
+        if (cached.isPresent()) return cached.orElseThrow();
 
         CompletableFuture<Thumbnail> created = new CompletableFuture<>();
         CompletableFuture<Thumbnail> existing = inFlight.putIfAbsent(cacheKey, created);
         if (existing != null) return await(existing);
         try {
-            Thumbnail thumbnail = cached(cacheKey).orElseGet(() -> fetcher.fetch(source));
-            retain(cacheKey, thumbnail);
+            Thumbnail thumbnail = loadMissing(cacheKey, source, checkedProfile);
             created.complete(thumbnail);
             return thumbnail;
         } catch (RuntimeException failure) {
@@ -54,20 +67,18 @@ public class DurableCoverThumbnailService {
         }
     }
 
-    private Optional<Thumbnail> cached(String cacheKey) {
-        try {
-            return cache.find(cacheKey);
-        } catch (RuntimeException failure) {
-            LOGGER.warn("Could not read a durable cover thumbnail: {}", failure.getClass().getSimpleName());
-            return Optional.empty();
+    private Thumbnail loadMissing(String cacheKey, URI source, Profile profile) {
+        if (!fetchPermits.tryAcquire()) {
+            throw new CapacityUnavailableException("cover origin fetch capacity is temporarily exhausted");
         }
-    }
-
-    private void retain(String cacheKey, Thumbnail thumbnail) {
         try {
+            Optional<Thumbnail> cached = cache.find(cacheKey);
+            if (cached.isPresent()) return cached.orElseThrow();
+            Thumbnail thumbnail = fetcher.fetch(source, profile);
             cache.store(cacheKey, thumbnail);
-        } catch (RuntimeException failure) {
-            LOGGER.warn("Could not retain a durable cover thumbnail: {}", failure.getClass().getSimpleName());
+            return thumbnail;
+        } finally {
+            fetchPermits.release();
         }
     }
 
@@ -76,8 +87,13 @@ public class DurableCoverThumbnailService {
             return existing.join();
         } catch (CompletionException failure) {
             if (failure.getCause() instanceof RuntimeException runtime) throw runtime;
-            throw new IllegalStateException("cover thumbnail is unavailable", failure.getCause());
+            throw new IllegalStateException("cover image is unavailable", failure.getCause());
         }
+    }
+
+    private String cacheKey(URI source, Profile profile) {
+        String sourceDigest = digest(source.toASCIIString());
+        return digest(CACHE_FORMAT_VERSION + '\n' + profile.name() + '\n' + sourceDigest);
     }
 
     private URI trustedSource(String sourceUrl) {
@@ -98,6 +114,17 @@ public class DurableCoverThumbnailService {
                     .digest(source.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException unavailable) {
             throw new IllegalStateException("SHA-256 is unavailable", unavailable);
+        }
+    }
+
+    public enum Profile {
+        COMPACT_PROFILE,
+        DISPLAY_PROFILE
+    }
+
+    public static final class CapacityUnavailableException extends IllegalStateException {
+        public CapacityUnavailableException(String message) {
+            super(message);
         }
     }
 }

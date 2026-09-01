@@ -11,6 +11,9 @@ import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionCriterion;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionDimension;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -266,6 +269,80 @@ class BoardGameRecommendationSelectorTest {
                 8);
 
         assertThat(result).extracting(value -> value.ranking().bggId()).containsExactly(1);
+    }
+
+    @Test
+    void appliesEverySupportedCatalogDimensionAsTheSameExactCandidateGate() {
+        Game candidate = new Game(
+                new Ranking(
+                        71,
+                        "Guild Archive",
+                        2025,
+                        71,
+                        new BigDecimal("7.2"),
+                        new BigDecimal("7.5"),
+                        2_000,
+                        List.of(BggGameType.STRATEGY)),
+                new Details(
+                        "Guild Archive",
+                        "行会档案",
+                        "",
+                        2,
+                        4,
+                        120,
+                        new BigDecimal("3.5"),
+                        List.of("Economic"),
+                        List.of("Deck, Bag, and Pool Building"),
+                        90,
+                        120,
+                        12,
+                        12,
+                        "3",
+                        "2-4",
+                        2,
+                        100,
+                        List.of("Cities: Hanseatic"),
+                        List.of("Avery Stone"),
+                        List.of("Open Shelf"),
+                        "Build a trading archive.",
+                        ""));
+        List<CatalogSelectionCriterion> criteria = List.of(
+                criterion(CatalogSelectionDimension.CATEGORY, "Economic"),
+                criterion(CatalogSelectionDimension.MECHANIC, "Deck, Bag, and Pool Building"),
+                criterion(CatalogSelectionDimension.FAMILY, "Cities: Hanseatic"),
+                criterion(CatalogSelectionDimension.DESIGNER, "Avery Stone"),
+                criterion(CatalogSelectionDimension.PUBLISHER, "Open Shelf"));
+
+        assertThat(selector.eligible(
+                        candidate,
+                        RecommendationProfile.empty(),
+                        new CatalogSelectionIntent(criteria)))
+                .isTrue();
+        assertThat(selector.fitClaims(
+                        candidate,
+                        RecommendationProfile.empty(),
+                        new CatalogSelectionIntent(criteria),
+                        false))
+                .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
+                .extracting(CandidateClaim::subject, CandidateClaim::relation)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("categories", CandidateClaim.Relation.SATISFIED),
+                        org.assertj.core.groups.Tuple.tuple("mechanics", CandidateClaim.Relation.SATISFIED),
+                        org.assertj.core.groups.Tuple.tuple("families", CandidateClaim.Relation.SATISFIED),
+                        org.assertj.core.groups.Tuple.tuple("designers", CandidateClaim.Relation.SATISFIED),
+                        org.assertj.core.groups.Tuple.tuple("publishers", CandidateClaim.Relation.SATISFIED));
+        for (CatalogSelectionDimension dimension : CatalogSelectionDimension.values()) {
+            assertThat(selector.eligible(
+                            candidate,
+                            RecommendationProfile.empty(),
+                            new CatalogSelectionIntent(List.of(criterion(dimension, "Different canonical value")))))
+                    .as("a mismatch in %s must reject the candidate", dimension)
+                    .isFalse();
+        }
+    }
+
+    private CatalogSelectionCriterion criterion(CatalogSelectionDimension dimension, String value) {
+        return new CatalogSelectionCriterion(dimension, value, "player-authored direction", 1);
     }
 
     private Game game(int id, int maximumMinutes, BigDecimal weight, List<String> mechanics) {

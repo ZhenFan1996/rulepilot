@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
 import com.rulepilot.catalog.CatalogGameSourceIdentityLookup;
 import java.net.IDN;
@@ -162,6 +163,14 @@ public class OfficialRulebookDiscoveryService {
     }
 
     public Result discover(UUID editionId, String language) {
+        return discover(editionId, language, CaptureHandle.noop(), null);
+    }
+
+    public Result discover(
+            UUID editionId,
+            String language,
+            CaptureHandle capture,
+            UUID parentOperationId) {
         var budget = new DiscoveryBudget(
                 catalogProviderBudget,
                 sourceInspectionProviderBudget,
@@ -202,7 +211,7 @@ public class OfficialRulebookDiscoveryService {
         }
 
         var modelDiscovered = new ArrayList<>(budget
-                .call(DiscoveryProvider.WEB_SEARCH, () -> finder.find(request))
+                .call(DiscoveryProvider.WEB_SEARCH, () -> finder.find(request, capture, parentOperationId))
                 .orElse(List.of()));
         modelDiscovered.add(new OfficialRulebookCandidateFinder.Candidate(
                 "BoardGameGeek Files",
@@ -227,7 +236,8 @@ public class OfficialRulebookDiscoveryService {
             List<Candidate> recovered = budget
                     .call(
                             DiscoveryProvider.WEB_SEARCH,
-                            () -> finder.findAfterSourcePages(request, observedPages))
+                            () -> finder.findAfterSourcePages(
+                                    request, observedPages, capture, parentOperationId))
                     .orElse(List.of())
                     .stream()
                     .map(candidate -> validate(candidate, identity.publishers()))

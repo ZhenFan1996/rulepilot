@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,6 +55,17 @@ final class TeachingPlannedUnitCoveragePolicy {
                 LinkedHashMap::new));
         for (TeachingUnitInput unit : plannedUnits) {
             List<StepDraft> unitSteps = stepsByUnit.getOrDefault(unit.unitId(), List.of());
+            if (unit.availability() == SourceCoverageAvailability.UNRESOLVED) {
+                if (!unitSteps.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "unresolved teaching unit cannot be presented as a rule claim: " + unit.unitId());
+                }
+                continue;
+            }
+            if (unit.availability() == SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE
+                    && unitSteps.isEmpty()) {
+                continue;
+            }
             if (unitSteps.isEmpty()) {
                 throw new IllegalArgumentException(
                         "teaching draft omitted planned teaching unit " + unit.unitId());

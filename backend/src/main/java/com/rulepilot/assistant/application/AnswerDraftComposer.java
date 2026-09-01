@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
@@ -26,10 +27,19 @@ final class AnswerDraftComposer {
             String username,
             UUID gameSessionId,
             ModelRequest modelRequest) {
+        return compose(assistantRunId, username, gameSessionId, modelRequest, CaptureHandle.noop());
+    }
+
+    Result compose(
+            UUID assistantRunId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            CaptureHandle capture) {
         ModelDraft draft;
         int modelRepairs = 0;
         try {
-            draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
+            draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest, capture);
         } catch (RuleAnswerModelTimeoutException exception) {
             return Result.failure(
                     AnswerStatus.MODEL_TIMEOUT,
@@ -63,6 +73,22 @@ final class AnswerDraftComposer {
             UUID gameSessionId,
             ModelRequest modelRequest,
             ModelDraft rejectedDraft) {
+        return repairAfterPublicationFailure(
+                assistantRunId,
+                username,
+                gameSessionId,
+                modelRequest,
+                rejectedDraft,
+                CaptureHandle.noop());
+    }
+
+    Result repairAfterPublicationFailure(
+            UUID assistantRunId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft rejectedDraft,
+            CaptureHandle capture) {
         ModelDraft revised;
         try {
             revised = modelGateway.revise(
@@ -83,7 +109,8 @@ final class AnswerDraftComposer {
                             "For a can/may/allowed question, answer can or cannot directly in shortVerdict and preserve the cited permission or prohibition direction, including every stated condition and exception.",
                             "Remove every claim that the cited excerpts do not directly support."),
                     "repairPublicationValidation",
-                    "Final citation validation failure repaired");
+                    "Final citation validation failure repaired",
+                    capture);
         } catch (RuleAnswerModelTimeoutException exception) {
             return Result.failure(
                     AnswerStatus.MODEL_TIMEOUT,
@@ -111,6 +138,22 @@ final class AnswerDraftComposer {
             UUID gameSessionId,
             ModelRequest modelRequest,
             ModelDraft rejectedDraft) {
+        return repairAfterCalculationFailure(
+                assistantRunId,
+                username,
+                gameSessionId,
+                modelRequest,
+                rejectedDraft,
+                CaptureHandle.noop());
+    }
+
+    Result repairAfterCalculationFailure(
+            UUID assistantRunId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft rejectedDraft,
+            CaptureHandle capture) {
         ModelDraft revised;
         try {
             revised = modelGateway.revise(
@@ -125,7 +168,8 @@ final class AnswerDraftComposer {
                             "Every numeric operand must appear in the current player question or cited evidence, and at least one operand must come from the current question.",
                             "If no grounded arithmetic is needed, return an empty calculations list and remove unsupported computed totals."),
                     "repairRuleCalculation",
-                    "Unsupported rule calculation repaired");
+                    "Unsupported rule calculation repaired",
+                    capture);
         } catch (RuleAnswerModelTimeoutException exception) {
             return Result.failure(AnswerStatus.MODEL_TIMEOUT, "规则计算修订超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {

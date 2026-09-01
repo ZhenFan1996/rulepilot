@@ -1,5 +1,7 @@
 package com.rulepilot.shared.adapter.out.cover;
 
+import static com.rulepilot.shared.cover.DurableCoverThumbnailService.Profile.COMPACT_PROFILE;
+import static com.rulepilot.shared.cover.DurableCoverThumbnailService.Profile.DISPLAY_PROFILE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
@@ -13,7 +15,7 @@ import org.junit.jupiter.api.Test;
 class CoverThumbnailerTest {
 
     @Test
-    void retainsEnoughPixelsForRetinaCatalogAndIdentityCards() throws Exception {
+    void createsDistinctBoundedCompactAndDisplayProfiles() throws Exception {
         BufferedImage sourceImage = new BufferedImage(1_200, 1_600, BufferedImage.TYPE_INT_RGB);
         var graphics = sourceImage.createGraphics();
         graphics.setColor(new Color(31, 79, 121));
@@ -22,12 +24,16 @@ class CoverThumbnailerTest {
         var source = new ByteArrayOutputStream();
         ImageIO.write(sourceImage, "png", source);
 
-        Thumbnail thumbnail = new CoverThumbnailer().create(source.toByteArray());
-        BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(thumbnail.content()));
+        Thumbnail compact = new CoverThumbnailer().create(source.toByteArray(), COMPACT_PROFILE);
+        Thumbnail display = new CoverThumbnailer().create(source.toByteArray(), DISPLAY_PROFILE);
+        BufferedImage compactImage = ImageIO.read(new ByteArrayInputStream(compact.content()));
+        BufferedImage displayImage = ImageIO.read(new ByteArrayInputStream(display.content()));
 
-        assertThat(decoded.getWidth()).isEqualTo(960);
-        assertThat(decoded.getHeight()).isEqualTo(1_280);
-        assertThat(thumbnail.content()).startsWith((byte) 0xff, (byte) 0xd8);
-        assertThat(thumbnail.content()).hasSizeLessThan(Thumbnail.MAX_CONTENT_BYTES);
+        assertThat(compactImage.getWidth()).isEqualTo(360);
+        assertThat(compactImage.getHeight()).isEqualTo(480);
+        assertThat(displayImage.getWidth()).isEqualTo(960);
+        assertThat(displayImage.getHeight()).isEqualTo(1_280);
+        assertThat(compact.content()).startsWith((byte) 0xff, (byte) 0xd8);
+        assertThat(display.content()).hasSizeLessThan(Thumbnail.MAX_CONTENT_BYTES);
     }
 }

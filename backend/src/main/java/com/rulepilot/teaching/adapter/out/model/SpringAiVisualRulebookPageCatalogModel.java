@@ -7,7 +7,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.rulepilot.agenttrace.AgentTraceEvent;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.MediaDescriptor;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.ModelAccountQuotaFailures;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
@@ -40,11 +51,19 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
@@ -67,6 +86,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final String QWEN_BALANCED_VISUAL_MODEL = "qwen3.7-plus";
+    private static final String TRACE_MEDIA_INPUT_SCHEMA =
+            "{\"type\":\"object\",\"required\":[\"purpose\",\"pageNumbers\"],\"properties\":{\"purpose\":{\"type\":\"string\"},\"pageNumbers\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}},\"additionalProperties\":false}";
     private static final String TEACHING_CONTRACT_REPAIR = """
             The previous ledger failed deterministic contract validation. Reinspect the attached pages and return one
             complete replacement JSON object. Keep each visible rule group as one ruleGroups object with exactly
@@ -226,27 +247,45 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     @Override
     public PageTranscript transcribeTeachingPage(PageImageInput page, String owner) {
+        return transcribeTeachingPage(page, owner, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public PageTranscript transcribeTeachingPage(
+            PageImageInput page,
+            String owner,
+            CaptureHandle capture,
+            TraceEventContext context) {
         if (!supportsTeachingPageTranscription(owner)) {
             return VisualRulebookPageCatalogModel.super.transcribeTeachingPage(page, owner);
         }
+        TraceInvocation trace = trace(capture, context);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner))
                 .prompt()
                 .options(qwenOcrOptions(ocrModelName));
-        String content = prompt.user(user -> {
+        PageImageInput readable = images.prepareForRuleTranscription(page);
+        ChatClient.ChatClientRequestSpec requestSpec = prompt.user(user -> {
                     user.text("""
                             Copy all visible text from PDF page {pageNumber}. Preserve the original language, line
                             breaks, digits, punctuation, headings, labels, table cells, and worked examples. Output
                             only the copied text. Do not calculate, translate, summarize, repair, or infer missing
                             characters. Write ? for a character that cannot be read reliably.
                             """).param("pageNumber", page.pageNumber());
-                    PageImageInput readable = images.prepareForRuleTranscription(page);
                     user.media(
                             MimeTypeUtils.parseMimeType(readable.mediaType()),
                             new ByteArrayResource(readable.content()));
-                })
-                .call()
-                .content();
-        return new PageTranscript(page.pageNumber(), content);
+                });
+        return tracedProviderCall(
+                trace,
+                owner,
+                ocrModelName,
+                "visual-page-transcription-v1",
+                "visual-page-transcript-v1",
+                "",
+                4_800,
+                List.of(readable),
+                () -> requestSpec.call().content(),
+                content -> new PageTranscript(page.pageNumber(), content));
     }
 
     @Override
@@ -262,37 +301,57 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     @Override
     public CatalogDraft summarize(CatalogRequest request) {
+        return summarize(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public CatalogDraft summarize(
+            CatalogRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
         String owner = request.modelConfigurationOwner();
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return fake.summarize(request);
         }
+        TraceInvocation trace = trace(capture, context);
         RuntimeException firstFailure;
         try {
-            return normalizePageBindings(request, summarizeOnce(request, owner, ""));
+            return normalizePageBindings(request, summarizeOnce(request, owner, "", trace));
         } catch (RuntimeException failure) {
+            ModelAccountQuotaFailures.rethrowIfPresent(failure);
             firstFailure = failure;
         }
         try {
             return normalizePageBindings(request, summarizeOnce(request, owner, """
                     The first catalog was invalid. Return one summary for every supplied page, use only supplied page
                     numbers, preserve visible original-language terms, and return structured data only.
-                    """));
+                    """, trace));
         } catch (RuntimeException failure) {
-            failure.addSuppressed(firstFailure);
+            if (failure != firstFailure) failure.addSuppressed(firstFailure);
             throw failure;
         }
     }
 
     @Override
     public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+        return summarizeForTeaching(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public CatalogDraft summarizeForTeaching(
+            CatalogRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
         String owner = request.modelConfigurationOwner();
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return fake.summarizeForTeaching(request);
         }
+        TraceInvocation trace = trace(capture, context);
         RuntimeException firstFailure;
         try {
-            return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner, ""));
+            return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner, "", trace));
         } catch (RuntimeException failure) {
+            ModelAccountQuotaFailures.rethrowIfPresent(failure);
             // The cataloger already splits a rejected multi-page ledger into single-page requests. Repairing the
             // whole batch here can consume its complete deadline before that more precise fallback can begin.
             if (request.pages().size() > 1) throw failure;
@@ -305,9 +364,10 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                             request,
                             owner,
                             TEACHING_CONTRACT_REPAIR + "\nDetected deterministic issue: "
-                                    + repairDiagnostic(firstFailure)));
+                                    + repairDiagnostic(firstFailure),
+                            trace));
         } catch (RuntimeException failure) {
-            failure.addSuppressed(firstFailure);
+            if (failure != firstFailure) failure.addSuppressed(firstFailure);
             throw failure;
         }
     }
@@ -328,10 +388,18 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     @Override
     public Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
+        return selectProgressiveTeachingStart(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(
+            CatalogRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
         String owner = request.modelConfigurationOwner();
         if (!supportsProgressiveTeachingStart(owner)) return Optional.empty();
         return Optional.of(normalizeProgressiveTeachingStartBindings(
-                request, progressiveTeachingStartOnce(request, owner)));
+                request, progressiveTeachingStartOnce(request, owner, trace(capture, context))));
     }
 
     @Override
@@ -345,16 +413,23 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 provider, teachingStartupModelName(provider, configuredModel)));
     }
 
-    private CatalogDraft summarizeTeachingOnce(CatalogRequest request, String owner, String contractRepair) {
+    private CatalogDraft summarizeTeachingOnce(
+            CatalogRequest request,
+            String owner,
+            String contractRepair,
+            TraceInvocation trace) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         String provider = models.providerFor(Role.VISUAL, owner);
+        String modelName = models.modelNameFor(Role.VISUAL, owner);
         if ("qwen".equals(provider)) {
-            String configuredModel = models.modelNameFor(Role.VISUAL, owner);
+            String configuredModel = modelName;
+            modelName = teachingStartupModelName(provider, configuredModel);
             prompt = prompt.options(qwenJsonOptions(
-                    teachingStartupModelName(provider, configuredModel),
+                    modelName,
                     Math.min(4_800, maxCompletionTokens)));
         }
-        String content = prompt.system(teachingStartupPrompt)
+        List<PageImageInput> preparedPages = request.pages().stream().map(images::prepare).toList();
+        ChatClient.ChatClientRequestSpec requestSpec = prompt.system(teachingStartupPrompt)
                 .user(user -> {
                     user.text("""
                                     Supplied PDF page numbers: {pageNumbers}
@@ -388,12 +463,23 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                             + request.pages().get(index).pageNumber())
                                     .collect(Collectors.joining("; ")))
                             .param("pageTranscripts", pageTranscripts(request));
-                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
+                    preparedPages.forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
-                })
-                .call()
-                .content();
-        return parseTeachingCatalogV6(content);
+                });
+        String tracedModelName = modelName;
+        return tracedProviderCall(
+                trace,
+                owner,
+                tracedModelName,
+                contractRepair.isBlank()
+                        ? "visual-teaching-page-catalog-v6"
+                        : "visual-teaching-page-catalog-repair-v6",
+                "visual-teaching-page-catalog-v6",
+                teachingStartupPrompt,
+                Math.min(4_800, maxCompletionTokens),
+                preparedPages,
+                () -> requestSpec.call().content(),
+                SpringAiVisualRulebookPageCatalogModel::parseTeachingCatalogV6);
     }
 
     private static String pageTranscripts(CatalogRequest request) {
@@ -405,15 +491,20 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .collect(Collectors.joining("\n"));
     }
 
-    private ProgressiveTeachingStartDraft progressiveTeachingStartOnce(CatalogRequest request, String owner) {
+    private ProgressiveTeachingStartDraft progressiveTeachingStartOnce(
+            CatalogRequest request,
+            String owner,
+            TraceInvocation trace) {
         String provider = models.providerFor(Role.VISUAL, owner);
+        String modelName = teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner));
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(provider)) {
             prompt = prompt.options(qwenJsonOptions(
-                    teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner)),
+                    modelName,
                     Math.min(1_600, maxCompletionTokens)));
         }
-        String content = prompt.system(progressiveTeachingStartPrompt)
+        List<PageImageInput> preparedPages = request.pages().stream().map(images::prepare).toList();
+        ChatClient.ChatClientRequestSpec requestSpec = prompt.system(progressiveTeachingStartPrompt)
                 .user(user -> {
                     user.text("""
                                     Supplied PDF page numbers: {pageNumbers}
@@ -429,21 +520,34 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     .mapToObj(index -> "image " + (index + 1) + " = PDF page "
                                             + request.pages().get(index).pageNumber())
                                     .collect(java.util.stream.Collectors.joining("; ")));
-                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
+                    preparedPages.forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
-                })
-                .call()
-                .content();
-        return parseProgressiveTeachingStartV4(content);
+                });
+        return tracedProviderCall(
+                trace,
+                owner,
+                modelName,
+                "visual-progressive-teaching-start-v4",
+                "visual-progressive-teaching-start-v4",
+                progressiveTeachingStartPrompt,
+                Math.min(1_600, maxCompletionTokens),
+                preparedPages,
+                () -> requestSpec.call().content(),
+                SpringAiVisualRulebookPageCatalogModel::parseProgressiveTeachingStartV4);
     }
 
-    private CatalogDraft summarizeOnce(CatalogRequest request, String owner, String correction) {
+    private CatalogDraft summarizeOnce(
+            CatalogRequest request,
+            String owner,
+            String correction,
+            TraceInvocation trace) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(
                     qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), maxCompletionTokens));
         }
-        String content = prompt.system(systemPrompt)
+        List<PageImageInput> preparedPages = request.pages().stream().map(images::prepare).toList();
+        ChatClient.ChatClientRequestSpec requestSpec = prompt.system(systemPrompt)
                 .user(user -> {
                     user.text("""
                                     Attached rulebook page numbers: {pageNumbers}
@@ -484,16 +588,32 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                             + "the final summaries."
                                     : "Inspect this page without guessing the identity of an unlabeled icon.")
                             .param("correction", correction);
-                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
+                    preparedPages.forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
-                })
-                .call()
-                .content();
-        return parseCatalog(content);
+                });
+        return tracedProviderCall(
+                trace,
+                owner,
+                models.modelNameFor(Role.VISUAL, owner),
+                correction.isBlank() ? "visual-page-catalog-v2" : "visual-page-catalog-repair-v2",
+                "visual-page-catalog-v2",
+                systemPrompt,
+                maxCompletionTokens,
+                preparedPages,
+                () -> requestSpec.call().content(),
+                SpringAiVisualRulebookPageCatalogModel::parseCatalog);
     }
 
     @Override
     public IconLocalizationDraft localizeIcons(IconLocalizationRequest request) {
+        return localizeIcons(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public IconLocalizationDraft localizeIcons(
+            IconLocalizationRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
         String owner = request.modelConfigurationOwner();
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return VisualRulebookPageCatalogModel.super.localizeIcons(request);
@@ -504,7 +624,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     models.modelNameFor(Role.VISUAL, owner), Math.min(2_000, maxCompletionTokens)));
         }
         String candidates = iconLocalizationCandidates(request.candidates());
-        String content = prompt.system(iconLocalizationPrompt)
+        PageImageInput preparedPage = images.prepare(request.page());
+        ChatClient.ChatClientRequestSpec requestSpec = prompt.system(iconLocalizationPrompt)
                 .user(user -> {
                     user.text("""
                                     PDF page number: {pageNumber}
@@ -515,18 +636,33 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                             .param("pageNumber", request.page().pageNumber())
                             .param("candidates", candidates)
                             .param("lastCandidateIndex", request.candidates().size() - 1);
-                    PageImageInput page = images.prepare(request.page());
                     user.media(
-                            MimeTypeUtils.parseMimeType(page.mediaType()),
-                            new ByteArrayResource(page.content()));
-                })
-                .call()
-                .content();
-        return parseIconLocalization(content, request.candidates().size());
+                            MimeTypeUtils.parseMimeType(preparedPage.mediaType()),
+                            new ByteArrayResource(preparedPage.content()));
+                });
+        return tracedProviderCall(
+                trace(capture, context),
+                owner,
+                models.modelNameFor(Role.VISUAL, owner),
+                "visual-icon-localization-v2",
+                "visual-icon-localization-v2",
+                iconLocalizationPrompt,
+                Math.min(2_000, maxCompletionTokens),
+                List.of(preparedPage),
+                () -> requestSpec.call().content(),
+                content -> parseIconLocalization(content, request.candidates().size()));
     }
 
     @Override
     public IconCropReviewDraft reviewIconCrops(IconCropReviewRequest request) {
+        return reviewIconCrops(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public IconCropReviewDraft reviewIconCrops(
+            IconCropReviewRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
         String owner = request.modelConfigurationOwner();
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return VisualRulebookPageCatalogModel.super.reviewIconCrops(request);
@@ -541,7 +677,13 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         + request.locations().get(index).candidateIndex() + ", expected appearance="
                         + cropReviewAppearance(request.candidates().get(index)))
                 .collect(Collectors.joining("\n"));
-        String content = prompt.system(iconCropReviewPrompt)
+        List<PageImageInput> crops = java.util.stream.IntStream.range(0, request.locations().size())
+                .mapToObj(index -> new PageImageInput(
+                        request.page().pageNumber(),
+                        MimeTypeUtils.IMAGE_JPEG_VALUE,
+                        localizedCrop(request.page(), request.locations().get(index))))
+                .toList();
+        ChatClient.ChatClientRequestSpec requestSpec = prompt.system(iconCropReviewPrompt)
                 .user(user -> {
                     user.text("""
                                     PDF page number: {pageNumber}
@@ -551,17 +693,24 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     """)
                             .param("pageNumber", request.page().pageNumber())
                             .param("attachmentOrder", attachmentOrder);
-                    java.util.stream.IntStream.range(0, request.locations().size())
-                            .mapToObj(index -> localizedCrop(request.page(), request.locations().get(index)))
-                            .forEach(crop -> user.media(
-                                    MimeTypeUtils.IMAGE_JPEG, new ByteArrayResource(crop)));
-                })
-                .call()
-                .content();
-        IconCropReviewDraft relativeReview = parseIconCropReview(
-                content,
-                request.locations().stream().map(IconLocation::candidateIndex).toList());
-        return projectIconCropReview(relativeReview, request.locations());
+                    crops.forEach(crop -> user.media(
+                            MimeTypeUtils.IMAGE_JPEG, new ByteArrayResource(crop.content())));
+                });
+        return tracedProviderCall(
+                trace(capture, context),
+                owner,
+                models.modelNameFor(Role.VISUAL, owner),
+                "visual-icon-crop-review-v4",
+                "visual-icon-crop-review-v4",
+                iconCropReviewPrompt,
+                Math.min(1_000, maxCompletionTokens),
+                crops,
+                () -> requestSpec.call().content(),
+                content -> projectIconCropReview(
+                        parseIconCropReview(
+                                content,
+                                request.locations().stream().map(IconLocation::candidateIndex).toList()),
+                        request.locations()));
     }
 
     static String iconLocalizationCandidates(List<IconOccurrence> candidates) {
@@ -863,7 +1012,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     throw new IllegalArgumentException("visual teaching catalog pageNumber must be positive");
                 }
                 strictTextArray(page.get("printedTerms"), "printedTerms", 0, 12);
-                strictTextArray(page.get("keywords"), "keywords", 2, 8);
+                // Keywords are bounded retrieval metadata, not rule evidence. A sparse or dense but otherwise
+                // exact page ledger must not be discarded because the model chose fewer or more search terms.
+                strictTextArray(page.get("keywords"), "keywords", 0, 16);
                 strictExternalDocumentDependencies(page.get("externalDocumentDependencies"));
                 if (!page.get("ruleGroupInventoryComplete").isBoolean()) {
                     throw new IllegalArgumentException(
@@ -2036,5 +2187,200 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                 observation.resolution()))
                         .toList(),
                 summary.ruleGroupFacts());
+    }
+
+    private <T> T tracedProviderCall(
+            TraceInvocation trace,
+            String owner,
+            String modelName,
+            String templateVersion,
+            String outputSchemaVersion,
+            String outputSchemaContract,
+            int maximumOutputTokens,
+            List<PageImageInput> modelVisiblePages,
+            Supplier<String> providerCall,
+            Function<String, T> decoder) {
+        int attempt = trace.nextAttempt();
+        captureVisualInputs(trace, attempt, templateVersion, modelVisiblePages);
+        capture(trace, () -> trace.capture().modelCallStarted(new ModelCallStarted(
+                freshContext(trace.context()),
+                models.providerFor(Role.VISUAL, owner),
+                modelName,
+                attempt,
+                templateVersion,
+                outputSchemaVersion,
+                sha256(outputSchemaContract),
+                Math.max(1, modelVisiblePages.size() * 600),
+                maximumOutputTokens)));
+        String content;
+        try {
+            content = providerCall.get();
+        } catch (RuntimeException failure) {
+            captureVisualFailure(trace, "VISUAL_PROVIDER_CALL_FAILED");
+            throw failure;
+        }
+        capture(trace, () -> trace.capture().modelTurn(new ModelTurn(
+                freshContext(trace.context()),
+                models.providerFor(Role.VISUAL, owner),
+                modelName,
+                attempt,
+                content == null ? "" : content,
+                List.of(),
+                "RESPONSE_RECEIVED",
+                0,
+                0,
+                content == null || content.isBlank())));
+        try {
+            return decoder.apply(content);
+        } catch (RuntimeException failure) {
+            captureVisualFailure(trace, "VISUAL_MODEL_OUTPUT_REJECTED");
+            throw failure;
+        }
+    }
+
+    private void captureVisualFailure(TraceInvocation trace, String code) {
+        capture(trace, () -> trace.capture().bindingOrFailure(new BindingOrFailure(
+                freshContext(trace.context()),
+                LifecycleSignal.FAILURE,
+                code,
+                trace.context().resource(),
+                null)));
+    }
+
+    private void captureVisualInputs(
+            TraceInvocation trace,
+            int attempt,
+            String purpose,
+            List<PageImageInput> pages) {
+        if (!trace.enabled() || pages.isEmpty()) return;
+        for (int start = 0, batch = 1; start < pages.size(); start += 4, batch++) {
+            List<PageImageInput> bounded = pages.subList(start, Math.min(start + 4, pages.size()));
+            int batchNumber = batch;
+            int inputOffset = start;
+            try {
+                List<MediaDescriptor> descriptors = java.util.stream.IntStream.range(0, bounded.size())
+                        .mapToObj(index -> mediaDescriptor(bounded.get(index), inputOffset + index + 1))
+                        .toList();
+                String callId = "visual-model-media|" + attempt + "|" + batchNumber;
+                String arguments = traceJson(Map.of(
+                        "purpose", purpose,
+                        "pageNumbers", bounded.stream().map(PageImageInput::pageNumber).toList()));
+                capture(trace, () -> trace.capture().toolCall(new AgentTraceEvent.ToolCall(
+                        freshContext(trace.context()),
+                        callId,
+                        "provide_visual_model_media",
+                        arguments,
+                        arguments,
+                        "visual-model-media-input-v1",
+                        sha256(TRACE_MEDIA_INPUT_SCHEMA),
+                        ToolArgumentValidation.ACCEPTED)));
+                String observation = traceJson(Map.of(
+                        "media", descriptors.stream()
+                                .map(descriptor -> Map.of(
+                                        "mediaType", descriptor.mediaType(),
+                                        "label", descriptor.label(),
+                                        "width", descriptor.width(),
+                                        "height", descriptor.height(),
+                                        "byteCount", descriptor.byteCount(),
+                                        "sha256", descriptor.sha256()))
+                                .toList()));
+                capture(trace, () -> trace.capture().toolObservation(new AgentTraceEvent.ToolObservation(
+                        freshContext(trace.context()),
+                        callId,
+                        "provide_visual_model_media",
+                        observation,
+                        "MEDIA_BOUND",
+                        descriptors.size(),
+                        false,
+                        descriptors)));
+            } catch (RuntimeException traceFailure) {
+                captureGap(trace, "VISUAL_MEDIA_TRACE_GAP");
+            }
+        }
+    }
+
+    private void captureGap(TraceInvocation trace, String code) {
+        capture(trace, () -> trace.capture().bindingOrFailure(new BindingOrFailure(
+                freshContext(trace.context()),
+                LifecycleSignal.GAP,
+                code,
+                trace.context().resource(),
+                null)));
+    }
+
+    private MediaDescriptor mediaDescriptor(PageImageInput page, int inputPosition) {
+        try {
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(page.content()));
+            if (image == null) throw new IllegalArgumentException("visual trace media is not a readable image");
+            return new MediaDescriptor(
+                    page.mediaType(),
+                    "pdf-page-" + page.pageNumber() + "-input-" + inputPosition,
+                    image.getWidth(),
+                    image.getHeight(),
+                    page.content().length,
+                    sha256(page.content()));
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("visual trace media is not a readable image", failure);
+        }
+    }
+
+    private TraceInvocation trace(CaptureHandle capture, TraceEventContext context) {
+        return new TraceInvocation(
+                PrivateAgentTraceCapture.failOpen(capture),
+                context,
+                new AtomicInteger());
+    }
+
+    private void capture(TraceInvocation trace, Runnable emission) {
+        if (!trace.enabled()) return;
+        try {
+            emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never alter visual interpretation or its optional failure boundary.
+        }
+    }
+
+    private TraceEventContext freshContext(TraceEventContext context) {
+        return new TraceEventContext(
+                UUID.randomUUID(),
+                Instant.now(),
+                context.stage(),
+                context.operationId(),
+                context.parentOperationId(),
+                context.resource());
+    }
+
+    private String sha256(String value) {
+        return sha256(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String traceJson(Object value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("visual trace metadata serialization failed", failure);
+        }
+    }
+
+    private String sha256(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+        } catch (NoSuchAlgorithmException failure) {
+            throw new IllegalStateException("SHA-256 is unavailable", failure);
+        }
+    }
+
+    private record TraceInvocation(
+            CaptureHandle capture,
+            TraceEventContext context,
+            AtomicInteger attempts) {
+
+        private boolean enabled() {
+            return context != null && capture != null && capture.enabled();
+        }
+
+        private int nextAttempt() {
+            return attempts.incrementAndGet();
+        }
     }
 }

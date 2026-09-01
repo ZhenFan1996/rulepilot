@@ -9,10 +9,16 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
@@ -36,6 +42,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.core.task.TaskRejectedException;
 
@@ -79,6 +86,45 @@ class OfficialRulebookImportJobServiceTest {
                 OfficialRulebookImportJob.Stage.VERIFYING_FILE,
                 OfficialRulebookImportJob.Stage.SAVING,
                 OfficialRulebookImportJob.Stage.COMPLETED);
+    }
+
+    @Test
+    void bindsTheImportJobAndCompletedDocumentIntoOnePrivateJourneyTrace() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        UUID versionId = UUID.randomUUID();
+        when(imports.importRulebook(any(), anyString(), any(), anyString(), anyBoolean(), anyString(), any()))
+                .thenReturn(uploadResult(versionId));
+        CaptureHandle capture = mock(CaptureHandle.class);
+        when(capture.enabled()).thenReturn(true);
+        when(capture.bind(any(ResourceRef.class))).thenReturn(true);
+        OfficialRulebookImportJobService service = service(jobs, imports, Runnable::run);
+
+        var launch = service.enqueue(command(), "alice", capture);
+
+        ArgumentCaptor<ResourceRef> boundResources = ArgumentCaptor.forClass(ResourceRef.class);
+        verify(capture, times(2)).bind(boundResources.capture());
+        assertThat(boundResources.getAllValues())
+                .extracting(ResourceRef::type)
+                .containsExactly(ResourceType.IMPORT_JOB, ResourceType.DOCUMENT_VERSION);
+        assertThat(boundResources.getAllValues().getFirst().id()).isEqualTo(launch.job().id());
+        assertThat(boundResources.getAllValues().getLast().id()).isEqualTo(versionId);
+
+        ArgumentCaptor<BindingOrFailure> events = ArgumentCaptor.forClass(BindingOrFailure.class);
+        verify(capture, times(2)).bindingOrFailure(events.capture());
+        assertThat(events.getAllValues()).allSatisfy(event ->
+                assertThat(event.context().stage()).isEqualTo(JourneyStage.IMPORT));
+        assertThat(events.getAllValues().getFirst()).satisfies(event -> {
+            assertThat(event.code()).isEqualTo("IMPORT_JOB_BOUND");
+            assertThat(event.childResource()).isEqualTo(new ResourceRef(ResourceType.IMPORT_JOB, launch.job().id()));
+        });
+        assertThat(events.getAllValues().getLast()).satisfies(event -> {
+            assertThat(event.code()).isEqualTo("DOCUMENT_VERSION_BOUND");
+            assertThat(event.context().operationId()).isEqualTo(versionId);
+            assertThat(event.context().parentOperationId()).isEqualTo(launch.job().id());
+            assertThat(event.parentResource()).isEqualTo(new ResourceRef(ResourceType.IMPORT_JOB, launch.job().id()));
+            assertThat(event.childResource()).isEqualTo(new ResourceRef(ResourceType.DOCUMENT_VERSION, versionId));
+        });
     }
 
     @Test

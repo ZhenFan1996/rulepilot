@@ -1,11 +1,22 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.CaptureHandle;
 import java.util.List;
+import java.util.UUID;
 
 /** Lets the model decide how this particular game should be taught before retrieval begins. */
 public interface TeachingOutlineModel {
 
     OutlineDraft organize(OutlineRequest request);
+
+    default OutlineDraft organize(
+            OutlineRequest request,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
+        return organize(request);
+    }
 
     /**
      * Rebuilds an otherwise usable outline when its broad flow chapter steals detail owned by later chapters.
@@ -13,6 +24,16 @@ public interface TeachingOutlineModel {
      */
     default OutlineDraft refineChapterOwnership(OutlineRequest request, OutlineDraft current, String feedback) {
         return current;
+    }
+
+    default OutlineDraft refineChapterOwnership(
+            OutlineRequest request,
+            OutlineDraft current,
+            String feedback,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
+        return refineChapterOwnership(request, current, feedback);
     }
 
     /**
@@ -76,14 +97,16 @@ public interface TeachingOutlineModel {
             List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
             List<String> sourceRuleGroupIdentifiers,
             boolean sourceRuleGroupInventoryComplete,
-            List<VisualRulebookPageCatalogModel.RuleGroupFact> sourceRuleGroupFacts) {
+            List<VisualRulebookPageCatalogModel.RuleGroupFact> sourceRuleGroupFacts,
+            PageLedgerState pageLedgerState) {
         public PageInput {
             if (pageNumber < 1 || text == null || text.isBlank() || sourceDependencies == null
                     || sourceRuleGroupIdentifiers == null
                     || sourceRuleGroupIdentifiers.stream()
                             .anyMatch(identifier -> identifier == null || identifier.isBlank())
                     || sourceRuleGroupFacts == null
-                    || sourceRuleGroupFacts.stream().anyMatch(java.util.Objects::isNull)) {
+                    || sourceRuleGroupFacts.stream().anyMatch(java.util.Objects::isNull)
+                    || pageLedgerState == null) {
                 throw new IllegalArgumentException("rulebook page input is invalid");
             }
             sourceDependencies = sourceDependencies.stream().distinct().toList();
@@ -94,6 +117,51 @@ public interface TeachingOutlineModel {
                             sourceRuleGroupIdentifiers, sourceRuleGroupFacts)) {
                 throw new IllegalArgumentException("complete page input requires typed rule-group facts");
             }
+            switch (pageLedgerState) {
+                case VISUAL_EXACT_COMPLETE -> {
+                    if (!sourceRuleGroupInventoryComplete) {
+                        throw new IllegalArgumentException("exact visual page ledger must be complete");
+                    }
+                }
+                case VISUAL_PARTIAL -> {
+                    if (sourceRuleGroupInventoryComplete) {
+                        throw new IllegalArgumentException("partial visual page ledger cannot be complete");
+                    }
+                    if (!VisualSourceRuleGroupLedger.hasExactFactBindings(
+                            sourceRuleGroupIdentifiers, sourceRuleGroupFacts)) {
+                        throw new IllegalArgumentException(
+                                "partial visual page ledger requires exact typed rule-group facts");
+                    }
+                }
+                case VISUAL_EXPLICITLY_UNAVAILABLE -> {
+                    if (sourceRuleGroupInventoryComplete
+                            || !sourceDependencies.isEmpty()
+                            || !sourceRuleGroupIdentifiers.isEmpty()
+                            || !sourceRuleGroupFacts.isEmpty()) {
+                        throw new IllegalArgumentException("unavailable rulebook page cannot carry source claims");
+                    }
+                }
+                case LEGACY_TEXT -> {
+                    // Legacy text inputs intentionally retain their existing source-contract behavior.
+                }
+            }
+        }
+
+        public PageInput(
+                int pageNumber,
+                String text,
+                List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
+                List<String> sourceRuleGroupIdentifiers,
+                boolean sourceRuleGroupInventoryComplete,
+                List<VisualRulebookPageCatalogModel.RuleGroupFact> sourceRuleGroupFacts) {
+            this(
+                    pageNumber,
+                    text,
+                    sourceDependencies,
+                    sourceRuleGroupIdentifiers,
+                    sourceRuleGroupInventoryComplete,
+                    sourceRuleGroupFacts,
+                    PageLedgerState.LEGACY_TEXT);
         }
 
         public PageInput(
@@ -108,19 +176,42 @@ public interface TeachingOutlineModel {
                     sourceDependencies,
                     sourceRuleGroupIdentifiers,
                     sourceRuleGroupInventoryComplete,
-                    List.of());
+                    List.of(),
+                    PageLedgerState.LEGACY_TEXT);
         }
 
         public PageInput(
                 int pageNumber,
                 String text,
                 List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies) {
-            this(pageNumber, text, sourceDependencies, List.of(), false, List.of());
+            this(
+                    pageNumber,
+                    text,
+                    sourceDependencies,
+                    List.of(),
+                    false,
+                    List.of(),
+                    PageLedgerState.LEGACY_TEXT);
         }
 
         public PageInput(int pageNumber, String text) {
-            this(pageNumber, text, List.of(), List.of(), false, List.of());
+            this(
+                    pageNumber,
+                    text,
+                    List.of(),
+                    List.of(),
+                    false,
+                    List.of(),
+                    PageLedgerState.LEGACY_TEXT);
         }
+    }
+
+    /** Typed provenance for the page ledger; planning must never infer this state from prompt prose. */
+    enum PageLedgerState {
+        LEGACY_TEXT,
+        VISUAL_EXACT_COMPLETE,
+        VISUAL_PARTIAL,
+        VISUAL_EXPLICITLY_UNAVAILABLE
     }
 
     record PageImageInput(int pageNumber, String mediaType, byte[] content) {

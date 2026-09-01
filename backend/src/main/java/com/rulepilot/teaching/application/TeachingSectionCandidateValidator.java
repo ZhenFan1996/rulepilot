@@ -52,6 +52,7 @@ final class TeachingSectionCandidateValidator {
                         RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
         SectionDraft acceptedDraft = draft;
         LessonDraftValidator.validateDraft(acceptedDraft, modelRequest);
+        TeachingPlannedUnitCoveragePolicy.validate(modelRequest.teachingUnits(), evidence, acceptedDraft);
         List<UUID> visualCitationIds = LessonDraftValidator.validatedVisualCitationIds(acceptedDraft, allowedEvidence);
         List<Claim> reviewClaims = LessonDraftValidator.reviewClaims(acceptedDraft, visualCitationIds);
         List<EvidenceClaim> generatedClaims = reviewClaims.stream()
@@ -159,8 +160,8 @@ final class TeachingSectionCandidateValidator {
             if (!usedRepairedSteps[index]) merged.add(repaired.steps().get(index));
         }
         log.info(
-                "Teaching topic {} repair preserved {} already validated player-facing steps byte-for-byte",
-                planned.topicKey(),
+                "Teaching section {} repair preserved {} already validated player-facing steps byte-for-byte",
+                planned.position(),
                 validOriginalSteps.stream().filter(Boolean.TRUE::equals).count());
         return new SectionDraft(
                 original.title(),

@@ -3,7 +3,10 @@ package com.rulepilot.recommendation.application;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataResult;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataCriterion;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.SelectionEligibility;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
@@ -61,6 +64,30 @@ public class BoardGameRecommendationTools {
                 0);
     }
 
+    CanonicalMetadataObservation canonicalizeMetadata(List<CatalogMetadataCriterion> criteria) {
+        try {
+            CanonicalMetadataResult result = catalog.canonicalizeMetadata(criteria);
+            if (!result.supported()) {
+                return new CanonicalMetadataObservation(
+                        ToolStatus.UNAVAILABLE,
+                        CanonicalMetadataResult.unsupported(),
+                        "CATALOG_CANONICALIZATION_UNAVAILABLE");
+            }
+            return new CanonicalMetadataObservation(ToolStatus.SUCCESS, result, "");
+        } catch (IllegalArgumentException exception) {
+            return new CanonicalMetadataObservation(
+                    ToolStatus.ERROR,
+                    CanonicalMetadataResult.unsupported(),
+                    "INVALID_ARGUMENT");
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation catalog canonical-metadata lookup failed");
+            return new CanonicalMetadataObservation(
+                    ToolStatus.ERROR,
+                    CanonicalMetadataResult.unsupported(),
+                    "CATALOG_UNAVAILABLE");
+        }
+    }
+
     CatalogObservation searchCatalog(
             List<BggGameType> types,
             List<String> categories,
@@ -76,6 +103,40 @@ public class BoardGameRecommendationTools {
             CatalogSort sort,
             int maximum,
             int offset) {
+        return searchCatalog(
+                types,
+                categories,
+                mechanics,
+                designers,
+                publishers,
+                families,
+                minimumPublicationYear,
+                maximumPublicationYear,
+                minimumAverageRating,
+                minimumRatingsCount,
+                textQuery,
+                sort,
+                maximum,
+                offset,
+                SelectionEligibility.none());
+    }
+
+    CatalogObservation searchCatalog(
+            List<BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            List<String> publishers,
+            List<String> families,
+            Integer minimumPublicationYear,
+            Integer maximumPublicationYear,
+            java.math.BigDecimal minimumAverageRating,
+            Integer minimumRatingsCount,
+            String textQuery,
+            CatalogSort sort,
+            int maximum,
+            int offset,
+            SelectionEligibility eligibility) {
         try {
             BoardGameRecommendationCatalog.CandidateSet result = catalog.searchGames(
                     new BoardGameRecommendationCatalog.CatalogFilters(
@@ -92,11 +153,13 @@ public class BoardGameRecommendationTools {
                             textQuery,
                             sort,
                             maximum,
-                            offset));
+                            offset),
+                    eligibility);
             return new CatalogObservation(
                     ToolStatus.SUCCESS,
                     ToolName.SEARCH_BGG_CATALOG,
                     result.sourceCount(),
+                    result.availableCount(),
                     result.games(),
                     List.of(),
                     "");
@@ -108,11 +171,13 @@ public class BoardGameRecommendationTools {
 
     CatalogObservation lookupGame(int bggId) {
         try {
+            Optional<Game> game = catalog.findGameById(bggId);
             return new CatalogObservation(
                     ToolStatus.SUCCESS,
                     ToolName.LOOKUP_BGG_GAME,
                     catalog.gameCount(),
-                    catalog.findGameById(bggId).map(List::of).orElseGet(List::of),
+                    game.isPresent() ? 1 : 0,
+                    game.map(List::of).orElseGet(List::of),
                     List.of(),
                     "");
         } catch (RuntimeException exception) {
@@ -155,6 +220,7 @@ public class BoardGameRecommendationTools {
                     ToolStatus.SUCCESS,
                     ToolName.INSPECT_BGG_TITLES,
                     catalog.gameCount(),
+                    games.size(),
                     games,
                     resolutions,
                     "");
@@ -214,6 +280,7 @@ public class BoardGameRecommendationTools {
                     ToolStatus.SUCCESS,
                     tool,
                     catalog.gameCount(),
+                    bggIds.size(),
                     catalog.findGamesByIds(bggIds),
                     List.of(),
                     "");
@@ -290,6 +357,7 @@ public class BoardGameRecommendationTools {
             ToolStatus status,
             ToolName tool,
             int sourceCount,
+            int availableCount,
             List<Game> games,
             List<TitleResolution> titleResolutions,
             String code) {
@@ -299,7 +367,22 @@ public class BoardGameRecommendationTools {
         }
 
         static CatalogObservation error(ToolName tool, String code) {
-            return new CatalogObservation(ToolStatus.ERROR, tool, 0, List.of(), List.of(), code);
+            return new CatalogObservation(ToolStatus.ERROR, tool, 0, 0, List.of(), List.of(), code);
+        }
+
+        boolean succeeded() {
+            return status == ToolStatus.SUCCESS;
+        }
+    }
+
+    record CanonicalMetadataObservation(
+            ToolStatus status,
+            CanonicalMetadataResult result,
+            String code) {
+        CanonicalMetadataObservation {
+            if (status == null || result == null || code == null) {
+                throw new IllegalArgumentException("canonical metadata observation is invalid");
+            }
         }
 
         boolean succeeded() {

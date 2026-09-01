@@ -1,5 +1,8 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
@@ -81,12 +84,41 @@ final class AnswerPostPublicationReviewer {
             StructuredRuleAnswer answer,
             List<HybridEvidenceHit> evidence,
             boolean correctionAllowed) {
+        return review(
+                assistantRunId,
+                question,
+                context,
+                username,
+                gameSessionId,
+                modelRequest,
+                draft,
+                answer,
+                evidence,
+                correctionAllowed,
+                CaptureHandle.noop());
+    }
+
+    Result review(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft draft,
+            StructuredRuleAnswer answer,
+            List<HybridEvidenceHit> evidence,
+            boolean correctionAllowed,
+            CaptureHandle capture) {
         try {
             ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, modelRequest, answer);
             Review review = critic.review(
                     AnswerCritiquePolicy.request(assistantRunId, question, context, modelRequest, answer, evidence),
                     risk,
-                    username);
+                    username,
+                    capture,
+                    new ResourceRef(ResourceType.ASSISTANT_RUN, assistantRunId),
+                    assistantRunId);
             if (review.accepted()) return Result.accepted(answer);
             if (!correctionAllowed || !AnswerCritiquePolicy.allowsBoundedCorrection(question, context)) {
                 return unresolvedReview(answer, review, context);
@@ -108,7 +140,8 @@ final class AnswerPostPublicationReviewer {
                         review,
                         editableFields,
                         answer,
-                        evidence);
+                        evidence,
+                        capture);
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException correctionFailure) {
@@ -126,9 +159,8 @@ final class AnswerPostPublicationReviewer {
             throw exception;
         } catch (RuntimeException exception) {
             log.warn(
-                    "Adaptive answer validation failed for run {}: {} ({})",
+                    "Adaptive answer validation failed for run {} (failureType={})",
                     assistantRunId,
-                    exception.getMessage(),
                     exception.getClass().getSimpleName());
             return Result.warned(answer, Type.REVIEW_UNRESOLVED);
         }
@@ -169,7 +201,8 @@ final class AnswerPostPublicationReviewer {
             Review review,
             Set<PlayerFacingField> editableFields,
             StructuredRuleAnswer previousAnswer,
-            List<HybridEvidenceHit> evidence) {
+            List<HybridEvidenceHit> evidence,
+            CaptureHandle capture) {
         List<String> feedback = AnswerCritiquePolicy.playerFacingRevisionFeedback(previousAnswer, review);
         ModelDraft revised = modelGateway.revisePlayerFacing(
                 assistantRunId,
@@ -180,7 +213,8 @@ final class AnswerPostPublicationReviewer {
                 feedback,
                 editableFields,
                 "reviseLearningResponse",
-                "Learning response revised from bounded critic feedback");
+                "Learning response revised from bounded critic feedback",
+                capture);
         if (revised == null || !revised.answerable() || revised.equals(previousDraft)) {
             throw new IllegalArgumentException("revised learning response is not answerable");
         }

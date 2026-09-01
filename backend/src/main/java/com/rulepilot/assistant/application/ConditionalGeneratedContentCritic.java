@@ -1,5 +1,7 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AuditedAgentInvocations;
@@ -70,6 +72,23 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
+        return review(
+                request,
+                risk,
+                ownerUsername,
+                CaptureHandle.noop(),
+                null,
+                request == null ? null : request.assistantRunId());
+    }
+
+    @Override
+    public Review review(
+            ReviewRequest request,
+            ReviewRisk risk,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         // Answers and ordinary evaluation probes keep the zero-latency runtime path. Teaching calls this mode only
         // after a chapter with a quantitative or legality-changing relationship has remained CITED_DRAFT; measured
         // rulebook canaries have shown that identity-valid citations alone do not catch swapped counts or a dropped
@@ -93,11 +112,13 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
             case POST_PUBLICATION_STRUCTURE -> "Published teaching lesson structure review completed";
             default -> "Generated content critique completed";
         };
-        List<Issue> candidates = critique(request, operation, successSummary, ownerUsername);
+        List<Issue> candidates = critique(
+                request, operation, successSummary, ownerUsername, capture, resource, parentOperationId);
         if (candidates.isEmpty() || !requiresAtomicConfirmation(request.reviewMode())) {
             return new Review(true, candidates);
         }
-        return new Review(true, confirmCandidateIssues(request, candidates, ownerUsername));
+        return new Review(true, confirmCandidateIssues(
+                request, candidates, ownerUsername, capture, resource, parentOperationId));
     }
 
     private boolean requiresAtomicConfirmation(ReviewMode mode) {
@@ -108,7 +129,10 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
             ReviewRequest request,
             String operation,
             String successSummary,
-            String ownerUsername) {
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         var draft = invocations.invoke(
                 request.assistantRunId(),
                 ActivityType.CRITIC,
@@ -116,7 +140,10 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 estimateTokens(request.toString()),
                 successSummary,
                 () -> deadline.invoke(
-                        request.assistantRunId(), () -> model.critique(request, ownerUsername)),
+                        request.assistantRunId(), () -> capture.enabled() && resource != null
+                                ? model.critique(
+                                        request, ownerUsername, capture, resource, parentOperationId)
+                                : model.critique(request, ownerUsername)),
                 result -> estimateTokens(result.toString()));
         if (draft == null) {
             throw new IllegalArgumentException("critic output is invalid");
@@ -134,7 +161,12 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
     }
 
     private List<Issue> confirmCandidateIssues(
-            ReviewRequest request, List<Issue> candidates, String ownerUsername) {
+            ReviewRequest request,
+            List<Issue> candidates,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         Map<Integer, Set<CandidateDefect>> candidateDefectsByPosition = candidates.stream()
                 .collect(Collectors.groupingBy(
                         Issue::claimPosition,
@@ -174,7 +206,10 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                         confirmationRequest,
                         "confirmGeneratedClaims",
                         "Candidate claim defects independently confirmed",
-                        ownerUsername)
+                        ownerUsername,
+                        capture,
+                        resource,
+                        parentOperationId)
                 .stream()
                 .filter(issue -> candidateDefectsByPosition
                         .getOrDefault(issue.claimPosition(), Set.of())

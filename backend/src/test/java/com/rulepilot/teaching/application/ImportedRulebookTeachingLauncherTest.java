@@ -1,21 +1,93 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.document.RulebookTeachingHandoffs;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class ImportedRulebookTeachingLauncherTest {
+
+    @Test
+    void recoversTheDocumentBoundTraceBeforeLaunchingTeaching() {
+        FakeHandoffs handoffs = new FakeHandoffs();
+        UUID jobId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        UUID traceId = UUID.randomUUID();
+        handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(
+                jobId, versionId, "alice", "重点讲清开局和第一轮。"));
+        TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
+        PrivateAgentTraceService traces = mock(PrivateAgentTraceService.class);
+        CaptureHandle recovered = mock(CaptureHandle.class);
+        when(recovered.enabled()).thenReturn(true);
+        when(recovered.traceId()).thenReturn(Optional.of(traceId));
+        ResourceRef document = new ResourceRef(ResourceType.DOCUMENT_VERSION, versionId);
+        when(traces.recover(document, "alice")).thenReturn(recovered);
+        when(plans.launch(
+                        eq(versionId),
+                        eq("重点讲清开局和第一轮。"),
+                        eq("alice"),
+                        any(CaptureHandle.class)))
+                .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
+        var launcher = new ImportedRulebookTeachingLauncher(handoffs, plans, 4, Optional.of(traces));
+
+        launcher.launchReadyHandoffs();
+
+        var ordered = inOrder(traces, plans);
+        ordered.verify(traces).recover(document, "alice");
+        ordered.verify(plans).launch(
+                eq(versionId),
+                eq("重点讲清开局和第一轮。"),
+                eq("alice"),
+                argThat(capture -> capture != null && capture.traceId().equals(Optional.of(traceId))));
+        verify(plans, never()).launch(versionId, "重点讲清开局和第一轮。", "alice");
+        assertThat(handoffs.launched).containsExactly(new LaunchRecord(jobId, runId));
+        assertThat(handoffs.failed).isEmpty();
+    }
+
+    @Test
+    void keepsTheLegacyLaunchWorkingWhenPrivateTraceRecoveryFails() {
+        FakeHandoffs handoffs = new FakeHandoffs();
+        UUID jobId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(jobId, versionId, "alice", null));
+        TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
+        PrivateAgentTraceService traces = mock(PrivateAgentTraceService.class);
+        ResourceRef document = new ResourceRef(ResourceType.DOCUMENT_VERSION, versionId);
+        when(traces.recover(document, "alice")).thenThrow(new IllegalStateException("redis unavailable"));
+        when(plans.launch(versionId, null, "alice"))
+                .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
+        var launcher = new ImportedRulebookTeachingLauncher(handoffs, plans, 4, Optional.of(traces));
+
+        launcher.launchReadyHandoffs();
+
+        verify(traces).recover(document, "alice");
+        verify(plans).launch(versionId, null, "alice");
+        verify(plans, never()).launch(eq(versionId), eq(null), eq("alice"), any(CaptureHandle.class));
+        assertThat(handoffs.launched).containsExactly(new LaunchRecord(jobId, runId));
+        assertThat(handoffs.failed).isEmpty();
+    }
 
     @Test
     void launchesThePersistedReadyHandoffAndRecordsTheRealPreparationRun() {

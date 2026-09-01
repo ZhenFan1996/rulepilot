@@ -1,5 +1,7 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
@@ -67,9 +69,19 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+        return locateGuideWithResult(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public LocateGuideResult locateGuideWithResult(
+            VisualLocationRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
         Future<LocateGuideResult> work;
         try {
-            work = executor.submit(() -> delegate.locateGuideWithResult(request));
+            work = executor.submit(() -> capture != null && capture.enabled()
+                    ? delegate.locateGuideWithResult(request, capture, context)
+                    : delegate.locateGuideWithResult(request));
         } catch (RejectedExecutionException busy) {
             log.info("Skipped visual enrichment because another visual request is still running");
             return LocateGuideResult.unavailable(Diagnostic.EXECUTOR_BUSY);
@@ -85,14 +97,14 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
             Thread.currentThread().interrupt();
             return LocateGuideResult.unavailable(Diagnostic.INTERRUPTED);
         } catch (ExecutionException failed) {
-            log.info("Skipped visual enrichment after provider failure: {}", rootMessage(failed));
+            log.info("Skipped visual enrichment after provider failure (failureType={})", rootType(failed));
             return LocateGuideResult.unavailable(Diagnostic.PROVIDER_FAILURE);
         }
     }
 
-    private String rootMessage(ExecutionException failure) {
+    private String rootType(ExecutionException failure) {
         Throwable cause = failure.getCause();
         if (cause == null) return "unknown";
-        return cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
+        return cause.getClass().getSimpleName();
     }
 }

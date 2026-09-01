@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import type { RecommendationGame } from '@/components/gameRecommendationTypes'
+import ProgressiveCatalogCover from '@/components/ProgressiveCatalogCover.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
 import { useLocale, type AppLocale } from '@/lib/locale'
 
@@ -229,36 +230,38 @@ onBeforeUnmount(() => {
         <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
       </header>
 
-      <div v-if="loading" class="grid min-h-96 place-items-center p-8 text-sm text-ink/50" role="status">{{ copy.loading }}</div>
-      <div v-else-if="error" class="grid min-h-80 place-items-center p-8 text-center" role="alert"><div><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></div></div>
-      <div v-else-if="details" class="grid items-start gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(15rem,21rem)_minmax(0,1fr)] lg:gap-8">
+      <div class="grid items-start gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(15rem,21rem)_minmax(0,1fr)] lg:gap-8">
         <div class="self-start rounded-2xl border border-ink/8 bg-paper p-3 sm:p-4">
-          <img v-if="details.imageUrl || details.thumbnailUrl" :src="details.imageUrl || details.thumbnailUrl" :alt="details.name" class="mx-auto h-auto max-h-[min(62vh,42rem)] w-auto max-w-full object-contain" referrerpolicy="no-referrer">
-          <div class="mt-4 flex flex-col gap-2">
+          <ProgressiveCatalogCover :bgg-id="game.bggId" :alt="details?.name ?? game.name" class="mx-auto aspect-[3/4] max-h-[min(62vh,42rem)] w-full" />
+          <div v-if="details" class="mt-4 flex flex-col gap-2">
             <button type="button" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white" @click="emit('select', game)">{{ copy.select }}</button>
             <a :href="details.bggUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center justify-center text-sm font-semibold text-indigo">{{ copy.source }} ↗</a>
           </div>
         </div>
         <div class="min-w-0">
-          <p v-if="details.officialNameLocalized" class="text-sm font-semibold text-copper">{{ details.originalName }}</p>
-          <p class="mt-1 text-sm text-ink/45">{{ details.publicationYear ?? copy.unknownYear }}</p>
-          <ul v-if="stats.length" class="mt-4 flex flex-wrap gap-2"><li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-9 px-3 text-sm">{{ stat }}</li></ul>
-          <p v-if="translating" class="mt-5 text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
-          <p v-else-if="details.descriptionTranslated" class="mt-5 text-xs font-semibold text-copper">{{ copy.translated }}</p>
-          <p v-if="details.description" class="mt-2 max-h-72 overflow-y-auto whitespace-pre-line pr-2 text-sm leading-7 text-ink/68">{{ details.description }}</p>
-          <dl class="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
-            <div v-if="details.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ details.designers.join('、') }}</dd></div>
-            <div v-if="details.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ details.publishers.join('、') }}</dd></div>
-            <div v-if="details.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}</dt><dd class="mt-1 leading-6">{{ details.mechanics.join('、') }}</dd></div>
-            <div v-if="details.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}</dt><dd class="mt-1 leading-6">{{ details.categories.join('、') }}</dd></div>
-            <div v-if="details.families.length"><dt class="font-semibold text-ink/45">{{ copy.families }}</dt><dd class="mt-1 leading-6">{{ details.families.join('、') }}</dd></div>
-            <div v-if="details.bestWith || details.recommendedWith"><dt class="font-semibold text-ink/45">{{ copy.communityFit }}</dt><dd class="mt-1 leading-6">{{ [details.bestWith, details.recommendedWith].filter(Boolean).join(' · ') }}</dd></div>
-          </dl>
-          <div v-if="details.editionImages.length" class="mt-6 border-t border-ink/10 pt-5">
-            <h3 class="font-display text-xl font-semibold">{{ copy.editions }}</h3>
-            <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" loading="lazy" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-ink/55">{{ edition.name }}</p></li></ul>
-          </div>
-          <p class="mt-6 rounded-xl bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/50">{{ copy.evidence }}</p>
+          <div v-if="loading" data-testid="recommendation-details-loading" class="grid min-h-80 place-items-center text-sm text-ink/50" role="status">{{ copy.loading }}</div>
+          <div v-else-if="error" class="grid min-h-80 place-items-center text-center" role="alert"><div><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></div></div>
+          <template v-else-if="details">
+            <p v-if="details.officialNameLocalized" class="text-sm font-semibold text-copper">{{ details.originalName }}</p>
+            <p class="mt-1 text-sm text-ink/45">{{ details.publicationYear ?? copy.unknownYear }}</p>
+            <ul v-if="stats.length" class="mt-4 flex flex-wrap gap-2"><li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-9 px-3 text-sm">{{ stat }}</li></ul>
+            <p v-if="translating" class="mt-5 text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
+            <p v-else-if="details.descriptionTranslated" class="mt-5 text-xs font-semibold text-copper">{{ copy.translated }}</p>
+            <p v-if="details.description" class="mt-2 max-h-72 overflow-y-auto whitespace-pre-line pr-2 text-sm leading-7 text-ink/68">{{ details.description }}</p>
+            <dl class="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
+              <div v-if="details.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ details.designers.join('、') }}</dd></div>
+              <div v-if="details.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ details.publishers.join('、') }}</dd></div>
+              <div v-if="details.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}</dt><dd class="mt-1 leading-6">{{ details.mechanics.join('、') }}</dd></div>
+              <div v-if="details.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}</dt><dd class="mt-1 leading-6">{{ details.categories.join('、') }}</dd></div>
+              <div v-if="details.families.length"><dt class="font-semibold text-ink/45">{{ copy.families }}</dt><dd class="mt-1 leading-6">{{ details.families.join('、') }}</dd></div>
+              <div v-if="details.bestWith || details.recommendedWith"><dt class="font-semibold text-ink/45">{{ copy.communityFit }}</dt><dd class="mt-1 leading-6">{{ [details.bestWith, details.recommendedWith].filter(Boolean).join(' · ') }}</dd></div>
+            </dl>
+            <div v-if="details.editionImages.length" class="mt-6 border-t border-ink/10 pt-5">
+              <h3 class="font-display text-xl font-semibold">{{ copy.editions }}</h3>
+              <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" loading="lazy" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-ink/55">{{ edition.name }}</p></li></ul>
+            </div>
+            <p class="mt-6 rounded-xl bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/50">{{ copy.evidence }}</p>
+          </template>
         </div>
       </div>
     </section>

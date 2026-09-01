@@ -1,7 +1,9 @@
 package com.rulepilot.shared.adapter.out.cover;
 
 import com.rulepilot.shared.cover.CoverImageFetcher;
+import com.rulepilot.shared.cover.CoverImageFetcher.SourceAbsentException;
 import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
+import com.rulepilot.shared.cover.DurableCoverThumbnailService;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
@@ -43,15 +45,18 @@ public class HttpCoverImageFetcher implements CoverImageFetcher {
     private final CoverThumbnailer thumbnailer = new CoverThumbnailer();
 
     @Override
-    public Thumbnail fetch(URI source) {
+    public Thumbnail fetch(URI source, DurableCoverThumbnailService.Profile profile) {
         try (Response response = request(source)) {
+            if (response.code() == 404 || response.code() == 410) {
+                throw new SourceAbsentException("cover origin no longer has this image");
+            }
             if (!response.isSuccessful()) throw new IllegalStateException("cover origin returned HTTP " + response.code());
             String contentType = response.header("Content-Type", "").toLowerCase(Locale.ROOT);
             if (!contentType.startsWith("image/")) throw new IllegalArgumentException("cover origin did not return an image");
             if (response.body() == null) throw new IllegalStateException("cover origin returned no image body");
             byte[] content = response.body().byteStream().readNBytes(MAX_ORIGIN_BYTES + 1);
             if (content.length > MAX_ORIGIN_BYTES) throw new IllegalArgumentException("cover origin image is too large");
-            return thumbnailer.create(content);
+            return thumbnailer.create(content, profile);
         } catch (IOException exception) {
             throw new IllegalStateException("cover origin is temporarily unavailable", exception);
         }

@@ -2,6 +2,7 @@ package com.rulepilot.catalog.adapter.out.bgg;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -16,6 +17,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +60,66 @@ class CachedBoardGameGeekCatalogTest {
         assertThat(returned.name()).isEqualTo("Cached Game");
         assertThat(cache.games.get(42).value().name()).isEqualTo("Fresh Game");
         verify(live).game(42);
+    }
+
+    @Test
+    void projectsPersistedDiscoveryMetadataImmediatelyWhileFullEditionDetailsRefreshInTheBackground() {
+        BggXmlApiClient live = mock(BggXmlApiClient.class);
+        MemoryCache cache = new MemoryCache();
+        DiscoveryGame stored = new DiscoveryGame(
+                1,
+                42,
+                "Catalog Game",
+                "目录游戏",
+                2026,
+                "https://example.test/42-thumb.jpg",
+                1,
+                4,
+                60,
+                new BigDecimal("8.0"),
+                new BigDecimal("2.5"),
+                List.of("Strategy"),
+                List.of("Drafting"),
+                45,
+                75,
+                10,
+                12,
+                "Best with 3",
+                "Recommended with 2-4",
+                2,
+                100,
+                List.of("Series"),
+                List.of("Designer"),
+                List.of("Publisher"),
+                "Stored description.",
+                "https://example.test/42.jpg");
+        cache.discovery.put(42, new BggMetadataCache.Cached<>(
+                stored, NOW.plusSeconds(30), NOW.plusSeconds(60)));
+        when(live.game(42)).thenReturn(game(42, "Fresh Game"));
+        List<Runnable> scheduled = new ArrayList<>();
+        var adapter = new CachedBoardGameGeekCatalog(
+                live,
+                cache,
+                scheduled::add,
+                new SimpleMeterRegistry(),
+                CLOCK,
+                Duration.ofHours(1),
+                Duration.ofDays(1),
+                Duration.ofDays(7),
+                Duration.ofDays(30));
+
+        GameDetails returned = adapter.game(42);
+
+        assertThat(returned.name()).isEqualTo("Catalog Game");
+        assertThat(returned.description()).isEqualTo("Stored description.");
+        assertThat(returned.officialChineseNames()).containsExactly("目录游戏");
+        assertThat(returned.editionImages()).isEmpty();
+        assertThat(scheduled).hasSize(1);
+        verify(live, never()).game(42);
+
+        scheduled.getFirst().run();
+        verify(live).game(42);
+        assertThat(cache.games.get(42).value().name()).isEqualTo("Fresh Game");
     }
 
     @Test

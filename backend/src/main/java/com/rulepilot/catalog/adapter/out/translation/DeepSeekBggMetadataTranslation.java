@@ -16,6 +16,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -349,11 +350,13 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
 
     private String requestPayload(Request request, String description) {
         try {
-            return json.writeValueAsString(Map.of(
-                    "gameName", bounded(request.gameName(), 500),
-                    "description", description == null ? "" : description.strip(),
-                    "categories", request.categories(),
-                    "mechanics", request.mechanics()));
+            Map<String, Object> source = new LinkedHashMap<>();
+            // This order preserves the existing Worker-written digest while making it deterministic across JVMs.
+            source.put("mechanics", request.mechanics());
+            source.put("categories", request.categories());
+            source.put("gameName", bounded(request.gameName(), 500));
+            source.put("description", description == null ? "" : description.strip());
+            return json.writeValueAsString(source);
         } catch (IOException exception) {
             throw new IllegalStateException("BGG metadata could not be serialized", exception);
         }

@@ -1,5 +1,6 @@
 package com.rulepilot.assistant;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
@@ -11,6 +12,11 @@ import java.util.Set;
 public interface NativeToolAgent {
 
     RunResult run(RunRequest request);
+
+    /** Compatibility-preserving explicit trace path; implementations that do not support it keep prior behavior. */
+    default RunResult run(RunRequest request, CaptureHandle capture) {
+        return run(request);
+    }
 
     default String providerId(Role role, String ownerUsername) {
         return "native-tool-agent";

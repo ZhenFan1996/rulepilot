@@ -14,6 +14,10 @@ public interface NativeToolModel {
         return "native-tool-model";
     }
 
+    default String modelId(Role role, String ownerUsername) {
+        return providerId(role, ownerUsername);
+    }
+
     default boolean supports(Role role, String ownerUsername) {
         return true;
     }

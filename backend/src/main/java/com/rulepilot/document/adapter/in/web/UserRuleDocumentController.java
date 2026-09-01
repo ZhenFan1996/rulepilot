@@ -1,5 +1,7 @@
 package com.rulepilot.document.adapter.in.web;
 
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
 import com.rulepilot.catalog.BoardGameMetadataMatching.Candidate;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
@@ -18,8 +20,11 @@ import com.rulepilot.document.domain.DocumentSourceType;
 import java.io.IOException;
 import java.security.Principal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,6 +38,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import jakarta.servlet.http.HttpSession;
 
 @RestController
 @RequestMapping("/api/v1/documents")
@@ -47,6 +53,29 @@ public class UserRuleDocumentController {
     private final OfficialRulebookImportJobService officialImports;
     private final UploadedRulebookTeachingHandoffService uploadedTeachingHandoffs;
     private final CatalogEditionLookup catalog;
+    private final Optional<PrivateAgentTraceService> privateTraces;
+
+    @Autowired
+    public UserRuleDocumentController(
+            UploadRuleDocumentService documents,
+            PhotographedRulebookUploadService photographedDocuments,
+            RuleDocumentRemovalService removals,
+            RuleDocumentMetadataSuggestionService metadataSuggestions,
+            RuleDocumentMetadataConfirmationService metadataConfirmations,
+            OfficialRulebookImportJobService officialImports,
+            UploadedRulebookTeachingHandoffService uploadedTeachingHandoffs,
+            CatalogEditionLookup catalog,
+            ObjectProvider<PrivateAgentTraceService> privateTraces) {
+        this.documents = documents;
+        this.photographedDocuments = photographedDocuments;
+        this.removals = removals;
+        this.metadataSuggestions = metadataSuggestions;
+        this.metadataConfirmations = metadataConfirmations;
+        this.officialImports = officialImports;
+        this.uploadedTeachingHandoffs = uploadedTeachingHandoffs;
+        this.catalog = catalog;
+        this.privateTraces = Optional.ofNullable(privateTraces.getIfAvailable());
+    }
 
     public UserRuleDocumentController(
             UploadRuleDocumentService documents,
@@ -65,6 +94,7 @@ public class UserRuleDocumentController {
         this.officialImports = officialImports;
         this.uploadedTeachingHandoffs = uploadedTeachingHandoffs;
         this.catalog = catalog;
+        this.privateTraces = Optional.empty();
     }
 
     @GetMapping
@@ -162,8 +192,22 @@ public class UserRuleDocumentController {
     @PostMapping("/official-imports")
     @ResponseStatus(HttpStatus.ACCEPTED)
     OfficialRulebookImportJobResponse importOfficialRulebook(
-            @RequestBody OfficialRulebookImportRequest request, Principal principal) {
-        var launch = officialImports.enqueue(new OfficialRulebookImportJobService.Command(
+            @RequestBody OfficialRulebookImportRequest request,
+            Principal principal,
+            HttpSession session) {
+        return importOfficialRulebook(request, principal, currentTrace(principal, session));
+    }
+
+    OfficialRulebookImportJobResponse importOfficialRulebook(
+            OfficialRulebookImportRequest request, Principal principal) {
+        return importOfficialRulebook(request, principal, CaptureHandle.noop());
+    }
+
+    private OfficialRulebookImportJobResponse importOfficialRulebook(
+            OfficialRulebookImportRequest request,
+            Principal principal,
+            CaptureHandle capture) {
+        var command = new OfficialRulebookImportJobService.Command(
                 request.editionId(),
                 request.title(),
                 request.sourceType(),
@@ -176,8 +220,15 @@ public class UserRuleDocumentController {
                         request.sourceEdition(),
                         request.sourceLanguage(),
                         request.sourceLanguageVerified()),
-                request.identityConfirmed()), principal.getName());
+                request.identityConfirmed());
+        var launch = capture != null && capture.enabled()
+                ? officialImports.enqueue(command, principal.getName(), capture)
+                : officialImports.enqueue(command, principal.getName());
         return officialImportResponse(launch.job(), launch.reused());
+    }
+
+    private CaptureHandle currentTrace(Principal principal, HttpSession session) {
+        return privateTraces.map(traces -> traces.current(principal, session)).orElseGet(CaptureHandle::noop);
     }
 
     @GetMapping("/official-imports")

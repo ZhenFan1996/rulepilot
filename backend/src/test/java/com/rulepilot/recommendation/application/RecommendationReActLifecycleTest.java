@@ -9,13 +9,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolObservation;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CandidateSet;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataResult;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataStatus;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CanonicalMetadataValue;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataCriterion;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogMetadataDimension;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.SelectionEligibility;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
@@ -24,6 +33,9 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionCriterion;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionDimension;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -35,9 +47,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class RecommendationReActLifecycleTest {
 
@@ -127,6 +141,106 @@ class RecommendationReActLifecycleTest {
                 .contains("PREFERENCE_EVIDENCE_NOT_GROUNDED");
         assertThat(afterRepeatedError.messages().get(5).content())
                 .contains("PREFERENCE_EVIDENCE_NOT_GROUNDED");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void readsAtLeastTheConfiguredCardCountWhenTheModelSuppliesATooSmallBrowseLimit() {
+        Game first = game(528, "First Harbor", "第一港", "The first eligible game.");
+        Game second = game(529, "Second Harbor", "第二港", "The second eligible game.");
+        Game third = game(530, "Third Harbor", "第三港", "The third eligible game.");
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "undersized-browse",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1}"),
+                action(
+                        "three-card-finish",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":["
+                                + "{\"bggId\":528,\"reason\":\"它是目录中可用的第一款。\"},"
+                                + "{\"bggId\":529,\"reason\":\"它提供另一种已验证的选择。\"},"
+                                + "{\"bggId\":530,\"reason\":\"它补足了第三个独立候选。\"}],"
+                                + "\"requestedCount\":3,\"playerReply\":\"这里是三款可继续进入规则书流程的选择。\"}")));
+        List<Game> rankedWindow = new ArrayList<>();
+        for (int index = 0; index < 18; index++) {
+            rankedWindow.add(game(
+                    600 + index,
+                    "Overlong " + index,
+                    "超时候选" + index,
+                    "This higher-ranked game exceeds the hard table limit.",
+                    List.of("Simultaneous Action Selection"),
+                    90,
+                    120));
+        }
+        rankedWindow.addAll(List.of(first, second, third));
+        RecordingCatalog catalog = new RecordingCatalog(rankedWindow.toArray(Game[]::new));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        new RecommendationProfile(
+                                null,
+                                60,
+                                null,
+                                BggGameType.ALL,
+                                BoardGameRecommendationAgent.InteractionPreference.ANY),
+                        "今晚最多一小时，直接给我三款，我之后再选规则书。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(528, 529, 530);
+        assertThat(response.shortfall()).isNull();
+        assertThat(catalog.filters).singleElement()
+                .satisfies(filters -> assertThat(filters.maximum()).isEqualTo(3));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void preservesTheAuthoritativeAvailableCountAfterARealPreferenceUpdate() {
+        Game hydrated = game(
+                531,
+                "Brief Workshop",
+                "短时工坊",
+                "One of two catalog-eligible games was hydrated for this bounded observation.");
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "updated-read",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"preferenceUpdates\":[{"
+                                + "\"field\":\"durationMinutes\",\"value\":{\"minimum\":null,\"maximum\":60},"
+                                + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}],\"limit\":1}"),
+                action(
+                        "premature-shortfall",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":[{\"bggId\":531,\"reason\":\"它符合这一小时的硬条件。\"}],"
+                                + "\"requestedCount\":2,\"playerReply\":\"目前只找到这一款。\"}"),
+                action(
+                        "transparent-recovery",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"playerReply\":\"目录表明还有一款符合条件的候选，我需要先把它读进当前视图，不能提前声称只有一款。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(2, hydrated);
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "今晚最多玩一小时，请直接给我两款。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.profile().durationMinutes()).satisfies(range -> {
+            assertThat(range.maximum()).isEqualTo(60);
+            assertThat(range.hard()).isTrue();
+        });
+        assertThat(response.harness().actions())
+                .contains("UPDATE_PREFERENCES", "REJECTED_ACTION:MORE_VERIFIED_CANDIDATES_AVAILABLE")
+                .doesNotContain("RECOMMEND_GAMES");
 
         loop.stopBoundedCalls();
     }
@@ -342,6 +456,369 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
+    void keepsAnEvidenceBackedCatalogIntentAcrossLaterReadsAndRejectsMismatchedVerifiedGames() {
+        Game deckBuilder = game(
+                520,
+                "Clockwork Market",
+                "发条市场",
+                "Players build an economic engine from a changing card market.",
+                List.of("Deck, Bag, and Pool Building", "Market"));
+        Game unrelated = game(
+                521,
+                "Stone Province",
+                "石境",
+                "Players develop a province through tile placement.",
+                List.of("Tile Placement", "Area Majority / Influence"));
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "typed-intent",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":8,\"catalogIntentUpdate\":{"
+                                + "\"operation\":\"REPLACE\",\"criteria\":[{"
+                                + "\"dimension\":\"MECHANIC\",\"value\":\"Deck, Bag, and Pool Building\",\"evidence\":\"U1\"}]}}"),
+                action(
+                        "later-broad-read",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"textQuery\":\"strategic economic game\",\"sort\":\"RELEVANCE\",\"limit\":8}"),
+                action(
+                        "mismatched-finish",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":[{\"bggId\":521,\"reason\":\"它看起来也很烧脑。\"}],\"requestedCount\":1,\"playerReply\":\"先看这一款。\"}"),
+                action(
+                        "matching-finish",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":[{\"bggId\":520,\"reason\":\"它的 BGG 机制资料明确包含你要的构筑机制。\"}],\"requestedCount\":1,\"playerReply\":\"按你刚才确定的机制，我会先选这一款。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(deckBuilder, unrelated);
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converseValidated(
+                validatedRequest("我想玩一款 DBG 方向的重策，先直接挑一款。", List.of(unrelated)),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                ignored -> {},
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).singleElement()
+                .satisfies(game -> assertThat(game.game().ranking().bggId()).isEqualTo(520));
+        assertThat(response.games().getFirst().claims())
+                .filteredOn(claim -> claim.subject().equals("mechanics"))
+                .singleElement()
+                .satisfies(claim -> {
+                    assertThat(claim.relation()).isEqualTo(com.rulepilot.recommendation.CandidateClaim.Relation.SATISFIED);
+                    assertThat(claim.evidence()).singleElement()
+                            .satisfies(observation -> assertThat(observation.attribute()).isEqualTo("mechanics"));
+                });
+        assertThat(response.harness().actions())
+                .contains(
+                        "UPDATE_CATALOG_INTENT",
+                        "SEARCH_BGG_CATALOG",
+                        "REJECTED_ACTION:FINAL_ID_FAILS_HARD_GATES")
+                .doesNotContain("CLEAR_CATALOG_INTENT");
+        assertThat(catalog.filters).hasSize(2);
+        assertThat(catalog.filters.getLast().mechanics())
+                .containsExactly("Deck, Bag, and Pool Building");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void appliesTheSameTypedCatalogContractToAnIndependentMechanic() {
+        Game workerPlacement = game(
+                522,
+                "Harbor Guilds",
+                "港口行会",
+                "Players place workers to develop a trading harbor.",
+                List.of("Worker Placement"));
+        Game deckBuilder = game(
+                523,
+                "Archive Forge",
+                "档案锻炉",
+                "Players improve a personal card deck.",
+                List.of("Deck, Bag, and Pool Building"));
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "worker-intent",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"catalogIntentUpdate\":{\"operation\":\"REPLACE\",\"criteria\":[{"
+                                + "\"dimension\":\"MECHANIC\",\"value\":\"Worker Placement\",\"evidence\":\"U1\"}]},\"limit\":8}"),
+                action(
+                        "worker-finish",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":[{\"bggId\":522,\"reason\":\"它明确采用工人放置机制。\"}],\"requestedCount\":1,\"playerReply\":\"我会先选这款。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(workerPlacement, deckBuilder);
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "这次换成工人放置，直接推荐一款。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(522);
+        assertThat(catalog.filters).singleElement()
+                .satisfies(filters -> assertThat(filters.mechanics()).containsExactly("Worker Placement"));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsShownCardsUnavailableWhenTheAgentRepeatsTheSameCanonicalCatalogIntent() {
+        Game shown = game(
+                532,
+                "Earlier Foundry",
+                "旧铸造厂",
+                "A previously shown worker-placement game.",
+                List.of("Worker Placement"));
+        Game fresh = game(
+                533,
+                "New Foundry",
+                "新铸造厂",
+                "A fresh worker-placement game.",
+                List.of("Worker Placement"));
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "redundant-intent",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"catalogIntentUpdate\":{"
+                                + "\"operation\":\"REPLACE\",\"criteria\":[{\"dimension\":\"MECHANIC\","
+                                + "\"value\":\"Worker Placement\",\"evidence\":\"U1\"}]},\"limit\":1}"),
+                action(
+                        "fresh-finish",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":[{\"bggId\":533,\"reason\":\"它是这次尚未展示的新候选。\"}],"
+                                + "\"requestedCount\":1,\"playerReply\":\"沿用同一个机制条件时，我只补充新的候选。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(shown, fresh);
+        RecommendationReActLoop loop = loop(model, catalog);
+        CatalogSelectionIntent existingIntent = new CatalogSelectionIntent(List.of(new CatalogSelectionCriterion(
+                CatalogSelectionDimension.MECHANIC,
+                "worker placement",
+                "earlier turn",
+                1)));
+        String userMessage = "还是刚才的工人放置条件，再给我一款新的，不要重复已经展示的。";
+        ConversationRequest request = new ConversationRequest(
+                RecommendationProfile.empty(),
+                userMessage,
+                List.of(),
+                List.of(new DialogueMessage("user", userMessage)),
+                null,
+                List.of(),
+                List.of(532),
+                List.of(shown),
+                existingIntent);
+
+        var response = loop.converseValidated(
+                request,
+                "zh-CN",
+                "player",
+                ignored -> {},
+                ignored -> {},
+                ignored -> {});
+
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(533);
+        assertThat(response.harness().actions())
+                .contains("IGNORED_REDUNDANT_CATALOG_INTENT_UPDATE", "RECOMMEND_GAMES")
+                .doesNotContain("UPDATE_CATALOG_INTENT", "MORE_VERIFIED_CANDIDATES_AVAILABLE");
+        assertThat(catalog.eligibilities).singleElement()
+                .satisfies(eligibility -> assertThat(eligibility.unavailableBggIds()).contains(532));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void excludesAComparisonReferenceBeforeTheCatalogLimitsFreshCandidates() {
+        Game reference = game(534, "Known Benchmark", "已知参照", "The player-named comparison reference.");
+        Game first = game(535, "Fresh North", "北方新选", "The first fresh candidate.");
+        Game second = game(536, "Fresh East", "东方新选", "The second fresh candidate.");
+        Game third = game(537, "Fresh West", "西方新选", "The third fresh candidate.");
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "resolve-reference",
+                        BoardGameRecommendationAgent.RESOLVE_TOOL,
+                        "{\"title\":\"Known Benchmark\",\"purpose\":\"COMPARISON_REFERENCE\",\"evidence\":\"U1\"}"),
+                action(
+                        "browse-fresh",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1}"),
+                action(
+                        "finish-three",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":["
+                                + "{\"bggId\":535,\"reason\":\"它是第一个独立的新候选。\"},"
+                                + "{\"bggId\":536,\"reason\":\"它提供第二个不同选择。\"},"
+                                + "{\"bggId\":537,\"reason\":\"它补足第三个新候选。\"}],"
+                                + "\"requestedCount\":3,\"playerReply\":\"参照游戏只用于比较，以下三款都是新的候选。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(reference, first, second, third);
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "我熟悉 Known Benchmark，把它只当参照，另外直接推荐三款新的游戏。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(535, 536, 537);
+        assertThat(response.shortfall()).isNull();
+        assertThat(response.harness().actions())
+                .contains("RESOLVE_BGG_REFERENCE", "SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
+                .doesNotContain("REJECTED_ACTION:MORE_VERIFIED_CANDIDATES_AVAILABLE");
+        assertThat(catalog.eligibilities).singleElement()
+                .satisfies(eligibility -> assertThat(eligibility.unavailableBggIds()).contains(534));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsTextQueryAsRecallOnlyWhenTheAgentDoesNotDeclareAnExactCatalogIntent() {
+        Game rankedFallback = game(
+                524,
+                "Open Horizon",
+                "开阔地平线",
+                "A broad strategy game that remains in the ranked fallback slate.",
+                List.of("Tile Placement"));
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "soft-recall",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"textQuery\":\"deck construction\",\"sort\":\"RELEVANCE\",\"limit\":1}"),
+                action(
+                        "soft-finish",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":[{\"bggId\":524,\"reason\":\"在没有明确机制硬条件时，它仍是可用的策略候选。\"}],\"requestedCount\":1,\"playerReply\":\"先给你一个不同方向。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(rankedFallback);
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "别限定具体机制，先给我一个策略方向。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(524);
+        assertThat(response.harness().actions())
+                .doesNotContain("UPDATE_CATALOG_INTENT", "CLEAR_CATALOG_INTENT");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void rejectsAnUngroundedCatalogIntentBeforeReadingOrMutatingTheCatalog() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "bad-evidence",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"catalogIntentUpdate\":{\"operation\":\"REPLACE\",\"criteria\":[{"
+                                + "\"dimension\":\"MECHANIC\",\"value\":\"Worker Placement\",\"evidence\":\"U99\"}]},\"limit\":1}"),
+                action(
+                        "safe-finish",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"playerReply\":\"我没有可归属到这轮玩家消息的机制证据，所以不会悄悄建立筛选条件。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(game(525, "Safe Slate", "安全候选", "A fixture."));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "先聊聊你会怎么选。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(catalog.searches).hasValue(0);
+        assertThat(response.harness().actions())
+                .contains("REJECTED_ACTION:PREFERENCE_EVIDENCE_NOT_GROUNDED")
+                .doesNotContain("UPDATE_CATALOG_INTENT", "SEARCH_BGG_CATALOG");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void rejectsANonCanonicalCatalogIntentWithoutCommittingItsSiblingProfileUpdate() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "unknown-canonical-value",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"preferenceUpdates\":[{\"field\":\"durationMinutes\",\"value\":{\"minimum\":null,\"maximum\":90},\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}],"
+                                + "\"catalogIntentUpdate\":{\"operation\":\"REPLACE\",\"criteria\":[{"
+                                + "\"dimension\":\"MECHANIC\",\"value\":\"Imaginary Canonical Mechanism\",\"evidence\":\"U1\"}]},\"limit\":1}"),
+                action(
+                        "transparent-finish",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"playerReply\":\"目录没有验证这个规范机制值；我不会保留半套时长或机制条件。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(game(526, "Known Game", "已知游戏", "A fixture."));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "最多九十分钟，并按我刚说的机制方向找。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(catalog.searches).hasValue(0);
+        assertThat(response.profile().durationMinutes()).isNull();
+        assertThat(response.harness().actions())
+                .contains("REJECTED_ACTION:CATALOG_INTENT_NOT_CANONICAL")
+                .doesNotContain("UPDATE_PREFERENCES", "UPDATE_CATALOG_INTENT", "SEARCH_BGG_CATALOG");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void clearsAnEarlierCatalogDirectionOnlyThroughAnEvidenceBackedTypedUpdate() {
+        Game differentMechanic = game(
+                527,
+                "Mapmakers Hall",
+                "制图师大厅",
+                "Players place tiles to build a shared map.",
+                List.of("Tile Placement"));
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "clear-direction",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"catalogIntentUpdate\":{\"operation\":\"CLEAR\",\"evidence\":\"U1\"},\"limit\":1}"),
+                action(
+                        "finish-after-clear",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"selections\":[{\"bggId\":527,\"reason\":\"你已经明确取消原机制方向，这款可以作为新的开放选择。\"}],\"requestedCount\":1,\"playerReply\":\"不再限定刚才的机制后，我会先看这款。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(differentMechanic);
+        RecommendationReActLoop loop = loop(model, catalog);
+        CatalogSelectionIntent earlier = new CatalogSelectionIntent(List.of(new CatalogSelectionCriterion(
+                CatalogSelectionDimension.MECHANIC,
+                "Deck, Bag, and Pool Building",
+                "earlier direction",
+                1)));
+        ConversationRequest request = new ConversationRequest(
+                RecommendationProfile.empty(),
+                "刚才的机制限制取消，换个方向直接挑一款。",
+                List.of(),
+                List.of(new DialogueMessage("user", "刚才的机制限制取消，换个方向直接挑一款。")),
+                null,
+                List.of(),
+                List.of(),
+                List.of(),
+                earlier);
+
+        var response = loop.converseValidated(
+                request,
+                "zh-CN",
+                "player",
+                ignored -> {},
+                ignored -> {},
+                ignored -> {});
+
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(527);
+        assertThat(response.harness().actions()).contains("CLEAR_CATALOG_INTENT", "RECOMMEND_GAMES");
+        assertThat(catalog.filters).singleElement()
+                .satisfies(filters -> assertThat(filters.mechanics()).isEmpty());
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void rejectsPreferenceAliasesThatAddressTheSameLogicalFieldTwice() {
         ScriptedModel model = new ScriptedModel(List.of(
                 action(
@@ -403,6 +880,57 @@ class RecommendationReActLifecycleTest {
         assertThat(response.harness().actions())
                 .contains("REJECTED_ACTION:REPLY_ID_NOT_VERIFIED", "REPLY_TO_USER")
                 .doesNotContain("UPDATE_PREFERENCES");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsAnExplicitPlayerNamedTargetSelectableAcrossAnEarlierCatalogDirection() {
+        Game selected = game(
+                531,
+                "Northbound",
+                "一路向北",
+                "The exact game the player selected for the next workflow.",
+                List.of("Tile Placement"));
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                "direct-target",
+                BoardGameRecommendationAgent.RESOLVE_TOOL,
+                "{\"title\":\"Northbound\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\","
+                        + "\"playerReply\":\"好，就进入《一路向北》。\","
+                        + "\"reason\":\"这是你这一轮明确点名、要继续找规则书和讲解的游戏。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(selected);
+        RecommendationReActLoop loop = loop(model, catalog);
+        CatalogSelectionIntent earlier = new CatalogSelectionIntent(List.of(new CatalogSelectionCriterion(
+                CatalogSelectionDimension.MECHANIC,
+                "Deck, Bag, and Pool Building",
+                "earlier browsing direction",
+                1)));
+        String message = "机制方向先保留，不过这次我明确选 Northbound，直接继续它的规则书和讲解。";
+        ConversationRequest request = new ConversationRequest(
+                RecommendationProfile.empty(),
+                message,
+                List.of(),
+                List.of(new DialogueMessage("user", message)),
+                null,
+                List.of(),
+                List.of(),
+                List.of(),
+                earlier);
+
+        var response = loop.converseValidated(
+                request,
+                "zh-CN",
+                "player",
+                ignored -> {},
+                ignored -> {},
+                ignored -> {});
+
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(531);
+        assertThat(response.harness().actions())
+                .contains("RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES")
+                .doesNotContain("REJECTED_ACTION:FINAL_ID_FAILS_HARD_GATES");
 
         loop.stopBoundedCalls();
     }
@@ -488,14 +1016,20 @@ class RecommendationReActLifecycleTest {
         when(tools.resolveReferenceTitle("Northbound"))
                 .thenReturn(new ReferenceObservation(ToolStatus.SUCCESS, List.of(selected), ""));
         RecommendationReActLoop loop = loop(model, tools);
+        CaptureHandle capture = mock(CaptureHandle.class);
+        when(capture.enabled()).thenReturn(true);
 
-        var response = loop.converse(
-                new ConversationRequest(
+        var response = loop.converseValidated(
+                loop.validate(new ConversationRequest(
                         RecommendationProfile.empty(),
-                        "我提到过 Fog Atlas 和 Copper Vale，但最后明确选 Northbound；请核对后继续。"),
+                        "我提到过 Fog Atlas 和 Copper Vale，但最后明确选 Northbound；请核对后继续。")),
                 "zh-CN",
                 "player",
-                ignored -> {});
+                ignored -> {},
+                ignored -> {},
+                ignored -> {},
+                capture,
+                UUID.randomUUID());
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games()).singleElement()
@@ -509,6 +1043,65 @@ class RecommendationReActLifecycleTest {
                 .doesNotContain("REJECTED_UNAVAILABLE_ACTION");
         verify(tools, times(3)).resolveLocalReferenceTitle(anyString());
         verify(tools, times(1)).resolveReferenceTitle("Northbound");
+        ArgumentCaptor<com.rulepilot.agenttrace.AgentTraceEvent.ToolCall> tracedCalls =
+                ArgumentCaptor.forClass(com.rulepilot.agenttrace.AgentTraceEvent.ToolCall.class);
+        ArgumentCaptor<ToolObservation> observations = ArgumentCaptor.forClass(ToolObservation.class);
+        verify(capture, times(3)).toolCall(tracedCalls.capture());
+        verify(capture, times(3)).toolObservation(observations.capture());
+        assertThat(tracedCalls.getAllValues())
+                .extracting(com.rulepilot.agenttrace.AgentTraceEvent.ToolCall::validation)
+                .containsOnly(ToolArgumentValidation.ACCEPTED);
+        assertThat(observations.getAllValues())
+                .extracting(ToolObservation::statusCode)
+                .containsExactly("REJECTED", "REJECTED", "TERMINAL_RESPONSE");
+        assertThat(observations.getAllValues().get(2).context().operationId())
+                .isEqualTo(tracedCalls.getAllValues().get(2).context().operationId());
+        assertThat(observations.getAllValues().get(2).callId())
+                .isEqualTo(tracedCalls.getAllValues().get(2).callId());
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void malformedArgumentsAreRejectedBeforeAValidTypedRecovery() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action("malformed", BoardGameRecommendationAgent.BROWSE_TOOL, "{\"limit\":"),
+                action(
+                        "recovery",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"playerReply\":\"我没有执行那次格式错误的目录读取；请再告诉我想找什么。\"}")));
+        RecommendationReActLoop loop = loop(
+                model,
+                new RecordingCatalog(game(523, "Northbound", "一路向北", "A travel game.")));
+        CaptureHandle capture = mock(CaptureHandle.class);
+        when(capture.enabled()).thenReturn(true);
+
+        var response = loop.converseValidated(
+                loop.validate(new ConversationRequest(RecommendationProfile.empty(), "请帮我找一款游戏。")),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                ignored -> {},
+                ignored -> {},
+                capture,
+                UUID.randomUUID());
+
+        ArgumentCaptor<com.rulepilot.agenttrace.AgentTraceEvent.ToolCall> tracedCalls =
+                ArgumentCaptor.forClass(com.rulepilot.agenttrace.AgentTraceEvent.ToolCall.class);
+        ArgumentCaptor<ToolObservation> observations = ArgumentCaptor.forClass(ToolObservation.class);
+        verify(capture, times(2)).toolCall(tracedCalls.capture());
+        verify(capture, times(2)).toolObservation(observations.capture());
+        assertThat(tracedCalls.getAllValues())
+                .extracting(com.rulepilot.agenttrace.AgentTraceEvent.ToolCall::validation)
+                .containsExactly(ToolArgumentValidation.REJECTED, ToolArgumentValidation.ACCEPTED);
+        assertThat(observations.getAllValues())
+                .extracting(ToolObservation::statusCode)
+                .containsExactly("REJECTED", "TERMINAL_RESPONSE");
+        assertThat(observations.getAllValues().get(1).context().operationId())
+                .isEqualTo(tracedCalls.getAllValues().get(1).context().operationId());
+        assertThat(observations.getAllValues().get(1).callId())
+                .isEqualTo(tracedCalls.getAllValues().get(1).callId());
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
 
         loop.stopBoundedCalls();
     }
@@ -691,6 +1284,31 @@ class RecommendationReActLifecycleTest {
     }
 
     private static Game game(int bggId, String name, String chineseName, String description) {
+        return game(
+                bggId,
+                name,
+                chineseName,
+                description,
+                List.of("Simultaneous Action Selection"));
+    }
+
+    private static Game game(
+            int bggId,
+            String name,
+            String chineseName,
+            String description,
+            List<String> mechanics) {
+        return game(bggId, name, chineseName, description, mechanics, 30, 45);
+    }
+
+    private static Game game(
+            int bggId,
+            String name,
+            String chineseName,
+            String description,
+            List<String> mechanics,
+            int minimumMinutes,
+            int maximumMinutes) {
         return new Game(
                 new Ranking(
                         bggId,
@@ -707,12 +1325,12 @@ class RecommendationReActLifecycleTest {
                         "",
                         2,
                         4,
-                        45,
+                        maximumMinutes,
                         new BigDecimal("1.6"),
                         List.of("Party Game"),
-                        List.of("Simultaneous Action Selection"),
-                        30,
-                        45,
+                        mechanics,
+                        minimumMinutes,
+                        maximumMinutes,
                         10,
                         10,
                         "4",
@@ -765,12 +1383,20 @@ class RecommendationReActLifecycleTest {
 
     private static final class RecordingCatalog implements BoardGameRecommendationCatalog {
         private final List<Game> games;
+        private final Integer reportedAvailableCount;
         private final AtomicInteger searches = new AtomicInteger();
+        private final List<CatalogFilters> filters = new ArrayList<>();
+        private final List<SelectionEligibility> eligibilities = new ArrayList<>();
         private final AtomicInteger localReferenceResolutions = new AtomicInteger();
         private final AtomicInteger remoteReferenceResolutions = new AtomicInteger();
 
         private RecordingCatalog(Game... games) {
+            this(null, games);
+        }
+
+        private RecordingCatalog(Integer reportedAvailableCount, Game... games) {
             this.games = List.of(games);
+            this.reportedAvailableCount = reportedAvailableCount;
         }
 
         @Override
@@ -780,8 +1406,95 @@ class RecommendationReActLifecycleTest {
 
         @Override
         public CandidateSet searchGames(CatalogFilters filters) {
+            return searchGames(filters, SelectionEligibility.none());
+        }
+
+        @Override
+        public CandidateSet searchGames(CatalogFilters filters, SelectionEligibility eligibility) {
             searches.incrementAndGet();
-            return new CandidateSet(games.size(), games);
+            this.filters.add(filters);
+            this.eligibilities.add(eligibility);
+            List<Game> eligible = games.stream()
+                    .filter(game -> !eligibility.unavailableBggIds().contains(game.ranking().bggId()))
+                    .filter(game -> matchesSelectionEligibility(game, eligibility))
+                    .toList();
+            return new CandidateSet(
+                    games.size(),
+                    reportedAvailableCount == null ? eligible.size() : reportedAvailableCount,
+                    eligible.stream().skip(filters.offset()).limit(filters.maximum()).toList());
+        }
+
+        private boolean matchesSelectionEligibility(Game game, SelectionEligibility eligibility) {
+            Details details = game.details();
+            if (details == null) return false;
+            if (eligibility.playerCountConstrained()
+                    && (details.minPlayers() == null
+                            || details.maxPlayers() == null
+                            || eligibility.minimumPlayers() != null
+                                    && details.minPlayers() > eligibility.minimumPlayers()
+                            || eligibility.maximumPlayers() != null
+                                    && details.maxPlayers() < eligibility.maximumPlayers())) {
+                return false;
+            }
+            Integer minimumDuration = details.minimumPlayTimeMinutes() == null
+                    ? details.playingTimeMinutes()
+                    : details.minimumPlayTimeMinutes();
+            Integer maximumDuration = details.maximumPlayTimeMinutes() == null
+                    ? details.playingTimeMinutes()
+                    : details.maximumPlayTimeMinutes();
+            if (eligibility.durationConstrained()
+                    && (minimumDuration == null
+                            || maximumDuration == null
+                            || eligibility.minimumDurationMinutes() != null
+                                    && minimumDuration < eligibility.minimumDurationMinutes()
+                            || eligibility.maximumDurationMinutes() != null
+                                    && maximumDuration > eligibility.maximumDurationMinutes())) {
+                return false;
+            }
+            return !eligibility.complexityConstrained()
+                    || details.averageWeight() != null
+                            && (eligibility.minimumComplexity() == null
+                                    || details.averageWeight().compareTo(eligibility.minimumComplexity()) >= 0)
+                            && (eligibility.maximumComplexity() == null
+                                    || details.averageWeight().compareTo(eligibility.maximumComplexity()) <= 0);
+        }
+
+        @Override
+        public CanonicalMetadataResult canonicalizeMetadata(List<CatalogMetadataCriterion> criteria) {
+            List<CanonicalMetadataValue> values = criteria.stream()
+                    .map(criterion -> {
+                        List<String> matches = games.stream()
+                                .filter(game -> game.details() != null)
+                                .flatMap(game -> metadataValues(game, criterion.dimension()).stream())
+                                .filter(value -> value.equalsIgnoreCase(criterion.value()))
+                                .distinct()
+                                .toList();
+                        return matches.size() == 1
+                                ? new CanonicalMetadataValue(
+                                        criterion.dimension(),
+                                        criterion.value(),
+                                        matches.getFirst(),
+                                        CanonicalMetadataStatus.CANONICAL)
+                                : new CanonicalMetadataValue(
+                                        criterion.dimension(),
+                                        criterion.value(),
+                                        "",
+                                        matches.isEmpty()
+                                                ? CanonicalMetadataStatus.NOT_FOUND
+                                                : CanonicalMetadataStatus.AMBIGUOUS);
+                    })
+                    .toList();
+            return new CanonicalMetadataResult(true, values);
+        }
+
+        private List<String> metadataValues(Game game, CatalogMetadataDimension dimension) {
+            return switch (dimension) {
+                case CATEGORY -> game.details().categories();
+                case MECHANIC -> game.details().mechanics();
+                case FAMILY -> game.details().families();
+                case DESIGNER -> game.details().designers();
+                case PUBLISHER -> game.details().publishers();
+            };
         }
 
         @Override

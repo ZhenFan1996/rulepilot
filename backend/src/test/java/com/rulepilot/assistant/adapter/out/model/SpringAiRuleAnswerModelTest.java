@@ -8,6 +8,10 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.agenttrace.AgentTraceEvent;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
@@ -25,6 +29,8 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -39,6 +45,27 @@ import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
 class SpringAiRuleAnswerModelTest {
+
+    @Test
+    void capturesEveryRawInterpretationTurnBeforeStructuredParsing() {
+        Fixture fixture = fixture(true, "not-json", "still-not-json");
+        RecordingCapture capture = new RecordingCapture();
+        UUID runId = UUID.randomUUID();
+
+        var result = fixture.model.interpretQuestion(
+                request(),
+                null,
+                capture,
+                new ResourceRef(ResourceType.ASSISTANT_RUN, runId),
+                runId);
+
+        assertThat(result).isEmpty();
+        assertThat(capture.starts).hasSize(2);
+        assertThat(capture.turns).extracting(AgentTraceEvent.ModelTurn::assistantText)
+                .containsExactly("not-json", "still-not-json");
+        assertThat(capture.turns).extracting(turn -> turn.context().operationId())
+                .doesNotHaveDuplicates();
+    }
 
     @Test
     void selectsConfiguredProviderWithoutCallingExternalApi() {
@@ -584,4 +611,20 @@ class SpringAiRuleAnswerModelTest {
     }
 
     private record Fixture(SpringAiRuleAnswerModel model, ChatModel chatModel) {}
+
+    private static final class RecordingCapture implements CaptureHandle {
+        private final List<AgentTraceEvent.ModelCallStarted> starts = new ArrayList<>();
+        private final List<AgentTraceEvent.ModelTurn> turns = new ArrayList<>();
+
+        @Override public boolean enabled() { return true; }
+        @Override public Optional<UUID> traceId() { return Optional.of(UUID.randomUUID()); }
+        @Override public void userTurn(AgentTraceEvent.UserTurn event) {}
+        @Override public void modelCallStarted(AgentTraceEvent.ModelCallStarted event) { starts.add(event); }
+        @Override public void modelTurn(AgentTraceEvent.ModelTurn event) { turns.add(event); }
+        @Override public void toolCall(AgentTraceEvent.ToolCall event) {}
+        @Override public void toolObservation(AgentTraceEvent.ToolObservation event) {}
+        @Override public void publication(AgentTraceEvent.Publication event) {}
+        @Override public void bindingOrFailure(AgentTraceEvent.BindingOrFailure event) {}
+        @Override public boolean bind(ResourceRef resource) { return true; }
+    }
 }

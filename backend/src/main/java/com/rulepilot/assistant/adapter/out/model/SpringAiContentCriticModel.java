@@ -1,5 +1,13 @@
 package com.rulepilot.assistant.adapter.out.model;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,6 +24,11 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +60,9 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final String TRACE_CRITIC_SCHEMA =
+            "critic-output-v1:issues[defectConfirmed,type,claimAspect,claimPosition,evidenceIds,summary]";
+    private static final int TRACE_MAXIMUM_OUTPUT_TOKENS = 2_048;
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
     private final double temperature;
@@ -85,19 +101,31 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
 
     @Override
     public CritiqueDraft critique(ReviewRequest request, String ownerUsername) {
+        return critique(request, ownerUsername, CaptureHandle.noop(), null, request.assistantRunId());
+    }
+
+    @Override
+    public CritiqueDraft critique(
+            ReviewRequest request,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         if (usesFake(ownerUsername)) {
             throw new IllegalStateException("a real critic model is required when model review is enabled");
         }
         RuntimeException firstFailure;
         try {
-            return critiqueOnce(request, "", ownerUsername);
+            return critiqueOnce(
+                    request, "", ownerUsername, capture, resource, parentOperationId, 1);
         } catch (RuntimeException exception) {
             firstFailure = exception;
         }
         try {
             String repair = prompts.criticOutputRepair();
             if (repair == null || repair.isBlank()) repair = prompts.structuredOutputRepair();
-            return critiqueOnce(request, repair, ownerUsername);
+            return critiqueOnce(
+                    request, repair, ownerUsername, capture, resource, parentOperationId, 2);
         } catch (RuntimeException secondFailure) {
             secondFailure.addSuppressed(firstFailure);
             throw secondFailure;
@@ -105,7 +133,13 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     }
 
     private CritiqueDraft critiqueOnce(
-            ReviewRequest request, String repair, String ownerUsername) {
+            ReviewRequest request,
+            String repair,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId,
+            int attempt) {
         Map<String, UUID> evidenceIds = evidenceIds(request);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
         boolean deepSeekNonThinking = usesDeepSeekNonThinkingGeneration(ownerUsername);
@@ -125,25 +159,125 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(temperature));
         }
-        String content = prompt
-                .templateRenderer(CRITIC_TEMPLATE_RENDERER)
-                .system(systemPrompt(request.reviewMode()))
-                .user(user -> user.text(userPrompt(request.reviewMode()))
-                        .param("type", request.contentType())
-                        .param("mode", request.reviewMode())
-                        .param("objective", request.taskContext().objective())
-                        .param("coverage", request.taskContext().requiredCoverage())
-                        .param("claims", modelClaims(request))
-                        .param("evidence", modelEvidence(request))
-                        .param("repair", repair))
-                .call()
-                .content();
-        ModelCritiqueDraft draft = parseStructuredDraft(content);
-        if (draft == null) throw new IllegalArgumentException("critic returned no draft");
-        return new CritiqueDraft(draft.issues().stream()
-                .filter(issue -> Boolean.TRUE.equals(issue.defectConfirmed()))
-                .map(issue -> confirmedIssue(request, issue, evidenceIds))
-                .toList());
+        TraceEventContext traceContext = traceContext(request, resource, parentOperationId);
+        try {
+            var call = prompt
+                    .templateRenderer(CRITIC_TEMPLATE_RENDERER)
+                    .system(systemPrompt(request.reviewMode()))
+                    .user(user -> user.text(userPrompt(request.reviewMode()))
+                            .param("type", request.contentType())
+                            .param("mode", request.reviewMode())
+                            .param("objective", request.taskContext().objective())
+                            .param("coverage", request.taskContext().requiredCoverage())
+                            .param("claims", modelClaims(request))
+                            .param("evidence", modelEvidence(request))
+                            .param("repair", repair));
+            captureStarted(capture, traceContext, request, ownerUsername, attempt, repair);
+            String content = call.call().content();
+            captureTurn(capture, traceContext, ownerUsername, attempt, content);
+            ModelCritiqueDraft draft = parseStructuredDraft(content);
+            if (draft == null) throw new IllegalArgumentException("critic returned no draft");
+            return new CritiqueDraft(draft.issues().stream()
+                    .filter(issue -> Boolean.TRUE.equals(issue.defectConfirmed()))
+                    .map(issue -> confirmedIssue(request, issue, evidenceIds))
+                    .toList());
+        } catch (RuntimeException failure) {
+            captureFailure(capture, traceContext);
+            throw failure;
+        }
+    }
+
+    private void captureStarted(
+            CaptureHandle capture,
+            TraceEventContext context,
+            ReviewRequest request,
+            String ownerUsername,
+            int attempt,
+            String repair) {
+        if (capture == null || context == null || !capture.enabled()) return;
+        capture(capture, () -> capture.modelCallStarted(new ModelCallStarted(
+                        freshContext(context),
+                        providerFor(ownerUsername),
+                        modelNameFor(ownerUsername),
+                        attempt,
+                        "content-critic-" + request.reviewMode().name().toLowerCase(java.util.Locale.ROOT)
+                                + (repair == null || repair.isBlank() ? "-v1" : "-repair-v1"),
+                        "critic-output-v1",
+                        sha256(TRACE_CRITIC_SCHEMA),
+                        estimateTokens(request.toString()),
+                        TRACE_MAXIMUM_OUTPUT_TOKENS)));
+    }
+
+    private void captureTurn(
+            CaptureHandle capture,
+            TraceEventContext context,
+            String ownerUsername,
+            int attempt,
+            String content) {
+        if (capture == null || context == null || !capture.enabled()) return;
+        capture(capture, () -> capture.modelTurn(new ModelTurn(
+                        freshContext(context),
+                        providerFor(ownerUsername),
+                        modelNameFor(ownerUsername),
+                        attempt,
+                        content == null ? "" : content,
+                        List.of(),
+                        "RESPONSE_RECEIVED",
+                        0,
+                        0,
+                        content == null || content.isBlank())));
+    }
+
+    private void captureFailure(CaptureHandle capture, TraceEventContext context) {
+        if (capture == null || context == null || !capture.enabled()) return;
+        capture(capture, () -> capture.bindingOrFailure(new BindingOrFailure(
+                        freshContext(context),
+                        LifecycleSignal.FAILURE,
+                        "CONTENT_CRITIC_MODEL_FAILED",
+                        context.resource(),
+                        null)));
+    }
+
+    private void capture(CaptureHandle capture, Runnable emission) {
+        try {
+            emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never alter critic publication policy.
+        }
+    }
+
+    private TraceEventContext traceContext(
+            ReviewRequest request, ResourceRef resource, UUID parentOperationId) {
+        if (resource == null) return null;
+        return TraceEventContext.create(
+                Instant.now(),
+                request.contentType() == ContentType.LESSON ? JourneyStage.TEACHING : JourneyStage.ANSWER,
+                UUID.randomUUID(),
+                parentOperationId,
+                resource);
+    }
+
+    private TraceEventContext freshContext(TraceEventContext context) {
+        return new TraceEventContext(
+                UUID.randomUUID(),
+                Instant.now(),
+                context.stage(),
+                context.operationId(),
+                context.parentOperationId(),
+                context.resource());
+    }
+
+    private int estimateTokens(String value) {
+        return value == null || value.isEmpty() ? 0 : Math.max(1, (value.length() + 3) / 4);
+    }
+
+    private String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
     }
 
     static ModelCritiqueDraft parseStructuredDraft(String content) {

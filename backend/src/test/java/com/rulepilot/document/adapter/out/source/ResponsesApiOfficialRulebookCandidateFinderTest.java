@@ -11,15 +11,25 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolCall;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolObservation;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.document.application.OfficialRulebookCandidateFinder;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.convert.ApplicationConversionService;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -37,6 +47,93 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
             context.refresh();
 
             assertThat(context.getBean(ResponsesApiOfficialRulebookCandidateFinder.class).configured()).isFalse();
+        }
+    }
+
+    @Test
+    void tracesTheRawResponsesTurnAndTypedBuiltInWebSearchDisposition() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            ObjectMapper json = new ObjectMapper();
+            String content = json.writeValueAsString(Map.of("candidates", List.of(Map.of(
+                    "title", "Official rules",
+                    "url", "https://publisher.example/rules.pdf",
+                    "publisher", "Publisher",
+                    "language", "en",
+                    "edition", "Base",
+                    "sourceIndexes", List.of(1)))));
+            byte[] response = json.writeValueAsBytes(Map.of(
+                    "status", "completed",
+                    "usage", Map.of("input_tokens", 100, "output_tokens", 30),
+                    "output", List.of(
+                            Map.of(
+                                    "id", "search-1",
+                                    "type", "web_search_call",
+                                    "action", Map.of(
+                                            "type", "search",
+                                            "query", "Catalog Game official rules",
+                                            "sources", List.of(Map.of(
+                                                    "title", "Publisher rules",
+                                                    "url", "https://publisher.example/rules.pdf")))),
+                            Map.of("type", "message", "content", List.of(Map.of(
+                                    "type", "output_text", "text", content))))));
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                    new OkHttpClient(),
+                    new ObjectMapper(),
+                    true,
+                    "secret-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "search-model");
+            CaptureHandle capture = mock(CaptureHandle.class);
+            when(capture.enabled()).thenReturn(true);
+            UUID ingressOperation = UUID.randomUUID();
+
+            assertThat(finder.find(
+                            new OfficialRulebookCandidateFinder.Request(
+                                    42, "Catalog Game", "Base", 2024, "en"),
+                            capture,
+                            ingressOperation))
+                    .singleElement()
+                    .extracting(OfficialRulebookCandidateFinder.Candidate::url)
+                    .isEqualTo("https://publisher.example/rules.pdf");
+
+            ArgumentCaptor<ModelCallStarted> started = ArgumentCaptor.forClass(ModelCallStarted.class);
+            ArgumentCaptor<ModelTurn> turn = ArgumentCaptor.forClass(ModelTurn.class);
+            ArgumentCaptor<ToolCall> toolCall = ArgumentCaptor.forClass(ToolCall.class);
+            ArgumentCaptor<ToolObservation> observation = ArgumentCaptor.forClass(ToolObservation.class);
+            verify(capture).modelCallStarted(started.capture());
+            verify(capture).modelTurn(turn.capture());
+            verify(capture).toolCall(toolCall.capture());
+            verify(capture).toolObservation(observation.capture());
+
+            assertThat(started.getValue().context().parentOperationId()).isEqualTo(ingressOperation);
+            assertThat(turn.getValue().context().operationId())
+                    .isEqualTo(started.getValue().context().operationId());
+            assertThat(turn.getValue().assistantText())
+                    .contains("web_search_call", "Catalog Game official rules", "publisher.example/rules.pdf");
+            assertThat(turn.getValue().toolCalls()).singleElement().satisfies(raw -> {
+                assertThat(raw.callId()).isEqualTo("search-1");
+                assertThat(raw.name()).isEqualTo("web_search");
+                assertThat(raw.argumentsJson()).contains("Catalog Game official rules");
+            });
+            assertThat(toolCall.getValue().context().parentOperationId())
+                    .isEqualTo(started.getValue().context().operationId());
+            assertThat(toolCall.getValue().callId()).isEqualTo("search-1");
+            assertThat(toolCall.getValue().validation()).isEqualTo(ToolArgumentValidation.ACCEPTED);
+            assertThat(observation.getValue().context().operationId())
+                    .isEqualTo(toolCall.getValue().context().operationId());
+            assertThat(observation.getValue().modelVisibleObservationJson())
+                    .contains("web_search_call", "publisher.example/rules.pdf");
+            assertThat(observation.getValue().evidenceCount()).isEqualTo(1);
+        } finally {
+            server.stop(0);
         }
     }
 
@@ -255,12 +352,22 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                 "search-model",
                 java.time.Duration.ofDays(30));
         var request = new OfficialRulebookCandidateFinder.Request(42, "Catalog Game", "Base", 2024, "en");
+        CaptureHandle capture = mock(CaptureHandle.class);
+        when(capture.enabled()).thenReturn(true);
+        UUID ingressOperation = UUID.randomUUID();
 
         assertThat(finder.find(request)).hasSize(1);
-        assertThat(finder.find(request)).hasSize(1);
+        assertThat(finder.find(request, capture, ingressOperation)).hasSize(1);
 
         assertThat(requests).hasValue(1);
         assertThat(cached).hasValueSatisfying(value -> assertThat(value).contains("rules.pdf"));
+        ArgumentCaptor<BindingOrFailure> replay = ArgumentCaptor.forClass(BindingOrFailure.class);
+        verify(capture).bindingOrFailure(replay.capture());
+        assertThat(replay.getValue().signal()).isEqualTo(LifecycleSignal.REPLAY);
+        assertThat(replay.getValue().code()).isEqualTo("RULEBOOK_DISCOVERY_CACHE_REUSED");
+        assertThat(replay.getValue().context().operationId()).isEqualTo(ingressOperation);
+        verify(capture, never()).modelCallStarted(any());
+        verify(capture, never()).modelTurn(any());
     }
 
     @Test

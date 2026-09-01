@@ -1,16 +1,35 @@
 package com.rulepilot.document.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.UserTurn;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService;
+import java.security.Principal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.mock.web.MockHttpSession;
 
 class OfficialRulebookDiscoveryControllerTest {
+
+    private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
 
     @Test
     void exposesReviewableProvenanceAndVerificationState() {
@@ -88,5 +107,84 @@ class OfficialRulebookDiscoveryControllerTest {
                             OfficialRulebookDiscoveryService.DiscoveryProvider.SOURCE_INSPECTION,
                             OfficialRulebookDiscoveryService.DiscoveryProvider.WEB_SEARCH);
         });
+    }
+
+    @Test
+    void tracesTheAuthenticatedImportIngressAndExactCandidatePublication() throws Exception {
+        UUID editionId = UUID.randomUUID();
+        OfficialRulebookDiscoveryService discovery = mock(OfficialRulebookDiscoveryService.class);
+        CaptureHandle capture = mock(CaptureHandle.class);
+        PrivateAgentTraceService traces = mock(PrivateAgentTraceService.class);
+        Principal principal = () -> "alice";
+        MockHttpSession session = new MockHttpSession();
+        when(capture.enabled()).thenReturn(true);
+        when(traces.current(principal, session)).thenReturn(capture);
+        when(discovery.discover(eq(editionId), eq("zh-CN"), any(CaptureHandle.class), any(UUID.class)))
+                .thenReturn(emptyResult(editionId, "zh-CN"));
+        var controller = new OfficialRulebookDiscoveryController(
+                discovery, json, Optional.of(traces));
+
+        var response = controller.discover(editionId, "zh-CN", principal, session);
+
+        ArgumentCaptor<UserTurn> userTurn = ArgumentCaptor.forClass(UserTurn.class);
+        verify(capture).userTurn(userTurn.capture());
+        assertThat(userTurn.getValue().context().stage()).isEqualTo(JourneyStage.IMPORT);
+        assertThat(userTurn.getValue().context().resource()).isNull();
+        assertThat(userTurn.getValue().locale()).isEqualTo("zh-CN");
+        assertThat(json.readTree(userTurn.getValue().typedRequestJson()))
+                .isEqualTo(json.readTree(json.writeValueAsString(
+                        java.util.Map.of("editionId", editionId, "language", "zh-CN"))));
+
+        ArgumentCaptor<UUID> operation = ArgumentCaptor.forClass(UUID.class);
+        verify(discovery).discover(
+                eq(editionId), eq("zh-CN"), any(CaptureHandle.class), operation.capture());
+        assertThat(operation.getValue()).isEqualTo(userTurn.getValue().context().operationId());
+
+        ArgumentCaptor<Publication> publication = ArgumentCaptor.forClass(Publication.class);
+        verify(capture).publication(publication.capture());
+        assertThat(publication.getValue().context().stage()).isEqualTo(JourneyStage.IMPORT);
+        assertThat(publication.getValue().context().parentOperationId()).isEqualTo(operation.getValue());
+        assertThat(publication.getValue().channel()).isEqualTo(PublicationChannel.IMPORT_CANDIDATES);
+        assertThat(json.readTree(publication.getValue().playerFacingJson()))
+                .isEqualTo(json.readTree(json.writeValueAsString(response)));
+    }
+
+    @Test
+    void tracesAnUnexpectedDiscoveryFailureWithoutReplacingIt() {
+        UUID editionId = UUID.randomUUID();
+        OfficialRulebookDiscoveryService discovery = mock(OfficialRulebookDiscoveryService.class);
+        CaptureHandle capture = mock(CaptureHandle.class);
+        PrivateAgentTraceService traces = mock(PrivateAgentTraceService.class);
+        Principal principal = () -> "alice";
+        MockHttpSession session = new MockHttpSession();
+        IllegalStateException failure = new IllegalStateException("provider failed");
+        when(capture.enabled()).thenReturn(true);
+        when(traces.current(principal, session)).thenReturn(capture);
+        when(discovery.discover(eq(editionId), eq("en"), any(CaptureHandle.class), any(UUID.class)))
+                .thenThrow(failure);
+        var controller = new OfficialRulebookDiscoveryController(
+                discovery, json, Optional.of(traces));
+
+        assertThatThrownBy(() -> controller.discover(editionId, "en", principal, session))
+                .isSameAs(failure);
+
+        ArgumentCaptor<BindingOrFailure> lifecycle = ArgumentCaptor.forClass(BindingOrFailure.class);
+        verify(capture).bindingOrFailure(lifecycle.capture());
+        assertThat(lifecycle.getValue().signal()).isEqualTo(LifecycleSignal.FAILURE);
+        assertThat(lifecycle.getValue().code()).isEqualTo("RULEBOOK_DISCOVERY_REQUEST_FAILED");
+        assertThat(lifecycle.getValue().context().stage()).isEqualTo(JourneyStage.IMPORT);
+    }
+
+    private OfficialRulebookDiscoveryService.Result emptyResult(UUID editionId, String language) {
+        return new OfficialRulebookDiscoveryService.Result(
+                true,
+                new OfficialRulebookDiscoveryService.DiscoveryIdentity(
+                        editionId, "Opaque Game", "First", language),
+                List.of(),
+                new OfficialRulebookDiscoveryService.DiscoverySummary(
+                        OfficialRulebookDiscoveryService.DiscoveryCompletion.COMPLETE,
+                        10,
+                        30_000,
+                        List.of()));
     }
 }

@@ -1,5 +1,8 @@
 package com.rulepilot.teaching.adapter.in.web;
 
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.teaching.application.IllustratedLessonService;
 import com.rulepilot.teaching.application.TeachingPlanSummary;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
@@ -10,7 +13,10 @@ import com.rulepilot.teaching.application.VisualLessonEnrichmentService.VisualEn
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.assistant.PlayerLocale;
 import java.security.Principal;
+import java.util.Optional;
 import java.util.UUID;
+import jakarta.servlet.http.HttpSession;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.CacheControl;
@@ -34,6 +40,23 @@ public class IllustratedLessonController {
     private final TeachingPlanOwnerGuard owners;
     private final LessonLocalizationService localizations;
     private final RulebookIconGlossaryService iconGlossary;
+    private final Optional<PrivateAgentTraceService> privateTraces;
+
+    @Autowired
+    public IllustratedLessonController(
+            IllustratedLessonService lessons,
+            IllustratedLessonLauncher launcher,
+            TeachingPlanOwnerGuard owners,
+            LessonLocalizationService localizations,
+            RulebookIconGlossaryService iconGlossary,
+            Optional<PrivateAgentTraceService> privateTraces) {
+        this.lessons = lessons;
+        this.launcher = launcher;
+        this.owners = owners;
+        this.localizations = localizations;
+        this.iconGlossary = iconGlossary;
+        this.privateTraces = privateTraces == null ? Optional.empty() : privateTraces;
+    }
 
     public IllustratedLessonController(
             IllustratedLessonService lessons,
@@ -41,36 +64,47 @@ public class IllustratedLessonController {
             TeachingPlanOwnerGuard owners,
             LessonLocalizationService localizations,
             RulebookIconGlossaryService iconGlossary) {
-        this.lessons = lessons;
-        this.launcher = launcher;
-        this.owners = owners;
-        this.localizations = localizations;
-        this.iconGlossary = iconGlossary;
+        this(lessons, launcher, owners, localizations, iconGlossary, Optional.empty());
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
-    LessonLaunch create(@PathVariable UUID planId, Principal principal) {
+    LessonLaunch create(@PathVariable UUID planId, Principal principal, HttpSession session) {
         owners.requireOwned(planId, principal.getName());
-        return launcher.launch(planId, principal.getName());
+        CaptureHandle capture = PrivateAgentTraceCapture.current(privateTraces, principal, session);
+        return capture.enabled()
+                ? launcher.launch(planId, principal.getName(), capture)
+                : launcher.launch(planId, principal.getName());
     }
 
     @PostMapping("/latest/visuals")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    VisualEnrichmentLaunch enrichVisuals(@PathVariable UUID planId, Principal principal) {
+    VisualEnrichmentLaunch enrichVisuals(
+            @PathVariable UUID planId,
+            Principal principal,
+            HttpSession session) {
         owners.requireOwned(planId, principal.getName());
         lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
-        return launcher.enrichLatest(planId, principal.getName());
+        CaptureHandle capture = PrivateAgentTraceCapture.current(privateTraces, principal, session);
+        return capture.enabled()
+                ? launcher.enrichLatest(planId, principal.getName(), capture)
+                : launcher.enrichLatest(planId, principal.getName());
     }
 
     @PostMapping("/latest/icon-glossary")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    VisualEnrichmentLaunch prepareIconGlossary(@PathVariable UUID planId, Principal principal) {
+    VisualEnrichmentLaunch prepareIconGlossary(
+            @PathVariable UUID planId,
+            Principal principal,
+            HttpSession session) {
         owners.requireOwned(planId, principal.getName());
         lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
-        return launcher.prepareIconGlossary(planId, principal.getName());
+        CaptureHandle capture = PrivateAgentTraceCapture.current(privateTraces, principal, session);
+        return capture.enabled()
+                ? launcher.prepareIconGlossary(planId, principal.getName(), capture)
+                : launcher.prepareIconGlossary(planId, principal.getName());
     }
 
     @GetMapping("/latest/icon-glossary")
@@ -108,9 +142,16 @@ public class IllustratedLessonController {
     @PostMapping("/latest/localizations/{language}")
     @ResponseStatus(HttpStatus.ACCEPTED)
     LessonLocalizationService.LocalizationView prepareLocalization(
-            @PathVariable UUID planId, @PathVariable String language, Principal principal) {
+            @PathVariable UUID planId,
+            @PathVariable String language,
+            Principal principal,
+            HttpSession session) {
         owners.requireOwned(planId, principal.getName());
-        return localizations.prepare(planId, principal.getName(), PlayerLocale.fromRequest(language));
+        PlayerLocale locale = PlayerLocale.fromRequest(language);
+        CaptureHandle capture = PrivateAgentTraceCapture.current(privateTraces, principal, session);
+        return capture.enabled()
+                ? localizations.prepare(planId, principal.getName(), locale, capture)
+                : localizations.prepare(planId, principal.getName(), locale);
     }
 
     @GetMapping("/latest/localizations/{language}")

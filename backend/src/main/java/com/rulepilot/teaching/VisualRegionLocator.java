@@ -1,5 +1,7 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import java.util.List;
 import java.util.Optional;
@@ -33,6 +35,13 @@ public interface VisualRegionLocator {
         return result.region()
                 .map(region -> LocateGuideResult.found(List.of(region)))
                 .orElseGet(() -> LocateGuideResult.unavailable(result.diagnostic()));
+    }
+
+    default LocateGuideResult locateGuideWithResult(
+            VisualLocationRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        return locateGuideWithResult(request);
     }
 
     enum Diagnostic {

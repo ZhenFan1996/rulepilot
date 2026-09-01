@@ -25,7 +25,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.ModelDescriptor;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
@@ -38,6 +40,7 @@ import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.RecommendationConversationText;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CatalogSelectionCriterion;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.HarnessTrace;
@@ -65,6 +68,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -193,14 +197,39 @@ final class RecommendationReActLoop {
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
+        return converseValidated(
+                request,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                checkpointListener,
+                CaptureHandle.noop(),
+                UUID.randomUUID());
+    }
+
+    ConversationResponse converseValidated(
+            ConversationRequest request,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<TurnCheckpoint> checkpointListener,
+            CaptureHandle capture,
+            UUID turnOperationId) {
         long startedAt = System.nanoTime();
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
+        RecommendationAgentTrace privateTrace = RecommendationAgentTrace.begin(
+                capture,
+                json,
+                turnOperationId);
         RecommendationAgentState state = new RecommendationAgentState(
                 request,
                 startedAt,
                 modelConfigurationOwner,
                 tools.webResearchConfigured(),
-                maximumRecommendationResults());
+                maximumRecommendationResults(),
+                privateTrace);
         ProgressTracker progress = new ProgressTracker(progressListener, state, startedAt);
         progress.start(ProgressStage.UNDERSTANDING_REQUEST, ProgressAction.UNDERSTAND_REQUEST);
         progress.complete();
@@ -237,11 +266,14 @@ final class RecommendationReActLoop {
                         currentActions,
                         outputTokenBudget(state),
                         ToolChoice.REQUIRED);
+                ModelDescriptor descriptor = modelDescriptor(state.modelConfigurationOwner);
+                state.trace.modelCallStarted(state.modelCalls, modelRequest, currentActions, descriptor);
                 turn = withinDeadline(
                         state,
                         () -> firstDecision
                                 ? model.streamNext(modelRequest, state.modelConfigurationOwner, ignored -> {})
                                 : model.next(modelRequest, state.modelConfigurationOwner));
+                state.trace.modelTurn(state.modelCalls, turn, descriptor);
             } catch (RunDeadlineExceeded exception) {
                 progress.fail();
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
@@ -292,6 +324,7 @@ final class RecommendationReActLoop {
             }
             progress.complete();
             state.actionCalls++;
+            state.trace.beginTool();
             String fingerprint = actionFingerprint(call);
             RecommendationActions.ActionOutcome outcome;
             boolean reused = false;
@@ -312,6 +345,11 @@ final class RecommendationReActLoop {
             } else {
                 outcome = actionExecutor.execute(call, state, request, locale, progress);
             }
+            ToolSpec invokedSpec = currentActions.stream()
+                    .filter(action -> action.name().equals(call.name()))
+                    .findFirst()
+                    .orElse(null);
+            state.trace.toolCall(call, invokedSpec, outcome.argumentsAccepted());
             if (!reused && !outcome.rejected()) {
                 stateEpoch++;
             }
@@ -319,9 +357,13 @@ final class RecommendationReActLoop {
                 settledActions.put(fingerprint, new SettledAction(outcome, stateEpoch));
             }
             if (!reused && outcome.settledRead()) {
-                checkpointListener.accept(new TurnCheckpoint(state.profile, state.verifiedForAgent()));
+                checkpointListener.accept(new TurnCheckpoint(
+                        state.profile,
+                        state.catalogSelectionIntent,
+                        state.verifiedForAgent()));
             }
             if (outcome.response() != null) {
+                state.trace.terminalToolDisposition(call, outcome.response(), reused);
                 progress.complete();
                 return publishValidatedResponse(
                         state,
@@ -335,6 +377,7 @@ final class RecommendationReActLoop {
                 progress.complete();
             }
             String observation = budgetedObservation(outcome.observation(), state);
+            state.trace.toolObservation(call, observation, outcome.rejected(), reused);
             compactPriorToolState(messages);
             messages.add(Message.assistant("", call));
             messages.add(Message.tool(call, observation));
@@ -450,8 +493,19 @@ final class RecommendationReActLoop {
                         state.elapsedMs()),
                 List.of(),
                 null);
+        if (state.trace != null) {
+            state.trace.failure(code);
+        }
         logRun(response);
         return response;
+    }
+
+    private ModelDescriptor modelDescriptor(String ownerUsername) {
+        try {
+            return model.descriptor(ownerUsername);
+        } catch (RuntimeException ignored) {
+            return new ModelDescriptor("configured", "recommendation");
+        }
     }
 
     void logRun(ConversationResponse response) {
@@ -528,7 +582,7 @@ final class RecommendationReActLoop {
                             "name", game.name(),
                             "originalName", game.originalName()))
                     .toList());
-            if (!state.verified.isEmpty()) {
+            if (!state.verified.isEmpty() || state.catalogSelectionIntent.active()) {
                 data.put("restoredTurnState", turnState(state));
             }
             data.put("shownBggIds", request.shownBggIds());
@@ -646,13 +700,16 @@ final class RecommendationReActLoop {
                         : !recommendableIds.isEmpty() && REPLY_TOOL.equals(action.name())
                                 ? slateReplyAction()
                         : action)
-                .map(action -> preferencesCapturedThisRun(state)
-                        ? withoutPreferenceUpdates(action)
+                .map(action -> preferenceUpdatesCapturedThisRun(state)
+                        ? withoutActionProperties(action, Set.of("preferenceUpdates", "contextualGroup"))
+                        : action)
+                .map(action -> catalogIntentCapturedThisRun(state)
+                        ? withoutActionProperties(action, Set.of("catalogIntentUpdate"))
                         : action)
                 .toList();
     }
 
-    private boolean preferencesCapturedThisRun(RecommendationAgentState state) {
+    private boolean preferenceUpdatesCapturedThisRun(RecommendationAgentState state) {
         return state.actions.stream().anyMatch(action -> Set.of(
                         "UPDATE_PREFERENCES",
                         "RECORD_CONTEXTUAL_PREFERENCE",
@@ -660,17 +717,23 @@ final class RecommendationReActLoop {
                 .contains(action));
     }
 
-    private ToolSpec withoutPreferenceUpdates(ToolSpec action) {
+    private boolean catalogIntentCapturedThisRun(RecommendationAgentState state) {
+        return state.actions.stream().anyMatch(action -> Set.of(
+                        "UPDATE_CATALOG_INTENT",
+                        "CLEAR_CATALOG_INTENT",
+                        "IGNORED_REDUNDANT_CATALOG_INTENT_UPDATE")
+                .contains(action));
+    }
+
+    private ToolSpec withoutActionProperties(ToolSpec action, Set<String> removedProperties) {
         try {
             JsonNode schema = json.readTree(action.inputSchema());
             if (schema.path("properties") instanceof ObjectNode properties) {
-                properties.remove("preferenceUpdates");
-                properties.remove("contextualGroup");
+                removedProperties.forEach(properties::remove);
             }
             if (schema.path("required") instanceof ArrayNode required) {
                 for (int index = required.size() - 1; index >= 0; index--) {
-                    if (Set.of("preferenceUpdates", "contextualGroup")
-                            .contains(required.path(index).asText())) required.remove(index);
+                    if (removedProperties.contains(required.path(index).asText())) required.remove(index);
                 }
             }
             return new ToolSpec(action.name(), action.description(), json.writeValueAsString(schema));
@@ -719,7 +782,12 @@ final class RecommendationReActLoop {
         if (state.verified.isEmpty() || !recommendableIds(state).isEmpty()) return List.of();
         LinkedHashSet<String> actionable = new LinkedHashSet<>();
         for (Game game : state.verified.values()) {
-            List<CandidateClaim> hardClaims = selector.fitClaims(game, state.profile, false).stream()
+            List<CandidateClaim> hardClaims = selector.fitClaims(
+                            game,
+                            state.profile,
+                            state.catalogSelectionIntent,
+                            false)
+                    .stream()
                     .filter(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
                     .filter(claim -> claim.strength() == ConstraintRange.Strength.HARD)
                     .toList();
@@ -741,7 +809,7 @@ final class RecommendationReActLoop {
                         || state.targetGameIds.contains(game.ranking().bggId()))
                 .filter(game -> !state.comparisonReferenceIds.contains(game.ranking().bggId()))
                 .filter(game -> state.targetGameIds.contains(game.ranking().bggId())
-                        || selector.eligible(game, state.profile))
+                        || selector.eligible(game, state.profile, state.catalogSelectionIntent))
                 .map(game -> game.ranking().bggId())
                 .toList();
     }
@@ -808,14 +876,37 @@ final class RecommendationReActLoop {
     }
 
     private static String catalogActionDescription() {
-        return "Search the local BGG catalog without public web latency. The Agent may combine exact BGG types, categories, mechanics, designers, publishers, families, publication years, rating/popularity floors, stable sort, rank-page offset, and a short textQuery over cached BGG descriptions/tags. All supplied filters match together. Put explicit hard table constraints in preferenceUpdates before selection. For a metaphor or desired feeling, use textQuery as a retrieval rewrite instead of inventing an exact taxonomy filter, then judge the returned games yourself. Results are stable, not random: use offset or another sort when the player asks for a genuinely different batch, while shownBggIds prevents repeats. If you confidently know the canonical creator behind an informal reference, use that exact designer here before public discovery: IDENTITY_ONLY when identifying them fully answers the request, otherwise SELECTABLE_CARDS. Never repeat the same page.";
+        return "Search the local BGG catalog without public web latency. The Agent may combine exact BGG types, categories, mechanics, designers, publishers, families, publication years, rating/popularity floors, stable sort, rank-page offset, and a short textQuery over cached BGG descriptions/tags. All supplied filters match together. Put explicit hard table constraints in preferenceUpdates before selection. When every newly suggested candidate card must have an exact BGG category, mechanic, family, designer, or publisher, use catalogIntentUpdate to REPLACE the active selection intent with canonical BGG values, each grounded in its cited user turn; the application then enforces those facts for candidates from every later retrieval path. An explicitly player-named TARGET_GAME is a direct handoff to that selected title rather than a new candidate and is the only exception. Omit the update to retain the same direction, and CLEAR it only when the player explicitly removes that direction. The Agent—not backend prose parsing—maps a player's shorthand or localized term to the canonical typed value. For a metaphor or desired feeling, use textQuery as a retrieval rewrite instead of inventing an exact taxonomy criterion, then judge the returned games yourself. Results are stable, not random: use offset or another sort when the player asks for a genuinely different batch, while shownBggIds prevents repeats. If you confidently know the canonical creator behind an informal reference, use that exact designer here before public discovery: IDENTITY_ONLY when identifying them fully answers the request, otherwise SELECTABLE_CARDS. Never repeat the same page.";
     }
 
     private static String catalogActionSchema(List<String> preferenceEvidenceIds) {
         return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"description\":\"Use SELECTABLE_CARDS for every search that should produce choices; use IDENTITY_ONLY only to verify one exact designer name for a conversation answer.\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"types\":{\"type\":\"array\",\"description\":\"Only literal player-supplied or previously verified BGG ranking types; omit for metaphors, moods, or subjective wishes.\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"description\":\"Only exact literal or observed BGG category labels; never invent one from imaginative prose.\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"description\":\"Only exact literal or observed BGG mechanic labels; never infer mechanics from mood.\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
                 + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"description\":\"One short English retrieval query over cached BGG names, descriptions, categories, mechanics, and families. Use concrete concepts derived by the Agent; this is not an exact taxonomy assertion.\",\"minLength\":1,\"maxLength\":240},\"sort\":{\"type\":\"string\",\"description\":\"RANK is the stable default; RATING, POPULARITY, NEWEST, and RELEVANCE provide alternative factual orderings. RELEVANCE requires textQuery.\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"offset\":{\"type\":\"integer\",\"description\":\"Stable result-page offset. Use a later offset when the current request explicitly wants another batch beyond shownBggIds.\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
                 + preferenceSchema(preferenceEvidenceIds)
+                + ",\"catalogIntentUpdate\":"
+                + catalogIntentUpdateSchema(preferenceEvidenceIds)
                 + "}}";
+    }
+
+    private static String catalogIntentUpdateSchema(List<String> preferenceEvidenceIds) {
+        String evidence = "{\"type\":\"string\",\"description\":\"Evidence ID for the specific player-authored direction or correction.\",\"enum\":"
+                + evidenceEnum(preferenceEvidenceIds)
+                + "}";
+        String criteria = "{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
+                + "\"dimension\":{\"type\":\"string\",\"enum\":[\"CATEGORY\",\"MECHANIC\",\"FAMILY\",\"DESIGNER\",\"PUBLISHER\"]},"
+                + "\"value\":{\"type\":\"string\",\"description\":\"Canonical English BGG metadata value selected by the Agent; never a copy of surrounding prose.\",\"minLength\":1,\"maxLength\":120},"
+                + "\"evidence\":"
+                + evidence
+                + "},\"required\":[\"dimension\",\"value\",\"evidence\"]}}";
+        return "{\"description\":\"REPLACE makes every listed canonical BGG fact mandatory for newly suggested candidate cards, regardless of retrieval path; each criterion cites its own user evidence. CLEAR removes the previous exact catalog direction and cites the clearing turn. Omit this object to retain the current direction.\",\"anyOf\":["
+                + "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
+                + "\"operation\":{\"type\":\"string\",\"enum\":[\"REPLACE\"]},\"criteria\":"
+                + criteria
+                + "},\"required\":[\"operation\",\"criteria\"]},"
+                + "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
+                + "\"operation\":{\"type\":\"string\",\"enum\":[\"CLEAR\"]},\"evidence\":"
+                + evidence
+                + "},\"required\":[\"operation\",\"evidence\"]}]}";
     }
 
     private static ToolSpec comparisonAction(
@@ -962,7 +1053,7 @@ final class RecommendationReActLoop {
                 : "\"description\":\"" + description + "\",";
         return "{\"type\":\"array\"," + descriptionProperty + "\"minItems\":" + minimumItems + ",\"maxItems\":5,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
                 + "\"field\":{\"type\":\"string\",\"description\":\"Integer playerCount=exact; object=range.\",\"enum\":[\"players\",\"playerCount\",\"durationMinutes\",\"complexity\",\"type\",\"interaction\"]},"
-                + "\"value\":{\"description\":\"Value; null clears a real limit.\",\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}},\"required\":[\"minimum\",\"maximum\"]},{\"type\":\"null\"},{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
+                + "\"value\":{\"description\":\"Value; null clears a real limit.\",\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minimum\":{\"anyOf\":[{\"type\":\"number\"},{\"type\":\"null\"}]},\"maximum\":{\"anyOf\":[{\"type\":\"number\"},{\"type\":\"null\"}]}},\"required\":[\"minimum\",\"maximum\"]},{\"type\":\"null\"},{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
                 + "\"evidence\":{\"type\":\"string\",\"description\":\"Evidence ID from the current user-message only. A player-written number such as 'we are 4 players' is a DIRECT current-session fact. Use a contextual count only when deriving an unstated number from a fully enumerated group; never cite game facts. Enum values must be affirmatively named, not inferred or rejected.\",\"enum\":"
                 + evidenceEnum
                 + "},\"evidenceClassification\":{\"type\":\"string\",\"description\":\"DIRECT=the player explicitly wrote the value, including a current-session group count. CONTEXTUAL_COMPLETE_GROUP=the Agent derived an unstated count because the speaker plus every named companion form the whole group; store only that derived count as a reversible working assumption.\",\"enum\":[\"DIRECT\",\"CONTEXTUAL_COMPLETE_GROUP\"]}},"
@@ -972,7 +1063,7 @@ final class RecommendationReActLoop {
     private static String clarificationPreferenceSchema(List<String> preferenceEvidenceIds) {
         return "{\"type\":\"array\",\"description\":\"Already-stated direct numeric constraints only; omit the missing answer.\",\"minItems\":1,\"maxItems\":4,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
                 + "\"field\":{\"type\":\"string\",\"enum\":[\"players\",\"playerCount\",\"durationMinutes\",\"complexity\"]},"
-                + "\"value\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}},\"required\":[\"minimum\",\"maximum\"]}]},"
+                + "\"value\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minimum\":{\"anyOf\":[{\"type\":\"number\"},{\"type\":\"null\"}]},\"maximum\":{\"anyOf\":[{\"type\":\"number\"},{\"type\":\"null\"}]}},\"required\":[\"minimum\",\"maximum\"]}]},"
                 + "\"evidence\":{\"type\":\"string\",\"enum\":"
                 + evidenceEnum(preferenceEvidenceIds)
                 + "}},\"required\":[\"field\",\"value\",\"evidence\"]}}";
@@ -995,6 +1086,12 @@ final class RecommendationReActLoop {
                 "A", "attributed public report, limited to its literal claim",
                 "R", "rulebook fact"));
         memory.put("profile", evidenceReview.profileForAgent(state.profile));
+        putIfNotEmpty(
+                memory,
+                "activeCatalogSelectionCriteria",
+                state.catalogSelectionIntent.requiredCriteria().stream()
+                        .map(this::catalogCriterionForAgent)
+                        .toList());
         putIfNotEmpty(memory, "contextualAssumptions", state.contextualPreferences.values().stream()
                 .map(value -> Map.of(
                         "field", value.field(),
@@ -1042,6 +1139,13 @@ final class RecommendationReActLoop {
             memory.put("webResearchFailureCode", state.webResearchFailureCode);
         }
         return memory;
+    }
+
+    private Map<String, Object> catalogCriterionForAgent(CatalogSelectionCriterion criterion) {
+        return Map.of(
+                "dimension", criterion.dimension().name(),
+                "value", criterion.value(),
+                "confirmedTurn", criterion.confirmedTurn());
     }
 
     private void putIfNotEmpty(Map<String, Object> target, String field, List<?> values) {
@@ -1287,7 +1391,7 @@ final class RecommendationReActLoop {
         if (listener == null) return;
         try {
             int hardEligible = (int) state.verified.values().stream()
-                    .filter(game -> selector.eligible(game, state.profile))
+                    .filter(game -> selector.eligible(game, state.profile, state.catalogSelectionIntent))
                     .count();
             listener.accept(new ProgressUpdate(
                     stage,

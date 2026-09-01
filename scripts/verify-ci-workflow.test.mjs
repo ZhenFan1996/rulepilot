@@ -12,6 +12,8 @@ const productionAvailabilityScript = await readFile(
   'utf8',
 )
 const productionCompose = await readFile(new URL('../infra/compose.production.yml', import.meta.url), 'utf8')
+const deploymentCompose = await readFile(new URL('../infra/compose.deployment.yml', import.meta.url), 'utf8')
+const envExample = await readFile(new URL('../.env.example', import.meta.url), 'utf8')
 const productionScript = await readFile(new URL('./run-production.sh', import.meta.url), 'utf8')
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
 const productionRecommendationWorkflow = await readFile(
@@ -26,12 +28,20 @@ const productionRealRulebookWorkflow = await readFile(
   new URL('../.github/workflows/production-real-rulebook-experience.yml', import.meta.url),
   'utf8',
 )
+const productionOrdinaryUserScript = await readFile(
+  new URL('./smoke-production-ordinary-user.sh', import.meta.url),
+  'utf8',
+)
 const publicLessonCandidateWorkflow = await readFile(
   new URL('../.github/workflows/public-lesson-candidate.yml', import.meta.url),
   'utf8',
 )
 const productionRecommendationConfig = await readFile(
   new URL('../frontend/playwright.recommendation-production.config.ts', import.meta.url),
+  'utf8',
+)
+const productionRealRulebookConfig = await readFile(
+  new URL('../frontend/playwright.production.config.ts', import.meta.url),
   'utf8',
 )
 const productionRecommendationSpec = await readFile(
@@ -58,22 +68,31 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_username/)
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_password/)
   assert.match(productionRecommendationWorkflow, /RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true/)
-  assert.match(productionRecommendationWorkflow, /opening_prompt:[\s\S]*?还没想清楚换什么方向/)
-  assert.match(productionRecommendationWorkflow, /selection_prompt:[\s\S]*?你直接挑三款/)
+  assert.match(productionRecommendationWorkflow, /opening_prompt:[\s\S]*?完全不知道该玩什么/)
+  assert.match(productionRecommendationWorkflow, /selection_prompt:[\s\S]*?DBG 为主[\s\S]*?直接给我三款/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /DBG（牌库构筑）/)
+  assert.match(productionRecommendationWorkflow,
+    /expected_mechanic:[\s\S]*?default: 'Deck, Bag, and Pool Building'/)
   assert.match(productionRecommendationWorkflow, /rule_follow_up:[\s\S]*?同一本规则书/)
   assert.match(productionRecommendationWorkflow,
     /RULEPILOT_RECOMMENDATION_OPENING_PROMPT: \$\{\{ inputs\.opening_prompt \}\}/)
   assert.match(productionRecommendationWorkflow,
     /RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: \$\{\{ inputs\.selection_prompt \}\}/)
   assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_EXPECTED_MECHANIC: \$\{\{ inputs\.expected_mechanic \}\}/)
+  assert.match(productionRecommendationWorkflow,
     /RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: \$\{\{ inputs\.rule_follow_up \}\}/)
   assert.doesNotMatch(productionRecommendationWorkflow, /target_bgg_id|target_names|230802|花砖物语|Azul/)
-  assert.match(productionRecommendationWorkflow, /require_fresh_import:[\s\S]*?type: boolean[\s\S]*?default: false/)
+  assert.match(productionRecommendationWorkflow, /require_fresh_import:[\s\S]*?type: boolean[\s\S]*?default: true/)
   assert.match(productionRecommendationWorkflow, /playwright\.recommendation-production\.config\.ts/)
   assert.match(productionRecommendationConfig, /testMatch:\s*'production-recommendation-journey\.spec\.ts'/)
   assert.match(productionRecommendationConfig, /trace:\s*'off'/)
   assert.match(productionRecommendationConfig, /screenshot:\s*'off'/)
-  assert.match(productionRecommendationSpec, /chooseRecommendationRecovery\([\s\S]*?candidateResult\.candidates/)
+  assert.match(productionRecommendationConfig,
+    /outputDir:\s*privateOutputDirectory/)
+  assert.match(productionRecommendationSpec, /chooseRecommendationRecovery\([\s\S]*?reusableJourneys/)
+  assert.match(productionRecommendationSpec,
+    /candidateResult\.candidates\.filter\(candidate =>[\s\S]*?!REQUIRE_FRESH_IMPORT[\s\S]*?officialSourceUrl !== candidate\.url/)
   assert.match(productionRecommendationSpec, /candidate\.officialDomainVerified === true/)
   assert.match(productionRecommendationSpec, /candidate\.languageVerified === true/)
   assert.match(productionRecommendationSpec, /DOCUMENT_RESPONSE_CONFIRMED/)
@@ -86,7 +105,7 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /report\.attemptedBggIds\.push\(attemptedBggId\)/)
   assert.match(productionRecommendationSpec, /report\.selectedRecommendationRank = selectedRecommendationRank/)
   assert.match(productionRecommendationSpec, /report\.recommendationRecoveryOutcomes\.push\(/)
-  assert.match(productionRecommendationSpec, /candidateResult\.configured \? candidateResult\.candidates : \[\]/)
+  assert.match(productionRecommendationSpec, /const reusableJourneys = REQUIRE_FRESH_IMPORT \? \[\] : existingJourneys/)
   assert.match(productionRecommendationSpec, /REUSED_EXISTING_JOURNEY/)
   assert.match(productionRecommendationSpec, /SELECTED_VERIFIED_OFFICIAL_SOURCE/)
   assert.match(productionRecommendationSpec, /SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE/)
@@ -112,6 +131,11 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToFirstCitedLessonMs = Math\.max/)
   assert.match(productionRecommendationSpec, /MAX_OPEN_GUIDANCE_MS = 15_000/)
   assert.match(productionRecommendationSpec, /MAX_SELECTION_RECOMMENDATION_MS = 20_000/)
+  assert.match(productionRecommendationSpec, /MAX_SELECTION_TERMINAL_MS = 45_000/)
+  assert.match(productionRecommendationSpec,
+    /entry\.game\.mechanics\?\.includes\(EXPECTED_CANONICAL_MECHANIC\)/)
+  assert.match(productionRecommendationSpec,
+    /claim\.subject === 'mechanics'[\s\S]*?claim\.strength === 'hard'[\s\S]*?claim\.relation === 'satisfied'/)
   assert.match(productionRecommendationSpec, /toContain\(report\.openGuidanceOutcome\)/)
   assert.match(
     productionRecommendationSpec,
@@ -153,6 +177,40 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /expect\(report\.followUpCitationCount\)\.toBeGreaterThan\(0\)/)
   assert.match(productionRecommendationSpec, /name: '继续推荐'/)
   assert.match(productionRecommendationSpec, /name: '规则答疑'/)
+  assert.match(productionRecommendationSpec, /\/api\/v1\/private-agent-trace\/start/)
+  assert.match(productionRecommendationSpec, /\/api\/v1\/private-agent-trace\/seal/)
+  assert.match(productionRecommendationSpec, /\/api\/v1\/private-agent-trace\/export/)
+  assert.match(productionRecommendationSpec, /request\.delete\('\/api\/v1\/private-agent-trace'/)
+  assert.match(productionRecommendationWorkflow,
+    /trace_export="\$RUNNER_TEMP\/rulepilot-agent-trace-\$\{GITHUB_RUN_ID\}\.zip"/)
+  assert.match(productionRecommendationWorkflow,
+    /private_dir="\$RUNNER_TEMP\/rulepilot-private-journey-\$\{GITHUB_RUN_ID\}"/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_REPORT="\$private_dir\/journey\.json"/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_PRODUCTION_PLAYWRIGHT_OUTPUT_DIR="\$private_dir\/playwright-test-results"/)
+  assert.match(productionRecommendationWorkflow,
+    /> "\$private_dir\/browser-probe\.log" 2>&1/)
+  assert.match(productionRecommendationWorkflow, /trap 'rm -f "\$trace_export"' EXIT/)
+  assert.match(productionRecommendationWorkflow, /unzip -p "\$trace_export" manifest\.json/)
+  assert.match(productionRecommendationWorkflow,
+    /\[\.\[\] \| select\(\.event\.kind == "MODEL_TURN"\) \| \.event\.context\.stage\]/)
+  assert.match(productionRecommendationWorkflow,
+    /all\(\["RECOMMENDATION", "TEACHING", "ANSWER"\]\[\]/)
+  assert.match(productionRecommendationWorkflow, /RULEBOOK_DISCOVERY_CACHE_REUSED/)
+  assert.match(productionRecommendationWorkflow,
+    /\(\(\$stages \| index\("IMPORT"\) != null\) or \$importReplay\)/)
+  assert.doesNotMatch(productionRecommendationWorkflow,
+    /RULEPILOT_AGENT_TRACE_EXPORT="\$artifact_dir\/agent-trace\.zip"/)
+  assert.doesNotMatch(productionRecommendationWorkflow,
+    /Upload private journey measurements and sensitive Agent trace export/)
+  assert.match(productionRecommendationWorkflow, /name: Create non-sensitive journey measurements/)
+  assert.match(productionRecommendationWorkflow, /name: Upload non-sensitive journey measurements/)
+  assert.match(productionRecommendationWorkflow,
+    /path: \.artifacts\/production-recommendation-journey\/summary\.json/)
+  assert.match(productionRecommendationWorkflow, /name: Delete private journey evidence from the runner/)
+  assert.doesNotMatch(productionRecommendationWorkflow,
+    /path: \.artifacts\/production-recommendation-journey\s*$/m)
   assert.doesNotMatch(productionRecommendationWorkflow, /echo "\$player_password"/)
   assert.doesNotMatch(productionRecommendationWorkflow, /'bash -s' -- "\$DEPLOY_PATH" "\$player_password"/)
 })
@@ -183,24 +241,58 @@ test('production activation allows the measured cold boot to finish before rollb
   assert.doesNotMatch(productionScript, /while \[ "\$attempt" -le 36 \]/)
 })
 
-test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
-  assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
-  assert.match(productionRecommendationWorkflow, /if: failure\(\)/)
-  assert.match(productionRecommendationWorkflow, /api-diagnostics\.log/)
-  assert.match(productionRecommendationWorkflow, /logs --since 35m --tail 500 --no-color api/)
-  assert.match(productionRecommendationWorkflow, /logs --since 35m --tail 500 --no-color worker/)
-  assert.match(productionRecommendationWorkflow, /Refusing to inspect an active release outside/)
-  assert.doesNotMatch(productionRecommendationWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+test('production recommendation artifacts exclude transcripts, raw traces, and unscoped service logs', () => {
+  assert.doesNotMatch(productionRecommendationWorkflow, /api-diagnostics\.log/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /logs --since [^\n]*(?:api|worker)/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /actions\/upload-artifact@[\s\S]*?journey\.json/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /actions\/upload-artifact@[\s\S]*?agent-trace/)
+  assert.match(productionRecommendationWorkflow, /rm -rf -- "\$RUNNER_TEMP\/rulepilot-private-journey-/)
+  assert.match(productionRecommendationWorkflow,
+    /rm -rf -- "\$GITHUB_WORKSPACE\/frontend\/test-results"/)
 })
 
-test('failed ordinary-user production journeys retain bounded API and worker diagnostics', () => {
-  assert.match(productionOrdinaryUserWorkflow, /name: Collect bounded service diagnostics after a failed journey/)
-  assert.match(productionOrdinaryUserWorkflow, /if: failure\(\)/)
-  assert.match(productionOrdinaryUserWorkflow, /service-diagnostics\.log/)
-  assert.match(productionOrdinaryUserWorkflow, /logs --since 35m --tail 500 --no-color api/)
-  assert.match(productionOrdinaryUserWorkflow, /logs --since 35m --tail 500 --no-color worker/)
-  assert.match(productionOrdinaryUserWorkflow, /Refusing to inspect an active release outside/)
-  assert.doesNotMatch(productionOrdinaryUserWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+test('ordinary-user production artifacts retain only allow-listed measurements', () => {
+  assert.match(productionOrdinaryUserWorkflow,
+    /private_dir="\$RUNNER_TEMP\/rulepilot-private-ordinary-user-\$\{GITHUB_RUN_ID\}"/)
+  assert.match(productionOrdinaryUserWorkflow, /name: Create non-sensitive smoke measurements/)
+  assert.match(productionOrdinaryUserWorkflow, /name: Upload non-sensitive smoke measurements/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /path: \.artifacts\/production-ordinary-user-smoke\/summary\.json/)
+  assert.match(productionOrdinaryUserWorkflow, /name: Delete private smoke evidence from the runner/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow, /service-diagnostics\.log|logs --since/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow,
+    /path: \.artifacts\/production-ordinary-user-smoke\s*$/m)
+  assert.doesNotMatch(productionOrdinaryUserScript,
+    /stage: "lesson", username: \$username|sourceUrl: \$sourceUrl|preparationRun: \$preparationRun/)
+  assert.match(productionOrdinaryUserScript,
+    /schemaVersion: 1, generatedAt: \$generatedAt, stage: "completed"/)
+})
+
+test('concurrent real-rulebook artifacts exclude per-user results, screenshots, and diagnostics', () => {
+  assert.match(productionRealRulebookWorkflow,
+    /private_dir="\$RUNNER_TEMP\/rulepilot-private-real-rulebook-\$\{GITHUB_RUN_ID\}"/)
+  assert.match(productionRealRulebookWorkflow, /name: Create non-sensitive concurrency measurements/)
+  assert.match(productionRealRulebookWorkflow, /name: Upload non-sensitive concurrency measurements/)
+  assert.match(productionRealRulebookWorkflow,
+    /path: \.artifacts\/production-real-rulebook-experience\/summary\.json/)
+  assert.match(productionRealRulebookWorkflow, /name: Delete private concurrency evidence from the runner/)
+  assert.match(productionRealRulebookWorkflow,
+    /RULEPILOT_PRODUCTION_PLAYWRIGHT_OUTPUT_DIR="\$private_dir\/playwright-test-results"/)
+  assert.match(productionRealRulebookWorkflow,
+    /RULEPILOT_PRODUCTION_PLAYWRIGHT_REPORT_DIR="\$private_dir\/playwright-html-report"/)
+  assert.match(productionRealRulebookWorkflow,
+    /> "\$private_dir\/browser-probe\.log" 2>&1/)
+  assert.match(productionRealRulebookConfig, /outputDir:\s*privateOutputDirectory/)
+  assert.match(productionRealRulebookConfig,
+    /outputFolder:\s*privateReportDirectory/)
+  assert.match(productionRealRulebookWorkflow,
+    /rm -rf -- "\$GITHUB_WORKSPACE\/frontend\/test-results"/)
+  assert.match(productionRealRulebookWorkflow,
+    /rm -rf -- "\$GITHUB_WORKSPACE\/frontend\/playwright-production-report"/)
+  assert.doesNotMatch(productionRealRulebookWorkflow,
+    /path: \.artifacts\/production-real-rulebook-experience\s*$/m)
+  assert.doesNotMatch(productionRealRulebookWorkflow,
+    /Upload private diagnostic output|path:[^\n]*(?:user-[a-d]-result|playwright-test-results|diagnostics)/)
 })
 
 test('production deployment synchronizes the protected BGG credential without packaging or logging it', () => {
@@ -228,6 +320,24 @@ test('production deployment assigns every player-facing Agent role to a configur
   assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'visual'\)/)
   assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'answer'\)/)
   assert.match(productionRecommendationSpec, /visualProvider\.visionCapable/)
+})
+
+test('production private Agent tracing is limited to the authenticated journey account', () => {
+  assert.match(envExample, /^RULEPILOT_PRIVATE_AGENT_TRACE_ALLOWED_USERS=$/m)
+  assert.match(
+    deploymentCompose,
+    /RULEPILOT_PRIVATE_AGENT_TRACE_ALLOWED_USERS: \$\{RULEPILOT_PRIVATE_AGENT_TRACE_ALLOWED_USERS:-\}/,
+  )
+  assert.match(
+    deploymentWorkflow,
+    /managed_runtime_keys='[^']*\bRULEPILOT_PRIVATE_AGENT_TRACE_ALLOWED_USERS\b[^']*'/,
+  )
+  assert.match(deploymentWorkflow, /private_agent_trace_allowed_user=\$\{line#RULEPILOT_USER_USERNAME=\}/)
+  assert.match(
+    deploymentWorkflow,
+    /printf 'RULEPILOT_PRIVATE_AGENT_TRACE_ALLOWED_USERS=%s\\n'[\s\S]*?"\$private_agent_trace_allowed_user"/,
+  )
+  assert.match(deploymentWorkflow, /Production player username cannot safely authorize private Agent tracing/)
 })
 
 test('production deployment replaces stale recommendation sampling overrides with the verified deterministic value', () => {
@@ -271,11 +381,13 @@ test('production deployment does not couple release availability to a stochastic
   assert.doesNotMatch(productionAvailabilityScript, /recommendation-agent|authorization|paid model/i)
 })
 
-test('production deployment captures bounded API diagnostics without reading protected environment values', () => {
-  assert.match(deploymentWorkflow, /name: Collect bounded production diagnostics after a failed verification/)
+test('production deployment reports only stable container state on failure', () => {
+  assert.match(deploymentWorkflow, /name: Collect safe production state after a failed verification/)
   assert.match(deploymentWorkflow, /if: failure\(\)/)
-  assert.match(deploymentWorkflow, /logs --since 10m --tail 250 --no-color api/)
+  assert.match(deploymentWorkflow,
+    /status=\{\{\.State\.Status\}\} running=\{\{\.State\.Running\}\} exitCode=\{\{\.State\.ExitCode\}\}/)
   assert.match(deploymentWorkflow, /Refusing to inspect an active release outside/)
+  assert.doesNotMatch(deploymentWorkflow, /docker logs|"\$\{compose\[@\]\}" logs/)
   assert.doesNotMatch(deploymentWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
 })
 

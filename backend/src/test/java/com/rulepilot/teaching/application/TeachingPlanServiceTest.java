@@ -10,6 +10,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
@@ -51,6 +58,66 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class TeachingPlanServiceTest {
+
+    @Test
+    void publishesTheExactPersistedPlanOnThePreparationRun() throws Exception {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID assistantRunId = UUID.randomUUID();
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        com.rulepilot.teaching.TeachingOutlineModel outlines =
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
+        TeachingPlanPublication planPublication = mock(TeachingPlanPublication.class);
+        RecordingCapture capture = new RecordingCapture();
+        OutlineDraft complete = sourceBoundOutline(
+                "Persisted Example",
+                "Teach one complete source-bound flow.",
+                List.of(new TopicDraft(
+                        "complete",
+                        "Complete flow",
+                        "Teach the exact supported relation.",
+                        true,
+                        false,
+                        List.of("SOURCE TERM"),
+                        List.of("setup", "core_loop", "end", "scoring"),
+                        List.of(1))));
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, null, "READY", "alice", "Persisted Example")));
+        when(documents.pages(documentVersionId)).thenReturn(List.of(
+                page(1, "SOURCE TERM. A complete source relation with enough text for structural admission.")));
+        when(outlines.organize(
+                        any(OutlineRequest.class),
+                        any(CaptureHandle.class),
+                        any(ResourceRef.class),
+                        eq(assistantRunId)))
+                .thenReturn(complete);
+        when(planPublication.publish(any(TeachingPlan.class), eq("Persisted Example")))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                scopes,
+                requested -> Optional.empty(),
+                mock(VisualRulebookCataloger.class),
+                outlines,
+                new ImmediateAuditedAgentInvocations(),
+                new TeachingPlanFactory(),
+                mock(TeachingPlanRepository.class),
+                planPublication);
+
+        TeachingPlan persisted = service.create(
+                documentVersionId, null, "alice", assistantRunId, capture);
+
+        assertThat(capture.publications).singleElement().satisfies(publication -> {
+            assertThat(publication.channel()).isEqualTo(PublicationChannel.TEACHING_PLAN);
+            assertThat(publication.statusCode()).isEqualTo("TEACHING_PLAN_READY");
+            assertThat(publication.context().resource())
+                    .isEqualTo(new ResourceRef(ResourceType.ASSISTANT_RUN, assistantRunId));
+            assertThat(publication.context().parentOperationId()).isEqualTo(assistantRunId);
+            assertThat(publication.playerFacingJson())
+                    .isEqualTo(new ObjectMapper().findAndRegisterModules().writeValueAsString(persisted));
+        });
+        assertThat(capture.failures).isEmpty();
+    }
 
     @Test
     void refreshesVisualFactsBeforeAStoredPlanIsReused() {
@@ -974,5 +1041,26 @@ class TeachingPlanServiceTest {
 
     private PageView page(int number, String text) {
         return new PageView(number, text, text.length());
+    }
+
+    private static final class RecordingCapture implements CaptureHandle {
+        private final UUID traceId = UUID.randomUUID();
+        private final List<AgentTraceEvent.Publication> publications = new ArrayList<>();
+        private final List<AgentTraceEvent.BindingOrFailure> failures = new ArrayList<>();
+
+        @Override public boolean enabled() { return true; }
+        @Override public Optional<UUID> traceId() { return Optional.of(traceId); }
+        @Override public void userTurn(AgentTraceEvent.UserTurn event) {}
+        @Override public void modelCallStarted(AgentTraceEvent.ModelCallStarted event) {}
+        @Override public void modelTurn(AgentTraceEvent.ModelTurn event) {}
+        @Override public void toolCall(AgentTraceEvent.ToolCall event) {}
+        @Override public void toolObservation(AgentTraceEvent.ToolObservation event) {}
+        @Override public void publication(AgentTraceEvent.Publication event) { publications.add(event); }
+        @Override public void bindingOrFailure(AgentTraceEvent.BindingOrFailure event) {
+            if (event.signal() == LifecycleSignal.FAILURE || event.signal() == LifecycleSignal.GAP) {
+                failures.add(event);
+            }
+        }
+        @Override public boolean bind(ResourceRef resource) { return true; }
     }
 }

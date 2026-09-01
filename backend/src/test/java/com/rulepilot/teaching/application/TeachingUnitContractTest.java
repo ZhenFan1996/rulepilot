@@ -47,6 +47,12 @@ class TeachingUnitContractTest {
                 .containsExactly(4);
         assertThat(TeachingUnitContract.decodeUnits(planned.retrievalQueries()).getFirst().sourcePages("K-two"))
                 .containsExactly(4);
+        assertThat(TeachingUnitContract.decodeUnits(planned.retrievalQueries()).getFirst())
+                .satisfies(unit -> {
+                    assertThat(unit.typed()).isTrue();
+                    assertThat(unit.roles()).containsExactly(SourceCoverageRole.SUPPORTING_RULE);
+                    assertThat(unit.availability()).isEqualTo(SourceCoverageAvailability.SOURCED);
+                });
     }
 
     @Test
@@ -58,6 +64,93 @@ class TeachingUnitContractTest {
         assertThat(unit.unitId()).isEqualTo("unit");
         assertThat(unit.sourceIdentifiers()).containsExactly("R_old");
         assertThat(unit.sourcePages()).isEmpty();
+        assertThat(unit.typed()).isFalse();
+        assertThat(unit.roles()).isEmpty();
+        assertThat(unit.availability()).isNull();
+    }
+
+    @Test
+    void keepsPersistedVersionTwoPageOwnershipExplicitlyLegacy() {
+        String versionTwo = TeachingUnitContract.encode(
+                new TeachingUnitContract.Unit("unit", java.util.Map.of("R_old", List.of(3))));
+
+        var unit = TeachingUnitContract.decodeUnits(List.of(versionTwo)).getFirst();
+
+        assertThat(unit.sourcePages()).containsExactly(3);
+        assertThat(unit.typed()).isFalse();
+        assertThat(unit.availability()).isNull();
+    }
+
+    @Test
+    void versionThreeRoundTripsRoleAndAvailabilityForIndependentMixedChapterUnits() {
+        List<SourceCoverageSlotDraft> slots = List.of(
+                new SourceCoverageSlotDraft(
+                        "sourced-slot",
+                        SourceCoverageRole.LEGAL_ACTION,
+                        "R-action",
+                        List.of(2),
+                        "mixed-topic",
+                        "sourced-unit",
+                        SourceCoverageAvailability.SOURCED),
+                new SourceCoverageSlotDraft(
+                        "missing-slot",
+                        SourceCoverageRole.ENDING,
+                        "External ending procedure",
+                        List.of(4),
+                        "mixed-topic",
+                        "missing-unit",
+                        SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE),
+                new SourceCoverageSlotDraft(
+                        "unresolved-slot",
+                        SourceCoverageRole.SCORING,
+                        "Unresolved scoring relation",
+                        List.of(),
+                        "mixed-topic",
+                        "unresolved-unit",
+                        SourceCoverageAvailability.UNRESOLVED));
+
+        List<String> encoded = TeachingUnitContract.encodeUnits(slots);
+        List<TeachingUnitContract.Unit> decoded = TeachingUnitContract.decodeUnits(encoded);
+
+        assertThat(encoded).allMatch(value -> value.startsWith("teaching-unit-v3."));
+        assertThat(decoded).extracting(TeachingUnitContract.Unit::availability)
+                .containsExactly(
+                        SourceCoverageAvailability.SOURCED,
+                        SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE,
+                        SourceCoverageAvailability.UNRESOLVED);
+        assertThat(decoded).extracting(TeachingUnitContract.Unit::roles)
+                .containsExactly(
+                        List.of(SourceCoverageRole.LEGAL_ACTION),
+                        List.of(SourceCoverageRole.ENDING),
+                        List.of(SourceCoverageRole.SCORING));
+        assertThat(TeachingUnitContract.retrievalIdentifiers(encoded))
+                .containsExactly("R-action", "External ending procedure")
+                .doesNotContain("Unresolved scoring relation");
+    }
+
+    @Test
+    void rejectsMixedAvailabilityInsideOneTeachingUnit() {
+        List<SourceCoverageSlotDraft> slots = List.of(
+                new SourceCoverageSlotDraft(
+                        "sourced-slot",
+                        SourceCoverageRole.CORE_LOOP,
+                        "R-loop",
+                        List.of(2),
+                        "mixed-topic",
+                        "blurred-unit",
+                        SourceCoverageAvailability.SOURCED),
+                new SourceCoverageSlotDraft(
+                        "missing-slot",
+                        SourceCoverageRole.CORE_LOOP,
+                        "External loop procedure",
+                        List.of(3),
+                        "mixed-topic",
+                        "blurred-unit",
+                        SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE));
+
+        assertThatThrownBy(() -> TeachingUnitContract.encodeUnits(slots))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot mix source availability");
     }
 
     @Test

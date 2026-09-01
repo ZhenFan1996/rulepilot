@@ -1,5 +1,7 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
@@ -23,6 +25,13 @@ public interface VisualRulebookPageCatalogModel {
 
     CatalogDraft summarize(CatalogRequest request);
 
+    default CatalogDraft summarize(
+            CatalogRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        return summarize(request);
+    }
+
     /**
      * Reads only the page-scoped rule facts needed to start an evidence-bound lesson. Implementations should avoid
      * icon inventories, spatial localization, and dense-cell audits here; those slower enrichments run after the
@@ -30,6 +39,13 @@ public interface VisualRulebookPageCatalogModel {
      */
     default CatalogDraft summarizeForTeaching(CatalogRequest request) {
         return summarize(request);
+    }
+
+    default CatalogDraft summarizeForTeaching(
+            CatalogRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        return summarizeForTeaching(request);
     }
 
     /**
@@ -49,6 +65,14 @@ public interface VisualRulebookPageCatalogModel {
         throw new UnsupportedOperationException("visual page transcription is unavailable");
     }
 
+    default PageTranscript transcribeTeachingPage(
+            PageImageInput page,
+            String modelConfigurationOwner,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        return transcribeTeachingPage(page, modelConfigurationOwner);
+    }
+
     default Optional<ModelExecutionIdentity> teachingPageTranscriptionExecutionIdentity(
             String modelConfigurationOwner) {
         return Optional.empty();
@@ -61,6 +85,13 @@ public interface VisualRulebookPageCatalogModel {
      */
     default Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
         return Optional.empty();
+    }
+
+    default Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(
+            CatalogRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        return selectProgressiveTeachingStart(request);
     }
 
     default boolean supportsProgressiveTeachingStart(String modelConfigurationOwner) {
@@ -90,6 +121,13 @@ public interface VisualRulebookPageCatalogModel {
                 .toList());
     }
 
+    default IconLocalizationDraft localizeIcons(
+            IconLocalizationRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        return localizeIcons(request);
+    }
+
     /**
      * Rechecks already localized close-up crops. A full-page locator can still land on adjacent prose or a similar
      * mark; implementations with a real vision model should inspect the proposed region at readable scale.
@@ -104,6 +142,13 @@ public interface VisualRulebookPageCatalogModel {
                         location.width(),
                         location.height()))
                 .toList());
+    }
+
+    default IconCropReviewDraft reviewIconCrops(
+            IconCropReviewRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        return reviewIconCrops(request);
     }
 
     default boolean available(String modelConfigurationOwner) {

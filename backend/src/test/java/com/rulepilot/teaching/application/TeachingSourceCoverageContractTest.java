@@ -58,6 +58,48 @@ class TeachingSourceCoverageContractTest {
     }
 
     @Test
+    void aLocalizedUnreadVisualPageKeepsTheCitedLessonReadableWithoutClaimingWholeDocumentCoverage() {
+        OutlineDraft complete = completeOutline();
+        List<TopicDraft> partialCatalogTopics = complete.topics().stream()
+                .map(topic -> new TopicDraft(
+                        topic.key(),
+                        topic.title(),
+                        topic.objective(),
+                        topic.required(),
+                        topic.visualEvidenceRecommended(),
+                        topic.retrievalQueries(),
+                        java.util.stream.Stream.concat(
+                                        topic.coverageTags().stream(),
+                                        java.util.stream.Stream.of(
+                                                TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG))
+                                .distinct()
+                                .toList(),
+                        topic.sourcePageNumbers()))
+                .toList();
+        OutlineDraft partialCatalog = new OutlineDraft(
+                complete.gameTitle(),
+                complete.premise(),
+                partialCatalogTopics,
+                complete.sourceCoverageSlots(),
+                true,
+                complete.wholeGameUnderstanding());
+        TeachingPlan plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", partialCatalog);
+        List<LessonSection> sections = supportedSections(plan);
+
+        assertThat(new TeachingLessonAssemblyPolicy().status(plan, sections))
+                .isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(new LessonQualityEvaluator().evaluate(plan, lesson(plan, sections)).checks())
+                .filteredOn(check -> check.type() == CheckType.SOURCE_RULE_GROUP_COVERAGE)
+                .singleElement()
+                .satisfies(check -> {
+                    assertThat(check.status()).isEqualTo(CheckStatus.NOT_EVALUATED);
+                    assertThat(check.detail()).contains(
+                            "仍有页面仅部分纳入或未获得可验证的视觉证据",
+                            "不能声称覆盖了整本规则书");
+                });
+    }
+
+    @Test
     void fourBroadCoverageTagsCannotHideOneOmittedVisualRuleGroup() {
         PageInput visualLedger = new PageInput(
                 7,

@@ -1,5 +1,7 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.teaching.VisualRegionLocator;
@@ -146,7 +148,24 @@ public class VisualLessonEnricher {
             String modelConfigurationOwner,
             UUID runId,
             VisualProgressListener progress) {
+        return enrichWithProgress(
+                documentVersionId,
+                lesson,
+                modelConfigurationOwner,
+                runId,
+                progress,
+                CaptureHandle.noop());
+    }
+
+    public EnrichmentResult enrichWithProgress(
+            UUID documentVersionId,
+            IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            UUID runId,
+            VisualProgressListener progress,
+            CaptureHandle capture) {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         var map = understanding.understanding(documentVersionId);
         Map<Integer, Set<Integer>> explicitVisualStepPositions = explicitVisualStepPositions(lesson);
         IllustratedLesson readerReadyLesson = mergePolicy.discardOverlyBroadVisuals(lesson);
@@ -171,7 +190,8 @@ public class VisualLessonEnricher {
                     runId,
                     progress,
                     acceptedVisuals,
-                    explicitVisualStepPositions.getOrDefault(section.position(), Set.of()));
+                    explicitVisualStepPositions.getOrDefault(section.position(), Set.of()),
+                    trace);
             SectionResult sectionResult = sectionResult(enriched);
             sectionResults.add(sectionResult);
             currentSections.set(sectionIndex, sectionResult.section());

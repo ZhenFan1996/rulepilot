@@ -6,6 +6,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolCall;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.UserTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.BudgetSnapshot;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
@@ -32,6 +39,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -43,6 +51,55 @@ import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
 
 class BoundedNativeToolAgentTest {
+
+    @Test
+    void capturesProviderNeutralRawTurnsAndTypedToolExchangeWithoutChangingTheResult() {
+        QueueModel model = new QueueModel(
+                turn(call("call-1", "search_rule_evidence", "{\"query\":\"setup\"}")),
+                finalTurn("Cited player guidance"));
+        BoundedNativeToolAgent agent = agent(
+                model, List.of(successTool("search_rule_evidence")), new RecordingInvocations());
+        RecordingCapture capture = new RecordingCapture(false);
+
+        var result = agent.run(request(scope(), 4), capture);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("Cited player guidance");
+        assertThat(capture.modelStarts).hasSize(2);
+        assertThat(capture.modelTurns).hasSize(2);
+        assertThat(capture.modelTurns.get(0).toolCalls()).singleElement().satisfies(call -> {
+            assertThat(call.name()).isEqualTo("search_rule_evidence");
+            assertThat(call.argumentsJson()).isEqualTo("{\"query\":\"setup\"}");
+        });
+        assertThat(capture.modelTurns.get(1).assistantText()).isEqualTo("Cited player guidance");
+        assertThat(capture.toolCalls)
+                .extracting(ToolCall::validation)
+                .containsExactly(ToolArgumentValidation.ACCEPTED);
+        assertThat(capture.toolCalls.getLast()).satisfies(call -> {
+            assertThat(call.toolName()).isEqualTo("search_rule_evidence");
+            assertThat(call.rawArgumentsJson()).isEqualTo("{\"query\":\"setup\"}");
+            assertThat(call.canonicalArgumentsJson()).isEqualTo("{\"query\":\"setup\"}");
+        });
+        assertThat(capture.toolObservations).singleElement().satisfies(observation -> {
+            assertThat(observation.toolName()).isEqualTo("search_rule_evidence");
+            assertThat(observation.modelVisibleObservationJson()).contains("FOUND");
+            assertThat(observation.evidenceCount()).isEqualTo(1);
+        });
+    }
+
+    @Test
+    void captureFailuresRemainFailOpen() {
+        QueueModel model = new QueueModel(
+                turn(call("call-1", "search_rule_evidence", "{}")),
+                finalTurn("still published"));
+        BoundedNativeToolAgent agent = agent(
+                model, List.of(successTool("search_rule_evidence")), new RecordingInvocations());
+
+        var result = agent.run(request(scope(), 4), new RecordingCapture(true));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("still published");
+    }
 
     @Test
     void completesAfterOneRequiredReadToolObservation() {
@@ -577,7 +634,8 @@ class BoundedNativeToolAgentTest {
                 finalTurn("I cannot verify that request."));
         BoundedNativeToolAgent agent = agent(model, List.of(invalid), new RecordingInvocations());
 
-        var result = agent.run(request(scope(), 3));
+        RecordingCapture capture = new RecordingCapture(false);
+        var result = agent.run(request(scope(), 3), capture);
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.observations()).singleElement().satisfies(observation -> {
@@ -585,6 +643,10 @@ class BoundedNativeToolAgentTest {
             assertThat(observation.observation().code()).isEqualTo("INVALID_ARGUMENT");
             assertThat(observation.observation().evidenceCount()).isZero();
         });
+        assertThat(capture.toolCalls)
+                .extracting(ToolCall::validation)
+                .containsExactly(ToolArgumentValidation.REJECTED);
+        assertThat(capture.toolCalls.getLast().canonicalArgumentsJson()).isEqualTo("{\"limit\":99}");
     }
 
     @Test
@@ -620,12 +682,19 @@ class BoundedNativeToolAgentTest {
     void isolatesProviderFailureBehindDeterministicFallback() {
         NativeToolModel failing = request -> { throw new IllegalStateException("provider unavailable"); };
         BoundedNativeToolAgent agent = agent(failing, List.of(successTool("search_rule_evidence")), new RecordingInvocations());
+        RecordingCapture capture = new RecordingCapture(false);
 
-        var result = agent.run(request(scope(), 3));
+        var result = agent.run(request(scope(), 3), capture);
 
         assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
         assertThat(result.reason()).isEqualTo("EXECUTION_FAILED");
         assertThat(result.text()).isEqualTo("Insufficient verified evidence.");
+        assertThat(capture.modelStarts).singleElement().satisfies(start ->
+                assertThat(capture.failures).anySatisfy(failure -> {
+                    assertThat(failure.signal()).isEqualTo(com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal.FAILURE);
+                    assertThat(failure.context().operationId()).isEqualTo(start.context().operationId());
+                    assertThat(failure.code()).isEqualTo("EXECUTION_FAILED");
+                }));
     }
 
     @Test
@@ -1008,6 +1077,45 @@ class BoundedNativeToolAgentTest {
         @Override
         public void record(UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
             recordedOperations.add(operation);
+        }
+    }
+
+    private static final class RecordingCapture implements CaptureHandle {
+        private final boolean fail;
+        private final List<ModelCallStarted> modelStarts = new ArrayList<>();
+        private final List<com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn> modelTurns = new ArrayList<>();
+        private final List<ToolCall> toolCalls = new ArrayList<>();
+        private final List<com.rulepilot.agenttrace.AgentTraceEvent.ToolObservation> toolObservations =
+                new ArrayList<>();
+        private final List<BindingOrFailure> failures = new ArrayList<>();
+
+        private RecordingCapture(boolean fail) {
+            this.fail = fail;
+        }
+
+        @Override public boolean enabled() { return true; }
+        @Override public Optional<UUID> traceId() { return Optional.of(UUID.randomUUID()); }
+        @Override public void userTurn(UserTurn event) { maybeFail(); }
+        @Override public void modelCallStarted(ModelCallStarted event) { maybeFail(); modelStarts.add(event); }
+        @Override public void modelTurn(com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn event) {
+            maybeFail();
+            modelTurns.add(event);
+        }
+        @Override public void toolCall(ToolCall event) { maybeFail(); toolCalls.add(event); }
+        @Override public void toolObservation(
+                com.rulepilot.agenttrace.AgentTraceEvent.ToolObservation event) {
+            maybeFail();
+            toolObservations.add(event);
+        }
+        @Override public void publication(Publication event) { maybeFail(); }
+        @Override public void bindingOrFailure(BindingOrFailure event) { maybeFail(); failures.add(event); }
+        @Override public boolean bind(com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef resource) {
+            maybeFail();
+            return true;
+        }
+
+        private void maybeFail() {
+            if (fail) throw new IllegalStateException("private trace unavailable");
         }
     }
 }

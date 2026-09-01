@@ -67,6 +67,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     }
 
     @Override
+    public ModelDescriptor descriptor(String ownerUsername) {
+        return new ModelDescriptor(providerFor(ownerUsername), modelNameFor(ownerUsername));
+    }
+
+    @Override
     public Turn next(Request request) {
         return next(request, null);
     }

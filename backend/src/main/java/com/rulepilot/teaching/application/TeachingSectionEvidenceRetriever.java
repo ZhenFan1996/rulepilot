@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.SearchRuleEvidence;
@@ -47,18 +48,34 @@ final class TeachingSectionEvidenceRetriever {
             UUID assistantRunId,
             int queryBudget,
             boolean bindVisualPageEvidence) {
+        return retrieve(
+                plan,
+                planned,
+                assistantRunId,
+                queryBudget,
+                bindVisualPageEvidence,
+                CaptureHandle.noop());
+    }
+
+    Result retrieve(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            UUID assistantRunId,
+            int queryBudget,
+            boolean bindVisualPageEvidence,
+            CaptureHandle capture) {
         if (bindVisualPageEvidence && ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
             try {
                 List<RuleEvidence> evidence = visualEvidenceResolver.resolve(
-                        plan, planned, List.of(), assistantRunId);
+                        plan, planned, List.of(), assistantRunId, capture);
                 return verifiedResult(plan, evidence, 1);
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException visualFailure) {
                 log.warn(
-                        "Teaching visual evidence resolution failed for topic {}: {}",
-                        planned.topicKey(),
-                        visualFailure.getMessage());
+                        "Teaching visual evidence resolution failed for section {} (failureType={})",
+                        planned.position(),
+                        visualFailure.getClass().getSimpleName());
                 return new Result(List.of(), 1, State.EMPTY);
             }
         }
@@ -88,7 +105,10 @@ final class TeachingSectionEvidenceRetriever {
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException retrievalFailure) {
-                log.warn("Teaching evidence retrieval failed for topic {}: {}", planned.topicKey(), retrievalFailure.getMessage());
+                log.warn(
+                        "Teaching evidence retrieval failed for section {} (failureType={})",
+                        planned.position(),
+                        retrievalFailure.getClass().getSimpleName());
             }
             if (conflictingEvidence) break;
         }
@@ -97,14 +117,14 @@ final class TeachingSectionEvidenceRetriever {
                 : TeachingEvidenceRetrievalPolicy.balancedEvidence(evidenceByIntent);
         if (bindVisualPageEvidence) {
             try {
-                evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId);
+                evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId, capture);
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException visualFailure) {
                 log.warn(
-                        "Optional visual evidence resolution failed for topic {}; retaining text evidence: {}",
-                        planned.topicKey(),
-                        visualFailure.getMessage());
+                        "Optional visual evidence resolution failed for section {} (failureType={}); retaining text evidence",
+                        planned.position(),
+                        visualFailure.getClass().getSimpleName());
             }
         }
         return verifiedResult(plan, evidence, toolCalls);
@@ -118,7 +138,9 @@ final class TeachingSectionEvidenceRetriever {
                             plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
                     .verified();
         } catch (RuntimeException verificationFailure) {
-            log.warn("Teaching evidence verification failed: {}", verificationFailure.getMessage());
+            log.warn(
+                    "Teaching evidence verification failed (failureType={})",
+                    verificationFailure.getClass().getSimpleName());
             verified = false;
         }
         return verified
@@ -130,7 +152,19 @@ final class TeachingSectionEvidenceRetriever {
             TeachingPlan plan,
             int completedSections,
             UUID assistantRunId) {
-        visualEvidenceResolver.prefetchRemaining(plan, completedSections, assistantRunId);
+        prefetchRemainingVisualFacts(
+                plan,
+                completedSections,
+                assistantRunId,
+                CaptureHandle.noop());
+    }
+
+    void prefetchRemainingVisualFacts(
+            TeachingPlan plan,
+            int completedSections,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        visualEvidenceResolver.prefetchRemaining(plan, completedSections, assistantRunId, capture);
     }
 
     private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {

@@ -1,6 +1,8 @@
 package com.rulepilot.teaching.application;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -13,6 +15,8 @@ import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
 import com.rulepilot.teaching.application.IllustratedLessonService.GenerationOutcome;
@@ -116,6 +120,50 @@ class IllustratedLessonServiceTest {
         verifyNoInteractions(agent);
     }
 
+    @Test
+    void persistsAccountQuotaExhaustionAsTheTeachingTerminalCause() {
+        UUID planId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        TeachingPlan plan = mock(TeachingPlan.class);
+        when(plan.id()).thenReturn(planId);
+        when(plan.createdBy()).thenReturn("alice");
+        AssistantRuns runs = mock(AssistantRuns.class);
+        RunSnapshot received = run(runId, planId, "alice", AssistantRunState.RECEIVED, 1);
+        RunSnapshot documentReady = run(runId, planId, "alice", AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot lessonPlanning = run(runId, planId, "alice", AssistantRunState.LESSON_PLANNING, 3);
+        RunSnapshot retrievalPlanning = run(runId, planId, "alice", AssistantRunState.RETRIEVAL_PLANNING, 4);
+        RunSnapshot retrieving = run(runId, planId, "alice", AssistantRunState.RETRIEVING, 5);
+        when(runs.advance(runId, 1, AssistantRunState.DOCUMENT_READINESS, "Rule document readiness is checked"))
+                .thenReturn(documentReady);
+        when(runs.advance(runId, 2, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded"))
+                .thenReturn(lessonPlanning);
+        when(runs.advance(runId, 3, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned"))
+                .thenReturn(retrievalPlanning);
+        when(runs.advance(runId, 4, AssistantRunState.RETRIEVING, "Allow-listed rule search is running"))
+                .thenReturn(retrieving);
+        GroundedTeachingAgent agent = mock(GroundedTeachingAgent.class);
+        AgentExecutionStoppedException quotaStopped =
+                new AgentExecutionStoppedException(StopReason.ACCOUNT_QUOTA);
+        when(agent.startBase(eq(plan), eq(runId), isNull(), any(), any())).thenThrow(quotaStopped);
+        IllustratedLessonService service = new IllustratedLessonService(
+                mock(TeachingPlanRepository.class),
+                agent,
+                mock(IllustratedLessonRepository.class),
+                runs,
+                mock(DocumentVersionScopeLookup.class),
+                ObservationRegistry.NOOP,
+                mock(IllustratedLessonProgressPublisher.class));
+
+        assertThatThrownBy(() -> service.startGeneration(plan, "alice", received))
+                .isSameAs(quotaStopped);
+
+        verify(runs).fail(
+                runId,
+                5,
+                "AGENT_ACCOUNT_QUOTA",
+                "Teaching workflow stopped by execution budget");
+    }
+
     private IllustratedLessonService service(AssistantRuns runs) {
         return new IllustratedLessonService(
                 mock(TeachingPlanRepository.class),
@@ -146,6 +194,18 @@ class IllustratedLessonServiceTest {
         Instant now = Instant.parse("2026-07-23T09:00:00Z");
         return new RunSnapshot(
                 UUID.randomUUID(), AssistantRunMode.TEACHING, subjectId, owner, state, revision, now, now,
+                state.terminal() ? now : null, null);
+    }
+
+    private RunSnapshot run(
+            UUID id,
+            UUID subjectId,
+            String owner,
+            AssistantRunState state,
+            long revision) {
+        Instant now = Instant.parse("2026-07-23T09:00:00Z");
+        return new RunSnapshot(
+                id, AssistantRunMode.TEACHING, subjectId, owner, state, revision, now, now,
                 state.terminal() ? now : null, null);
     }
 }

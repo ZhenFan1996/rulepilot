@@ -1,5 +1,9 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
@@ -67,9 +71,25 @@ public interface TeachingLessonModel {
         return estimatedInvocation(request, draft);
     }
 
+    default ModelInvocation composeInvocation(
+            SectionRequest request,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        return composeInvocation(request);
+    }
+
     default ModelInvocation repairCompositionContractInvocation(SectionRequest request) {
         SectionDraft draft = repairCompositionContract(request);
         return estimatedInvocation(request, draft);
+    }
+
+    default ModelInvocation repairCompositionContractInvocation(
+            SectionRequest request,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        return repairCompositionContractInvocation(request);
     }
 
     default ModelInvocation reviseInvocation(
@@ -78,10 +98,30 @@ public interface TeachingLessonModel {
         return estimatedInvocation(request, draft);
     }
 
+    default ModelInvocation reviseInvocation(
+            SectionRequest request,
+            SectionDraft previousDraft,
+            List<String> feedback,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        return reviseInvocation(request, previousDraft, feedback);
+    }
+
     default ModelInvocation repairRevisionContractInvocation(
             SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
         SectionDraft draft = repairRevisionContract(request, previousDraft, feedback);
         return estimatedInvocation(request, draft);
+    }
+
+    default ModelInvocation repairRevisionContractInvocation(
+            SectionRequest request,
+            SectionDraft previousDraft,
+            List<String> feedback,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        return repairRevisionContractInvocation(request, previousDraft, feedback);
     }
 
     SectionDraft compose(SectionRequest request);
@@ -310,9 +350,20 @@ public interface TeachingLessonModel {
     }
 
     /** One grouping decision made by the outline Agent, not a fixed lesson-template category. */
-    record TeachingUnitInput(String unitId, List<String> sourceIdentifiers, List<UUID> directEvidenceIds) {
+    record TeachingUnitInput(
+            String unitId,
+            List<String> sourceIdentifiers,
+            List<UUID> directEvidenceIds,
+            List<SourceCoverageRole> roles,
+            SourceCoverageAvailability availability) {
+
+        public TeachingUnitInput(
+                String unitId, List<String> sourceIdentifiers, List<UUID> directEvidenceIds) {
+            this(unitId, sourceIdentifiers, directEvidenceIds, List.of(), null);
+        }
+
         public TeachingUnitInput(String unitId, List<String> sourceIdentifiers) {
-            this(unitId, sourceIdentifiers, List.of());
+            this(unitId, sourceIdentifiers, List.of(), List.of(), null);
         }
 
         public TeachingUnitInput {
@@ -321,12 +372,22 @@ public interface TeachingLessonModel {
                     || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
                             || identifier.isBlank())
                     || directEvidenceIds == null
-                    || directEvidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
+                    || directEvidenceIds.stream().anyMatch(java.util.Objects::isNull)
+                    || roles == null
+                    || roles.stream().anyMatch(java.util.Objects::isNull)
+                    || ((roles.isEmpty()) != (availability == null))
+                    || (availability == SourceCoverageAvailability.SOURCED && directEvidenceIds.isEmpty())
+                    || (availability == SourceCoverageAvailability.UNRESOLVED && !directEvidenceIds.isEmpty())) {
                 throw new IllegalArgumentException("teaching unit input is invalid");
             }
             unitId = unitId.strip();
             sourceIdentifiers = sourceIdentifiers.stream().map(String::strip).distinct().toList();
             directEvidenceIds = directEvidenceIds.stream().distinct().toList();
+            roles = roles.stream().distinct().toList();
+        }
+
+        public boolean typed() {
+            return availability != null;
         }
     }
 

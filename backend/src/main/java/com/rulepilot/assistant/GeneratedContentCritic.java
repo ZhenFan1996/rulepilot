@@ -1,5 +1,7 @@
 package com.rulepilot.assistant;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.CaptureHandle;
 import java.util.List;
 import java.util.UUID;
 
@@ -9,6 +11,16 @@ public interface GeneratedContentCritic {
 
     default Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
         return review(request, risk);
+    }
+
+    default Review review(
+            ReviewRequest request,
+            ReviewRisk risk,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
+        return review(request, risk, ownerUsername);
     }
 
     enum ContentType {

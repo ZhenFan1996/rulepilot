@@ -12,6 +12,8 @@ import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
@@ -525,6 +527,91 @@ class TeachingSectionCandidateValidatorTest {
                 .containsExactly(
                         "轮到你时选择一项可用行动。",
                         "完整结算后把回合交给下一位玩家。");
+    }
+
+    @Test
+    void acceptsASourcedUnitWhenItsMissingSiblingHasNoOwnedEvidence() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = textEvidence(chunkId, versionId);
+        SectionRequest request = unitRequest(
+                chunkId,
+                List.of(
+                        new TeachingUnitInput(
+                                "sourced-turn",
+                                List.of("Setup and turns"),
+                                List.of(chunkId),
+                                List.of(SourceCoverageRole.CORE_LOOP),
+                                SourceCoverageAvailability.SOURCED),
+                        new TeachingUnitInput(
+                                "missing-ending",
+                                List.of("External ending procedure"),
+                                List.of(),
+                                List.of(SourceCoverageRole.ENDING),
+                                SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE)));
+        SectionDraft draft = new SectionDraft(
+                "完成有来源的回合",
+                VisualKind.FLOW_DIAGRAM,
+                "按当前来源完成回合行动。",
+                List.of(chunkId),
+                List.of(new StepDraft(
+                        "完成当前行动",
+                        TeachingMove.DO,
+                        "轮到你时选择一项可用行动，并完成它的结算。",
+                        List.of(chunkId),
+                        List.of("sourced-turn"),
+                        null)));
+        TeachingPlan plan = plan(versionId);
+
+        var section = validator.validate(
+                plan,
+                plan.sections().getFirst(),
+                List.of(evidence),
+                request,
+                draft,
+                EvidenceStatus.CITED_DRAFT);
+
+        assertThat(section.steps()).singleElement()
+                .extracting(step -> step.heading())
+                .isEqualTo("完成当前行动");
+    }
+
+    @Test
+    void rejectsAnUnresolvedUnitBeforeItCanBecomePlayerFacingContent() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = textEvidence(chunkId, versionId);
+        SectionRequest request = unitRequest(
+                chunkId,
+                List.of(new TeachingUnitInput(
+                        "unresolved-ending",
+                        List.of("Unresolved ending relation"),
+                        List.of(),
+                        List.of(SourceCoverageRole.ENDING),
+                        SourceCoverageAvailability.UNRESOLVED)));
+        SectionDraft invented = new SectionDraft(
+                "未解析的结束流程",
+                VisualKind.FLOW_DIAGRAM,
+                "把附近证据当作结束条件。",
+                List.of(chunkId),
+                List.of(new StepDraft(
+                        "检查结束条件",
+                        TeachingMove.CHECK,
+                        "按附近段落检查游戏是否结束。",
+                        List.of(chunkId),
+                        List.of("unresolved-ending"),
+                        null)));
+        TeachingPlan plan = plan(versionId);
+
+        assertThatThrownBy(() -> validator.validate(
+                        plan,
+                        plan.sections().getFirst(),
+                        List.of(evidence),
+                        request,
+                        invented,
+                        EvidenceStatus.CITED_DRAFT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unresolved", "cannot be presented as a rule claim");
     }
 
     private TeachingPlan plan(UUID versionId) {

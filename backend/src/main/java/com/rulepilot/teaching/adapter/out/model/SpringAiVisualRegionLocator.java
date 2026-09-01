@@ -1,5 +1,17 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.MediaDescriptor;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRegionLocator;
@@ -12,13 +24,24 @@ import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Mode
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelRegion;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Rejection;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
+import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -32,6 +55,9 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiVisualRegionLocator.class);
+    private static final ObjectMapper TRACE_JSON = new ObjectMapper();
+    private static final String TRACE_MEDIA_INPUT_SCHEMA =
+            "{\"type\":\"object\",\"required\":[\"purpose\",\"pageNumbers\"],\"properties\":{\"purpose\":{\"type\":\"string\"},\"pageNumbers\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}},\"additionalProperties\":false}";
 
     @Override
     public boolean supportsVisualEvidence(String modelConfigurationOwner) {
@@ -171,37 +197,70 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+        return locateGuideWithResult(request, CaptureHandle.noop(), null);
+    }
+
+    @Override
+    public LocateGuideResult locateGuideWithResult(
+            VisualLocationRequest request,
+            CaptureHandle capture,
+            TraceEventContext context) {
+        TraceInvocation trace = trace(capture, context);
         String owner = request.modelConfigurationOwner();
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
-            log.info("Visual locator is unavailable for section {}", request.sectionTitle());
+            log.info("Visual locator is unavailable for runId={} (reason=MODEL_UNAVAILABLE)", request.runId());
             return LocateGuideResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
         }
-        GuideAttempt first = locateGuideOnce(request, owner, "");
+        GuideAttempt first = locateGuideOnce(request, owner, "", trace);
         if (!first.guide().regions().isEmpty()) {
             List<LocatedRegion> compactFirst = VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
                     first.guide().regions());
             if (!compactFirst.isEmpty()) {
                 return withCatalogedAnchorFallback(
-                        request, owner, confirmedExactStepCrops(request, compactFirst, owner));
+                        request,
+                        owner,
+                        confirmedExactStepCrops(request, compactFirst, owner, trace),
+                        trace);
             }
-            log.info("Retrying visual locator to tighten a broad reader crop for section {}", request.sectionTitle());
+            log.info("Retrying visual locator to tighten a broad reader crop for runId={}", request.runId());
             GuideAttempt tightened = locateGuideOnce(
-                    request, owner, VisualCropAcceptancePolicy.tightReaderViewportInstruction());
+                    request,
+                    owner,
+                    VisualCropAcceptancePolicy.tightReaderViewportInstruction(),
+                    trace);
             List<LocatedRegion> compactTightened = VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
                     tightened.guide().regions());
             if (!compactTightened.isEmpty()) {
                 return withCatalogedAnchorFallback(
-                        request, owner, confirmedExactStepCrops(request, compactTightened, owner));
+                        request,
+                        owner,
+                        confirmedExactStepCrops(request, compactTightened, owner, trace),
+                        trace);
             }
-            return withCatalogedAnchorFallback(request, owner, LocateGuideResult.unavailable(Diagnostic.OVERSIZED_REGION));
+            return withCatalogedAnchorFallback(
+                    request,
+                    owner,
+                    LocateGuideResult.unavailable(Diagnostic.OVERSIZED_REGION),
+                    trace);
         }
-        if (!first.retryable()) return withCatalogedAnchorFallback(request, owner, first.guide());
-        log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
+        if (!first.retryable()) return withCatalogedAnchorFallback(request, owner, first.guide(), trace);
+        log.info(
+                "Retrying visual locator after a rejected response for runId={} (reason={})",
+                request.runId(),
+                first.rejection());
         GuideAttempt retried = locateGuideOnce(
-                request, owner, VisualLocatorResponsePolicy.retryInstruction(first.rejection()));
-        if (retried.guide().regions().isEmpty()) return withCatalogedAnchorFallback(request, owner, retried.guide());
+                request,
+                owner,
+                VisualLocatorResponsePolicy.retryInstruction(first.rejection()),
+                trace);
+        if (retried.guide().regions().isEmpty()) {
+            return withCatalogedAnchorFallback(request, owner, retried.guide(), trace);
+        }
         return withCatalogedAnchorFallback(
-                request, owner, confirmedExactStepCrops(request, retried.guide().regions(), owner));
+                request,
+                owner,
+                confirmedExactStepCrops(request, retried.guide().regions(), owner, trace),
+                trace);
     }
 
     /**
@@ -211,7 +270,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
      * shown to the exact-step verifier; an anchor can never become a player-facing rule merely because it was stored.
      */
     private LocateGuideResult withCatalogedAnchorFallback(
-            VisualLocationRequest request, String owner, LocateGuideResult original) {
+            VisualLocationRequest request,
+            String owner,
+            LocateGuideResult original,
+            TraceInvocation trace) {
         if (!original.regions().isEmpty()) return original;
         for (Candidate candidate : request.candidates()) {
             Optional<LocatedRegion> anchorRegion =
@@ -227,19 +289,22 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             byte[] crop = VisualCropAcceptancePolicy.croppedPng(page, region);
             if (crop == null) continue;
             Optional<CropVerdict> verified = confirmExactCrop(
-                    request, region, "R1", new CropImage(region.pageNumber(), region.label(), crop), owner);
+                    request,
+                    region,
+                    "R1",
+                    new CropImage(region.pageNumber(), region.label(), crop),
+                    owner,
+                    trace);
             if (verified.orElse(CropVerdict.REJECTED) == CropVerdict.ACCEPTED) {
                 log.info(
-                        "Recovered a verified cataloged visual anchor for section {} on page {}",
-                        request.sectionTitle(),
-                        region.pageNumber());
+                        "Recovered a verified cataloged visual anchor for runId={}",
+                        request.runId());
                 return LocateGuideResult.found(List.of(region));
             }
             if (verified.orElse(CropVerdict.REJECTED) == CropVerdict.CONTRADICTED) {
                 log.info(
-                        "Recovered a cataloged visual anchor that contradicts a lesson claim for section {} on page {}",
-                        request.sectionTitle(),
-                        region.pageNumber());
+                        "Recovered a cataloged visual anchor that contradicts a lesson claim for runId={}",
+                        request.runId());
                 return LocateGuideResult.found(List.of(region.withClaimContradiction()));
             }
         }
@@ -252,7 +317,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
      * not become a misleading illustration for another step.
      */
     private LocateGuideResult confirmedExactStepCrops(
-            VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
+            VisualLocationRequest request,
+            List<LocatedRegion> regions,
+            String owner,
+            TraceInvocation trace) {
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             // Qwen's first response already carries typed page, claim, step and geometry bindings. Re-reading natural
             // lesson prose to decide whether a second provider call is needed made latency vocabulary-dependent and
@@ -265,7 +333,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             for (int index = 0; index < regions.size(); index++) {
                 String reference = "R" + (index + 1);
                 Optional<CropVerdict> confirmed = confirmExactCrop(
-                        request, regions.get(index), reference, crops.get(reference), owner);
+                        request,
+                        regions.get(index),
+                        reference,
+                        crops.get(reference),
+                        owner,
+                        trace);
                 if (confirmed.isEmpty()) return retainFirstGroundedCrops(request, regions);
                 if (confirmed.get() == CropVerdict.ACCEPTED) {
                     return LocateGuideResult.found(List.of(regions.get(index)));
@@ -284,7 +357,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         // The first pass still passed page, claim, geometry, and literal-visual checks. A transient failure in the
         // optional second opinion must not erase that grounded aid; an explicit verifier rejection is the only signal
         // that removes it. This keeps the text-first speed boundary while preserving useful visual coverage.
-        log.info("Exact-step crop verification was unavailable for section {}; retaining the first grounded crop", request.sectionTitle());
+        log.info(
+                "Exact-step crop verification was unavailable for runId={}; retaining {} grounded crop(s)",
+                request.runId(),
+                regions.size());
         return LocateGuideResult.found(regions);
     }
 
@@ -294,14 +370,15 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             LocatedRegion region,
             String reference,
             CropImage crop,
-            String owner) {
+            String owner,
+            TraceInvocation trace) {
         try {
             boolean qwen = "qwen".equals(models.providerFor(Role.VISUAL, owner));
             var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
             if (qwen) {
                 prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
             }
-            String content = prompt
+            ChatClient.ChatClientRequestSpec requestSpec = prompt
                     .system(qwen ? QWEN_CROP_VERIFIER_SYSTEM : CROP_VERIFIER_SYSTEM)
                     .user(user -> {
                         user.text("Crop reference: {crop}. Return only the JSON object.")
@@ -315,9 +392,18 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                                         "text", claim.text()))
                                                 .toList()));
                         user.media(MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(crop.content()));
-                    })
-                    .call()
-                    .content();
+                    });
+            String content = tracedContent(
+                    trace,
+                    owner,
+                    "visual-exact-crop-verifier-v1",
+                    "visual-exact-crop-verdict-v1",
+                    qwen ? QWEN_CROP_VERIFIER_SYSTEM : CROP_VERIFIER_SYSTEM,
+                    List.of(new VisualRegionLocator.PageImage(
+                            crop.pageNumber(),
+                            MimeTypeUtils.IMAGE_PNG_VALUE,
+                            crop.content())),
+                    () -> requestSpec.call().content());
             Optional<CropVerdict> verified = VisualLocatorResponsePolicy.cropReview(content, Set.of(reference))
                     .map(review -> {
                         if (review.contradictedReferences().contains(reference)) return CropVerdict.CONTRADICTED;
@@ -326,13 +412,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     });
             if (qwen) {
                 log.info(
-                        "Qwen exact-crop verdict for section {} at page {} ({}, {}, {}, {}): {}",
-                        request.sectionTitle(),
-                        region.pageNumber(),
-                        region.x(),
-                        region.y(),
-                        region.width(),
-                        region.height(),
+                        "Qwen exact-crop verdict for runId={} (verdict={})",
+                        request.runId(),
                         verified.orElse(null));
             }
             return verified;
@@ -374,14 +455,18 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         REJECTED
     }
 
-    private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {
+    private GuideAttempt locateGuideOnce(
+            VisualLocationRequest request,
+            String owner,
+            String correction,
+            TraceInvocation trace) {
         boolean qwen = "qwen".equals(models.providerFor(Role.VISUAL, owner));
         List<VisualRegionLocator.PageImage> preparedPages = request.pages().stream().map(images::prepare).toList();
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if (qwen) {
             prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
         }
-        String content = prompt
+        ChatClient.ChatClientRequestSpec requestSpec = prompt
                 .system(qwen ? QWEN_SYSTEM : SYSTEM)
                 .user(user -> {
                     user.text("""
@@ -408,27 +493,30 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                             .param("correction", correction);
                     preparedPages.forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
-                })
-                .call()
-                .content();
+                });
+        String content = tracedContent(
+                trace,
+                owner,
+                correction.isBlank() ? "visual-region-locator-v1" : "visual-region-locator-retry-v1",
+                "visual-region-locator-v1",
+                qwen ? QWEN_SYSTEM : SYSTEM,
+                preparedPages,
+                () -> requestSpec.call().content());
         if (VisualLocatorResponsePolicy.isExplicitNoRegion(content)) {
             return unavailableGuide(Rejection.EXPLICIT_NO_REGION, false);
         }
         Optional<ModelGuide> parsed = VisualLocatorResponsePolicy.parseModelGuide(content);
         if (parsed.isEmpty()) {
-            log.info("Visual locator returned no usable JSON for section {}", request.sectionTitle());
+            captureFailure(trace, "VISUAL_REGION_OUTPUT_REJECTED");
+            log.info("Visual locator returned no usable JSON for runId={}", request.runId());
             return unavailableGuide(Rejection.MALFORMED_JSON, true);
         }
         if (parsed.get().regions().isEmpty()) return unavailableGuide(Rejection.EXPLICIT_NO_REGION, false);
         if (qwen) {
             log.info(
-                    "Qwen visual candidates for section {}: {}",
-                    request.sectionTitle(),
-                    parsed.get().regions().stream()
-                            .map(region -> "p" + region.pageNumber() + "@" + region.x() + "," + region.y()
-                                    + "+" + region.width() + "x" + region.height()
-                                    + "=" + region.supportedClaimRefs())
-                            .toList());
+                    "Qwen visual locator returned {} candidate region(s) for runId={}",
+                    parsed.get().regions().size(),
+                    request.runId());
         }
         List<LocatedRegion> accepted = new java.util.ArrayList<>();
         Rejection rejected = Rejection.NONE;
@@ -464,12 +552,15 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                         supportedStepPositions);
                 if (accepted.stream().noneMatch(existing -> sameRegion(existing, region))) accepted.add(region);
             } catch (IllegalArgumentException invalidModelOutput) {
-                log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
+                log.info(
+                        "Rejected invalid visual locator output for runId={} (reason=INVALID_GEOMETRY)",
+                        request.runId());
                 rejected = Rejection.INVALID_GEOMETRY;
             }
         }
         if (!accepted.isEmpty()) return new GuideAttempt(LocateGuideResult.found(accepted), false, Rejection.NONE);
-        log.info("Visual locator returned no supported visual regions for section {}", request.sectionTitle());
+        log.info("Visual locator returned no supported visual regions for runId={}", request.runId());
+        captureFailure(trace, "VISUAL_REGION_SCOPE_REJECTED");
         return unavailableGuide(rejected == Rejection.NONE ? Rejection.UNSUPPORTED_SCOPE : rejected, true);
     }
 
@@ -498,6 +589,188 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .maxTokens(800)
                 .extraBody(Map.of("enable_thinking", false))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+    }
+
+    private String tracedContent(
+            TraceInvocation trace,
+            String owner,
+            String templateVersion,
+            String outputSchemaVersion,
+            String outputContract,
+            List<VisualRegionLocator.PageImage> modelVisiblePages,
+            Supplier<String> providerCall) {
+        int attempt = trace.nextAttempt();
+        captureVisualInputs(trace, attempt, templateVersion, modelVisiblePages);
+        capture(trace, () -> trace.capture().modelCallStarted(new ModelCallStarted(
+                freshContext(trace.context()),
+                models.providerFor(Role.VISUAL, owner),
+                models.modelNameFor(Role.VISUAL, owner),
+                attempt,
+                templateVersion,
+                outputSchemaVersion,
+                sha256(outputContract),
+                Math.max(1, modelVisiblePages.size() * 600),
+                800)));
+        try {
+            String content = providerCall.get();
+            capture(trace, () -> trace.capture().modelTurn(new ModelTurn(
+                    freshContext(trace.context()),
+                    models.providerFor(Role.VISUAL, owner),
+                    models.modelNameFor(Role.VISUAL, owner),
+                    attempt,
+                    content == null ? "" : content,
+                    List.of(),
+                    "RESPONSE_RECEIVED",
+                    0,
+                    0,
+                    content == null || content.isBlank())));
+            return content;
+        } catch (RuntimeException failure) {
+            captureFailure(trace, "VISUAL_REGION_MODEL_ATTEMPT_FAILED");
+            throw failure;
+        }
+    }
+
+    private void captureVisualInputs(
+            TraceInvocation trace,
+            int attempt,
+            String purpose,
+            List<VisualRegionLocator.PageImage> pages) {
+        if (!trace.enabled() || pages.isEmpty()) return;
+        try {
+            List<MediaDescriptor> descriptors = IntStream.range(0, pages.size())
+                    .mapToObj(index -> mediaDescriptor(pages.get(index), index + 1))
+                    .toList();
+            String callId = "visual-region-media|" + attempt;
+            String arguments = traceJson(Map.of(
+                    "purpose", purpose,
+                    "pageNumbers", pages.stream().map(VisualRegionLocator.PageImage::pageNumber).toList()));
+            capture(trace, () -> trace.capture().toolCall(new AgentTraceEvent.ToolCall(
+                    freshContext(trace.context()),
+                    callId,
+                    "provide_visual_model_media",
+                    arguments,
+                    arguments,
+                    "visual-model-media-input-v1",
+                    sha256(TRACE_MEDIA_INPUT_SCHEMA),
+                    ToolArgumentValidation.ACCEPTED)));
+            String observation = traceJson(Map.of(
+                    "media",
+                    descriptors.stream()
+                            .map(descriptor -> Map.of(
+                                    "mediaType", descriptor.mediaType(),
+                                    "label", descriptor.label(),
+                                    "width", descriptor.width(),
+                                    "height", descriptor.height(),
+                                    "byteCount", descriptor.byteCount(),
+                                    "sha256", descriptor.sha256()))
+                            .toList()));
+            capture(trace, () -> trace.capture().toolObservation(new AgentTraceEvent.ToolObservation(
+                    freshContext(trace.context()),
+                    callId,
+                    "provide_visual_model_media",
+                    observation,
+                    "MEDIA_BOUND",
+                    descriptors.size(),
+                    false,
+                    descriptors)));
+        } catch (RuntimeException traceFailure) {
+            captureGap(trace, "VISUAL_REGION_MEDIA_TRACE_GAP");
+        }
+    }
+
+    private MediaDescriptor mediaDescriptor(VisualRegionLocator.PageImage page, int inputPosition) {
+        try {
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(page.content()));
+            if (image == null) throw new IllegalArgumentException("visual trace media is not a readable image");
+            return new MediaDescriptor(
+                    page.mediaType(),
+                    "pdf-page-" + page.pageNumber() + "-input-" + inputPosition,
+                    image.getWidth(),
+                    image.getHeight(),
+                    page.content().length,
+                    sha256(page.content()));
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("visual trace media is not a readable image", failure);
+        }
+    }
+
+    private void captureFailure(TraceInvocation trace, String code) {
+        capture(trace, () -> trace.capture().bindingOrFailure(new BindingOrFailure(
+                freshContext(trace.context()),
+                LifecycleSignal.FAILURE,
+                code,
+                trace.context().resource(),
+                null)));
+    }
+
+    private void captureGap(TraceInvocation trace, String code) {
+        capture(trace, () -> trace.capture().bindingOrFailure(new BindingOrFailure(
+                freshContext(trace.context()),
+                LifecycleSignal.GAP,
+                code,
+                trace.context().resource(),
+                null)));
+    }
+
+    private TraceInvocation trace(CaptureHandle capture, TraceEventContext context) {
+        return new TraceInvocation(
+                PrivateAgentTraceCapture.failOpen(capture),
+                context,
+                new AtomicInteger());
+    }
+
+    private void capture(TraceInvocation trace, Runnable emission) {
+        if (!trace.enabled()) return;
+        try {
+            emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never remove an already grounded text lesson or change optional crop recovery.
+        }
+    }
+
+    private TraceEventContext freshContext(TraceEventContext context) {
+        return new TraceEventContext(
+                UUID.randomUUID(),
+                Instant.now(),
+                context.stage(),
+                context.operationId(),
+                context.parentOperationId(),
+                context.resource());
+    }
+
+    private String traceJson(Object value) {
+        try {
+            return TRACE_JSON.writeValueAsString(value);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("visual trace metadata serialization failed", failure);
+        }
+    }
+
+    private String sha256(String value) {
+        return sha256(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String sha256(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+        } catch (NoSuchAlgorithmException failure) {
+            throw new IllegalStateException("SHA-256 is unavailable", failure);
+        }
+    }
+
+    private record TraceInvocation(
+            CaptureHandle capture,
+            TraceEventContext context,
+            AtomicInteger attempts) {
+
+        private boolean enabled() {
+            return context != null && capture != null && capture.enabled();
+        }
+
+        private int nextAttempt() {
+            return attempts.incrementAndGet();
+        }
     }
 
     private record GuideAttempt(LocateGuideResult guide, boolean retryable, Rejection rejection) {}

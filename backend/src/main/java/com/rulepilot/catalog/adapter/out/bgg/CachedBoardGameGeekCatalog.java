@@ -182,8 +182,48 @@ public class CachedBoardGameGeekCatalog implements BoardGameGeekCatalog {
             refreshAsync("game:" + bggId, () -> loadAndCacheGame(bggId));
             return cached.get().value();
         }
+        Cached<DiscoveryGame> locallyStored = safeDiscoveryGames(List.of(bggId), now).get(bggId);
+        if (locallyStored != null) {
+            recordRequest("game", "projection");
+            GameDetails projected = projectGameDetails(locallyStored.value());
+            refreshAsync("game:" + bggId, () -> loadAndCacheGame(bggId));
+            return projected;
+        }
         recordRequest("game", "miss");
         return coalesced("game:" + bggId, () -> loadAndCacheGame(bggId));
+    }
+
+    private GameDetails projectGameDetails(DiscoveryGame game) {
+        List<String> officialChineseNames = game.chineseName().isBlank()
+                ? List.of()
+                : List.of(game.chineseName());
+        return new GameDetails(
+                game.bggId(),
+                game.name(),
+                game.description(),
+                game.thumbnailUrl(),
+                game.publicationYear(),
+                game.minPlayers(),
+                game.maxPlayers(),
+                game.playingTimeMinutes(),
+                game.minimumAge(),
+                game.imageUrl(),
+                game.averageRating(),
+                game.averageWeight(),
+                game.categories(),
+                game.mechanics(),
+                game.designers(),
+                game.publishers(),
+                officialChineseNames,
+                List.of(),
+                game.minimumPlayTimeMinutes(),
+                game.maximumPlayTimeMinutes(),
+                game.suggestedMinimumAge(),
+                game.bestWith(),
+                game.recommendedWith(),
+                game.languageDependenceLevel(),
+                game.weightVotes(),
+                game.families());
     }
 
     private List<HotGame> loadAndCacheHotGames() {

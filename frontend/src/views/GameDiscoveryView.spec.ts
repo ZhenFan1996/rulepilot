@@ -45,6 +45,24 @@ describe('GameDiscoveryView', () => {
     vi.unstubAllGlobals()
   })
 
+  it('shows route identity and starts its cover while the details request is pending', async () => {
+    let resolveDetails!: (response: Response) => void
+    const pendingDetails = new Promise<Response>(resolve => { resolveDetails = resolve })
+    vi.stubGlobal('fetch', vi.fn(() => pendingDetails))
+
+    const { wrapper } = await mountDiscovery()
+    await flushPromises()
+
+    expect(wrapper.get('h1').text()).toBe('BGG #42')
+    expect(wrapper.get('[data-testid="game-detail-loading"]').text()).toContain('正在读取桌游资料')
+    expect(wrapper.get('img[alt="BGG #42 封面"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/42/thumbnail')
+    expect(wrapper.find('[data-cover-kind="display"]').exists()).toBe(false)
+
+    wrapper.unmount()
+    resolveDetails(Response.json(details))
+  })
+
   it('inspects attributed BGG details without mutating the catalog', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _options?: RequestInit) => {
       const path = String(input)
@@ -73,6 +91,12 @@ describe('GameDiscoveryView', () => {
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42"]').attributes('target')).toBe('_blank')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42/images"]').attributes('target')).toBe('_blank')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42/files"]').attributes('target')).toBe('_blank')
+    expect(wrapper.get('img[alt="目录游戏 封面"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/42/thumbnail')
+    expect(wrapper.find('img[aria-hidden="true"]').exists()).toBe(false)
+    await wrapper.get('img[alt="目录游戏 封面"]').trigger('load')
+    expect(wrapper.get('img[aria-hidden="true"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/42/image')
     expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=false', {
       credentials: 'include', signal: expect.any(AbortSignal),

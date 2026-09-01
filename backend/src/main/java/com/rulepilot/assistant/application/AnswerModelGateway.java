@@ -1,5 +1,8 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.RuleAnswerModel;
@@ -38,6 +41,15 @@ final class AnswerModelGateway {
     }
 
     ModelDraft compose(UUID runId, String username, UUID gameSessionId, ModelRequest request) {
+        return compose(runId, username, gameSessionId, request, CaptureHandle.noop());
+    }
+
+    ModelDraft compose(
+            UUID runId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest request,
+            CaptureHandle capture) {
         RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
         try {
             return invocations.invoke(
@@ -46,7 +58,12 @@ final class AnswerModelGateway {
                     "composeRuleAnswer",
                     estimateTokens(request.toString()),
                     "Rule answer model output received",
-                    () -> deadline.invoke(runId, () -> model.compose(request, username)),
+                    () -> deadline.invoke(
+                            runId,
+                            () -> capture.enabled()
+                                    ? model.compose(
+                                            request, username, capture, assistantRun(runId), runId)
+                                    : model.compose(request, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -62,6 +79,28 @@ final class AnswerModelGateway {
             List<String> feedback,
             String operation,
             String successSummary) {
+        return revise(
+                runId,
+                username,
+                gameSessionId,
+                request,
+                previousDraft,
+                feedback,
+                operation,
+                successSummary,
+                CaptureHandle.noop());
+    }
+
+    ModelDraft revise(
+            UUID runId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            String operation,
+            String successSummary,
+            CaptureHandle capture) {
         RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
         try {
             return invocations.invoke(
@@ -71,7 +110,17 @@ final class AnswerModelGateway {
                     estimateTokens(request.toString()) + estimateTokens(feedback.toString()),
                     successSummary,
                     () -> deadline.invoke(
-                            runId, () -> model.revise(request, previousDraft, feedback, username)),
+                            runId,
+                            () -> capture.enabled()
+                                    ? model.revise(
+                                            request,
+                                            previousDraft,
+                                            feedback,
+                                            username,
+                                            capture,
+                                            assistantRun(runId),
+                                            runId)
+                                    : model.revise(request, previousDraft, feedback, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -88,6 +137,30 @@ final class AnswerModelGateway {
             Set<PlayerFacingField> editableFields,
             String operation,
             String successSummary) {
+        return revisePlayerFacing(
+                runId,
+                username,
+                gameSessionId,
+                request,
+                previousDraft,
+                feedback,
+                editableFields,
+                operation,
+                successSummary,
+                CaptureHandle.noop());
+    }
+
+    ModelDraft revisePlayerFacing(
+            UUID runId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            Set<PlayerFacingField> editableFields,
+            String operation,
+            String successSummary,
+            CaptureHandle capture) {
         RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
         try {
             ModelDraft repaired = invocations.invoke(
@@ -98,8 +171,22 @@ final class AnswerModelGateway {
                     successSummary,
                     () -> deadline.invoke(
                             runId,
-                            () -> model.revisePlayerFacing(
-                                    request, previousDraft, feedback, editableFields, username)),
+                            () -> capture.enabled()
+                                    ? model.revisePlayerFacing(
+                                            request,
+                                            previousDraft,
+                                            feedback,
+                                            editableFields,
+                                            username,
+                                            capture,
+                                            assistantRun(runId),
+                                            runId)
+                                    : model.revisePlayerFacing(
+                                            request,
+                                            previousDraft,
+                                            feedback,
+                                            editableFields,
+                                            username)),
                     result -> estimateTokens(result.toString()));
             return lockUnselectedPlayerFacingFields(previousDraft, repaired, editableFields);
         } finally {
@@ -150,6 +237,15 @@ final class AnswerModelGateway {
             String username,
             UUID gameSessionId,
             QuestionInterpretationRequest request) {
+        return interpretQuestion(runId, username, gameSessionId, request, CaptureHandle.noop());
+    }
+
+    Optional<QuestionInterpretationDraft> interpretQuestion(
+            UUID runId,
+            String username,
+            UUID gameSessionId,
+            QuestionInterpretationRequest request,
+            CaptureHandle capture) {
         RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
         try {
             return invocations.invoke(
@@ -158,7 +254,12 @@ final class AnswerModelGateway {
                     "interpretAnswerQuestion",
                     estimateTokens(request.toString()),
                     "Player question intent interpreted",
-                    () -> deadline.invoke(runId, () -> model.interpretQuestion(request, username)),
+                    () -> deadline.invoke(
+                            runId,
+                            () -> capture.enabled()
+                                    ? model.interpretQuestion(
+                                            request, username, capture, assistantRun(runId), runId)
+                                    : model.interpretQuestion(request, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -167,6 +268,10 @@ final class AnswerModelGateway {
 
     private RuleAnswerRateLimiter.Permit acquire(String username, UUID gameSessionId) {
         return rateLimiter.acquireModel(username, gameSessionId, model.providerId(username));
+    }
+
+    private ResourceRef assistantRun(UUID runId) {
+        return new ResourceRef(ResourceType.ASSISTANT_RUN, runId);
     }
 
     private int estimateTokens(String value) {

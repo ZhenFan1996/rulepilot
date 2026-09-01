@@ -4,6 +4,13 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -15,9 +22,15 @@ import com.rulepilot.teaching.domain.LessonLocalization.SectionTranslation;
 import com.rulepilot.teaching.domain.LessonLocalization.RuleFactTranslation;
 import com.rulepilot.teaching.domain.LessonLocalization.StepTranslation;
 import java.util.HashMap;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -33,6 +46,8 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final String TRACE_LOCALIZATION_SCHEMA =
+            "{\"type\":\"object\",\"required\":[\"position\",\"title\",\"visualCaption\",\"steps\"],\"additionalProperties\":false}";
 
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
@@ -49,6 +64,24 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
 
     @Override
     public SectionTranslation translate(LessonSection section, PlayerLocale targetLanguage, String modelConfigurationOwner) {
+        return translate(
+                section,
+                targetLanguage,
+                modelConfigurationOwner,
+                CaptureHandle.noop(),
+                null,
+                1);
+    }
+
+    @Override
+    public SectionTranslation translate(
+            LessonSection section,
+            PlayerLocale targetLanguage,
+            String modelConfigurationOwner,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         if (targetLanguage != PlayerLocale.EN || !available(modelConfigurationOwner)) {
             throw new IllegalStateException("lesson localization model is unavailable");
         }
@@ -66,17 +99,105 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
         }
         SectionTranslationDraft draft;
         try {
-            draft = parseSectionTranslation(prompt
+            captureModelStarted(trace, context, modelConfigurationOwner, section, attempt);
+            String content = prompt
                     .system(prompts.lessonLocalizationSystem())
                     .user(user -> user.text(prompts.lessonLocalizationUser())
                             .param("targetLanguage", targetLanguage.promptName())
                             .param("section", SectionInput.from(section)))
                     .call()
-                    .content());
+                    .content();
+            captureModelTurn(trace, context, modelConfigurationOwner, content, attempt);
+            draft = parseSectionTranslation(content);
         } catch (JsonProcessingException invalid) {
+            captureFailure(trace, context, "LESSON_LOCALIZATION_INVALID_JSON");
             throw new IllegalArgumentException("lesson localization returned invalid structured output", invalid);
+        } catch (RuntimeException failure) {
+            captureFailure(trace, context, "LESSON_LOCALIZATION_MODEL_FAILED");
+            throw failure;
         }
-        return toDomain(section, draft);
+        try {
+            return toDomain(section, draft);
+        } catch (RuntimeException invalidContract) {
+            captureFailure(trace, context, "LESSON_LOCALIZATION_CONTRACT_REJECTED");
+            throw invalidContract;
+        }
+    }
+
+    private void captureModelStarted(
+            CaptureHandle capture,
+            TraceEventContext context,
+            String owner,
+            LessonSection section,
+            int attempt) {
+        if (context == null) return;
+        capture(capture, () -> capture.modelCallStarted(new ModelCallStarted(
+                freshContext(context),
+                models.providerFor(Role.TEACHING, owner),
+                models.modelNameFor(Role.TEACHING, owner),
+                attempt,
+                "lesson-localization-v1",
+                "lesson-localization-v1",
+                sha256(TRACE_LOCALIZATION_SCHEMA),
+                Math.max(1, section.toString().length() / 4),
+                4_096)));
+    }
+
+    private void captureModelTurn(
+            CaptureHandle capture,
+            TraceEventContext context,
+            String owner,
+            String content,
+            int attempt) {
+        if (context == null) return;
+        capture(capture, () -> capture.modelTurn(new ModelTurn(
+                freshContext(context),
+                models.providerFor(Role.TEACHING, owner),
+                models.modelNameFor(Role.TEACHING, owner),
+                attempt,
+                content == null ? "" : content,
+                List.of(),
+                "RESPONSE_RECEIVED",
+                0,
+                0,
+                content == null || content.isBlank())));
+    }
+
+    private void captureFailure(CaptureHandle capture, TraceEventContext context, String code) {
+        if (context == null) return;
+        capture(capture, () -> capture.bindingOrFailure(new BindingOrFailure(
+                freshContext(context),
+                LifecycleSignal.FAILURE,
+                code,
+                context.resource(),
+                null)));
+    }
+
+    private void capture(CaptureHandle capture, Runnable emission) {
+        try {
+            if (capture != null && capture.enabled()) emission.run();
+        } catch (RuntimeException ignored) {
+            // Localization trace diagnostics never change the cached source-bound projection.
+        }
+    }
+
+    private TraceEventContext freshContext(TraceEventContext context) {
+        return new TraceEventContext(
+                UUID.randomUUID(),
+                Instant.now(),
+                context.stage(),
+                context.operationId(),
+                context.parentOperationId(),
+                context.resource());
+    }
+
+    private String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException failure) {
+            throw new IllegalStateException("SHA-256 is unavailable", failure);
+        }
     }
 
     static SectionTranslationDraft parseSectionTranslation(String content) throws JsonProcessingException {

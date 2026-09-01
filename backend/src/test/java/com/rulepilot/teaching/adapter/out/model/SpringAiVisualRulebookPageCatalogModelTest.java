@@ -8,9 +8,17 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.agenttrace.AgentTraceEvent;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.modelconfig.AccountQuotaExceededException;
+import com.rulepilot.modelconfig.ModelAccountQuota;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
-import com.rulepilot.modelconfig.ModelAccountQuota;
 import com.rulepilot.modelconfig.adapter.out.QuotaAwareChatModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
@@ -28,7 +36,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
@@ -83,9 +94,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "every distinct readable gameplay group",
                 "Inventory each distinct labelled block, list row, table row, and worked example",
                 "never replace them with a heading-only overview",
+                "zero to sixteen visible original-language retrieval terms",
+                "Return an empty array",
+                "never determine whether the rule-group inventory is complete",
                 "Do not inventory icons, propose rectangles or coordinates",
                 "Those belong to later enrichment")
                 .doesNotContain(
+                        "2-8 visible original-language retrieval terms",
                         "For every ruleGroupIdentifiers item",
                         "quantifierScope",
                         "resolution",
@@ -876,6 +891,29 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void doesNotTreatAccountQuotaExhaustionAsAVisualOutputContractRepair() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class)))
+                .thenThrow(new IllegalStateException("provider wrapper", new AccountQuotaExceededException()));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+
+        assertThatThrownBy(() -> model.summarizeForTeaching(new CatalogRequest(
+                        List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game")))
+                .isInstanceOf(AccountQuotaExceededException.class);
+
+        verify(chatModel).call(any(Prompt.class));
+    }
+
+    @Test
     void leavesAnInvalidMultiPageLedgerForTheCallerToSplitWithoutAQualityRetry() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
@@ -1381,6 +1419,79 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void productionCatalogKeepsExactRuleEvidenceAcrossTheBoundedKeywordRange() {
+        String ledger = """
+                {"pages":[{"pageNumber":7,"printedTerms":["ΚΥΚΛΟΣ"],"keywords":%s,
+                "externalDocumentDependencies":[],"ruleGroups":[
+                  {"identifier":"ΚΥΚΛΟΣ","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
+                "ruleGroupInventoryComplete":true}]}
+                """;
+
+        var noKeywords = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted("[]"));
+        var oneKeyword = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted("[\"ΚΥΚΛΟΣ\"]"));
+        String sixteenKeywords = java.util.stream.IntStream.rangeClosed(1, 16)
+                .mapToObj(index -> "\"term-" + index + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        var denseKeywords = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted(sixteenKeywords));
+
+        assertThat(noKeywords.pages()).singleElement().satisfies(page -> {
+            assertThat(page.keywords()).containsExactly("page 7");
+            assertThat(page.ruleGroupFacts()).singleElement();
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
+        assertThat(oneKeyword.pages()).singleElement().satisfies(page -> {
+            assertThat(page.keywords()).containsExactly("ΚΥΚΛΟΣ");
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
+        assertThat(denseKeywords.pages()).singleElement().satisfies(page -> {
+            assertThat(page.keywords()).hasSize(16);
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
+    }
+
+    @Test
+    void productionCatalogStillRejectsAnUnboundedKeywordPayload() {
+        String seventeenKeywords = java.util.stream.IntStream.rangeClosed(1, 17)
+                .mapToObj(index -> "\"term-" + index + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                        {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"],"keywords":%s,
+                        "externalDocumentDependencies":[],"ruleGroups":[
+                          {"identifier":"CYCLE","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
+                        "ruleGroupInventoryComplete":true}]}
+                        """.formatted(seventeenKeywords)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must be an array with the declared size");
+    }
+
+    @Test
+    void productionCatalogKeepsKeywordElementsTypedNonBlankAndDistinct() {
+        String ledger = """
+                {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"],"keywords":%s,
+                "externalDocumentDependencies":[],"ruleGroups":[
+                  {"identifier":"CYCLE","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
+                "ruleGroupInventoryComplete":true}]}
+                """;
+
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        ledger.formatted("[\"CYCLE\",\" CYCLE \"]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must not contain duplicate text");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        ledger.formatted("[\"CYCLE\",\" \"]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must contain non-blank text");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        ledger.formatted("[\"CYCLE\",7]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must contain non-blank text");
+    }
+
+    @Test
     void productionTeachingCatalogRejectsUnknownMissingDuplicateAndLegacyFieldsAtTheJsonBoundary() {
         String exact = """
                 {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"keywords":["MOVE","PAWN"],
@@ -1417,6 +1528,143 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 .hasMessageContaining("invalid JSON");
     }
 
+    @Test
+    void tracesEveryVisualOnlyProviderAttemptWithMediaDescriptorsAndTheRawTurn() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        String raw = """
+                {"pages":[{"pageNumber":3,"printedTerms":["MOVE"],"keywords":["MOVE","PAWN"],
+                 "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"MOVE",
+                 "fact":"Move exactly one pawn.","quantitySpans":["one pawn"]}],
+                 "ruleGroupInventoryComplete":true}]}
+                """;
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(raw));
+        RecordingCapture capture = new RecordingCapture();
+        UUID operationId = UUID.randomUUID();
+
+        model(configuration).summarizeForTeaching(
+                new CatalogRequest(
+                        List.of(new PageImageInput(3, "image/png", png())),
+                        "owner",
+                        "Visual-only rulebook"),
+                capture,
+                traceContext(operationId));
+
+        assertThat(capture.starts).singleElement().satisfies(start -> {
+            assertThat(start.attempt()).isEqualTo(1);
+            assertThat(start.context().operationId()).isEqualTo(operationId);
+        });
+        assertThat(capture.turns).singleElement().satisfies(turn -> {
+            assertThat(turn.assistantText()).isEqualTo(raw);
+            assertThat(turn.context().operationId()).isEqualTo(operationId);
+        });
+        assertThat(capture.toolCalls).singleElement().satisfies(call -> {
+            assertThat(call.toolName()).isEqualTo("provide_visual_model_media");
+            assertThat(call.context().operationId()).isEqualTo(operationId);
+        });
+        assertThat(capture.observations).singleElement().satisfies(observation -> {
+            assertThat(observation.toolName()).isEqualTo("provide_visual_model_media");
+            assertThat(observation.media()).singleElement().satisfies(media -> {
+                assertThat(media.mediaType()).startsWith("image/");
+                assertThat(media.width()).isPositive();
+                assertThat(media.height()).isPositive();
+                assertThat(media.byteCount()).isPositive();
+                assertThat(media.sha256()).hasSize(64);
+            });
+            assertThat(observation.modelVisibleObservationJson())
+                    .contains("\"sha256\"")
+                    .doesNotContain("data:image", "iVBOR");
+            assertThat(observation.context().operationId()).isEqualTo(operationId);
+        });
+        assertThat(capture.failures).isEmpty();
+    }
+
+    @Test
+    void correlatesEveryFailedVisualOnlyProviderAttemptWithoutInventingModelTurns() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenThrow(new IllegalStateException("private visual provider detail"));
+        RecordingCapture capture = new RecordingCapture();
+        UUID operationId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> model(configuration).summarizeForTeaching(
+                        new CatalogRequest(
+                                List.of(new PageImageInput(3, "image/png", png())),
+                                "owner",
+                                "Visual-only rulebook"),
+                        capture,
+                        traceContext(operationId)))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(capture.starts).extracting(AgentTraceEvent.ModelCallStarted::attempt)
+                .containsExactly(1, 2);
+        assertThat(capture.starts).allSatisfy(start ->
+                assertThat(start.context().operationId()).isEqualTo(operationId));
+        assertThat(capture.toolCalls).hasSize(2);
+        assertThat(capture.observations).hasSize(2);
+        assertThat(capture.turns).isEmpty();
+        assertThat(capture.failures).hasSize(2).allSatisfy(failure -> {
+            assertThat(failure.signal()).isEqualTo(LifecycleSignal.FAILURE);
+            assertThat(failure.code()).isEqualTo("VISUAL_PROVIDER_CALL_FAILED");
+            assertThat(failure.context().operationId()).isEqualTo(operationId);
+        });
+    }
+
+    @Test
+    void tracesRejectedVisualOnlyModelOutputAfterPreservingEachRawTurn() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        String rejected = "{\"pages\":[{\"pageNumber\":3,\"ruleGroups\":[]}]}";
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(rejected));
+        RecordingCapture capture = new RecordingCapture();
+        UUID operationId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> model(configuration).summarizeForTeaching(
+                        new CatalogRequest(
+                                List.of(new PageImageInput(3, "image/png", png())),
+                                "owner",
+                                "Visual-only rulebook"),
+                        capture,
+                        traceContext(operationId)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(capture.starts).extracting(AgentTraceEvent.ModelCallStarted::attempt)
+                .containsExactly(1, 2);
+        assertThat(capture.turns).hasSize(2).allSatisfy(turn -> {
+            assertThat(turn.assistantText()).isEqualTo(rejected);
+            assertThat(turn.context().operationId()).isEqualTo(operationId);
+        });
+        assertThat(capture.failures).hasSize(2).allSatisfy(failure -> {
+            assertThat(failure.signal()).isEqualTo(LifecycleSignal.FAILURE);
+            assertThat(failure.code()).isEqualTo("VISUAL_MODEL_OUTPUT_REJECTED");
+            assertThat(failure.context().operationId()).isEqualTo(operationId);
+        });
+    }
+
     private SpringAiVisualRulebookPageCatalogModel model(RuntimeModelConfiguration configuration) throws IOException {
         return new SpringAiVisualRulebookPageCatalogModel(
                 configuration,
@@ -1432,6 +1680,35 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
     private ChatResponse response(String content) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
+    }
+
+    private TraceEventContext traceContext(UUID operationId) {
+        return TraceEventContext.create(
+                Instant.now(),
+                JourneyStage.TEACHING,
+                operationId,
+                null,
+                new ResourceRef(ResourceType.VISUAL_RUN, UUID.randomUUID()));
+    }
+
+    private static final class RecordingCapture implements CaptureHandle {
+        private final UUID traceId = UUID.randomUUID();
+        private final List<AgentTraceEvent.ModelCallStarted> starts = new ArrayList<>();
+        private final List<AgentTraceEvent.ModelTurn> turns = new ArrayList<>();
+        private final List<AgentTraceEvent.ToolCall> toolCalls = new ArrayList<>();
+        private final List<AgentTraceEvent.ToolObservation> observations = new ArrayList<>();
+        private final List<AgentTraceEvent.BindingOrFailure> failures = new ArrayList<>();
+
+        @Override public boolean enabled() { return true; }
+        @Override public Optional<UUID> traceId() { return Optional.of(traceId); }
+        @Override public void userTurn(AgentTraceEvent.UserTurn event) {}
+        @Override public void modelCallStarted(AgentTraceEvent.ModelCallStarted event) { starts.add(event); }
+        @Override public void modelTurn(AgentTraceEvent.ModelTurn event) { turns.add(event); }
+        @Override public void toolCall(AgentTraceEvent.ToolCall event) { toolCalls.add(event); }
+        @Override public void toolObservation(AgentTraceEvent.ToolObservation event) { observations.add(event); }
+        @Override public void publication(AgentTraceEvent.Publication event) {}
+        @Override public void bindingOrFailure(AgentTraceEvent.BindingOrFailure event) { failures.add(event); }
+        @Override public boolean bind(ResourceRef resource) { return true; }
     }
 
     private static String teachingCatalogWithDependency(String dependency) {

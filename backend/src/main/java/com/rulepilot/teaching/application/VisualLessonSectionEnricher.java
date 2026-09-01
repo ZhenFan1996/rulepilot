@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -72,6 +73,28 @@ final class VisualLessonSectionEnricher {
             VisualLessonEnricher.VisualProgressListener progress,
             List<VisualFocus> acceptedVisuals,
             java.util.Set<Integer> explicitVisualStepPositions) {
+        return enrich(
+                understanding,
+                documentVersionId,
+                section,
+                modelConfigurationOwner,
+                runId,
+                progress,
+                acceptedVisuals,
+                explicitVisualStepPositions,
+                CaptureHandle.noop());
+    }
+
+    Result enrich(
+            RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            String modelConfigurationOwner,
+            UUID runId,
+            VisualLessonEnricher.VisualProgressListener progress,
+            List<VisualFocus> acceptedVisuals,
+            java.util.Set<Integer> explicitVisualStepPositions,
+            CaptureHandle capture) {
         if (explicitVisualStepPositions == null) {
             throw new IllegalArgumentException("explicit visual step positions are required");
         }
@@ -96,7 +119,14 @@ final class VisualLessonSectionEnricher {
         try (var executor = Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size()))) {
             List<Future<VisualLessonStepLocator.Result>> attempts = targets.stream()
                     .map(step -> executor.submit(() -> locateWithProgress(
-                            understanding, documentVersionId, section, step, modelConfigurationOwner, runId, progress)))
+                            understanding,
+                            documentVersionId,
+                            section,
+                            step,
+                            modelConfigurationOwner,
+                            runId,
+                            progress,
+                            capture)))
                     .toList();
             for (Future<VisualLessonStepLocator.Result> attempt : attempts) {
                 VisualLessonStepLocator.Result location = awaitLocation(attempt);
@@ -135,12 +165,19 @@ final class VisualLessonSectionEnricher {
             LessonStep step,
             String modelConfigurationOwner,
             UUID runId,
-            VisualLessonEnricher.VisualProgressListener progress) {
+            VisualLessonEnricher.VisualProgressListener progress,
+            CaptureHandle capture) {
         VisualLessonEnricher.VisualTarget target = new VisualLessonEnricher.VisualTarget(
                 section.position(), section.title(), step.position(), step.heading());
         progress.targetStarted(target);
         VisualLessonStepLocator.Result location = stepLocator.locate(
-                understanding, documentVersionId, section, step, modelConfigurationOwner, runId);
+                understanding,
+                documentVersionId,
+                section,
+                step,
+                modelConfigurationOwner,
+                runId,
+                capture);
         progress.targetFinished(target, location.region() == null
                 ? location.rejection() == null
                         ? VisualLessonEnricher.Outcome.LOCATOR_RETURNED_NONE

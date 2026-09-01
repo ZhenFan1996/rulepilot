@@ -6,6 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import com.rulepilot.catalog.BggMetadataTranslation;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.CatalogCoverImages;
+import com.rulepilot.catalog.CatalogCoverImages.Absent;
+import com.rulepilot.catalog.CatalogCoverImages.Asset;
+import com.rulepilot.catalog.CatalogCoverImages.Retryable;
+import com.rulepilot.catalog.CatalogCoverImages.Variant;
+import com.rulepilot.catalog.application.BggCatalogCoverPrewarmProgress.CoverCohort;
 import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.Cohort;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
@@ -66,6 +71,7 @@ class BggPopularMetadataPrewarmerTest {
                         new RecordingBgg(),
                         new BggMetadataLocalizationService(new RecordingTranslation(-1)),
                         new RecordingProgress(null),
+                        new RecordingCoverProgress(null),
                         new SyncTaskExecutor(),
                         new RecordingCoverImages(),
                         new SyncTaskExecutor(),
@@ -86,11 +92,14 @@ class BggPopularMetadataPrewarmerTest {
         RecordingCoverImages covers = new RecordingCoverImages();
         RecordingProgress progress = new RecordingProgress(new Cohort(
                 UUID.randomUUID(), "a".repeat(64), 0, 45, 0, 3));
+        RecordingCoverProgress coverProgress = new RecordingCoverProgress(new CoverCohort(
+                UUID.randomUUID(), "a".repeat(64), covers.formatVersion(), 0, 45));
         var prewarmer = new BggPopularMetadataPrewarmer(
                 ranked,
                 bgg,
                 new BggMetadataLocalizationService(translations),
                 progress,
+                coverProgress,
                 new SyncTaskExecutor(),
                 covers,
                 new SyncTaskExecutor(),
@@ -103,17 +112,23 @@ class BggPopularMetadataPrewarmerTest {
 
         prewarmer.prewarm();
 
-        assertThat(bgg.batches).hasSize(4);
+        assertThat(bgg.batches).hasSize(7);
         assertThat(bgg.batches.get(0)).containsExactlyElementsOf(ids(1, 20));
         assertThat(bgg.batches.get(1)).containsExactlyElementsOf(ids(21, 40));
         assertThat(bgg.batches.get(2)).containsExactlyElementsOf(ids(41, 45));
-        assertThat(bgg.batches.get(3)).containsExactly(1, 2, 3);
+        assertThat(bgg.batches.get(3)).containsExactlyElementsOf(ids(1, 20));
+        assertThat(bgg.batches.get(4)).containsExactlyElementsOf(ids(21, 40));
+        assertThat(bgg.batches.get(5)).containsExactlyElementsOf(ids(41, 45));
+        assertThat(bgg.batches.get(6)).containsExactly(1, 2, 3);
         assertThat(translations.translatedIds).containsExactly(1, 2, 3);
-        assertThat(covers.sources).hasSize(45);
-        assertThat(covers.sources.getFirst()).isEqualTo("https://example.test/1.jpg");
-        assertThat(covers.sources.getLast()).isEqualTo("https://example.test/45.jpg");
+        assertThat(covers.requests).hasSize(90);
+        assertThat(covers.requests.getFirst()).isEqualTo("1:COMPACT");
+        assertThat(covers.requests.get(1)).isEqualTo("1:DISPLAY");
+        assertThat(covers.requests.getLast()).isEqualTo("45:DISPLAY");
         assertThat(progress.metadataNext).isEqualTo(45);
         assertThat(progress.translationNext).isEqualTo(3);
+        assertThat(coverProgress.claimedFormatVersion).isEqualTo(covers.formatVersion());
+        assertThat(coverProgress.next).isEqualTo(45);
     }
 
     @Test
@@ -128,6 +143,7 @@ class BggPopularMetadataPrewarmerTest {
                 bgg,
                 new BggMetadataLocalizationService(translations),
                 progress,
+                new RecordingCoverProgress(null),
                 new SyncTaskExecutor(),
                 new RecordingCoverImages(),
                 new SyncTaskExecutor(),
@@ -157,6 +173,7 @@ class BggPopularMetadataPrewarmerTest {
                 bgg,
                 new BggMetadataLocalizationService(translations),
                 progress,
+                new RecordingCoverProgress(null),
                 new SyncTaskExecutor(),
                 new RecordingCoverImages(),
                 new SyncTaskExecutor(),
@@ -172,6 +189,110 @@ class BggPopularMetadataPrewarmerTest {
         assertThat(progress.metadataNext).isEqualTo(20);
         assertThat(progress.translationNext).isEqualTo(3);
         assertThat(translations.translatedIds).containsExactly(1, 3);
+    }
+
+    @Test
+    void warmsANewCoverFormatAfterMetadataAndTranslationAreAlreadyComplete() {
+        MemoryRankedCatalog ranked = new MemoryRankedCatalog(20);
+        RecordingCoverImages covers = new RecordingCoverImages();
+        RecordingCoverProgress coverProgress = new RecordingCoverProgress(new CoverCohort(
+                UUID.randomUUID(), "a".repeat(64), covers.formatVersion(), 0, 20));
+        var prewarmer = new BggPopularMetadataPrewarmer(
+                ranked,
+                new RecordingBgg(),
+                new BggMetadataLocalizationService(new RecordingTranslation(-1)),
+                new RecordingProgress(null),
+                coverProgress,
+                new SyncTaskExecutor(),
+                covers,
+                new SyncTaskExecutor(),
+                CLOCK,
+                true,
+                20,
+                20,
+                3,
+                Duration.ofMinutes(30));
+
+        prewarmer.prewarm();
+
+        assertThat(coverProgress.next).isEqualTo(20);
+        assertThat(covers.requests).hasSize(40);
+    }
+
+    @Test
+    void retryableCoverAssetsPauseOnlyTheCoverCursor() {
+        MemoryRankedCatalog ranked = new MemoryRankedCatalog(20);
+        RecordingTranslation translations = new RecordingTranslation(-1);
+        RecordingCoverImages covers = new RecordingCoverImages(2);
+        RecordingProgress progress = new RecordingProgress(new Cohort(
+                UUID.randomUUID(), "a".repeat(64), 0, 20, 0, 3));
+        RecordingCoverProgress coverProgress = new RecordingCoverProgress(new CoverCohort(
+                UUID.randomUUID(), "a".repeat(64), covers.formatVersion(), 0, 20));
+        var prewarmer = new BggPopularMetadataPrewarmer(
+                ranked,
+                new RecordingBgg(),
+                new BggMetadataLocalizationService(translations),
+                progress,
+                coverProgress,
+                new SyncTaskExecutor(),
+                covers,
+                new SyncTaskExecutor(),
+                CLOCK,
+                true,
+                20,
+                20,
+                3,
+                Duration.ofMinutes(30));
+
+        prewarmer.prewarm();
+
+        assertThat(coverProgress.next).isZero();
+        assertThat(progress.metadataNext).isEqualTo(20);
+        assertThat(progress.translationNext).isEqualTo(3);
+        assertThat(translations.translatedIds).containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void unavailableCoverProgressDoesNotBlockMetadataOrTranslation() {
+        RecordingProgress progress = new RecordingProgress(new Cohort(
+                UUID.randomUUID(), "a".repeat(64), 0, 20, 0, 3));
+        BggCatalogCoverPrewarmProgress unavailableCoverProgress = new BggCatalogCoverPrewarmProgress() {
+            @Override
+            public Optional<CoverCohort> claim(
+                    String snapshotSha256,
+                    String formatVersion,
+                    int targetCount,
+                    int cohortSize,
+                    Instant claimedAt,
+                    Duration leaseDuration) {
+                throw new IllegalStateException("cover progress database unavailable");
+            }
+
+            @Override
+            public void complete(CoverCohort cohort, int nextOffset, Instant completedAt) {
+                throw new AssertionError("an unavailable claim cannot be completed");
+            }
+        };
+        var prewarmer = new BggPopularMetadataPrewarmer(
+                new MemoryRankedCatalog(20),
+                new RecordingBgg(),
+                new BggMetadataLocalizationService(new RecordingTranslation(-1)),
+                progress,
+                unavailableCoverProgress,
+                new SyncTaskExecutor(),
+                new RecordingCoverImages(),
+                new SyncTaskExecutor(),
+                CLOCK,
+                true,
+                20,
+                20,
+                3,
+                Duration.ofMinutes(30));
+
+        prewarmer.prewarm();
+
+        assertThat(progress.metadataNext).isEqualTo(20);
+        assertThat(progress.translationNext).isEqualTo(3);
     }
 
     private static List<Integer> ids(int first, int last) {
@@ -270,7 +391,20 @@ class BggPopularMetadataPrewarmerTest {
                             BigDecimal.ONE,
                             BigDecimal.ONE,
                             List.of("Strategy"),
-                            List.of("Card Drafting")))
+                            List.of("Card Drafting"),
+                            60,
+                            60,
+                            null,
+                            null,
+                            "",
+                            "",
+                            null,
+                            null,
+                            List.of(),
+                            List.of(),
+                            List.of(),
+                            "Stored description " + id,
+                            "https://example.test/" + id + "-original.jpg"))
                     .toList();
         }
 
@@ -281,12 +415,54 @@ class BggPopularMetadataPrewarmerTest {
     }
 
     private static final class RecordingCoverImages implements CatalogCoverImages {
-        private final List<String> sources = new ArrayList<>();
+        private final List<String> requests = new ArrayList<>();
+        private final int retryableBggId;
+
+        private RecordingCoverImages() {
+            this(-1);
+        }
+
+        private RecordingCoverImages(int retryableBggId) {
+            this.retryableBggId = retryableBggId;
+        }
 
         @Override
-        public byte[] read(String sourceUrl) {
-            sources.add(sourceUrl);
-            return new byte[] {1};
+        public String formatVersion() {
+            return "test-profiled-cover-v1";
+        }
+
+        @Override
+        public Asset load(int bggId, Variant variant) {
+            requests.add(bggId + ":" + variant);
+            if (bggId == retryableBggId) return new Retryable(Duration.ofSeconds(5));
+            return new Absent();
+        }
+    }
+
+    private static final class RecordingCoverProgress implements BggCatalogCoverPrewarmProgress {
+        private final CoverCohort cohort;
+        private String claimedFormatVersion;
+        private int next = -1;
+
+        private RecordingCoverProgress(CoverCohort cohort) {
+            this.cohort = cohort;
+        }
+
+        @Override
+        public Optional<CoverCohort> claim(
+                String snapshotSha256,
+                String formatVersion,
+                int targetCount,
+                int cohortSize,
+                Instant claimedAt,
+                Duration leaseDuration) {
+            claimedFormatVersion = formatVersion;
+            return Optional.ofNullable(cohort);
+        }
+
+        @Override
+        public void complete(CoverCohort cohort, int nextOffset, Instant completedAt) {
+            next = nextOffset;
         }
     }
 
@@ -341,7 +517,7 @@ class BggPopularMetadataPrewarmerTest {
                 int translationCohortSize,
                 Instant claimedAt,
                 Duration leaseDuration) {
-            return Optional.of(cohort);
+            return Optional.ofNullable(cohort);
         }
 
         @Override

@@ -563,6 +563,13 @@ final class RecommendationEvidenceReview {
         requirePreferenceEvidence(evidenceId, request);
     }
 
+    UserEvidence userEvidence(String evidenceId, ConversationRequest request) {
+        requirePreferenceEvidence(evidenceId, request);
+        return new UserEvidence(
+                preferenceEvidenceText(evidenceId, request),
+                evidenceTurn(evidenceId, request));
+    }
+
     Map<String, String> preferenceEvidence(ConversationRequest request) {
         Map<String, String> evidence = new LinkedHashMap<>();
         for (DialogueMessage message : request.transcript()) {
@@ -730,6 +737,8 @@ final class RecommendationEvidenceReview {
     }
 
     private record PreferenceEvidenceClassification(boolean contextual, String reason) {}
+
+    record UserEvidence(String text, int turn) {}
 
     record PreferenceUpdatePlan(
             RecommendationProfile profile,

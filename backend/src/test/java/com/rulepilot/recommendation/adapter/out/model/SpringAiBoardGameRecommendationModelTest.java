@@ -6,12 +6,14 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.google.genai.types.Schema;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
+import java.lang.reflect.Method;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -22,7 +24,9 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.util.JacksonUtils;
 import reactor.core.publisher.Flux;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 class SpringAiBoardGameRecommendationModelTest {
 
@@ -314,4 +318,65 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(turn.toolCalls()).singleElement().satisfies(call ->
                 assertThat(call.name()).isEqualTo("reply_to_user"));
     }
+
+    @Test
+    void preservesBothCatalogIntentUpdateBranchesWhenGoogleGenAiDeserializesTheBrowseSchema() throws Exception {
+        var googleMapper = JacksonUtils.getDefaultJsonMapper().rebuild()
+                .addMixIn(Schema.class, GoogleSchemaMixin.class)
+                .build();
+        List<ToolSpec> actions = recommendationActions(List.of("U1"));
+        for (ToolSpec action : actions) {
+            googleMapper.readValue(action.inputSchema(), Schema.class);
+        }
+        ToolSpec browse = actions.stream()
+                .filter(action -> action.name().equals("browse_bgg_catalog"))
+                .findFirst()
+                .orElseThrow();
+        Schema browseSchema = googleMapper.readValue(browse.inputSchema(), Schema.class);
+        Schema catalogIntentUpdate = browseSchema.properties()
+                .orElseThrow()
+                .get("catalogIntentUpdate");
+
+        assertThat(catalogIntentUpdate.anyOf()).hasValueSatisfying(branches -> {
+            assertThat(branches).hasSize(2);
+
+            Schema replace = branches.getFirst();
+            assertThat(replace.properties().orElseThrow()).containsKeys("operation", "criteria");
+            assertThat(replace.properties().orElseThrow().get("operation").enum_())
+                    .hasValue(List.of("REPLACE"));
+            assertThat(replace.required()).hasValue(List.of("operation", "criteria"));
+            Schema criteria = replace.properties().orElseThrow().get("criteria");
+            assertThat(criteria.minItems()).contains(1L);
+            Schema criterion = criteria.items().orElseThrow();
+            assertThat(criterion.properties().orElseThrow())
+                    .containsKeys("dimension", "value", "evidence");
+            assertThat(criterion.properties().orElseThrow().get("dimension").enum_())
+                    .hasValue(List.of("CATEGORY", "MECHANIC", "FAMILY", "DESIGNER", "PUBLISHER"));
+            assertThat(criterion.properties().orElseThrow().get("value").minLength()).contains(1L);
+            assertThat(criterion.properties().orElseThrow().get("value").maxLength()).contains(120L);
+            assertThat(criterion.properties().orElseThrow().get("evidence").enum_())
+                    .hasValue(List.of("U1"));
+            assertThat(criterion.required())
+                    .hasValue(List.of("dimension", "value", "evidence"));
+
+            Schema clear = branches.get(1);
+            assertThat(clear.properties().orElseThrow()).containsKeys("operation", "evidence");
+            assertThat(clear.properties().orElseThrow().get("operation").enum_())
+                    .hasValue(List.of("CLEAR"));
+            assertThat(clear.properties().orElseThrow().get("evidence").enum_())
+                    .hasValue(List.of("U1"));
+            assertThat(clear.required()).hasValue(List.of("operation", "evidence"));
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<ToolSpec> recommendationActions(List<String> preferenceEvidenceIds) throws Exception {
+        Class<?> loop = Class.forName("com.rulepilot.recommendation.application.RecommendationReActLoop");
+        Method actions = loop.getDeclaredMethod("actions", int.class, List.class);
+        actions.setAccessible(true);
+        return (List<ToolSpec>) actions.invoke(null, 3, preferenceEvidenceIds);
+    }
+
+    @JsonDeserialize(builder = Schema.Builder.class)
+    abstract static class GoogleSchemaMixin {}
 }

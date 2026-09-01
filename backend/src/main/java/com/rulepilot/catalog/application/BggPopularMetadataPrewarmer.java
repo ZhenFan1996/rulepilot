@@ -4,6 +4,10 @@ import static com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgres
 import static com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.MAX_TARGET_COUNT;
 
 import com.rulepilot.catalog.CatalogCoverImages;
+import com.rulepilot.catalog.CatalogCoverImages.Asset;
+import com.rulepilot.catalog.CatalogCoverImages.Retryable;
+import com.rulepilot.catalog.CatalogCoverImages.Variant;
+import com.rulepilot.catalog.application.BggCatalogCoverPrewarmProgress.CoverCohort;
 import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.Cohort;
 import com.rulepilot.catalog.BggMetadataTranslation.PrewarmResult;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
@@ -24,7 +28,7 @@ import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Low-priority hydration of recommendation metadata for the most-ranked BGG games. */
+/** Low-priority hydration of metadata, translations, and profiled covers for ranked BGG games. */
 @Component
 @Profile("!test")
 @ConditionalOnProperty(name = "rulepilot.runtime.worker-enabled", havingValue = "true")
@@ -37,6 +41,7 @@ class BggPopularMetadataPrewarmer {
     private final BoardGameGeekCatalog bgg;
     private final BggMetadataLocalizationService localization;
     private final BggPopularMetadataPrewarmProgress progress;
+    private final BggCatalogCoverPrewarmProgress coverProgress;
     private final TaskExecutor executor;
     private final CatalogCoverImages coverImages;
     private final TaskExecutor coverExecutor;
@@ -54,6 +59,7 @@ class BggPopularMetadataPrewarmer {
             BoardGameGeekCatalog bgg,
             BggMetadataLocalizationService localization,
             BggPopularMetadataPrewarmProgress progress,
+            BggCatalogCoverPrewarmProgress coverProgress,
             @Qualifier("bggPopularPrewarmExecutor") TaskExecutor executor,
             CatalogCoverImages coverImages,
             @Qualifier("bggCoverPrewarmExecutor") TaskExecutor coverExecutor,
@@ -67,6 +73,7 @@ class BggPopularMetadataPrewarmer {
                 bgg,
                 localization,
                 progress,
+                coverProgress,
                 executor,
                 coverImages,
                 coverExecutor,
@@ -83,6 +90,7 @@ class BggPopularMetadataPrewarmer {
             BoardGameGeekCatalog bgg,
             BggMetadataLocalizationService localization,
             BggPopularMetadataPrewarmProgress progress,
+            BggCatalogCoverPrewarmProgress coverProgress,
             TaskExecutor executor,
             CatalogCoverImages coverImages,
             TaskExecutor coverExecutor,
@@ -97,6 +105,7 @@ class BggPopularMetadataPrewarmer {
         this.bgg = bgg;
         this.localization = localization;
         this.progress = progress;
+        this.coverProgress = coverProgress;
         this.executor = executor;
         this.coverImages = coverImages;
         this.coverExecutor = coverExecutor;
@@ -135,6 +144,11 @@ class BggPopularMetadataPrewarmer {
         BggRankedCatalog.Snapshot snapshot = rankedCatalog.findSnapshot().orElse(null);
         if (snapshot == null || snapshot.gameCount() == 0) return;
         int target = Math.min(targetGameCount, snapshot.gameCount());
+        try {
+            prewarmCovers(snapshot.sha256(), target);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("BGG catalog cover prewarm could not be claimed; metadata prewarm will continue");
+        }
         Cohort cohort = progress.claim(
                         snapshot.sha256(),
                         target,
@@ -160,13 +174,57 @@ class BggPopularMetadataPrewarmer {
         }
     }
 
+    private void prewarmCovers(String snapshotSha256, int target) {
+        CoverCohort cohort = coverProgress.claim(
+                        snapshotSha256,
+                        coverImages.formatVersion(),
+                        target,
+                        metadataCohortSize,
+                        clock.instant(),
+                        leaseDuration)
+                .orElse(null);
+        if (cohort == null) return;
+
+        int next = warmCoverRange(cohort.start(), cohort.end());
+        try {
+            coverProgress.complete(cohort, next, clock.instant());
+            LOGGER.info(
+                    "BGG catalog cover prewarm advanced format {} to {} / {}",
+                    cohort.formatVersion(),
+                    next,
+                    target);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("BGG catalog cover prewarm progress could not be persisted; the lease will be retried");
+        }
+    }
+
+    private int warmCoverRange(int start, int end) {
+        int next = start;
+        while (next < end) {
+            List<Integer> ids = rankedIds(next, Math.min(BGG_BATCH_SIZE, end - next));
+            if (ids.isEmpty()) return next;
+            try {
+                bgg.gameDetails(ids);
+                if (!warmCovers(ids)) {
+                    LOGGER.warn("BGG catalog cover prewarm paused at ranked offset {}", next);
+                    return next;
+                }
+            } catch (RuntimeException exception) {
+                LOGGER.warn("BGG catalog cover prewarm paused at ranked offset {}", next);
+                return next;
+            }
+            next += ids.size();
+        }
+        return next;
+    }
+
     private int hydrate(int start, int end) {
         int next = start;
         while (next < end) {
             List<Integer> ids = rankedIds(next, Math.min(BGG_BATCH_SIZE, end - next));
             if (ids.isEmpty()) return next;
             try {
-                warmCovers(bgg.gameDetails(ids));
+                bgg.gameDetails(ids);
             } catch (RuntimeException exception) {
                 LOGGER.warn("BGG popular metadata hydration paused at ranked offset {}", next);
                 return next;
@@ -176,26 +234,20 @@ class BggPopularMetadataPrewarmer {
         return next;
     }
 
-    private void warmCovers(List<DiscoveryGame> games) {
-        CompletableFuture<?>[] warmups = games.stream()
-                .map(this::coverSource)
-                .filter(source -> !source.isBlank())
-                .map(source -> CompletableFuture.runAsync(() -> warmCover(source), coverExecutor))
-                .toArray(CompletableFuture[]::new);
-        CompletableFuture.allOf(warmups).join();
+    private boolean warmCovers(List<Integer> bggIds) {
+        List<CompletableFuture<Asset>> warmups = bggIds.stream()
+                .flatMap(bggId -> java.util.stream.Stream.of(
+                        new CoverWarmup(bggId, Variant.COMPACT),
+                        new CoverWarmup(bggId, Variant.DISPLAY)))
+                .distinct()
+                .map(request -> CompletableFuture.supplyAsync(
+                        () -> coverImages.load(request.bggId(), request.variant()), coverExecutor))
+                .toList();
+        CompletableFuture.allOf(warmups.toArray(CompletableFuture<?>[]::new)).join();
+        return warmups.stream().map(CompletableFuture::join).noneMatch(Retryable.class::isInstance);
     }
 
-    private String coverSource(DiscoveryGame game) {
-        return !game.imageUrl().isBlank() ? game.imageUrl() : game.thumbnailUrl();
-    }
-
-    private void warmCover(String source) {
-        try {
-            coverImages.read(source);
-        } catch (RuntimeException unavailable) {
-            LOGGER.debug("A BGG cover could not be prewarmed and will retry on demand");
-        }
-    }
+    private record CoverWarmup(int bggId, Variant variant) {}
 
     private int translate(int start, int end) {
         int next = start;

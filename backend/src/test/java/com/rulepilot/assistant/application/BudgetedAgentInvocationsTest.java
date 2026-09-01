@@ -6,9 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
+import com.rulepilot.modelconfig.AccountQuotaExceededException;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class BudgetedAgentInvocationsTest {
@@ -90,6 +92,46 @@ class BudgetedAgentInvocationsTest {
                 .hasMessage("provider failed");
         assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.FAILED);
         assertThat(control.summary).isEqualTo("composeRuleAnswer failed safely");
+    }
+
+    @Test
+    void mapsDirectAccountQuotaExhaustionToANonRetryableRejectedInvocation() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+        AtomicInteger calls = new AtomicInteger();
+
+        assertThatThrownBy(() -> invocations.invoke(
+                        UUID.randomUUID(), AgentExecutionControl.ActivityType.MODEL, "composeTeachingSection|1", 5,
+                        "Teaching section composed", () -> {
+                            calls.incrementAndGet();
+                            throw new AccountQuotaExceededException();
+                        }, value -> 0))
+                .isInstanceOfSatisfying(AgentExecutionStoppedException.class, stopped -> {
+                    assertThat(stopped.reason()).isEqualTo(StopReason.ACCOUNT_QUOTA);
+                    assertThat(stopped).hasCauseInstanceOf(AccountQuotaExceededException.class);
+                });
+        assertThat(calls).hasValue(1);
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.REJECTED);
+        assertThat(control.summary).isEqualTo("Model account quota exhausted");
+    }
+
+    @Test
+    void findsAccountQuotaExhaustionInsideAProviderWrapperWithoutMisclassifyingIt() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+
+        assertThatThrownBy(() -> invocations.invoke(
+                        UUID.randomUUID(), AgentExecutionControl.ActivityType.MODEL, "organizeTeachingOutline", 5,
+                        "Teaching outline organized", () -> {
+                            throw new IllegalStateException("provider wrapper", new AccountQuotaExceededException());
+                        }, value -> 0))
+                .isInstanceOfSatisfying(AgentExecutionStoppedException.class, stopped -> {
+                    assertThat(stopped.reason()).isEqualTo(StopReason.ACCOUNT_QUOTA);
+                    assertThat(stopped).hasCauseInstanceOf(IllegalStateException.class);
+                    assertThat(stopped).hasRootCauseInstanceOf(AccountQuotaExceededException.class);
+                });
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.REJECTED);
+        assertThat(control.summary).isEqualTo("Model account quota exhausted");
     }
 
     @Test

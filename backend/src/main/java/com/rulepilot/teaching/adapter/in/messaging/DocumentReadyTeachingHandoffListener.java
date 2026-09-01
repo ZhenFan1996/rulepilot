@@ -83,10 +83,10 @@ public class DocumentReadyTeachingHandoffListener {
             // The event is only a latency hint. A database failure must not create a hot Rabbit redelivery loop;
             // the isolated scheduled reconciliation lane retries the same durable waiting intent.
             LOGGER.warn(
-                    "Document READY wake-up could not dispatch {} handoff for documentVersionId={}; scheduled reconciliation will recover it",
+                    "Document READY wake-up could not dispatch {} handoff for documentVersionId={}; scheduled reconciliation will recover it (failureType={})",
                     handoffType,
                     documentVersionId,
-                    failure);
+                    failure.getClass().getSimpleName());
             return false;
         }
     }

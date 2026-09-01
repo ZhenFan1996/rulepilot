@@ -1,6 +1,13 @@
 package com.rulepilot.recommendation.application;
 
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
@@ -98,8 +105,44 @@ public class RecommendationConversationCoordinator {
             String ownerUsername,
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener) {
+        return converse(
+                turn,
+                requestedLocale,
+                ownerUsername,
+                progressListener,
+                answerPartListener,
+                CaptureHandle.noop());
+    }
+
+    public TurnResult converse(
+            SessionTurn turn,
+            String requestedLocale,
+            String ownerUsername,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            CaptureHandle capture) {
+        return converse(
+                turn,
+                requestedLocale,
+                ownerUsername,
+                progressListener,
+                answerPartListener,
+                capture,
+                turn == null ? null : turn.clientTurnId());
+    }
+
+    public TurnResult converse(
+            SessionTurn turn,
+            String requestedLocale,
+            String ownerUsername,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            CaptureHandle capture,
+            UUID traceTurnOperationId) {
         Objects.requireNonNull(turn, "recommendation session turn is required");
         Objects.requireNonNull(turn.clientTurnId(), "clientTurnId is required for a persisted turn");
+        UUID traceTurn = Objects.requireNonNull(
+                traceTurnOperationId, "recommendation trace turn operation id is required");
         ConversationRequest validatedRequest = agent.validatedConversationRequest(turn.request());
         SessionTurn validatedTurn = new SessionTurn(
                 turn.conversationId(),
@@ -109,10 +152,11 @@ public class RecommendationConversationCoordinator {
         String owner = owner(ownerUsername);
         String locale = responseLocale(requestedLocale);
         StoredConversation conversation = resolveConversation(validatedTurn, owner);
+        bindRecommendationResources(capture, conversation.id(), traceTurn);
         String fingerprint = fingerprint(validatedRequest, locale);
 
         Optional<TurnResult> replay = replay(conversation, validatedTurn.clientTurnId(), fingerprint);
-        if (replay.isPresent()) return replay.get();
+        if (replay.isPresent()) return traceReplay(capture, replay.get(), traceTurn);
         requireRevision(validatedTurn.expectedRevision(), conversation.revision());
 
         ClaimedTurn claim = claimOrAwait(
@@ -123,7 +167,9 @@ public class RecommendationConversationCoordinator {
                 progressListener);
         StoredConversation claimed = claim.conversation();
         Optional<TurnResult> completedWhileClaiming = replay(claimed, validatedTurn.clientTurnId(), fingerprint);
-        if (completedWhileClaiming.isPresent()) return completedWhileClaiming.get();
+        if (completedWhileClaiming.isPresent()) {
+            return traceReplay(capture, completedWhileClaiming.get(), traceTurn);
+        }
         UUID claimAttemptId = Objects.requireNonNull(
                 claim.claimAttemptId(), "claimed recommendation turn has no claim attempt id");
         ConversationRequest effectiveRequest = requestFrom(claimed.state(), validatedRequest);
@@ -131,29 +177,40 @@ public class RecommendationConversationCoordinator {
         ConversationResponse response;
         try {
             AtomicReference<ConversationState> settledState = new AtomicReference<>(claimed.state());
-            response = agent.conversePersisted(
-                    effectiveRequest,
-                    locale,
-                    owner,
-                    progressListener,
-                    ignored -> {},
-                    checkpoint -> {
-                        ConversationState value = checkpointState(claimed.state(), checkpoint);
-                        if (!conversations.checkpointTurn(
-                                claimed.id(),
-                                owner,
-                                claimed.revision(),
-                                validatedTurn.clientTurnId(),
-                                fingerprint,
-                                claimAttemptId,
-                                value,
-                                clock.instant())) {
-                            throw conflict(
-                                    Code.CONCURRENT_TURN,
-                                    "recommendation conversation changed while a settled read was saved");
-                        }
-                        settledState.set(value);
-                    });
+            Consumer<TurnCheckpoint> checkpoint = value -> {
+                ConversationState state = checkpointState(claimed.state(), value);
+                if (!conversations.checkpointTurn(
+                        claimed.id(),
+                        owner,
+                        claimed.revision(),
+                        validatedTurn.clientTurnId(),
+                        fingerprint,
+                        claimAttemptId,
+                        state,
+                        clock.instant())) {
+                    throw conflict(
+                            Code.CONCURRENT_TURN,
+                            "recommendation conversation changed while a settled read was saved");
+                }
+                settledState.set(state);
+            };
+            response = capture != null && capture.enabled()
+                    ? agent.conversePersisted(
+                            effectiveRequest,
+                            locale,
+                            owner,
+                            progressListener,
+                            ignored -> {},
+                            checkpoint,
+                            capture,
+                            traceTurn)
+                    : agent.conversePersisted(
+                            effectiveRequest,
+                            locale,
+                            owner,
+                            progressListener,
+                            ignored -> {},
+                            checkpoint);
             ConversationState nextState = nextState(settledState.get(), effectiveRequest, response);
             Instant completedAt = clock.instant();
             boolean completed = conversations.completeTurn(
@@ -170,7 +227,9 @@ public class RecommendationConversationCoordinator {
             if (!completed) {
                 StoredConversation current = requireOwned(claimed.id(), owner);
                 Optional<TurnResult> concurrentReplay = replay(current, validatedTurn.clientTurnId(), fingerprint);
-                if (concurrentReplay.isPresent()) return concurrentReplay.get();
+                if (concurrentReplay.isPresent()) {
+                    return traceReplay(capture, concurrentReplay.get(), traceTurn);
+                }
                 throw conflict(Code.CONCURRENT_TURN, "recommendation conversation changed while the turn completed");
             }
         } catch (RuntimeException | Error failure) {
@@ -192,6 +251,59 @@ public class RecommendationConversationCoordinator {
                 false,
                 locale,
                 response);
+    }
+
+    private void bindRecommendationResources(
+            CaptureHandle capture,
+            UUID conversationId,
+            UUID turnId) {
+        if (capture == null || !capture.enabled()) return;
+        try {
+            ResourceRef conversation = new ResourceRef(ResourceType.RECOMMENDATION_CONVERSATION, conversationId);
+            ResourceRef turn = new ResourceRef(ResourceType.RECOMMENDATION_TURN, turnId);
+            capture.bind(conversation);
+            capture.bind(turn);
+            capture.bindingOrFailure(new BindingOrFailure(
+                    TraceEventContext.create(
+                            clock.instant(),
+                            JourneyStage.RECOMMENDATION,
+                            turnId,
+                            null,
+                            turn),
+                    LifecycleSignal.BINDING,
+                    "RECOMMENDATION_TURN_BOUND",
+                    conversation,
+                    turn));
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never change optimistic conversation semantics.
+        }
+    }
+
+    private TurnResult traceReplay(
+            CaptureHandle capture,
+            TurnResult replay,
+            UUID traceTurnOperationId) {
+        if (capture == null || replay == null) return replay;
+        try {
+            if (!capture.enabled()) return replay;
+            ResourceRef conversation = new ResourceRef(
+                    ResourceType.RECOMMENDATION_CONVERSATION, replay.conversationId());
+            ResourceRef turn = new ResourceRef(ResourceType.RECOMMENDATION_TURN, traceTurnOperationId);
+            capture.bindingOrFailure(new BindingOrFailure(
+                    TraceEventContext.create(
+                            clock.instant(),
+                            JourneyStage.RECOMMENDATION,
+                            traceTurnOperationId,
+                            null,
+                            turn),
+                    LifecycleSignal.REPLAY,
+                    "RECOMMENDATION_TURN_REPLAYED",
+                    conversation,
+                    turn));
+        } catch (RuntimeException ignored) {
+            // Replay remains authoritative when private diagnostics are unavailable.
+        }
+        return replay;
     }
 
     public Optional<SessionSnapshot> latest(String ownerUsername) {
@@ -369,7 +481,8 @@ public class RecommendationConversationCoordinator {
                 turn.focusedBggId(),
                 state.knownGames(),
                 state.shownBggIds(),
-                state.verifiedGames());
+                state.verifiedGames(),
+                state.catalogSelectionIntent());
     }
 
     private static ConversationState importedState(ConversationRequest request) {
@@ -378,7 +491,8 @@ public class RecommendationConversationCoordinator {
                 boundedTranscript(request.transcript()),
                 boundedKnownGames(request.knownGames()),
                 boundedIds(request.shownBggIds()),
-                List.of());
+                List.of(),
+                request.catalogSelectionIntent());
     }
 
     private static ConversationState nextState(
@@ -422,7 +536,8 @@ public class RecommendationConversationCoordinator {
                 boundedTranscript(transcript),
                 boundedKnownGames(new ArrayList<>(games.values())),
                 boundedIds(new ArrayList<>(shown)),
-                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList());
+                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList(),
+                previous.catalogSelectionIntent());
     }
 
     private static ConversationState checkpointState(
@@ -442,7 +557,8 @@ public class RecommendationConversationCoordinator {
                 previous.transcript(),
                 boundedKnownGames(new ArrayList<>(games.values())),
                 previous.shownBggIds(),
-                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList());
+                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList(),
+                checkpoint.catalogSelectionIntent());
     }
 
     private static KnownGame knownGame(Game game) {

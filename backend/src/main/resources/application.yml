@@ -227,6 +227,7 @@ rulepilot:
     default-monthly-token-limit: ${MODEL_DEFAULT_MONTHLY_TOKEN_LIMIT:2000000}
     per-call-reservation-tokens: ${MODEL_PER_CALL_RESERVATION_TOKENS:16000}
     request-timeout: ${MODEL_REQUEST_TIMEOUT:PT2M}
+    reservation-timeout: ${MODEL_RESERVATION_TIMEOUT:PT15M}
     startup-allowed-users: ${RULEPILOT_MODELS_STARTUP_ALLOWED_USERS:}
     openai:
       enabled: ${OPENAI_ENABLED:false}

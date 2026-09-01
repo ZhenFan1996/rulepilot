@@ -1,8 +1,16 @@
 package com.rulepilot.teaching.application;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
@@ -11,6 +19,7 @@ import com.rulepilot.ingestion.RulebookUnderstandingRebuilder;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,6 +27,69 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 class VisualLessonEnrichmentServiceTest {
+
+    @Test
+    void publishesTheExactPersistedVisualLessonOnItsVisualRun() throws Exception {
+        TeachingPlanRepository plans = Mockito.mock(TeachingPlanRepository.class);
+        IllustratedLessonRepository lessons = Mockito.mock(IllustratedLessonRepository.class);
+        VisualLessonEnricher enricher = Mockito.mock(VisualLessonEnricher.class);
+        IllustratedLessonProgressPublisher publisher = Mockito.mock(IllustratedLessonProgressPublisher.class);
+        RulebookUnderstandingRebuilder rebuilder = Mockito.mock(RulebookUnderstandingRebuilder.class);
+        AssistantRuns runs = Mockito.mock(AssistantRuns.class);
+        AuditedAgentInvocations activities = Mockito.mock(AuditedAgentInvocations.class);
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        IllustratedLesson persisted = lesson(planId);
+        RecordingCapture capture = new RecordingCapture();
+        var received = run(runId, planId, AssistantRunState.RECEIVED, 1, null, null);
+        var ready = run(runId, planId, AssistantRunState.DOCUMENT_READINESS, 2, null, null);
+        var retrieving = run(runId, planId, AssistantRunState.RETRIEVING, 3, null, null);
+        var verifying = run(runId, planId, AssistantRunState.VERIFYING_EVIDENCE, 4, null, null);
+        var packaging = run(runId, planId, AssistantRunState.MEDIA_PACKAGING, 5, null, null);
+        var completed = run(runId, planId, AssistantRunState.COMPLETED, 6, Instant.now(), null);
+        when(plans.findById(planId)).thenReturn(Optional.of(plan(planId, documentVersionId)));
+        when(lessons.findLatestByPlan(planId)).thenReturn(Optional.of(persisted));
+        when(runs.advance(runId, 1, AssistantRunState.DOCUMENT_READINESS,
+                        "Loading cited pages and visual candidates"))
+                .thenReturn(ready);
+        when(runs.advance(runId, 2, AssistantRunState.RETRIEVING,
+                        "Looking for compact, player-useful rulebook regions"))
+                .thenReturn(retrieving);
+        when(runs.advance(runId, 3, AssistantRunState.VERIFYING_EVIDENCE,
+                        "Checking that every selected crop has cited rule evidence"))
+                .thenReturn(verifying);
+        when(runs.advance(runId, 4, AssistantRunState.MEDIA_PACKAGING,
+                        "Publishing accepted local rulebook crops"))
+                .thenReturn(packaging);
+        when(runs.advance(runId, 5, AssistantRunState.COMPLETED, "Visual enrichment finished"))
+                .thenReturn(completed);
+        when(runs.findOwned(runId, "owner")).thenReturn(Optional.of(new AssistantRuns.RunDetails(
+                retrieving, List.of(), null, List.of())));
+        when(enricher.enrichWithProgress(
+                        Mockito.eq(documentVersionId),
+                        Mockito.eq(persisted),
+                        Mockito.eq("owner"),
+                        Mockito.eq(runId),
+                        Mockito.any(),
+                        Mockito.argThat(actual -> actual != null
+                                && actual.traceId().equals(capture.traceId()))))
+                .thenReturn(new VisualLessonEnricher.EnrichmentResult(persisted, List.of()));
+
+        new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder, runs, activities)
+                .enrichLatest(planId, received, capture);
+
+        assertThat(capture.publications).singleElement().satisfies(publication -> {
+            assertThat(publication.channel()).isEqualTo(PublicationChannel.TEACHING_LESSON);
+            assertThat(publication.statusCode()).isEqualTo("VISUAL_ENRICHMENT_READY");
+            assertThat(publication.context().resource())
+                    .isEqualTo(new ResourceRef(ResourceType.VISUAL_RUN, runId));
+            assertThat(publication.context().parentOperationId()).isEqualTo(runId);
+            assertThat(publication.playerFacingJson())
+                    .isEqualTo(new ObjectMapper().findAndRegisterModules().writeValueAsString(persisted));
+        });
+        assertThat(capture.failures).isEmpty();
+    }
 
     @Test
     void skipsEveryVisualModelCallWhenTheOutlineRequestsNoVisualEvidence() {
@@ -253,7 +325,7 @@ class VisualLessonEnrichmentServiceTest {
     }
 
     @Test
-    void runsWholeRulebookIconInventoryAsAnIndependentObservableJob() {
+    void runsWholeRulebookIconInventoryAsAnIndependentObservableJob() throws Exception {
         TeachingPlanRepository plans = Mockito.mock(TeachingPlanRepository.class);
         IllustratedLessonRepository lessons = Mockito.mock(IllustratedLessonRepository.class);
         VisualLessonEnricher enricher = Mockito.mock(VisualLessonEnricher.class);
@@ -264,6 +336,14 @@ class VisualLessonEnrichmentServiceTest {
         RulebookIconGlossaryService icons = Mockito.mock(RulebookIconGlossaryService.class);
         UUID planId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
+        RecordingCapture capture = new RecordingCapture();
+        var glossary = new RulebookIconGlossaryService.GlossaryView(
+                RulebookIconGlossaryService.GlossaryStatus.READY,
+                3,
+                3,
+                3,
+                List.of(),
+                List.of());
         var received = run(runId, planId, AssistantRunState.RECEIVED, 1, null, null);
         var ready = run(runId, planId, AssistantRunState.DOCUMENT_READINESS, 2, null, null);
         var retrieving = run(runId, planId, AssistantRunState.RETRIEVING, 3, null, null);
@@ -280,15 +360,35 @@ class VisualLessonEnrichmentServiceTest {
                 "Preparing exact icon crops for the quick reference")).thenReturn(packaging);
         when(runs.advance(runId, 5, AssistantRunState.COMPLETED,
                 "Rulebook icon quick reference finished")).thenReturn(completed);
+        when(icons.extract(
+                        Mockito.eq(planId),
+                        Mockito.eq("owner"),
+                        Mockito.eq(runId),
+                        Mockito.argThat(actual -> actual != null
+                                && actual.traceId().equals(capture.traceId()))))
+                .thenReturn(glossary);
 
         new VisualLessonEnrichmentService(
                         plans, lessons, enricher, publisher, rebuilder, runs, activities, icons)
-                .extractIconGlossaryOnly(planId, received);
+                .extractIconGlossaryOnly(planId, received, capture);
 
-        verify(icons).extract(planId, "owner", runId);
+        verify(icons).extract(
+                Mockito.eq(planId),
+                Mockito.eq("owner"),
+                Mockito.eq(runId),
+                Mockito.argThat(actual -> actual != null
+                        && actual.traceId().equals(capture.traceId())));
         verify(runs).advance(
                 runId, 5, AssistantRunState.COMPLETED, "Rulebook icon quick reference finished");
         Mockito.verifyNoInteractions(enricher, publisher);
+        assertThat(capture.publications).singleElement().satisfies(publication -> {
+            assertThat(publication.channel()).isEqualTo(PublicationChannel.TEACHING_LESSON);
+            assertThat(publication.statusCode()).isEqualTo("ICON_GLOSSARY_READY");
+            assertThat(publication.context().resource())
+                    .isEqualTo(new ResourceRef(ResourceType.VISUAL_RUN, runId));
+            assertThat(publication.playerFacingJson())
+                    .isEqualTo(new ObjectMapper().findAndRegisterModules().writeValueAsString(glossary));
+        });
     }
 
     private TeachingPlan plan(UUID planId, UUID documentVersionId) {
@@ -340,5 +440,26 @@ class VisualLessonEnrichmentServiceTest {
                 now,
                 completedAt,
                 lastErrorCode);
+    }
+
+    private static final class RecordingCapture implements CaptureHandle {
+        private final UUID traceId = UUID.randomUUID();
+        private final List<AgentTraceEvent.Publication> publications = new ArrayList<>();
+        private final List<AgentTraceEvent.BindingOrFailure> failures = new ArrayList<>();
+
+        @Override public boolean enabled() { return true; }
+        @Override public Optional<UUID> traceId() { return Optional.of(traceId); }
+        @Override public void userTurn(AgentTraceEvent.UserTurn event) {}
+        @Override public void modelCallStarted(AgentTraceEvent.ModelCallStarted event) {}
+        @Override public void modelTurn(AgentTraceEvent.ModelTurn event) {}
+        @Override public void toolCall(AgentTraceEvent.ToolCall event) {}
+        @Override public void toolObservation(AgentTraceEvent.ToolObservation event) {}
+        @Override public void publication(AgentTraceEvent.Publication event) { publications.add(event); }
+        @Override public void bindingOrFailure(AgentTraceEvent.BindingOrFailure event) {
+            if (event.signal() == LifecycleSignal.FAILURE || event.signal() == LifecycleSignal.GAP) {
+                failures.add(event);
+            }
+        }
+        @Override public boolean bind(ResourceRef resource) { return true; }
     }
 }

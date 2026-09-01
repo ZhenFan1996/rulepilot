@@ -1,10 +1,22 @@
 package com.rulepilot.teaching.application;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
@@ -26,6 +38,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class IllustratedLessonService {
 
     private static final Logger log = LoggerFactory.getLogger(IllustratedLessonService.class);
+    private static final ObjectMapper TRACE_JSON = new ObjectMapper().findAndRegisterModules();
 
     private final TeachingPlanRepository plans;
     private final GroundedTeachingAgent agent;
@@ -85,36 +98,63 @@ public class IllustratedLessonService {
     }
 
     GenerationContinuation startGeneration(UUID teachingPlanId, String ownerUsername, RunSnapshot initialRun) {
+        return startGeneration(
+                teachingPlanId, ownerUsername, initialRun, CaptureHandle.noop());
+    }
+
+    GenerationContinuation startGeneration(
+            UUID teachingPlanId,
+            String ownerUsername,
+            RunSnapshot initialRun,
+            CaptureHandle capture) {
         return Observation.createNotStarted("rulepilot.teaching.startup", observations)
                 .contextualName("teaching-first-section")
-                .observe(() -> startGenerationObserved(teachingPlanId, ownerUsername, initialRun));
+                .observe(() -> startGenerationObserved(
+                        teachingPlanId, ownerUsername, initialRun, PrivateAgentTraceCapture.failOpen(capture)));
     }
 
     GenerationContinuation startGeneration(TeachingPlan plan, String ownerUsername, RunSnapshot initialRun) {
+        return startGeneration(plan, ownerUsername, initialRun, CaptureHandle.noop());
+    }
+
+    GenerationContinuation startGeneration(
+            TeachingPlan plan,
+            String ownerUsername,
+            RunSnapshot initialRun,
+            CaptureHandle capture) {
         requirePreparedRun(plan, ownerUsername, initialRun);
         return Observation.createNotStarted("rulepilot.teaching.startup", observations)
                 .contextualName("teaching-first-section")
-                .observe(() -> startGenerationObserved(plan, initialRun));
+                .observe(() -> startGenerationObserved(
+                        plan, initialRun, PrivateAgentTraceCapture.failOpen(capture)));
     }
 
     GenerationOutcome continueGeneration(GenerationContinuation continuation) {
+        return continueGeneration(continuation, CaptureHandle.noop());
+    }
+
+    GenerationOutcome continueGeneration(
+            GenerationContinuation continuation, CaptureHandle capture) {
         if (continuation == null) throw new IllegalArgumentException("teaching continuation is required");
         return Observation.createNotStarted("rulepilot.teaching.continuation", observations)
                 .contextualName("teaching-remaining-sections")
-                .observe(() -> continueGenerationObserved(continuation));
+                .observe(() -> continueGenerationObserved(
+                        continuation, PrivateAgentTraceCapture.failOpen(capture)));
     }
 
     private GenerationContinuation startGenerationObserved(
             UUID teachingPlanId,
             String ownerUsername,
-            RunSnapshot initialRun) {
+            RunSnapshot initialRun,
+            CaptureHandle capture) {
         var plan = requireReadyPlan(teachingPlanId, ownerUsername);
-        return startGenerationObserved(plan, initialRun);
+        return startGenerationObserved(plan, initialRun, capture);
     }
 
     private GenerationContinuation startGenerationObserved(
             TeachingPlan plan,
-            RunSnapshot initialRun) {
+            RunSnapshot initialRun,
+            CaptureHandle capture) {
         RunSnapshot run = initialRun;
         try {
             run = advance(run, AssistantRunState.DOCUMENT_READINESS, "Rule document readiness is checked");
@@ -122,36 +162,53 @@ public class IllustratedLessonService {
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
             IllustratedLesson previousLesson = repository.findLatestByPlan(plan.id()).orElse(null);
+            UUID activeRunId = run.id();
             var base = agent.startBase(
                     plan,
-                    run.id(),
+                    activeRunId,
                     previousLesson,
-                    progressPublisher::publish);
+                    lesson -> publishProgress(activeRunId, lesson, capture),
+                    capture);
             return new GenerationContinuation(run, base);
         } catch (AgentExecutionStoppedException stopped) {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
+            captureFailure(capture, run.id(), "AGENT_" + stopped.reason().name());
             throw stopped;
         } catch (RuntimeException exception) {
-            log.error("Teaching first-section workflow failed for plan {} and run {}", plan.id(), run.id(), exception);
+            log.error(
+                    "Teaching first-section workflow failed for plan {} and run {} (failureType={})",
+                    plan.id(),
+                    run.id(),
+                    exception.getClass().getSimpleName());
             failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
+            captureFailure(capture, run.id(), "TEACHING_WORKFLOW_FAILED");
             throw exception;
         }
     }
 
-    private GenerationOutcome continueGenerationObserved(GenerationContinuation continuation) {
+    private GenerationOutcome continueGenerationObserved(
+            GenerationContinuation continuation, CaptureHandle capture) {
         RunSnapshot run = continuation.run();
         try {
+            UUID activeRunId = run.id();
             IllustratedLesson lesson = agent.continueBase(
                     continuation.base(),
-                    progressPublisher::publish);
+                    published -> publishProgress(activeRunId, published, capture),
+                    capture);
+            capturePublication(capture, activeRunId, lesson, PublicationChannel.TEACHING_LESSON);
             run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
         } catch (AgentExecutionStoppedException stopped) {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
+            captureFailure(capture, run.id(), "AGENT_" + stopped.reason().name());
             throw stopped;
         } catch (RuntimeException exception) {
-            log.error("Teaching continuation failed for run {}", run.id(), exception);
+            log.error(
+                    "Teaching continuation failed for run {} (failureType={})",
+                    run.id(),
+                    exception.getClass().getSimpleName());
             failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
+            captureFailure(capture, run.id(), "TEACHING_WORKFLOW_FAILED");
             throw exception;
         }
     }
@@ -184,7 +241,11 @@ public class IllustratedLessonService {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
             throw stopped;
         } catch (RuntimeException exception) {
-            log.error("Teaching workflow failed for plan {} and run {}", teachingPlanId, run.id(), exception);
+            log.error(
+                    "Teaching workflow failed for plan {} and run {} (failureType={})",
+                    teachingPlanId,
+                    run.id(),
+                    exception.getClass().getSimpleName());
             failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
             throw exception;
         }
@@ -234,6 +295,59 @@ public class IllustratedLessonService {
                 exception.addSuppressed(trackingFailure);
             }
         }
+    }
+
+    private void publishProgress(UUID teachingRunId, IllustratedLesson lesson, CaptureHandle capture) {
+        progressPublisher.publish(lesson);
+        capturePublication(capture, teachingRunId, lesson, PublicationChannel.TEACHING_SECTION);
+    }
+
+    private void capturePublication(
+            CaptureHandle capture,
+            UUID teachingRunId,
+            IllustratedLesson lesson,
+            PublicationChannel channel) {
+        if (!capture.enabled()) return;
+        try {
+            ResourceRef resource = new ResourceRef(ResourceType.TEACHING_RUN, teachingRunId);
+            List<UUID> citations = lesson.sections().stream()
+                    .flatMap(section -> java.util.stream.Stream.concat(
+                            section.visualSourceChunkIds().stream(),
+                            section.steps().stream().flatMap(step -> java.util.stream.Stream.concat(
+                                    step.sourceChunkIds().stream(),
+                                    step.ruleFacts().stream().flatMap(fact -> fact.sourceChunkIds().stream())))))
+                    .distinct()
+                    .limit(200)
+                    .toList();
+            capture.publication(new Publication(
+                    traceContext(UUID.randomUUID(), teachingRunId, resource),
+                    channel,
+                    TRACE_JSON.writeValueAsString(lesson),
+                    lesson.status().name(),
+                    citations));
+        } catch (JsonProcessingException | RuntimeException ignored) {
+            // Persisted lesson progress remains authoritative when private diagnostics are unavailable.
+        }
+    }
+
+    private void captureFailure(CaptureHandle capture, UUID teachingRunId, String code) {
+        if (!capture.enabled()) return;
+        try {
+            ResourceRef resource = new ResourceRef(ResourceType.TEACHING_RUN, teachingRunId);
+            capture.bindingOrFailure(new BindingOrFailure(
+                    traceContext(UUID.randomUUID(), teachingRunId, resource),
+                    LifecycleSignal.FAILURE,
+                    code,
+                    resource,
+                    null));
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never replace persisted lesson state.
+        }
+    }
+
+    private TraceEventContext traceContext(UUID operationId, UUID parentOperationId, ResourceRef resource) {
+        return TraceEventContext.create(
+                java.time.Instant.now(), JourneyStage.TEACHING, operationId, parentOperationId, resource);
     }
 
     @Transactional(readOnly = true)

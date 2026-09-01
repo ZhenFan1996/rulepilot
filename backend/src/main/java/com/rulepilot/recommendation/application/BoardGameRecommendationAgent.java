@@ -1,6 +1,7 @@
 package com.rulepilot.recommendation.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
@@ -10,6 +11,7 @@ import com.rulepilot.recommendation.ConstraintRange;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.function.Consumer;
 import jakarta.annotation.PreDestroy;
 import org.springframework.context.annotation.Profile;
@@ -32,7 +34,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v67-atomic-settled-actions";
+    static final String PROMPT_VERSION = "recommendation-agent-v68-canonical-selection-intent";
 
     private final RecommendationReActLoop loop;
 
@@ -90,6 +92,25 @@ public class BoardGameRecommendationAgent {
                 answerPartListener);
     }
 
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            CaptureHandle capture,
+            UUID turnOperationId) {
+        return loop.converseValidated(
+                loop.validate(input),
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {},
+                capture,
+                turnOperationId);
+    }
+
     ConversationRequest validatedConversationRequest(ConversationRequest input) {
         return loop.validate(input);
     }
@@ -138,9 +159,39 @@ public class BoardGameRecommendationAgent {
                 checkpointListener);
     }
 
-    record TurnCheckpoint(RecommendationProfile profile, List<Game> verifiedGames) {
+    ConversationResponse conversePersisted(
+            ConversationRequest validatedRequestWithServerMemory,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<TurnCheckpoint> checkpointListener,
+            CaptureHandle capture,
+            UUID turnOperationId) {
+        return loop.converseValidated(
+                validatedRequestWithServerMemory,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                checkpointListener,
+                capture,
+                turnOperationId);
+    }
+
+    record TurnCheckpoint(
+            RecommendationProfile profile,
+            CatalogSelectionIntent catalogSelectionIntent,
+            List<Game> verifiedGames) {
+        TurnCheckpoint(RecommendationProfile profile, List<Game> verifiedGames) {
+            this(profile, CatalogSelectionIntent.empty(), verifiedGames);
+        }
+
         TurnCheckpoint {
             profile = profile == null ? RecommendationProfile.empty() : profile;
+            catalogSelectionIntent = catalogSelectionIntent == null
+                    ? CatalogSelectionIntent.empty()
+                    : catalogSelectionIntent;
             verifiedGames = verifiedGames == null ? List.of() : List.copyOf(verifiedGames);
         }
     }
@@ -153,9 +204,19 @@ public class BoardGameRecommendationAgent {
             Integer focusedBggId,
             List<KnownGame> knownGames,
             List<Integer> shownBggIds,
-            List<Game> priorVerifiedGames) {
+            List<Game> priorVerifiedGames,
+            CatalogSelectionIntent catalogSelectionIntent) {
         public ConversationRequest(RecommendationProfile profile, String message) {
-            this(profile, message, List.of(), List.of(), null, List.of(), List.of(), List.of());
+            this(
+                    profile,
+                    message,
+                    List.of(),
+                    List.of(),
+                    null,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    CatalogSelectionIntent.empty());
         }
 
         public ConversationRequest(
@@ -166,7 +227,37 @@ public class BoardGameRecommendationAgent {
                 Integer focusedBggId,
                 List<KnownGame> knownGames,
                 List<Integer> shownBggIds) {
-            this(profile, message, excludedBggIds, transcript, focusedBggId, knownGames, shownBggIds, List.of());
+            this(
+                    profile,
+                    message,
+                    excludedBggIds,
+                    transcript,
+                    focusedBggId,
+                    knownGames,
+                    shownBggIds,
+                    List.of(),
+                    CatalogSelectionIntent.empty());
+        }
+
+        public ConversationRequest(
+                RecommendationProfile profile,
+                String message,
+                List<Integer> excludedBggIds,
+                List<DialogueMessage> transcript,
+                Integer focusedBggId,
+                List<KnownGame> knownGames,
+                List<Integer> shownBggIds,
+                List<Game> priorVerifiedGames) {
+            this(
+                    profile,
+                    message,
+                    excludedBggIds,
+                    transcript,
+                    focusedBggId,
+                    knownGames,
+                    shownBggIds,
+                    priorVerifiedGames,
+                    CatalogSelectionIntent.empty());
         }
 
         public ConversationRequest {
@@ -175,12 +266,67 @@ public class BoardGameRecommendationAgent {
             knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
             shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
             priorVerifiedGames = priorVerifiedGames == null ? List.of() : List.copyOf(priorVerifiedGames);
+            catalogSelectionIntent = catalogSelectionIntent == null
+                    ? CatalogSelectionIntent.empty()
+                    : catalogSelectionIntent;
         }
     }
 
     public record DialogueMessage(String role, String text) {}
 
     public record KnownGame(int bggId, String name, String originalName) {}
+
+    /**
+     * Exact, Agent-interpreted catalog facts that every newly suggested candidate card must satisfy. A game that the
+     * player explicitly names as TARGET_GAME is a direct handoff to that title, not a new recommendation slate, and
+     * therefore remains selectable even when it differs from an earlier browsing direction.
+     */
+    public record CatalogSelectionIntent(List<CatalogSelectionCriterion> requiredCriteria) {
+        public CatalogSelectionIntent {
+            requiredCriteria = requiredCriteria == null ? List.of() : List.copyOf(requiredCriteria);
+            if (requiredCriteria.size() > 8) {
+                throw new IllegalArgumentException("catalog selection intent is too large");
+            }
+            long distinct = requiredCriteria.stream()
+                    .map(criterion -> criterion.dimension().name() + "\u0000" + criterion.value().toLowerCase(java.util.Locale.ROOT))
+                    .distinct()
+                    .count();
+            if (distinct != requiredCriteria.size()) {
+                throw new IllegalArgumentException("catalog selection intent contains duplicate criteria");
+            }
+        }
+
+        public static CatalogSelectionIntent empty() {
+            return new CatalogSelectionIntent(List.of());
+        }
+
+        public boolean active() {
+            return !requiredCriteria.isEmpty();
+        }
+    }
+
+    public record CatalogSelectionCriterion(
+            CatalogSelectionDimension dimension,
+            String value,
+            String sourceText,
+            int confirmedTurn) {
+        public CatalogSelectionCriterion {
+            Objects.requireNonNull(dimension, "catalog selection dimension is required");
+            value = value == null ? "" : value.strip();
+            sourceText = sourceText == null ? "" : sourceText.strip();
+            if (value.isEmpty() || value.length() > 120 || sourceText.length() > 2_000 || confirmedTurn < 0) {
+                throw new IllegalArgumentException("catalog selection criterion is invalid");
+            }
+        }
+    }
+
+    public enum CatalogSelectionDimension {
+        CATEGORY,
+        MECHANIC,
+        FAMILY,
+        DESIGNER,
+        PUBLISHER
+    }
 
     public enum ProgressStage {
         UNDERSTANDING_REQUEST,

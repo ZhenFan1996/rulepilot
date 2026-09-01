@@ -1,5 +1,7 @@
 package com.rulepilot.assistant;
 
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.ConceptComparisonBasis;
@@ -37,6 +39,15 @@ public interface RuleAnswerModel {
         return compose(request);
     }
 
+    default ModelDraft compose(
+            ModelRequest request,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
+        return compose(request, ownerUsername);
+    }
+
     default ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
         return compose(request);
     }
@@ -47,6 +58,17 @@ public interface RuleAnswerModel {
             List<String> feedback,
             String ownerUsername) {
         return revise(request, previousDraft, feedback);
+    }
+
+    default ModelDraft revise(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
+        return revise(request, previousDraft, feedback, ownerUsername);
     }
 
     /**
@@ -75,6 +97,18 @@ public interface RuleAnswerModel {
         return revise(request, previousDraft, feedback, ownerUsername);
     }
 
+    default ModelDraft revisePlayerFacing(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            Set<PlayerFacingField> editableFields,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
+        return revisePlayerFacing(request, previousDraft, feedback, editableFields, ownerUsername);
+    }
+
     /**
      * Selects a bounded semantic interpretation from application-defined choices. The result is untrusted dialogue
      * control data, never rule evidence; unsupported models preserve deterministic question understanding.
@@ -86,6 +120,15 @@ public interface RuleAnswerModel {
     default Optional<QuestionInterpretationDraft> interpretQuestion(
             QuestionInterpretationRequest request, String ownerUsername) {
         return interpretQuestion(request);
+    }
+
+    default Optional<QuestionInterpretationDraft> interpretQuestion(
+            QuestionInterpretationRequest request,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
+        return interpretQuestion(request, ownerUsername);
     }
 
     default boolean supportsQuestionInterpretation() {

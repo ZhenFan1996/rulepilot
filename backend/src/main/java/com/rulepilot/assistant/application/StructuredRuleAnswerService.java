@@ -1,5 +1,15 @@
 package com.rulepilot.assistant.application;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.AgentTraceEvent.UserTurn;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
@@ -34,12 +44,16 @@ import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.AnswerEvidenceRetriever;
+import com.rulepilot.retrieval.AnswerRetrievalContext;
+import com.rulepilot.retrieval.AnswerRetrievalPlan;
+import com.rulepilot.retrieval.AnswerRetrievalQuestion;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.ruling.ConfirmedRulingLookup;
 import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
@@ -60,6 +74,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
+    private static final ObjectMapper TRACE_JSON = new ObjectMapper().findAndRegisterModules();
     // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
     private static final String ANSWER_POLICY_VERSION = "answer-v115-context-only-interpretation";
     private final QuestionUnderstanding understanding;
@@ -275,7 +290,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     StructuredRuleAnswer answer(String question, QuestionContext context) {
-        return answerInternal(question, context, "test-user", null, UUID.randomUUID());
+        return answerInternal(
+                question, context, "test-user", null, UUID.randomUUID(), true, CaptureHandle.noop());
     }
 
     public AnswerCreation answerWithRun(
@@ -289,11 +305,89 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String username,
             UUID gameSessionId,
             Consumer<UUID> runStarted) {
+        return answerWithRun(
+                question, context, username, gameSessionId, runStarted, CaptureHandle.noop());
+    }
+
+    public AnswerCreation answerWithRun(
+            String question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            Consumer<UUID> runStarted,
+            CaptureHandle capture) {
         Consumer<UUID> checkedListener = runStarted == null ? ignored -> {} : runStarted;
+        PreparedAnswerRun prepared = prepareAnswerRun(question, context, username, gameSessionId, capture);
+        try {
+            checkedListener.accept(prepared.id());
+        } catch (RuntimeException exception) {
+            LOGGER.debug("Answer progress listener disconnected after run creation");
+        }
+        return answerPrepared(question, context, username, gameSessionId, prepared, capture);
+    }
+
+    /** Starts and binds the persisted run on the request thread, before asynchronous publication. */
+    public PreparedAnswerRun prepareAnswerRun(
+            String question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            CaptureHandle capture) {
+        RunSnapshot run = runLifecycle.start(
+                AssistantRunMode.QUESTION_ANSWER,
+                gameSessionId == null ? context.documentVersionId() : gameSessionId,
+                username);
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
+        bindAnswerRun(trace, run, context, gameSessionId);
+        captureUserTurn(trace, run, question, context, gameSessionId);
+        return new PreparedAnswerRun(run);
+    }
+
+    /** Continues a run that was durably created and trace-bound before an executor hand-off. */
+    public AnswerCreation answerPrepared(
+            String question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            PreparedAnswerRun prepared,
+            CaptureHandle capture) {
+        if (prepared == null || !prepared.run().ownerUsername().equals(username)) {
+            throw new IllegalArgumentException("prepared answer run ownership does not match");
+        }
         return Observation.createNotStarted("rulepilot.answer.workflow", observations)
                 .contextualName("answer-workflow")
                 .observe(() -> answerWithRunObserved(
-                        question, context, username, gameSessionId, true, checkedListener));
+                        question,
+                        context,
+                        username,
+                        gameSessionId,
+                        true,
+                        prepared.run(),
+                        PrivateAgentTraceCapture.failOpen(capture)));
+    }
+
+    /** Terminalizes a durably prepared run when an asynchronous hand-off never started its workflow. */
+    public void failPreparedAnswerBeforeExecution(
+            PreparedAnswerRun prepared,
+            String username,
+            String errorCode,
+            String summary,
+            RuntimeException handoffFailure,
+            CaptureHandle capture) {
+        if (prepared == null || !prepared.run().ownerUsername().equals(username)) {
+            throw new IllegalArgumentException("prepared answer run ownership does not match");
+        }
+        RuntimeException failure = handoffFailure == null
+                ? new IllegalStateException("prepared answer execution did not start")
+                : handoffFailure;
+        runLifecycle.fail(prepared.run(), errorCode, summary, failure);
+        captureFailure(PrivateAgentTraceCapture.failOpen(capture), prepared.run(), errorCode);
+        if (failure.getSuppressed().length > 0) {
+            LOGGER.warn(
+                    "Prepared answer run could not be terminalized after an asynchronous hand-off failure "
+                            + "(failureType={})",
+                    failure.getClass().getSimpleName());
+        }
     }
 
     @Override
@@ -368,42 +462,40 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String username,
             UUID gameSessionId,
             boolean useCache,
-            Consumer<UUID> runStarted) {
-        RunSnapshot run = runLifecycle.start(
-                AssistantRunMode.QUESTION_ANSWER,
-                gameSessionId == null ? context.documentVersionId() : gameSessionId,
-                username);
-        try {
-            runStarted.accept(run.id());
-        } catch (RuntimeException exception) {
-            LOGGER.debug("Answer progress listener disconnected after run creation");
-        }
+            RunSnapshot preparedRun,
+            CaptureHandle capture) {
+        RunSnapshot run = preparedRun;
         try {
             StructuredRuleAnswer answer = answerInternal(
-                    question, context, username, gameSessionId, run.id(), useCache);
+                    question, context, username, gameSessionId, run.id(), useCache, capture);
             run = runLifecycle.finish(run, answer);
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
             runLifecycle.fail(run, "AGENT_" + stopped.reason().name(), "Question workflow stopped by execution budget", stopped);
+            captureFailure(capture, run, "AGENT_" + stopped.reason().name());
             AnswerStatus status = stopped.reason() == AgentExecutionStoppedException.StopReason.TIMEOUT
                     ? AnswerStatus.MODEL_TIMEOUT
                     : AnswerStatus.INVALID_MODEL_OUTPUT;
-            return new AnswerCreation(
-                    run.id(), safe(context.documentVersionId(), status, "答疑执行已在应用预算边界安全停止。"));
+            StructuredRuleAnswer answer = safe(
+                    context.documentVersionId(), status, "答疑执行已在应用预算边界安全停止。");
+            return new AnswerCreation(run.id(), answer);
         } catch (RuntimeException exception) {
             runLifecycle.fail(run, "QUESTION_WORKFLOW_FAILED", "Question workflow failed safely", exception);
+            captureFailure(capture, run, "QUESTION_WORKFLOW_FAILED");
             throw exception;
         }
     }
 
     StructuredRuleAnswer answer(
             String question, QuestionContext context, String username, UUID gameSessionId) {
-        return answerInternal(question, context, username, gameSessionId, UUID.randomUUID());
+        return answerInternal(
+                question, context, username, gameSessionId, UUID.randomUUID(), true, CaptureHandle.noop());
     }
 
     private StructuredRuleAnswer answerInternal(
             String question, QuestionContext context, String username, UUID gameSessionId, UUID assistantRunId) {
-        return answerInternal(question, context, username, gameSessionId, assistantRunId, true);
+        return answerInternal(
+                question, context, username, gameSessionId, assistantRunId, true, CaptureHandle.noop());
     }
 
     private StructuredRuleAnswer answerInternal(
@@ -413,6 +505,24 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             UUID gameSessionId,
             UUID assistantRunId,
             boolean useCache) {
+        return answerInternal(
+                question,
+                context,
+                username,
+                gameSessionId,
+                assistantRunId,
+                useCache,
+                CaptureHandle.noop());
+    }
+
+    private StructuredRuleAnswer answerInternal(
+            String question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            UUID assistantRunId,
+            boolean useCache,
+            CaptureHandle capture) {
         context = context.withOutputLanguage(PlayerLocale.forQuestion(question, context.outputLanguage()));
         UnderstoodQuestion deterministic = understanding.understand(question, context);
         UnderstoodQuestion understood = deterministic;
@@ -427,7 +537,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                                 assistantRunId,
                                 username,
                                 gameSessionId,
-                                interpretationRequest(deterministic, suppliedContext))
+                                interpretationRequest(deterministic, suppliedContext),
+                                capture)
                         .flatMap(draft -> questionInterpretation.applyWithPlan(deterministic, suppliedContext, draft));
                 if (interpreted.isPresent()) {
                     AnswerQuestionInterpretationPolicy.Interpretation accepted = interpreted.orElseThrow();
@@ -487,25 +598,47 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
             cacheMisses.increment();
         }
-        AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(
-                assistantRunId,
-                AnswerRetrievalInputMapper.question(interpretedQuestion),
-                AnswerRetrievalInputMapper.context(context),
-                username,
-                AnswerRetrievalInputMapper.plan(questionPlan));
-        if (evidenceRefiner != null) {
-            retrievalResult = evidenceRefiner.refine(
+        AnswerRetrievalQuestion retrievalQuestion = AnswerRetrievalInputMapper.question(interpretedQuestion);
+        AnswerRetrievalContext retrievalContext = AnswerRetrievalInputMapper.context(context);
+        AnswerRetrievalPlan retrievalPlan = AnswerRetrievalInputMapper.plan(questionPlan);
+        AnswerEvidenceTrace.Operation evidenceTrace = AnswerEvidenceTrace.start(
+                capture, assistantRunId, retrievalQuestion, retrievalContext, retrievalPlan);
+        AnswerEvidenceRetriever.Result retrievalResult;
+        AnswerEvidenceAdmissionGate.Admission admission;
+        try {
+            retrievalResult = evidenceRetriever.retrieve(
                     assistantRunId,
-                    interpretedQuestion,
-                    context,
+                    retrievalQuestion,
+                    retrievalContext,
                     username,
-                    gameSessionId,
-                    questionPlan,
-                    retrievalResult);
+                    retrievalPlan);
+            if (evidenceRefiner != null) {
+                retrievalResult = capture.enabled()
+                        ? evidenceRefiner.refine(
+                                assistantRunId,
+                                interpretedQuestion,
+                                context,
+                                username,
+                                gameSessionId,
+                                questionPlan,
+                                retrievalResult,
+                                capture)
+                        : evidenceRefiner.refine(
+                                assistantRunId,
+                                interpretedQuestion,
+                                context,
+                                username,
+                                gameSessionId,
+                                questionPlan,
+                                retrievalResult);
+            }
+            admission = evidenceAdmissionGate.admit(context.documentVersionId(), retrievalResult);
+        } catch (RuntimeException failure) {
+            evidenceTrace.failed("ANSWER_EVIDENCE_PIPELINE_FAILED");
+            throw failure;
         }
-        AnswerEvidenceAdmissionGate.Admission admission = evidenceAdmissionGate.admit(
-                context.documentVersionId(), retrievalResult);
         if (!admission.ready()) {
+            evidenceTrace.rejected(retrievalResult.state(), admission.failureStatus());
             return safe(context.documentVersionId(), admission.failureStatus(), admission.failureMessage());
         }
         List<HybridEvidenceHit> evidence = admission.evidence();
@@ -513,12 +646,15 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         try {
             modelRequest = modelRequestFactory.create(interpretedQuestion, context, evidence, questionPlan);
         } catch (RuleAnswerModelTimeoutException exception) {
+            evidenceTrace.rejected(retrievalResult.state(), AnswerStatus.MODEL_TIMEOUT);
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
+            evidenceTrace.rejected(retrievalResult.state(), AnswerStatus.INVALID_MODEL_OUTPUT);
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
+        evidenceTrace.ready(retrievalResult.state(), modelRequest.evidence());
         AnswerDraftComposer.Result draftResult = draftComposer.compose(
-                assistantRunId, username, gameSessionId, modelRequest);
+                assistantRunId, username, gameSessionId, modelRequest, capture);
         if (!draftResult.ready()) {
             if (draftResult.failureStatus() == AnswerStatus.INSUFFICIENT_EVIDENCE) {
                 return AnswerOutcomePolicy.insufficientWithSources(
@@ -539,7 +675,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 return invalidCalculation(context.documentVersionId());
             }
             draftResult = repairSelectedStructuredDetails(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
+                    assistantRunId, username, gameSessionId, modelRequest, draft, capture);
             if (!draftResult.ready()) {
                 return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
             }
@@ -563,7 +699,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         "回答在一次有针对性的修订后仍未通过结构或引用校验。");
             }
             draftResult = draftComposer.repairAfterPublicationFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
+                    assistantRunId, username, gameSessionId, modelRequest, draft, capture);
             if (!draftResult.ready()) {
                 return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
             }
@@ -597,7 +733,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     draft,
                     answer,
                     evidence,
-                    !modelRepairUsed);
+                    !modelRepairUsed,
+                    capture);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "局部重讲超时，可以稍后重试或直接查看规则引用。");
         } catch (AgentExecutionStoppedException exception) {
@@ -649,14 +786,15 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String username,
             UUID gameSessionId,
             ModelRequest modelRequest,
-            ModelDraft rejectedDraft) {
+            ModelDraft rejectedDraft,
+            CaptureHandle capture) {
         if (modelRequest.answerAid() != AnswerAid.CALCULATION) {
             return AnswerDraftComposer.Result.failure(
                     AnswerStatus.INVALID_MODEL_OUTPUT,
                     "回答附加结构与已确认的问题计划不一致。");
         }
         return draftComposer.repairAfterCalculationFailure(
-                assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+                assistantRunId, username, gameSessionId, modelRequest, rejectedDraft, capture);
     }
 
     private StructuredRuleAnswer publishValidated(
@@ -1041,7 +1179,101 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 results -> results.size() * 8);
     }
 
+    private void bindAnswerRun(
+            CaptureHandle capture, RunSnapshot run, QuestionContext context, UUID gameSessionId) {
+        if (!capture.enabled()) return;
+        ResourceRef answerRun = new ResourceRef(ResourceType.ASSISTANT_RUN, run.id());
+        captureTrace(capture, () -> {
+            capture.bind(answerRun);
+            capture.bindingOrFailure(new BindingOrFailure(
+                    traceContext(run.id(), null, answerRun),
+                    LifecycleSignal.BINDING,
+                    "ANSWER_RUN_BOUND",
+                    new ResourceRef(ResourceType.DOCUMENT_VERSION, context.documentVersionId()),
+                    answerRun));
+        });
+        if (gameSessionId == null) return;
+        ResourceRef gameSession = new ResourceRef(ResourceType.GAME_SESSION, gameSessionId);
+        captureTrace(capture, () -> {
+            capture.bind(gameSession);
+            capture.bindingOrFailure(new BindingOrFailure(
+                    traceContext(run.id(), null, answerRun),
+                    LifecycleSignal.BINDING,
+                    "GAME_SESSION_ANSWER_BOUND",
+                    gameSession,
+                    answerRun));
+        });
+    }
+
+    private void captureUserTurn(
+            CaptureHandle capture,
+            RunSnapshot run,
+            String question,
+            QuestionContext context,
+            UUID gameSessionId) {
+        if (!capture.enabled()) return;
+        try {
+            ResourceRef resource = new ResourceRef(ResourceType.ASSISTANT_RUN, run.id());
+            String typedRequest = TRACE_JSON.writeValueAsString(new TraceAnswerRequest(
+                    context.documentVersionId(),
+                    gameSessionId,
+                    context.learningIntent(),
+                    context.outputLanguage()));
+            capture.userTurn(new UserTurn(
+                    traceContext(run.id(), null, resource),
+                    question,
+                    typedRequest,
+                    context.outputLanguage().name()));
+        } catch (JsonProcessingException | RuntimeException ignored) {
+            // The private diagnostic artifact must never replace the answer journey.
+        }
+    }
+
+    private void captureFailure(CaptureHandle capture, RunSnapshot run, String code) {
+        if (!capture.enabled()) return;
+        ResourceRef resource = new ResourceRef(ResourceType.ASSISTANT_RUN, run.id());
+        captureTrace(capture, () -> capture.bindingOrFailure(new BindingOrFailure(
+                        traceContext(UUID.randomUUID(), run.id(), resource),
+                        LifecycleSignal.FAILURE,
+                        code,
+                        resource,
+                        null)));
+    }
+
+    private void captureTrace(CaptureHandle capture, Runnable emission) {
+        try {
+            emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never replace the answer journey.
+        }
+    }
+
+    private TraceEventContext traceContext(UUID operationId, UUID parentOperationId, ResourceRef resource) {
+        return TraceEventContext.create(
+                java.time.Instant.now(), JourneyStage.ANSWER, operationId, parentOperationId, resource);
+    }
+
+    public record PreparedAnswerRun(RunSnapshot run) {
+        public PreparedAnswerRun {
+            if (run == null) throw new IllegalArgumentException("prepared answer run is required");
+        }
+
+        public UUID id() {
+            return run.id();
+        }
+
+        public ResourceRef resource() {
+            return new ResourceRef(ResourceType.ASSISTANT_RUN, run.id());
+        }
+    }
+
     public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}
+
+    private record TraceAnswerRequest(
+            UUID documentVersionId,
+            UUID gameSessionId,
+            LearningIntent learningIntent,
+            PlayerLocale outputLanguage) {}
 
     private StructuredRuleAnswer safe(UUID versionId, AnswerStatus status, String message) {
         return AnswerOutcomePolicy.safeFailure(versionId, status, message);

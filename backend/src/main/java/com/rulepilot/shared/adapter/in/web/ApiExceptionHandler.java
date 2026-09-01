@@ -43,6 +43,7 @@ public class ApiExceptionHandler {
         HttpStatus status = switch (exception.reason()) {
             case CANCELLED -> HttpStatus.CONFLICT;
             case TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            case ACCOUNT_QUOTA -> HttpStatus.PAYMENT_REQUIRED;
             default -> HttpStatus.TOO_MANY_REQUESTS;
         };
         ProblemDetail problem = problem(

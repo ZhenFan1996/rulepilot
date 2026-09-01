@@ -5,6 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonMappingException;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
@@ -16,6 +24,9 @@ import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -24,6 +35,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -124,10 +136,20 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public ModelDraft compose(ModelRequest request, String ownerUsername) {
+        return compose(request, ownerUsername, CaptureHandle.noop(), null, null);
+    }
+
+    @Override
+    public ModelDraft compose(
+            ModelRequest request,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         requireConfigured(ownerUsername);
         RuntimeException firstFailure;
         try {
-            return composeOnce(request, "", ownerUsername);
+            return composeOnce(request, "", ownerUsername, capture, resource, parentOperationId, 1);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -135,7 +157,14 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             firstFailure = exception;
         }
         try {
-            return composeOnce(request, prompts.structuredOutputRepair(), ownerUsername);
+            return composeOnce(
+                    request,
+                    prompts.structuredOutputRepair(),
+                    ownerUsername,
+                    capture,
+                    resource,
+                    parentOperationId,
+                    2);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -156,9 +185,35 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             ModelDraft previousDraft,
             java.util.List<String> feedback,
             String ownerUsername) {
+        return revise(
+                request,
+                previousDraft,
+                feedback,
+                ownerUsername,
+                CaptureHandle.noop(),
+                null,
+                null);
+    }
+
+    @Override
+    public ModelDraft revise(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         requireConfigured(ownerUsername);
         try {
-            return repairOnce(request, previousDraft, feedback, ownerUsername);
+            return repairOnce(
+                    request,
+                    previousDraft,
+                    feedback,
+                    ownerUsername,
+                    capture,
+                    resource,
+                    parentOperationId);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -174,10 +229,38 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             List<String> feedback,
             Set<PlayerFacingField> editableFields,
             String ownerUsername) {
+        return revisePlayerFacing(
+                request,
+                previousDraft,
+                feedback,
+                editableFields,
+                ownerUsername,
+                CaptureHandle.noop(),
+                null,
+                null);
+    }
+
+    @Override
+    public ModelDraft revisePlayerFacing(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            Set<PlayerFacingField> editableFields,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         requireConfigured(ownerUsername);
         try {
             PlayerFacingRepairDraft repaired = repairPlayerFacingOnce(
-                    request, previousDraft, feedback, editableFields, ownerUsername);
+                    request,
+                    previousDraft,
+                    feedback,
+                    editableFields,
+                    ownerUsername,
+                    capture,
+                    resource,
+                    parentOperationId);
             if (repaired == null) {
                 throw new IllegalStateException("player-facing repair returned no structured fields");
             }
@@ -208,20 +291,39 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     @Override
     public Optional<QuestionInterpretationDraft> interpretQuestion(
             QuestionInterpretationRequest request, String ownerUsername) {
+        return interpretQuestion(request, ownerUsername, CaptureHandle.noop(), null, null);
+    }
+
+    @Override
+    public Optional<QuestionInterpretationDraft> interpretQuestion(
+            QuestionInterpretationRequest request,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         requireConfigured(ownerUsername);
         try {
-            String content = interpretQuestionOnce(request, "", ownerUsername);
+            String content = interpretQuestionOnce(
+                    request, "", ownerUsername, capture, resource, parentOperationId, 1);
             Optional<QuestionInterpretationDraft> interpretation = parseQuestionInterpretation(content);
             if (interpretation.isPresent()) return interpretation;
+            captureFailure(capture, resource, parentOperationId, "QUESTION_INTERPRETATION_RESPONSE_REJECTED");
 
             LOGGER.warn(
                     "Answer question interpretation rejected; requesting one bounded contract repair: provider={}, status={}",
                     providerId(ownerUsername),
                     interpretationOutputStatus(content));
             String repairedContent = interpretQuestionOnce(
-                    request, QUESTION_INTERPRETATION_REPAIR, ownerUsername);
+                    request,
+                    QUESTION_INTERPRETATION_REPAIR,
+                    ownerUsername,
+                    capture,
+                    resource,
+                    parentOperationId,
+                    2);
             Optional<QuestionInterpretationDraft> repaired = parseQuestionInterpretation(repairedContent);
             if (repaired.isEmpty()) {
+                captureFailure(capture, resource, parentOperationId, "QUESTION_INTERPRETATION_REPAIR_REJECTED");
                 LOGGER.warn(
                         "Answer question interpretation repair rejected: provider={}, status={}",
                         providerId(ownerUsername),
@@ -243,7 +345,11 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     private String interpretQuestionOnce(
             QuestionInterpretationRequest request,
             String repairInstruction,
-            String ownerUsername) {
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId,
+            int attempt) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
         if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
@@ -265,7 +371,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         String system = repairInstruction == null || repairInstruction.isBlank()
                 ? QUESTION_INTERPRETATION_SYSTEM
                 : QUESTION_INTERPRETATION_SYSTEM + "\n\n" + repairInstruction;
-        return prompt
+        ChatClient.ChatClientRequestSpec call = prompt
                 .system(system)
                 .user(user -> user.text(QUESTION_INTERPRETATION_USER)
                         .param("question", request.question())
@@ -275,13 +381,29 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("deterministicType", request.deterministicType().name())
                         .param("deterministicMissingContext", request.deterministicMissingContext())
                         .param("explicitLearningIntent", request.explicitLearningIntentForPrompt())
-                        .param("outputLanguage", request.outputLanguage().promptName()))
-                .call()
-                .content();
+                        .param("outputLanguage", request.outputLanguage().promptName()));
+        return tracedContent(
+                capture,
+                resource,
+                parentOperationId,
+                ownerUsername,
+                attempt,
+                "rule-answer-question-interpretation-v9",
+                "question-interpretation-v1",
+                QUESTION_INTERPRETATION_SCHEMA,
+                estimateTokens(request.toString()),
+                384,
+                () -> call.call().content());
     }
 
     private ModelDraft composeOnce(
-            ModelRequest request, String repairInstruction, String ownerUsername) {
+            ModelRequest request,
+            String repairInstruction,
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId,
+            int attempt) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
         if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
@@ -298,7 +420,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(answerTemperature));
         }
-        String content = prompt
+        ChatClient.ChatClientRequestSpec call = prompt
                 .system(prompts.answerSystem(request.answerAid().name()))
                 .user(user -> user.text(prompts.answerUser())
                         .param("question", request.question())
@@ -313,17 +435,37 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("learningIntent", request.context().learningIntentForPrompt())
                         .param("outputLanguage", request.context().outputLanguageForPrompt())
                         .param("evidence", request.evidence())
-                        .param("repair", repairInstruction))
-                .call()
-                .content();
-        return parseModelDraft(content);
+                        .param("repair", repairInstruction));
+        String content = tracedContent(
+                capture,
+                resource,
+                parentOperationId,
+                ownerUsername,
+                attempt,
+                repairInstruction == null || repairInstruction.isBlank()
+                        ? "rule-answer-v60"
+                        : "structured-output-repair-v1",
+                "rule-answer-model-draft-v1",
+                MODEL_DRAFT_SCHEMA,
+                estimateTokens(request.toString()),
+                8192,
+                () -> call.call().content());
+        try {
+            return parseModelDraft(content);
+        } catch (RuntimeException rejected) {
+            captureFailure(capture, resource, parentOperationId, "ANSWER_MODEL_RESPONSE_REJECTED");
+            throw rejected;
+        }
     }
 
     private ModelDraft repairOnce(
             ModelRequest request,
             ModelDraft previousDraft,
             List<String> feedback,
-            String ownerUsername) {
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
         if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
@@ -340,7 +482,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(interpretationTemperature));
         }
-        String content = prompt
+        ChatClient.ChatClientRequestSpec call = prompt
                 .system(ANSWER_REPAIR_SYSTEM)
                 .user(user -> user.text(ANSWER_REPAIR_USER)
                         .param("question", request.question())
@@ -353,10 +495,25 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("outputLanguage", request.context().outputLanguageForPrompt())
                         .param("evidence", request.evidence())
                         .param("previousDraft", previousDraft)
-                        .param("feedback", feedback))
-                .call()
-                .content();
-        return parseModelDraft(content);
+                        .param("feedback", feedback));
+        String content = tracedContent(
+                capture,
+                resource,
+                parentOperationId,
+                ownerUsername,
+                1,
+                "rule-answer-repair-v1",
+                "rule-answer-model-draft-v1",
+                MODEL_DRAFT_SCHEMA,
+                estimateTokens(request.toString()) + estimateTokens(feedback.toString()),
+                8192,
+                () -> call.call().content());
+        try {
+            return parseModelDraft(content);
+        } catch (RuntimeException rejected) {
+            captureFailure(capture, resource, parentOperationId, "ANSWER_MODEL_REVISION_REJECTED");
+            throw rejected;
+        }
     }
 
     /** Exact admission for the combined natural-answer and machine-decision JSON envelope. */
@@ -377,7 +534,10 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             ModelDraft previousDraft,
             List<String> feedback,
             Set<PlayerFacingField> editableFields,
-            String ownerUsername) {
+            String ownerUsername,
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId) {
         if (editableFields == null || editableFields.isEmpty()) {
             throw new IllegalArgumentException("player-facing repair requires at least one editable field");
         }
@@ -397,7 +557,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(interpretationTemperature));
         }
-        String content = prompt
+        ChatClient.ChatClientRequestSpec call = prompt
                 .system(PLAYER_FACING_REPAIR_SYSTEM)
                 .user(user -> user.text(PLAYER_FACING_REPAIR_USER)
                         .param("question", request.question())
@@ -406,10 +566,25 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("evidence", request.evidence())
                         .param("editableFields", editableFields)
                         .param("rejectedFields", rejectedFieldsJson(previousDraft, editableFields))
-                        .param("feedback", feedback))
-                .call()
-                .content();
-        return parsePlayerFacingRepair(content, editableFields);
+                        .param("feedback", feedback));
+        String content = tracedContent(
+                capture,
+                resource,
+                parentOperationId,
+                ownerUsername,
+                1,
+                "rule-answer-player-facing-repair-v1",
+                "player-facing-repair-v1",
+                "",
+                estimateTokens(request.toString()) + estimateTokens(feedback.toString()),
+                8192,
+                () -> call.call().content());
+        try {
+            return parsePlayerFacingRepair(content, editableFields);
+        } catch (RuntimeException rejected) {
+            captureFailure(capture, resource, parentOperationId, "ANSWER_PLAYER_FACING_REPAIR_REJECTED");
+            throw rejected;
+        }
     }
 
     private boolean usesQwen(String ownerUsername) {
@@ -623,6 +798,110 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 throw new IllegalStateException("player-facing repair omitted citationIds");
             }
         }
+    }
+
+    private String tracedContent(
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId,
+            String ownerUsername,
+            int attempt,
+            String templateVersion,
+            String outputSchemaVersion,
+            String outputSchema,
+            int inputTokenEstimate,
+            int maximumOutputTokens,
+            Supplier<String> invocation) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
+        if (!trace.enabled()) return invocation.get();
+        UUID operationId = UUID.randomUUID();
+        TraceEventContext started = TraceEventContext.create(
+                java.time.Instant.now(), JourneyStage.ANSWER, operationId, parentOperationId, resource);
+        capture(trace, () -> trace.modelCallStarted(new ModelCallStarted(
+                        started,
+                        providerFor(ownerUsername),
+                        modelNameFor(ownerUsername),
+                        attempt,
+                        templateVersion,
+                        outputSchemaVersion,
+                        outputSchema == null || outputSchema.isBlank() ? "" : sha256(outputSchema),
+                        inputTokenEstimate,
+                        maximumOutputTokens)));
+        String content;
+        try {
+            content = invocation.get();
+        } catch (RuntimeException failure) {
+            capture(trace, () -> trace.bindingOrFailure(new BindingOrFailure(
+                            nextEvent(started),
+                            LifecycleSignal.FAILURE,
+                            isTimeout(failure) ? "MODEL_CALL_TIMEOUT" : "MODEL_CALL_FAILED",
+                            resource,
+                            null)));
+            throw failure;
+        }
+        String rawContent = content;
+        capture(trace, () -> trace.modelTurn(new com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn(
+                        nextEvent(started),
+                        providerFor(ownerUsername),
+                        modelNameFor(ownerUsername),
+                        attempt,
+                        rawContent == null ? "" : rawContent,
+                        List.of(),
+                        rawContent == null || rawContent.isBlank() ? "NO_CONTENT" : "STOP",
+                        0,
+                        0,
+                        rawContent == null || rawContent.isBlank())));
+        return content;
+    }
+
+    private void capture(CaptureHandle trace, Runnable emission) {
+        try {
+            emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never alter the provider or publication result.
+        }
+    }
+
+    private void captureFailure(
+            CaptureHandle capture,
+            ResourceRef resource,
+            UUID parentOperationId,
+            String code) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
+        if (!trace.enabled()) return;
+        capture(trace, () -> trace.bindingOrFailure(new BindingOrFailure(
+                        TraceEventContext.create(
+                                java.time.Instant.now(),
+                                JourneyStage.ANSWER,
+                                UUID.randomUUID(),
+                                parentOperationId,
+                                resource),
+                        LifecycleSignal.FAILURE,
+                        code,
+                        resource,
+                        null)));
+    }
+
+    private TraceEventContext nextEvent(TraceEventContext context) {
+        return TraceEventContext.create(
+                java.time.Instant.now(),
+                context.stage(),
+                context.operationId(),
+                context.parentOperationId(),
+                context.resource());
+    }
+
+    private String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private int estimateTokens(String value) {
+        return value == null || value.isEmpty() ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 
     private boolean isTimeout(Throwable failure) {

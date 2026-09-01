@@ -4,11 +4,15 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
 const RECOMMENDATION_OPENING_PROMPT = process.env.RULEPILOT_RECOMMENDATION_OPENING_PROMPT
-  ?? '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
+  ?? '这周末想和朋友开一局，但我完全不知道该玩什么。你会先问我什么，帮我一起缩小范围？'
 const RECOMMENDATION_SELECTION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_SELECTION_PROMPT
-  ?? '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后还想接着找规则书、听讲解。'
+  ?? '想清楚了：我们三个人，想玩两小时左右的德式重策，最好是 DBG 为主。请直接给我三款，把你最推荐的一款放第一；选好后我们还想找规则书、听讲解。'
+const EXPECTED_CANONICAL_MECHANIC = process.env.RULEPILOT_RECOMMENDATION_EXPECTED_MECHANIC
+  ?? 'Deck, Bag, and Pool Building'
 const MAX_OPEN_GUIDANCE_MS = 15_000
 const MAX_SELECTION_RECOMMENDATION_MS = 20_000
+const MAX_SELECTION_TERMINAL_MS = 45_000
+const EXPECTED_RECOMMENDATION_COUNT = 3
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
 const RULE_QUESTION = process.env.RULEPILOT_RECOMMENDATION_RULE_QUESTION
   ?? '我们现在要开第一局：所有组件分别怎么摆、每个人先拿什么？请按顺序说，并标出规则书页码。'
@@ -18,9 +22,9 @@ const REQUIRE_FRESH_IMPORT = process.env.RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_
 
 function bggIdFromBindingPath(pathname: string) {
   const match = /^\/api\/v1\/bgg\/games\/([1-9]\d*)\/import$/.exec(pathname)
-  if (!match) throw new Error(`Unexpected BGG binding path: ${pathname}`)
+  if (!match) throw new Error('Unexpected BGG binding path')
   const value = Number(match[1])
-  if (!Number.isSafeInteger(value)) throw new Error(`Unsafe BGG id in binding path: ${pathname}`)
+  if (!Number.isSafeInteger(value)) throw new Error('Unsafe BGG identity in binding path')
   return value
 }
 
@@ -63,10 +67,84 @@ interface RecommendationRecoveryObservation {
   elapsedMs: number
 }
 
+interface RecommendationShortfallResponse {
+  requestedCount: number
+  availableCount: number
+}
+
+interface RecommendationResponseGame {
+  game: {
+    bggId: number
+    name: string
+    originalName: string
+    mechanics?: string[]
+  }
+  matches: string[]
+  tradeoffs: string[]
+  fitClaims?: Array<{
+    subject: string
+    strength: 'hard' | 'soft'
+    relation: 'satisfied' | 'conflict' | 'unknown'
+    text: string
+  }>
+  replyParts?: Array<{
+    role: string
+    subject: string
+    text: string
+  }>
+}
+
+interface RecommendationAgentResponse {
+  conversationId: string | null
+  revision: number | null
+  clientTurnId: string | null
+  replayed: boolean
+  responseLocale: string
+  outcome: string
+  assistantMessage: string
+  recommendationLead: string | null
+  shortfall: RecommendationShortfallResponse | null
+  sourceCount: number
+  candidatesEvaluated: number
+  completedWork: string[]
+  games: RecommendationResponseGame[]
+  [key: string]: unknown
+}
+
 interface RecommendationSessionResponse {
   conversationId: string
   revision: number
-  latestResponse: null | { outcome: string }
+  transcript: Array<{ role: 'user' | 'assistant'; text: string }>
+  processing: boolean
+  processingSince: string | null
+  latestResponse: RecommendationAgentResponse | null
+}
+
+interface RecommendationTurnRequestIdentity {
+  conversationId: string | null
+  revision: number | null
+  clientTurnId: string | null
+}
+
+interface RecommendationCardIdentity {
+  rank: number
+  bggId: number
+  name: string
+}
+
+interface RecommendationDomCardIdentity {
+  rank: number
+  bggId: number | null
+  name: string
+}
+
+interface RecommendationAcceptanceObservation {
+  failedChecks: string[]
+  selectionSloMet: boolean
+  selectionContractMet: boolean
+  continuationSafe: boolean
+  projectionMatches: boolean
+  hardMechanicFitVerified: boolean
 }
 
 interface ImportJob {
@@ -169,6 +247,14 @@ interface CsrfToken {
   token: string
 }
 
+interface PrivateAgentTraceStatus {
+  state: 'ACTIVE' | 'SEALED'
+  integrity: 'COMPLETE' | 'INCOMPLETE'
+  incompleteReason: string
+  eventCount: number
+  storedBytes: number
+}
+
 interface ModelConfigurationResponse {
   providers: Array<{
     id: string
@@ -223,11 +309,51 @@ interface TeachingWaitProgress {
 interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
+  journeyReachedEnd: boolean
   stage: string
+  failedChecks: string[]
+  privateAgentTraceStarted: boolean
+  privateAgentTraceState: PrivateAgentTraceStatus['state'] | null
+  privateAgentTraceIntegrity: PrivateAgentTraceStatus['integrity'] | null
+  privateAgentTraceIncompleteReason: string | null
+  privateAgentTraceEventCount: number
+  privateAgentTraceStoredBytes: number
+  privateAgentTraceExported: boolean
+  privateAgentTraceDeletedAfterExport: boolean
   selectedBggId: number | null
   selectedGameName: string | null
   recommendationConversationId: string | null
+  recommendationOpeningPrompt: string
+  recommendationSelectionPrompt: string
+  recommendationExpectedMechanic: string
+  recommendationTranscript: Array<{ role: 'user' | 'assistant'; text: string }>
   openGuidanceOutcome: string | null
+  recommendationExpectedRevision: number | null
+  recommendationPersistedRevision: number | null
+  recommendationClientTurnId: string | null
+  recommendationTerminalObserved: boolean
+  recommendationTerminalSource: 'PERSISTED_SESSION' | null
+  recommendationTerminalObservedMs: number | null
+  recommendationProcessingSince: string | null
+  recommendationSelectionRequestCount: number
+  recommendationSloMs: number
+  recommendationHardDeadlineMs: number
+  recommendationSloMet: boolean | null
+  recommendationExactCardinalityWithinSlo: boolean | null
+  recommendationCompletedAfterSlo: boolean | null
+  recommendationContractMet: boolean
+  recommendationResultUsable: boolean
+  recommendationHardMechanicFitVerified: boolean
+  recommendationTextReviewRequired: boolean
+  recommendationRequestedCount: number
+  recommendationStructuredCardCount: number
+  recommendationOrderedCards: RecommendationCardIdentity[]
+  recommendationDomCards: RecommendationDomCardIdentity[]
+  recommendationDomProjectionMs: number | null
+  recommendationAssistantMessage: string | null
+  recommendationLead: string | null
+  recommendationShortfall: RecommendationShortfallResponse | null
+  recommendationStructuredResponse: RecommendationAgentResponse | null
   modelAssignments: ModelConfigurationResponse['assignments'] | null
   visualModelVisionCapable: boolean | null
   routeStayedOnDiscover: boolean
@@ -336,6 +462,200 @@ function elapsed(startedAt: number) {
   return Math.round(performance.now() - startedAt)
 }
 
+function recordFailedCheck(report: ProductionJourneyReport, check: string) {
+  if (!report.failedChecks.includes(check)) report.failedChecks.push(check)
+}
+
+function orderedRecommendationCards(response: RecommendationAgentResponse): RecommendationCardIdentity[] {
+  return response.games.map((entry, index) => ({
+    rank: index + 1,
+    bggId: entry.game.bggId,
+    name: entry.game.name.trim(),
+  }))
+}
+
+async function recommendationDomCards(cards: Locator): Promise<RecommendationDomCardIdentity[]> {
+  return await cards.evaluateAll(elements => elements.map((element, index) => {
+    const rawBggId = element.getAttribute('data-bgg-id')
+    const bggId = rawBggId === null ? Number.NaN : Number(rawBggId)
+    return {
+      rank: index + 1,
+      bggId: Number.isSafeInteger(bggId) && bggId > 0 ? bggId : null,
+      name: element.querySelector('h3')?.textContent?.trim() ?? '',
+    }
+  }))
+}
+
+function recommendationProjectionMatches(
+  structuredCards: RecommendationCardIdentity[],
+  domCards: RecommendationDomCardIdentity[],
+) {
+  return structuredCards.length === domCards.length
+    && structuredCards.every((card, index) => {
+      const projected = domCards[index]
+      return projected?.rank === card.rank
+        && projected.bggId === card.bggId
+        && projected.name === card.name
+    })
+}
+
+function recommendationAcceptance(
+  response: RecommendationAgentResponse,
+  domCards: RecommendationDomCardIdentity[],
+  domProjectionMs: number,
+  selectionRequestCount: number,
+): RecommendationAcceptanceObservation {
+  const structuredCards = orderedRecommendationCards(response)
+  const bggIds = structuredCards.map(card => card.bggId)
+  const uniqueBggIds = bggIds.every(id => Number.isSafeInteger(id) && id > 0)
+    && new Set(bggIds).size === bggIds.length
+  const exactCardinality = structuredCards.length === EXPECTED_RECOMMENDATION_COUNT
+  const projectionMatches = recommendationProjectionMatches(structuredCards, domCards)
+  const hardMechanicFitVerified = response.games.length > 0
+    && response.games.every(entry =>
+      entry.game.mechanics?.includes(EXPECTED_CANONICAL_MECHANIC)
+      && entry.fitClaims?.some(claim =>
+        claim.subject === 'mechanics'
+        && claim.strength === 'hard'
+        && claim.relation === 'satisfied'))
+  const shortfallMatches = exactCardinality
+    ? response.shortfall === null
+    : Boolean(structuredCards.length > 0
+      && structuredCards.length < EXPECTED_RECOMMENDATION_COUNT
+      && response.shortfall?.requestedCount === EXPECTED_RECOMMENDATION_COUNT
+      && response.shortfall.availableCount === structuredCards.length)
+  const recommendationOutcome = response.outcome === 'recommendations'
+  const selectionSloMet = domProjectionMs <= MAX_SELECTION_RECOMMENDATION_MS
+  const failedChecks: string[] = []
+  if (!selectionSloMet) failedChecks.push('SELECTION_SLO_EXCEEDED')
+  if (!recommendationOutcome) failedChecks.push('RECOMMENDATION_TERMINAL_OUTCOME_INVALID')
+  if (!exactCardinality) failedChecks.push('RECOMMENDATION_CARDINALITY_MISMATCH')
+  if (!uniqueBggIds) failedChecks.push('RECOMMENDATION_DUPLICATE_BGG_IDENTITY')
+  if (!projectionMatches) failedChecks.push('RECOMMENDATION_UI_PROJECTION_MISMATCH')
+  if (!hardMechanicFitVerified) failedChecks.push('RECOMMENDATION_HARD_MECHANIC_FIT_UNVERIFIED')
+  if (!shortfallMatches) failedChecks.push('RECOMMENDATION_SHORTFALL_MISMATCH')
+  if (selectionRequestCount !== 1) failedChecks.push('RECOMMENDATION_TURN_REPOSTED')
+  return {
+    failedChecks,
+    selectionSloMet,
+    selectionContractMet:
+      recommendationOutcome && exactCardinality && uniqueBggIds && projectionMatches
+        && hardMechanicFitVerified && shortfallMatches,
+    continuationSafe:
+      recommendationOutcome && structuredCards.length > 0 && uniqueBggIds && projectionMatches
+        && hardMechanicFitVerified && shortfallMatches,
+    projectionMatches,
+    hardMechanicFitVerified,
+  }
+}
+
+function recommendationResponseFixture(
+  bggIds: number[],
+  shortfall: RecommendationShortfallResponse | null = null,
+): RecommendationAgentResponse {
+  return {
+    conversationId: '00000000-0000-4000-8000-000000000001',
+    revision: 2,
+    clientTurnId: '00000000-0000-4000-8000-000000000002',
+    replayed: true,
+    responseLocale: 'zh-CN',
+    outcome: 'recommendations',
+    assistantMessage: '已按当前条件整理候选。',
+    recommendationLead: '按顺序查看这些候选。',
+    shortfall,
+    sourceCount: bggIds.length,
+    candidatesEvaluated: bggIds.length,
+    completedWork: ['recommend_games'],
+    games: bggIds.map(bggId => ({
+      game: {
+        bggId,
+        name: `Game ${bggId}`,
+        originalName: `Game ${bggId}`,
+        mechanics: [EXPECTED_CANONICAL_MECHANIC],
+      },
+      matches: [],
+      tradeoffs: [],
+      fitClaims: [{
+        subject: 'mechanics',
+        strength: 'hard',
+        relation: 'satisfied',
+        text: 'The canonical mechanic criterion is satisfied.',
+      }],
+    })),
+  }
+}
+
+async function waitForPersistedRecommendationTerminal(
+  request: APIRequestContext,
+  conversationId: string,
+  clientTurnId: string,
+  expectedRevision: number,
+  startedAt: number,
+  deadlineAt: number,
+) {
+  let latestSession: RecommendationSessionResponse | null = null
+  let latestStatus: number | null = null
+  let latestRequestFailed = false
+  while (Date.now() < deadlineAt) {
+    const response = await request.get(
+      `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(conversationId)}`,
+      { timeout: Math.max(1, Math.min(5_000, deadlineAt - Date.now())) },
+    ).catch(() => {
+      latestRequestFailed = true
+      return null
+    })
+    if (response) {
+      latestStatus = response.status()
+      latestRequestFailed = false
+      if (response.ok()) {
+        const session = await response.json() as RecommendationSessionResponse
+        if (session.conversationId !== conversationId) {
+          throw new Error('Recommendation reconciliation returned another conversation identity')
+        }
+        latestSession = session
+        const terminal = session.latestResponse
+        if (!session.processing
+          && session.revision > expectedRevision
+          && terminal?.clientTurnId === clientTurnId) {
+          return { session, observedMs: elapsed(startedAt) }
+        }
+        if (!session.processing
+          && session.revision > expectedRevision
+          && terminal?.clientTurnId
+          && terminal.clientTurnId !== clientTurnId) {
+          throw new Error('Recommendation reconciliation advanced to another client turn')
+        }
+      }
+    }
+    const remainingMs = deadlineAt - Date.now()
+    if (remainingMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(500, remainingMs)))
+    }
+  }
+  throw new Error(
+    `Recommendation turn did not reach its persisted terminal state within ${MAX_SELECTION_TERMINAL_MS} ms; `
+    + `latestStatus=${latestStatus ?? 'none'}, latestSession=${JSON.stringify(latestSession && {
+      revision: latestSession.revision,
+      processing: latestSession.processing,
+      latestOutcome: latestSession.latestResponse?.outcome ?? null,
+    })}, latestRequestFailed=${latestRequestFailed}`,
+  )
+}
+
+async function waitForRecommendationDomProjection(
+  cards: Locator,
+  structuredCards: RecommendationCardIdentity[],
+  startedAt: number,
+  deadlineAt: number,
+) {
+  let latest = await recommendationDomCards(cards)
+  while (Date.now() < deadlineAt && !recommendationProjectionMatches(structuredCards, latest)) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    latest = await recommendationDomCards(cards)
+  }
+  return { cards: latest, observedMs: elapsed(startedAt) }
+}
+
 function persistedDuration(from: string | null, to: string | null) {
   if (!from || !to) return null
   const startedAt = Date.parse(from)
@@ -363,6 +683,52 @@ async function login(page: Page, username: string, password: string) {
   await page.locator('input[name="password"]').fill(password)
   await page.locator('form button[type="submit"]').click()
   await expect(page).toHaveURL(homeUrl)
+}
+
+async function csrfToken(request: APIRequestContext) {
+  const response = await request.get('/api/auth/csrf')
+  expect(response.ok(), `CSRF token returned HTTP ${response.status()}`).toBe(true)
+  return await response.json() as CsrfToken
+}
+
+async function finalizePrivateAgentTrace(
+  request: APIRequestContext,
+  traceExportFile: string,
+  report: ProductionJourneyReport,
+) {
+  const traceCsrf = await csrfToken(request)
+  const sealResponse = await request.post('/api/v1/private-agent-trace/seal', {
+    headers: { [traceCsrf.headerName]: traceCsrf.token },
+  })
+  if (!sealResponse.ok()) {
+    throw new Error(`Private Agent trace seal returned HTTP ${sealResponse.status()}`)
+  }
+  const sealed = await sealResponse.json() as PrivateAgentTraceStatus
+  report.privateAgentTraceState = sealed.state
+  report.privateAgentTraceIntegrity = sealed.integrity
+  report.privateAgentTraceIncompleteReason = sealed.incompleteReason || null
+  report.privateAgentTraceEventCount = sealed.eventCount
+  report.privateAgentTraceStoredBytes = sealed.storedBytes
+  if (sealed.state !== 'SEALED' || sealed.integrity !== 'COMPLETE') {
+    throw new Error(
+      `Private Agent trace sealed incompletely: state=${sealed.state}; integrity=${sealed.integrity}; reason=${sealed.incompleteReason ?? 'NONE'}`,
+    )
+  }
+  const exportResponse = await request.get('/api/v1/private-agent-trace/export')
+  if (!exportResponse.ok()) {
+    throw new Error(`Private Agent trace export returned HTTP ${exportResponse.status()}`)
+  }
+  const traceBytes = await exportResponse.body()
+  if (traceBytes.length === 0) throw new Error('Private Agent trace export was empty')
+  await writeFile(traceExportFile, traceBytes, { mode: 0o600 })
+  report.privateAgentTraceExported = true
+  const deleteResponse = await request.delete('/api/v1/private-agent-trace', {
+    headers: { [traceCsrf.headerName]: traceCsrf.token },
+  })
+  if (!deleteResponse.ok()) {
+    throw new Error(`Private Agent trace cleanup returned HTTP ${deleteResponse.status()}`)
+  }
+  report.privateAgentTraceDeletedAfterExport = true
 }
 
 function observedDownloadComplete(job: ImportJob) {
@@ -573,17 +939,21 @@ async function waitForFirstCitedLesson(
     }
     await new Promise(resolve => setTimeout(resolve, 500))
   }
-  throw new Error(`The first source-cited lesson section did not become readable; latest=${JSON.stringify(progress.latest())}`)
+  throw new Error(
+    `The first source-cited lesson section did not become readable; ${teachingProgressSummary(progress.latest())}`,
+  )
 }
 
 function unfinishedSectionSummary(lesson: LessonMilestoneResponse) {
   const unfinished = lesson.sections.filter(section => section.evidenceStatus !== 'SUPPORTED')
   if (unfinished.length === 0) return 'no unfinished section details were returned'
-  return unfinished.map((section, index) => {
-    const identity = section.title?.trim()
-      || (section.position ? `section ${section.position}` : `section ${index + 1}`)
-    return `${identity}=${section.evidenceStatus}`
-  }).join(', ')
+  const counts = unfinished.reduce<Map<string, number>>((statuses, section) => {
+    statuses.set(section.evidenceStatus, (statuses.get(section.evidenceStatus) ?? 0) + 1)
+    return statuses
+  }, new Map())
+  return [...counts.entries()]
+    .map(([status, count]) => `${status}=${count}`)
+    .join(', ')
 }
 
 async function waitForCompletedLesson(
@@ -657,7 +1027,7 @@ async function waitForCompletedLesson(
     await new Promise(resolve => setTimeout(resolve, 500))
   }
   throw new Error(
-    `Teaching lesson did not complete; run=${latestRunState}; lesson=${latestLesson?.status ?? 'NOT_PUBLISHED'}; error=${latestRunError ?? 'NONE'}; ${latestLesson ? unfinishedSectionSummary(latestLesson) : 'no lesson was published'}; latest=${JSON.stringify(progress.latest())}`,
+    `Teaching lesson did not complete; run=${latestRunState}; lesson=${latestLesson?.status ?? 'NOT_PUBLISHED'}; error=${latestRunError ?? 'NONE'}; ${latestLesson ? unfinishedSectionSummary(latestLesson) : 'no lesson was published'}; ${teachingProgressSummary(progress.latest())}`,
   )
 }
 
@@ -705,9 +1075,23 @@ function teachingFailureDiagnostic(
     .filter(activity => activity.outcome !== 'SUCCEEDED')
     .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))[0]
   const latest = latestFailure
-    ? `${latestFailure.operation}: ${latestFailure.summary}`
+    ? `${latestFailure.operation}: ${teaching?.run.lastErrorCode ?? 'ACTIVITY_REJECTED'}`
     : teaching?.run.lastErrorCode ?? 'no rejected activity was recorded'
   return `attempt ${Math.min(2, job.teachingAutomaticRecoveryCount + 1)} of 2; chapters published=${published}, insufficient=${insufficient}, total=${sections.length}; latest=${latest}`
+}
+
+function teachingProgressSummary(progress: TeachingWaitProgress | null) {
+  if (!progress) return 'progress=UNAVAILABLE'
+  return [
+    `phase=${progress.phase}`,
+    `preparation=${progress.preparationState ?? 'NONE'}`,
+    `teaching=${progress.teachingState ?? 'NONE'}`,
+    `lesson=${progress.lessonStatus ?? 'NONE'}`,
+    `sections=${progress.sectionCount}`,
+    `published=${progress.publishedSectionCount}`,
+    `insufficient=${progress.insufficientSectionCount}`,
+    `handoff=${progress.teachingHandoffState ?? 'NONE'}`,
+  ].join(', ')
 }
 
 function teachingProgressReporter(
@@ -724,7 +1108,7 @@ function teachingProgressReporter(
       fingerprint = nextFingerprint
       loggedAt = now
       last = progress
-      console.log(`[production-teaching-progress] ${JSON.stringify(progress)}`)
+      console.log(`[production-teaching-progress] ${teachingProgressSummary(progress)}`)
       await onProgress?.(progress)
     },
     latest() {
@@ -854,6 +1238,114 @@ test('dynamic recommendation binding accepts only the exact BGG import route', (
     .toThrow('Unexpected BGG binding path')
 })
 
+test('recommendation acceptance records a late terminal without discarding its safe cards', () => {
+  const response = recommendationResponseFixture([101, 102, 103])
+  const cards = response.games.map((entry, index) => ({
+    rank: index + 1,
+    bggId: entry.game.bggId,
+    name: entry.game.name,
+  }))
+
+  expect(recommendationAcceptance(response, cards, 22_125, 1)).toEqual({
+    failedChecks: ['SELECTION_SLO_EXCEEDED'],
+    selectionSloMet: false,
+    selectionContractMet: true,
+    continuationSafe: true,
+    projectionMatches: true,
+    hardMechanicFitVerified: true,
+  })
+})
+
+test('recommendation acceptance continues an honest shortfall but cannot report the three-card contract as met', () => {
+  const response = recommendationResponseFixture(
+    [201, 202],
+    { requestedCount: EXPECTED_RECOMMENDATION_COUNT, availableCount: 2 },
+  )
+  const cards = response.games.map((entry, index) => ({
+    rank: index + 1,
+    bggId: entry.game.bggId,
+    name: entry.game.name,
+  }))
+
+  expect(recommendationAcceptance(response, cards, 12_000, 1)).toEqual({
+    failedChecks: ['RECOMMENDATION_CARDINALITY_MISMATCH'],
+    selectionSloMet: true,
+    selectionContractMet: false,
+    continuationSafe: true,
+    projectionMatches: true,
+    hardMechanicFitVerified: true,
+  })
+})
+
+test('recommendation acceptance rejects a partial slate without matching structured shortfall', () => {
+  const response = recommendationResponseFixture([251, 252])
+  const cards = response.games.map((entry, index) => ({
+    rank: index + 1,
+    bggId: entry.game.bggId,
+    name: entry.game.name,
+  }))
+
+  expect(recommendationAcceptance(response, cards, 12_000, 1)).toMatchObject({
+    failedChecks: [
+      'RECOMMENDATION_CARDINALITY_MISMATCH',
+      'RECOMMENDATION_SHORTFALL_MISMATCH',
+    ],
+    selectionContractMet: false,
+    continuationSafe: false,
+  })
+})
+
+test('recommendation acceptance stops before binding when the DOM changes structured card identity', () => {
+  const response = recommendationResponseFixture([301, 302, 303])
+  const cards = response.games.map((entry, index) => ({
+    rank: index + 1,
+    bggId: index === 1 ? 999 : entry.game.bggId,
+    name: entry.game.name,
+  }))
+
+  expect(recommendationAcceptance(response, cards, 8_000, 1)).toMatchObject({
+    failedChecks: ['RECOMMENDATION_UI_PROJECTION_MISMATCH'],
+    selectionContractMet: false,
+    continuationSafe: false,
+    projectionMatches: false,
+    hardMechanicFitVerified: true,
+  })
+})
+
+test('recommendation acceptance rejects cards without a structured satisfied hard mechanic claim', () => {
+  const response = recommendationResponseFixture([401, 402, 403])
+  response.games[1]!.fitClaims = []
+  const cards = response.games.map((entry, index) => ({
+    rank: index + 1,
+    bggId: entry.game.bggId,
+    name: entry.game.name,
+  }))
+
+  expect(recommendationAcceptance(response, cards, 8_000, 1)).toMatchObject({
+    failedChecks: ['RECOMMENDATION_HARD_MECHANIC_FIT_UNVERIFIED'],
+    selectionContractMet: false,
+    continuationSafe: false,
+    hardMechanicFitVerified: false,
+  })
+})
+
+test('recommendation acceptance rejects a satisfied mechanic claim for the wrong canonical BGG value', () => {
+  const response = recommendationResponseFixture([411, 412, 413])
+  response.games[1]!.game.mechanics = ['Worker Placement']
+  const cards = response.games.map((entry, index) => ({
+    rank: index + 1,
+    bggId: entry.game.bggId,
+    name: entry.game.name,
+  }))
+
+  expect(recommendationAcceptance(response, cards, 8_000, 1)).toMatchObject({
+    failedChecks: ['RECOMMENDATION_HARD_MECHANIC_FIT_UNVERIFIED'],
+    selectionContractMet: false,
+    continuationSafe: false,
+    hardMechanicFitVerified: false,
+  })
+})
+
 test('automation confirms only a verified official source with explicit edition and language identity', () => {
   const verified: RulebookCandidate = {
     title: 'Rules',
@@ -945,11 +1437,13 @@ test('recommendation becomes one readable, taught, and answerable production jou
   const username = process.env.RULEPILOT_RECOMMENDATION_USER
   const password = process.env.RULEPILOT_RECOMMENDATION_PASSWORD
   const reportFile = process.env.RULEPILOT_RECOMMENDATION_REPORT
-  if (!username || !password || !reportFile) {
-    throw new Error('Production recommendation credentials and report path are required')
+  const traceExportFile = process.env.RULEPILOT_AGENT_TRACE_EXPORT
+  if (!username || !password || !reportFile || !traceExportFile) {
+    throw new Error('Production recommendation credentials, report path, and trace export path are required')
   }
 
   const pageErrors: Error[] = []
+  const recommendationStreamRequests: RecommendationTurnRequestIdentity[] = []
   let guidesPage: Page | null = null
   let importRequestCount = 0
   let observedDocumentVersionId: string | null = null
@@ -961,9 +1455,19 @@ test('recommendation becomes one readable, taught, and answerable production jou
     officialSourceUrl?: string
     identityConfirmed?: boolean
   } | null = null
+  let privateTraceStarted = false
+  let privateTraceFinalizeError: Error | null = null
   page.on('pageerror', error => pageErrors.push(error))
   page.on('request', request => {
     const path = new URL(request.url()).pathname
+    if (path === '/api/v1/bgg/recommendation-agent/stream' && request.method() === 'POST') {
+      const body = request.postDataJSON() as Partial<RecommendationTurnRequestIdentity> | null
+      recommendationStreamRequests.push({
+        conversationId: typeof body?.conversationId === 'string' ? body.conversationId : null,
+        revision: Number.isSafeInteger(body?.revision) ? Number(body?.revision) : null,
+        clientTurnId: typeof body?.clientTurnId === 'string' ? body.clientTurnId : null,
+      })
+    }
     if (path === '/api/v1/documents/official-imports' && request.method() === 'POST') {
       importRequestCount += 1
       observedImportRequest = request.postDataJSON() as typeof observedImportRequest
@@ -971,9 +1475,34 @@ test('recommendation becomes one readable, taught, and answerable production jou
   })
 
   const report: ProductionJourneyReport = {
-    generatedAt: new Date().toISOString(), completed: false, stage: 'login',
+    generatedAt: new Date().toISOString(), completed: false, journeyReachedEnd: false,
+    stage: 'login', failedChecks: [],
+    privateAgentTraceStarted: false, privateAgentTraceState: null,
+    privateAgentTraceIntegrity: null, privateAgentTraceIncompleteReason: null,
+    privateAgentTraceEventCount: 0, privateAgentTraceStoredBytes: 0,
+    privateAgentTraceExported: false, privateAgentTraceDeletedAfterExport: false,
     selectedBggId: null, selectedGameName: null,
-    recommendationConversationId: null, openGuidanceOutcome: null,
+    recommendationConversationId: null,
+    recommendationOpeningPrompt: RECOMMENDATION_OPENING_PROMPT,
+    recommendationSelectionPrompt: RECOMMENDATION_SELECTION_PROMPT,
+    recommendationExpectedMechanic: EXPECTED_CANONICAL_MECHANIC,
+    recommendationTranscript: [], openGuidanceOutcome: null,
+    recommendationExpectedRevision: null, recommendationPersistedRevision: null,
+    recommendationClientTurnId: null, recommendationTerminalObserved: false,
+    recommendationTerminalSource: null, recommendationTerminalObservedMs: null,
+    recommendationProcessingSince: null, recommendationSelectionRequestCount: 0,
+    recommendationSloMs: MAX_SELECTION_RECOMMENDATION_MS,
+    recommendationHardDeadlineMs: MAX_SELECTION_TERMINAL_MS,
+    recommendationSloMet: null, recommendationExactCardinalityWithinSlo: null,
+    recommendationCompletedAfterSlo: null,
+    recommendationContractMet: false, recommendationResultUsable: false,
+    recommendationHardMechanicFitVerified: false,
+    recommendationTextReviewRequired: false,
+    recommendationRequestedCount: EXPECTED_RECOMMENDATION_COUNT,
+    recommendationStructuredCardCount: 0, recommendationOrderedCards: [],
+    recommendationDomCards: [], recommendationDomProjectionMs: null,
+    recommendationAssistantMessage: null, recommendationLead: null,
+    recommendationShortfall: null, recommendationStructuredResponse: null,
     modelAssignments: null, visualModelVisionCapable: null,
     routeStayedOnDiscover: false, journeyBackdropVisible: false, journeySurfaceOpaque: false,
     lessonBackdropVisible: false, lessonSurfaceOpaque: false,
@@ -1048,6 +1577,22 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
   try {
     await login(page, username, password)
+    report.stage = 'private-trace-start'
+    const traceCsrf = await csrfToken(page.request)
+    const traceStartResponse = await page.request.post('/api/v1/private-agent-trace/start', {
+      headers: { [traceCsrf.headerName]: traceCsrf.token },
+    })
+    expect(traceStartResponse.status(), 'Private Agent trace could not start').toBe(201)
+    const traceStart = await traceStartResponse.json() as PrivateAgentTraceStatus
+    expect(traceStart.state).toBe('ACTIVE')
+    expect(traceStart.integrity).toBe('COMPLETE')
+    privateTraceStarted = true
+    report.privateAgentTraceStarted = true
+    report.privateAgentTraceState = traceStart.state
+    report.privateAgentTraceIntegrity = traceStart.integrity
+    report.privateAgentTraceIncompleteReason = traceStart.incompleteReason || null
+    report.privateAgentTraceEventCount = traceStart.eventCount
+    report.privateAgentTraceStoredBytes = traceStart.storedBytes
     report.stage = 'model-role-preflight'
     const modelConfigurationResponse = await page.request.get('/api/v1/model-configuration')
     expect(modelConfigurationResponse.ok(),
@@ -1104,15 +1649,132 @@ test('recommendation becomes one readable, taught, and answerable production jou
       'The unknown-target opening did not finish as useful guidance').toContain(report.openGuidanceOutcome)
 
     const recommendationStartedAt = performance.now()
+    const recommendationDeadlineAt = Date.now() + MAX_SELECTION_TERMINAL_MS
+    const recommendationRequestPromise = page.waitForRequest(request => {
+      const url = new URL(request.url())
+      return url.pathname === '/api/v1/bgg/recommendation-agent/stream'
+        && request.method() === 'POST'
+    }, { timeout: MAX_SELECTION_TERMINAL_MS })
     await composer.fill(RECOMMENDATION_SELECTION_PROMPT)
     await page.getByRole('button', { name: '发送', exact: true }).click()
-    await expect(recommendationCards).toHaveCount(3, { timeout: MAX_SELECTION_RECOMMENDATION_MS })
-    report.recommendationMs = elapsed(recommendationStartedAt)
-    report.recommendationCardCount = await recommendationCards.count()
-    expect(
-      report.recommendationMs,
-      'The recommendation Agent should refine the unknown target into three choices within the interaction budget',
-    ).toBeLessThanOrEqual(MAX_SELECTION_RECOMMENDATION_MS)
+    const recommendationThreeCardSloObservation
+      = expect(recommendationCards).toHaveCount(3, { timeout: MAX_SELECTION_RECOMMENDATION_MS })
+        .then(() => true, () => false)
+    const recommendationRequest = await recommendationRequestPromise.catch(error => {
+      const requestFailedMs = elapsed(recommendationStartedAt)
+      report.recommendationMs = requestFailedMs
+      if (requestFailedMs > MAX_SELECTION_RECOMMENDATION_MS) {
+        report.recommendationSloMet = false
+        report.recommendationCompletedAfterSlo = true
+        recordFailedCheck(report, 'SELECTION_SLO_EXCEEDED')
+      }
+      recordFailedCheck(report, 'RECOMMENDATION_REQUEST_NOT_OBSERVED')
+      throw error
+    })
+    const recommendationRequestBody
+      = recommendationRequest.postDataJSON() as Partial<RecommendationTurnRequestIdentity> | null
+    const recommendationClientTurnId = typeof recommendationRequestBody?.clientTurnId === 'string'
+      ? recommendationRequestBody.clientTurnId
+      : null
+    const recommendationExpectedRevision = Number.isSafeInteger(recommendationRequestBody?.revision)
+      ? Number(recommendationRequestBody?.revision)
+      : null
+    report.recommendationClientTurnId = recommendationClientTurnId
+    report.recommendationExpectedRevision = recommendationExpectedRevision
+    if (recommendationRequestBody?.conversationId !== createdConversation.conversationId
+      || recommendationExpectedRevision !== guidanceSession.revision
+      || !recommendationClientTurnId) {
+      recordFailedCheck(report, 'RECOMMENDATION_REQUEST_IDENTITY_INVALID')
+      throw new Error('Recommendation selection request did not preserve its conversation, revision, and client turn identity')
+    }
+
+    let recommendationTerminal: Awaited<ReturnType<typeof waitForPersistedRecommendationTerminal>>
+    try {
+      recommendationTerminal = await waitForPersistedRecommendationTerminal(
+        page.request,
+        createdConversation.conversationId,
+        recommendationClientTurnId,
+        recommendationExpectedRevision,
+        recommendationStartedAt,
+        recommendationDeadlineAt,
+      )
+    } catch (error) {
+      const reconciliationFailedMs = elapsed(recommendationStartedAt)
+      report.recommendationMs = reconciliationFailedMs
+      if (reconciliationFailedMs > MAX_SELECTION_RECOMMENDATION_MS) {
+        report.recommendationSloMet = false
+        report.recommendationCompletedAfterSlo = true
+        recordFailedCheck(report, 'SELECTION_SLO_EXCEEDED')
+      }
+      recordFailedCheck(report, 'RECOMMENDATION_TERMINAL_RECONCILIATION_FAILED')
+      throw error
+    }
+
+    const recommendationSession = recommendationTerminal.session
+    const recommendationResponse = recommendationSession.latestResponse
+    if (!recommendationResponse
+      || recommendationResponse.conversationId !== createdConversation.conversationId
+      || recommendationResponse.revision !== recommendationSession.revision
+      || recommendationResponse.clientTurnId !== recommendationClientTurnId) {
+      recordFailedCheck(report, 'RECOMMENDATION_TERMINAL_IDENTITY_INVALID')
+      throw new Error('Persisted recommendation terminal response changed the conversation, revision, or client turn identity')
+    }
+    report.recommendationTerminalObserved = true
+    report.recommendationTerminalSource = 'PERSISTED_SESSION'
+    report.recommendationTerminalObservedMs = recommendationTerminal.observedMs
+    report.recommendationPersistedRevision = recommendationSession.revision
+    report.recommendationProcessingSince = recommendationSession.processingSince
+    report.recommendationTranscript = recommendationSession.transcript.map(turn => ({ ...turn }))
+    report.recommendationStructuredResponse = recommendationResponse
+    report.recommendationAssistantMessage = recommendationResponse.assistantMessage
+    report.recommendationLead = recommendationResponse.recommendationLead
+    report.recommendationShortfall = recommendationResponse.shortfall
+    report.recommendationOrderedCards = orderedRecommendationCards(recommendationResponse)
+    report.recommendationStructuredCardCount = report.recommendationOrderedCards.length
+    report.recommendationTextReviewRequired
+      = report.recommendationStructuredCardCount !== EXPECTED_RECOMMENDATION_COUNT
+        || recommendationResponse.shortfall !== null
+
+    const projection = await waitForRecommendationDomProjection(
+      recommendationCards,
+      report.recommendationOrderedCards,
+      recommendationStartedAt,
+      recommendationDeadlineAt,
+    )
+    report.recommendationDomCards = projection.cards
+    report.recommendationDomProjectionMs = projection.observedMs
+    report.recommendationMs = projection.observedMs
+    report.recommendationCardCount = projection.cards.length
+    report.recommendationExactCardinalityWithinSlo
+      = report.recommendationStructuredCardCount === EXPECTED_RECOMMENDATION_COUNT
+        ? await recommendationThreeCardSloObservation
+        : false
+    report.recommendationSelectionRequestCount = recommendationStreamRequests
+      .filter(request => request.clientTurnId === recommendationClientTurnId).length
+    const recommendationAssessment = recommendationAcceptance(
+      recommendationResponse,
+      projection.cards,
+      projection.observedMs,
+      report.recommendationSelectionRequestCount,
+    )
+    recommendationAssessment.failedChecks.forEach(check => recordFailedCheck(report, check))
+    report.recommendationSloMet = recommendationAssessment.selectionSloMet
+    report.recommendationCompletedAfterSlo = !recommendationAssessment.selectionSloMet
+    report.recommendationContractMet = recommendationAssessment.selectionContractMet
+    report.recommendationResultUsable = recommendationAssessment.continuationSafe
+    report.recommendationHardMechanicFitVerified = recommendationAssessment.hardMechanicFitVerified
+    if (report.recommendationSloMet) {
+      expect(
+        report.recommendationMs,
+        'A recommendation reported within the SLO must retain its measured projection latency',
+      ).toBeLessThanOrEqual(MAX_SELECTION_RECOMMENDATION_MS)
+    }
+    await retainReport(reportFile, report)
+    if (!recommendationAssessment.continuationSafe) {
+      throw new Error(
+        `Persisted recommendation result is unsafe to continue: ${JSON.stringify(recommendationAssessment.failedChecks)}`,
+      )
+    }
     await composer.fill(PRESERVED_DRAFT)
     type SelectedRecommendationJourney = {
       recommendationRank: number
@@ -1195,8 +1857,9 @@ test('recommendation becomes one readable, taught, and answerable production jou
       const existingJourneys = await existingJourneyResponse.json() as ImportJob[]
       const restorableJourney = existingJourneys.find(job =>
         job.editionId === attemptedBoundGame.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED')
+      const reusableJourneys = REQUIRE_FRESH_IMPORT ? [] : existingJourneys
       let candidateResult: CandidateResponse | null = null
-      let recovery = chooseRecommendationRecovery(attemptedBoundGame.edition.id, existingJourneys, [])
+      let recovery = chooseRecommendationRecovery(attemptedBoundGame.edition.id, reusableJourneys, [])
       if (recovery.outcome !== 'REUSED_EXISTING_JOURNEY') {
         if (restorableJourney) {
           const chooseAnotherSource = page.getByTestId('player-journey-surface')
@@ -1217,8 +1880,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
             .toBe(attemptedBoundGame.edition.id)
           recovery = chooseRecommendationRecovery(
             attemptedBoundGame.edition.id,
-            existingJourneys,
-            candidateResult.configured ? candidateResult.candidates : [],
+            reusableJourneys,
+            candidateResult.configured
+              ? candidateResult.candidates.filter(candidate =>
+                  !REQUIRE_FRESH_IMPORT
+                  || existingJourneys.every(job => job.officialSourceUrl !== candidate.url))
+              : [],
           )
         }
       }
@@ -1260,8 +1927,10 @@ test('recommendation becomes one readable, taught, and answerable production jou
     }
 
     if (!selectedJourney) {
+      const recoverySummary = report.recommendationRecoveryOutcomes
+        .map(({ recommendationRank, outcome }) => ({ recommendationRank, outcome }))
       throw new Error(
-        `None of the three Agent-ranked recommendations had a usable journey or verified official rulebook source: ${JSON.stringify(report.recommendationRecoveryOutcomes)}`,
+        `None of the three Agent-ranked recommendations had a usable journey or verified official rulebook source: ${JSON.stringify(recoverySummary)}`,
       )
     }
 
@@ -1593,7 +2262,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
       'My Guides changed the imported document version identity').toBe(completedJob.documentVersionId)
     report.planGameTitleMatchesSelection = persistedPlan!.gameTitle === boundGame.game.name
     expect(report.planGameTitleMatchesSelection,
-      `My Guides used ${persistedPlan?.gameTitle ?? 'no title'} instead of ${boundGame.game.name}`).toBe(true)
+      'My Guides changed the selected game title').toBe(true)
     await guidesPage.reload()
     await expect(guidesPage.getByRole('heading', { name: boundGame.game.name, exact: true })).toBeVisible({ timeout: 60_000 })
 
@@ -1728,10 +2397,15 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await restoredRoleSwitcher.getByRole('button', { name: '继续推荐' }).click()
 
     await expect(page).toHaveURL(/\/discover$/)
-    expect(pageErrors, 'The production journey emitted uncaught browser errors').toEqual([])
+    if (pageErrors.length > 0) recordFailedCheck(report, 'BROWSER_PAGE_ERRORS')
     report.routeStayedOnDiscover = true
-    report.completed = true
-    report.stage = 'completed'
+    report.journeyReachedEnd = true
+    report.completed = report.failedChecks.length === 0
+    report.stage = report.completed ? 'completed' : 'acceptance-failed'
+    expect(
+      report.failedChecks,
+      `The production journey reached the end with failed acceptance facts: ${JSON.stringify(report.failedChecks)}`,
+    ).toEqual([])
   } finally {
     if (observedDocumentVersionId) {
       try {
@@ -1788,10 +2462,30 @@ test('recommendation becomes one readable, taught, and answerable production jou
         // Preserve the primary failure while retaining any earlier teaching diagnostics.
       }
     }
+    if (privateTraceStarted) {
+      try {
+        await finalizePrivateAgentTrace(page.request, traceExportFile, report)
+      } catch (error) {
+        privateTraceFinalizeError = error instanceof Error ? error : new Error(String(error))
+        recordFailedCheck(report, 'PRIVATE_AGENT_TRACE_EXPORT_FAILED')
+      }
+    }
     await guidesPage?.close().catch(() => undefined)
     report.importRequestCount = importRequestCount
     report.pageErrorCount = pageErrors.length
+    if (report.recommendationClientTurnId) {
+      report.recommendationSelectionRequestCount = recommendationStreamRequests
+        .filter(request => request.clientTurnId === report.recommendationClientTurnId).length
+      if (report.recommendationSelectionRequestCount > 1) {
+        recordFailedCheck(report, 'RECOMMENDATION_TURN_REPOSTED')
+      }
+    }
+    report.completed = report.journeyReachedEnd && report.failedChecks.length === 0
+    if (report.journeyReachedEnd && !report.completed) report.stage = 'acceptance-failed'
     report.generatedAt = new Date().toISOString()
     await retainReport(reportFile, report)
+    if (privateTraceFinalizeError && report.journeyReachedEnd) {
+      expect(privateTraceFinalizeError, 'Private Agent trace finalization failed').toBeNull()
+    }
   }
 })

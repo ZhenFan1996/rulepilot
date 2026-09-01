@@ -131,6 +131,49 @@ class PublicLessonReaderTest {
     }
 
     @Test
+    void projectsOnlyCitedSectionsFromAMixedReadableLesson() {
+        Fixture fixture = fixture();
+        IllustratedLesson.LessonSection localGap = new IllustratedLesson.LessonSection(
+                2,
+                "external-ending",
+                List.of("source_contract_unsourced"),
+                "External ending",
+                false,
+                IllustratedLesson.EvidenceStatus.INSUFFICIENT_EVIDENCE,
+                IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "This local source is unavailable.",
+                List.of(),
+                List.of(),
+                List.of(new IllustratedLesson.LessonStep(
+                        1,
+                        "Skip unavailable source",
+                        IllustratedLesson.TeachingMove.WATCH,
+                        "Continue with the sourced chapter.",
+                        List.of(),
+                        List.of())));
+        IllustratedLesson mixed = new IllustratedLesson(
+                fixture.lesson.id(),
+                fixture.lesson.teachingPlanId(),
+                IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(fixture.lesson.sections().getFirst(), localGap),
+                fixture.lesson.generatorVersion(),
+                fixture.lesson.createdAt());
+        when(plans.findById(fixture.plan.id())).thenReturn(Optional.of(fixture.plan));
+        when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(mixed));
+        when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(fixture.reference));
+
+        var publicLesson = reader.find(fixture.plan.id());
+
+        assertThat(publicLesson).hasValueSatisfying(value -> {
+            assertThat(value.lesson().sections())
+                    .extracting(IllustratedLesson.LessonSection::topicKey)
+                    .containsExactly("setup");
+            assertThat(value.citedPages()).containsExactlyInAnyOrder(2, 5);
+        });
+        assertThat(mixed.sections()).hasSize(2);
+    }
+
+    @Test
     void keeps_a_draft_with_a_player_facing_source_gap_out_of_the_anonymous_reader() {
         Fixture fixture = fixture();
         IllustratedLesson.LessonSection sourceGap = new IllustratedLesson.LessonSection(

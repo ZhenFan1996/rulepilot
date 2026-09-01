@@ -1,8 +1,20 @@
 package com.rulepilot.teaching.application;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentVersionScopeLookup;
@@ -14,6 +26,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -30,6 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class TeachingPlanService {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingPlanService.class);
+    private static final ObjectMapper TRACE_JSON = new ObjectMapper().findAndRegisterModules();
     // The first focused rewrite receives every detected boundary conflict. Repeating whole-outline rewrites tends to
     // oscillate on wording while delaying a fully cited lesson; section-level validation still protects every claim.
     private static final int MAX_CHAPTER_OWNERSHIP_REFINEMENTS = 1;
@@ -72,6 +86,21 @@ public class TeachingPlanService {
             String learningGoal,
             String createdBy,
             UUID assistantRunId) {
+        return create(
+                documentVersionId,
+                learningGoal,
+                createdBy,
+                assistantRunId,
+                CaptureHandle.noop());
+    }
+
+    public TeachingPlan create(
+            UUID documentVersionId,
+            String learningGoal,
+            String createdBy,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         var scope = documentScopes.findVersion(documentVersionId)
                 .filter(found -> found.createdBy().equals(createdBy))
                 .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
@@ -84,8 +113,20 @@ public class TeachingPlanService {
         boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         boolean textRulebookVisualCatalogAvailable = !visualOnly && visualCataloger.available(createdBy);
         var pages = visualOnly
-                ? visualCataloger.catalogVisualPages(
-                        documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId)
+                ? trace.enabled()
+                        ? visualCataloger.catalogVisualPages(
+                                documentVersionId,
+                                documentPages,
+                                scope.documentTitle(),
+                                createdBy,
+                                assistantRunId,
+                                trace)
+                        : visualCataloger.catalogVisualPages(
+                                documentVersionId,
+                                documentPages,
+                                scope.documentTitle(),
+                                createdBy,
+                                assistantRunId)
                 : documentPages.stream()
                         .map(page -> new PageInput(
                                 page.pageNumber(), page.text() == null || page.text().isBlank()
@@ -100,11 +141,26 @@ public class TeachingPlanService {
                 initialOutlineRequest,
                 pages,
                 documentPages,
-                assistantRunId);
+                assistantRunId,
+                trace);
         OutlineRequest outlineRequest = initialOutlineRequest;
         if (textRulebookVisualCatalogAvailable) {
-            List<PageFact> coverageFacts = visualCataloger.inspectUnownedSparseVisualPages(
-                    documentVersionId, outline, documentPages, scope.documentTitle(), createdBy, assistantRunId);
+            List<PageFact> coverageFacts = trace.enabled()
+                    ? visualCataloger.inspectUnownedSparseVisualPages(
+                            documentVersionId,
+                            outline,
+                            documentPages,
+                            scope.documentTitle(),
+                            createdBy,
+                            assistantRunId,
+                            trace)
+                    : visualCataloger.inspectUnownedSparseVisualPages(
+                            documentVersionId,
+                            outline,
+                            documentPages,
+                            scope.documentTitle(),
+                            createdBy,
+                            assistantRunId);
             if (!coverageFacts.isEmpty()) {
                 pages = VisualRulebookCatalogPolicy.appendFactsToPageInputs(pages, coverageFacts);
                 outlineRequest = new OutlineRequest(
@@ -113,7 +169,13 @@ public class TeachingPlanService {
         }
         if (requiresModelSourcePageCoverageRevision(visualOnly)) {
             outline = refineSourcePageCoverage(
-                    outlineRequest, outline, pages, assistantRunId, documentPages, playerGameTitle);
+                    outlineRequest,
+                    outline,
+                    pages,
+                    assistantRunId,
+                    documentPages,
+                    playerGameTitle,
+                    trace);
         } else if (assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -123,7 +185,12 @@ public class TeachingPlanService {
                     "The source-bound concept and coverage contracts remain authoritative; page text length alone did not trigger a second outline model call");
         }
         outline = refineChapterOwnership(
-                outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
+                outlineRequest,
+                outline,
+                assistantRunId,
+                documentPages,
+                playerGameTitle,
+                trace);
         try {
             if (visualOnly || hasStructuredSourceDependencies(pages)) {
                 VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
@@ -131,7 +198,9 @@ public class TeachingPlanService {
             TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
             plans.validate(outline);
         } catch (IllegalArgumentException invalidOutline) {
-            log.warn("Source-bound teaching outline was incomplete; rejecting preparation: {}", invalidOutline.getMessage());
+            log.warn(
+                    "Source-bound teaching outline was incomplete; rejecting preparation (failureType={})",
+                    invalidOutline.getClass().getSimpleName());
             if (assistantRunId != null) {
                 invocations.record(
                         assistantRunId,
@@ -183,24 +252,32 @@ public class TeachingPlanService {
                     "Source-bound whole-game understanding persisted before lesson chapter generation");
         }
         log.info(
-                "Teaching outline generated for documentVersionId={}: gameTitle={}, topics={}",
+                "Teaching outline generated for documentVersionId={} (topicCount={}, visualTopicCount={})",
                 documentVersionId,
-                outline.gameTitle(),
-                outline.topics().stream()
-                        .map(topic -> topic.key() + " visual=" + topic.visualEvidenceRecommended()
-                                + " tags=" + topic.coverageTags() + " queries=" + topic.retrievalQueries())
-                        .toList());
-        return publication.publish(plans.create(
+                outline.topics().size(),
+                outline.topics().stream().filter(TeachingOutlineModel.TopicDraft::visualEvidenceRecommended).count());
+        TeachingPlan published = publication.publish(plans.create(
                 documentVersionId,
                 learningGoal,
                 createdBy,
                 outline), outline.gameTitle());
+        capturePlanPublication(trace, assistantRunId, published);
+        return published;
     }
 
     void refreshVisualEvidence(
             UUID documentVersionId,
             String createdBy,
             UUID assistantRunId) {
+        refreshVisualEvidence(documentVersionId, createdBy, assistantRunId, CaptureHandle.noop());
+    }
+
+    void refreshVisualEvidence(
+            UUID documentVersionId,
+            String createdBy,
+            UUID assistantRunId,
+            CaptureHandle capture) {
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         var scope = documentScopes.findVersion(documentVersionId)
                 .filter(found -> found.createdBy().equals(createdBy))
                 .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
@@ -211,12 +288,22 @@ public class TeachingPlanService {
         boolean visualOnly = !documentPages.isEmpty()
                 && documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         if (visualOnly) {
-            visualCataloger.catalogVisualPages(
-                    documentVersionId,
-                    documentPages,
-                    scope.documentTitle(),
-                    createdBy,
-                    assistantRunId);
+            if (trace.enabled()) {
+                visualCataloger.catalogVisualPages(
+                        documentVersionId,
+                        documentPages,
+                        scope.documentTitle(),
+                        createdBy,
+                        assistantRunId,
+                        trace);
+            } else {
+                visualCataloger.catalogVisualPages(
+                        documentVersionId,
+                        documentPages,
+                        scope.documentTitle(),
+                        createdBy,
+                        assistantRunId);
+            }
         }
     }
 
@@ -230,7 +317,8 @@ public class TeachingPlanService {
             OutlineRequest request,
             List<PageInput> pages,
             List<DocumentProcessing.PageView> documentPages,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            CaptureHandle capture) {
         TeachingOutlineModel.OutlineDraft organized;
         try {
             organized = invokeModel(
@@ -238,7 +326,10 @@ public class TeachingPlanService {
                     "organizeTeachingOutline",
                     outlineInputTokens(pages),
                     "Rulebook lesson topics organized",
-                    () -> outlines.organize(request),
+                    () -> capture.enabled()
+                            ? outlines.organize(
+                                    request, capture, teachingRun(assistantRunId), assistantRunId)
+                            : outlines.organize(request),
                     this::outlineOutputTokens);
         } catch (OutlineGenerationException generationFailure) {
             log.warn(
@@ -269,7 +360,8 @@ public class TeachingPlanService {
             TeachingOutlineModel.OutlineDraft outline,
             UUID assistantRunId,
             List<DocumentProcessing.PageView> documentPages,
-            String documentTitle) {
+            String documentTitle,
+            CaptureHandle capture) {
         TeachingOutlineModel.OutlineDraft current = outline;
         for (int attempt = 1; attempt <= MAX_CHAPTER_OWNERSHIP_REFINEMENTS; attempt++) {
             Optional<String> feedback = TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(current);
@@ -281,7 +373,16 @@ public class TeachingPlanService {
                         "refineTeachingOutlineOwnership",
                         Math.max(1, outlineOutputTokens(beforeRefinement) + feedback.get().length() / 4),
                         "Lesson chapters separated so each detailed rule has one home",
-                        () -> outlines.refineChapterOwnership(request, beforeRefinement, feedback.get()),
+                        () -> capture.enabled()
+                                ? outlines.refineChapterOwnership(
+                                        request,
+                                        beforeRefinement,
+                                        feedback.get(),
+                                        capture,
+                                        teachingRun(assistantRunId),
+                                        assistantRunId)
+                                : outlines.refineChapterOwnership(
+                                        request, beforeRefinement, feedback.get()),
                         this::outlineOutputTokens);
                 current = preferDocumentTitle(
                         documentTitle,
@@ -292,7 +393,9 @@ public class TeachingPlanService {
                 TeachingWholeGameUnderstandingPolicy.validateComplete(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
-                log.warn("Teaching outline ownership refinement was skipped: {}", refinementFailure.getMessage());
+                log.warn(
+                        "Teaching outline ownership refinement was skipped (failureType={})",
+                        refinementFailure.getClass().getSimpleName());
                 if (assistantRunId != null) {
                     invocations.record(
                             assistantRunId,
@@ -317,7 +420,8 @@ public class TeachingPlanService {
             List<PageInput> pages,
             UUID assistantRunId,
             List<DocumentProcessing.PageView> documentPages,
-            String documentTitle) {
+            String documentTitle,
+            CaptureHandle capture) {
         TeachingOutlineModel.OutlineDraft current = outline;
         for (int attempt = 1; attempt <= MAX_SOURCE_COVERAGE_REFINEMENTS; attempt++) {
             Optional<String> feedback = TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(current, pages);
@@ -329,7 +433,16 @@ public class TeachingPlanService {
                         "refineTeachingOutlineCoverage",
                         Math.max(1, outlineOutputTokens(beforeRefinement) + feedback.get().length() / 4),
                         "Lesson topics expanded to cover omitted rulebook pages",
-                        () -> outlines.refineChapterOwnership(request, beforeRefinement, feedback.get()),
+                        () -> capture.enabled()
+                                ? outlines.refineChapterOwnership(
+                                        request,
+                                        beforeRefinement,
+                                        feedback.get(),
+                                        capture,
+                                        teachingRun(assistantRunId),
+                                        assistantRunId)
+                                : outlines.refineChapterOwnership(
+                                        request, beforeRefinement, feedback.get()),
                         this::outlineOutputTokens);
                 current = preferDocumentTitle(
                         documentTitle,
@@ -340,7 +453,9 @@ public class TeachingPlanService {
                 TeachingWholeGameUnderstandingPolicy.validateComplete(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
-                log.warn("Teaching outline source-coverage refinement was skipped: {}", refinementFailure.getMessage());
+                log.warn(
+                        "Teaching outline source-coverage refinement was skipped (failureType={})",
+                        refinementFailure.getClass().getSimpleName());
                 if (assistantRunId != null) {
                     invocations.record(
                             assistantRunId,
@@ -468,6 +583,43 @@ public class TeachingPlanService {
                         + dependency.reason().length())
                 .sum();
         return Math.max(1, characters / 4);
+    }
+
+    private ResourceRef teachingRun(UUID assistantRunId) {
+        return assistantRunId == null
+                ? null
+                : new ResourceRef(ResourceType.ASSISTANT_RUN, assistantRunId);
+    }
+
+    private void capturePlanPublication(
+            CaptureHandle capture,
+            UUID assistantRunId,
+            TeachingPlan plan) {
+        if (assistantRunId == null || !capture.enabled()) return;
+        ResourceRef resource = teachingRun(assistantRunId);
+        try {
+            capture.publication(new Publication(
+                    traceContext(UUID.randomUUID(), assistantRunId, resource),
+                    PublicationChannel.TEACHING_PLAN,
+                    TRACE_JSON.writeValueAsString(plan),
+                    "TEACHING_PLAN_READY",
+                    List.of()));
+        } catch (JsonProcessingException | RuntimeException traceFailure) {
+            capture.bindingOrFailure(new BindingOrFailure(
+                    traceContext(UUID.randomUUID(), assistantRunId, resource),
+                    LifecycleSignal.GAP,
+                    "TEACHING_PLAN_PUBLICATION_TRACE_GAP",
+                    resource,
+                    null));
+        }
+    }
+
+    private TraceEventContext traceContext(
+            UUID operationId,
+            UUID parentOperationId,
+            ResourceRef resource) {
+        return TraceEventContext.create(
+                Instant.now(), JourneyStage.TEACHING, operationId, parentOperationId, resource);
     }
 
 }

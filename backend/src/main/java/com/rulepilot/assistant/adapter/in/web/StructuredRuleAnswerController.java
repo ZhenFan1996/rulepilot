@@ -1,8 +1,21 @@
 package com.rulepilot.assistant.adapter.in.web;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.JourneyStage;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.AgentTraceEvent.PublicationChannel;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceRef;
+import com.rulepilot.agenttrace.AgentTraceEvent.ResourceType;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
 import com.rulepilot.assistant.AgentExecutionControl.ActivitySnapshot;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.application.AnswerFeedbackService;
 import com.rulepilot.assistant.application.GameSessionConversationService;
@@ -10,6 +23,7 @@ import com.rulepilot.assistant.application.PlayerFacingAnswerPresenter;
 import com.rulepilot.assistant.application.PlayerFacingRuleAnswer;
 import com.rulepilot.assistant.application.StructuredRuleAnswerService;
 import com.rulepilot.assistant.application.StructuredRuleAnswerService.AnswerCreation;
+import com.rulepilot.assistant.application.StructuredRuleAnswerService.PreparedAnswerRun;
 import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
@@ -20,12 +34,14 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
+import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.MediaType;
@@ -44,6 +60,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class StructuredRuleAnswerController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerController.class);
+    private static final ObjectMapper TRACE_JSON = new ObjectMapper().findAndRegisterModules();
     private static final long STREAM_TIMEOUT_MILLIS = 40_000;
 
     private final StructuredRuleAnswerService answers;
@@ -52,6 +69,25 @@ public class StructuredRuleAnswerController {
     private final AnswerFeedbackService feedback;
     private final TaskExecutor streamExecutor;
     private final AssistantRuns runs;
+    private final Optional<PrivateAgentTraceService> privateTraces;
+
+    @Autowired
+    public StructuredRuleAnswerController(
+            StructuredRuleAnswerService answers,
+            GameSessionContextLookup sessions,
+            GameSessionConversationService conversations,
+            AnswerFeedbackService feedback,
+            AssistantRuns runs,
+            @Qualifier("structuredRuleAnswerStreamExecutor") TaskExecutor streamExecutor,
+            Optional<PrivateAgentTraceService> privateTraces) {
+        this.answers = answers;
+        this.sessions = sessions;
+        this.conversations = conversations;
+        this.feedback = feedback;
+        this.runs = runs;
+        this.streamExecutor = streamExecutor;
+        this.privateTraces = privateTraces == null ? Optional.empty() : privateTraces;
+    }
 
     public StructuredRuleAnswerController(
             StructuredRuleAnswerService answers,
@@ -60,23 +96,35 @@ public class StructuredRuleAnswerController {
             AnswerFeedbackService feedback,
             AssistantRuns runs,
             @Qualifier("structuredRuleAnswerStreamExecutor") TaskExecutor streamExecutor) {
-        this.answers = answers;
-        this.sessions = sessions;
-        this.conversations = conversations;
-        this.feedback = feedback;
-        this.runs = runs;
-        this.streamExecutor = streamExecutor;
+        this(answers, sessions, conversations, feedback, runs, streamExecutor, Optional.empty());
     }
 
     @PostMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     AnswerResponse answer(
-            @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
-        return createAnswer(versionId, request, principal.getName(), ignored -> {});
+            @PathVariable UUID versionId,
+            @RequestBody AnswerRequest request,
+            Principal principal,
+            HttpSession session) {
+        String username = principal.getName();
+        CaptureHandle capture = PrivateAgentTraceCapture.current(privateTraces, principal, session);
+        PreparedWebAnswer webAnswer = prepareWebAnswer(versionId, request, username);
+        PreparedAnswerRun run = answers.prepareAnswerRun(
+                request.question(),
+                webAnswer.context(),
+                username,
+                request.gameSessionId(),
+                capture);
+        CompletedWebAnswer completed = createPreparedAnswer(request, username, webAnswer, run, capture);
+        capturePublication(capture, completed);
+        return completed.response();
     }
 
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     SseEmitter answerStream(
-            @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
+            @PathVariable UUID versionId,
+            @RequestBody AnswerRequest request,
+            Principal principal,
+            HttpSession session) {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AtomicBoolean open = new AtomicBoolean(true);
         emitter.onCompletion(() -> open.set(false));
@@ -85,87 +133,177 @@ public class StructuredRuleAnswerController {
         send(emitter, open, "accepted", new StreamAccepted("answer_received"));
         if (!open.get()) return emitter;
         String username = principal.getName();
+        PreparedWebAnswer webAnswer;
+        PreparedAnswerRun preparedRun;
         try {
-            streamExecutor.execute(() -> {
-                PlayerActivityPump[] activityPump = new PlayerActivityPump[1];
-                try {
-                    AnswerResponse response = createAnswer(
-                            versionId,
-                            request,
-                            username,
-                            runId -> {
-                                send(emitter, open, "run", new StreamRun(runId));
-                                activityPump[0] = new PlayerActivityPump(
-                                        emitter,
-                                        open,
-                                        runId,
-                                        username,
-                                        PlayerLocale.forQuestion(
-                                                request.question(), PlayerLocale.fromRequest(request.language())));
-                                activityPump[0].start();
-                            });
-                    if (activityPump[0] != null) activityPump[0].finish();
-                    if (!open.get()) return;
-                    send(emitter, open, "answer_part", new AnswerPart("verdict", response.answer().shortVerdict()));
-                    send(emitter, open, "answer_part", new AnswerPart("explanation", response.answer().explanation()));
-                    send(emitter, open, "result", response);
-                    if (open.getAndSet(false)) emitter.complete();
-                } catch (RuntimeException exception) {
-                    if (activityPump[0] != null) activityPump[0].finish();
-                    LOGGER.warn(
-                            "Structured answer stream did not complete: {}: {}",
-                            exception.getClass().getSimpleName(),
-                            exception.getMessage(),
-                            exception);
-                    sendError(emitter, open, "answer_unavailable");
-                }
-            });
+            CaptureHandle requestCapture = PrivateAgentTraceCapture.current(privateTraces, principal, session);
+            webAnswer = prepareWebAnswer(versionId, request, username);
+            preparedRun = answers.prepareAnswerRun(
+                    request.question(),
+                    webAnswer.context(),
+                    username,
+                    request.gameSessionId(),
+                    requestCapture);
+            send(emitter, open, "run", new StreamRun(preparedRun.id()));
+            if (!open.get()) {
+                answers.failPreparedAnswerBeforeExecution(
+                        preparedRun,
+                        username,
+                        "ANSWER_STREAM_DISCONNECTED_BEFORE_DISPATCH",
+                        "Answer stream disconnected before execution",
+                        new IllegalStateException("answer stream disconnected before execution"),
+                        requestCapture);
+                return emitter;
+            }
+            ResourceRef recoveryResource = preparedRun.resource();
+            try {
+                streamExecutor.execute(() -> {
+                    PlayerActivityPump activityPump = new PlayerActivityPump(
+                            emitter, open, preparedRun.id(), username, webAnswer.outputLanguage());
+                    activityPump.start();
+                    try {
+                        CaptureHandle capture = PrivateAgentTraceCapture.recover(
+                                privateTraces, recoveryResource, username);
+                        CompletedWebAnswer completed = createPreparedAnswer(
+                                request, username, webAnswer, preparedRun, capture);
+                        AnswerResponse response = completed.response();
+                        activityPump.finish();
+                        if (!open.get()) return;
+                        send(emitter, open, "answer_part", new AnswerPart("verdict", response.answer().shortVerdict()));
+                        send(emitter, open, "answer_part", new AnswerPart("explanation", response.answer().explanation()));
+                        if (!send(emitter, open, "result", response)) return;
+                        capturePublication(capture, completed);
+                        if (open.getAndSet(false)) emitter.complete();
+                    } catch (RuntimeException exception) {
+                        activityPump.finish();
+                        LOGGER.warn(
+                                "Structured answer stream did not complete (failureType={})",
+                                exception.getClass().getSimpleName());
+                        sendError(emitter, open, "answer_unavailable");
+                    }
+                });
+            } catch (RuntimeException dispatchFailure) {
+                answers.failPreparedAnswerBeforeExecution(
+                        preparedRun,
+                        username,
+                        "ANSWER_STREAM_QUEUE_REJECTED",
+                        "Answer stream execution could not be scheduled",
+                        dispatchFailure,
+                        requestCapture);
+                throw dispatchFailure;
+            }
         } catch (RuntimeException exception) {
             sendError(emitter, open, "answer_unavailable");
         }
         return emitter;
     }
 
-    private AnswerResponse createAnswer(
-            UUID versionId,
-            AnswerRequest request,
-            String username,
-            Consumer<UUID> runStarted) {
+    private PreparedWebAnswer prepareWebAnswer(UUID versionId, AnswerRequest request, String username) {
         var session = validateSession(request.gameSessionId(), versionId, username);
         var priorTurn = session == null
                 ? null
                 : conversations.priorTurnReference(session.sessionId(), username, versionId).orElse(null);
         PlayerLocale outputLanguage = PlayerLocale.forQuestion(
                 request.question(), PlayerLocale.fromRequest(request.language()));
-        AnswerCreation creation = answers.answerWithRun(
-                request.question(),
+        return new PreparedWebAnswer(
+                session,
                 new QuestionContext(
                         versionId,
                         request.previousQuestion(),
                         request.learningIntent(),
                         outputLanguage,
                         priorTurn),
+                outputLanguage);
+    }
+
+    private CompletedWebAnswer createPreparedAnswer(
+            AnswerRequest request,
+            String username,
+            PreparedWebAnswer webAnswer,
+            PreparedAnswerRun run,
+            CaptureHandle capture) {
+        AnswerCreation creation = answers.answerPrepared(
+                request.question(),
+                webAnswer.context(),
                 username,
                 request.gameSessionId(),
-                runStarted);
-        GameSessionConversationTurn turn = session == null
+                run,
+                capture);
+        return new CompletedWebAnswer(
+                answerResponse(request, username, webAnswer, creation),
+                creation.assistantRunId(),
+                creation.answer());
+    }
+
+    private AnswerResponse answerResponse(
+            AnswerRequest request,
+            String username,
+            PreparedWebAnswer webAnswer,
+            AnswerCreation creation) {
+        GameSessionConversationTurn turn = webAnswer.session() == null
                 ? null
-                : conversations.record(session.sessionId(), request.question(), creation.answer(), username);
+                : conversations.record(
+                        webAnswer.session().sessionId(), request.question(), creation.answer(), username);
         return new AnswerResponse(
-                PlayerFacingAnswerPresenter.present(creation.answer(), request.question(), outputLanguage),
+                PlayerFacingAnswerPresenter.present(
+                        creation.answer(), request.question(), webAnswer.outputLanguage()),
                 turn == null ? null : turn.id(),
                 RulingReference.from(creation.answer()));
     }
 
-    private void send(SseEmitter emitter, AtomicBoolean open, String event, Object data) {
-        if (!open.get()) return;
+    static void capturePublication(CaptureHandle capture, CompletedWebAnswer completed) {
+        if (capture == null || completed == null) return;
+        try {
+            if (!capture.enabled()) return;
+            ResourceRef resource = new ResourceRef(ResourceType.ASSISTANT_RUN, completed.assistantRunId());
+            capture.publication(new Publication(
+                    TraceEventContext.create(
+                            Instant.now(),
+                            JourneyStage.ANSWER,
+                            UUID.randomUUID(),
+                            completed.assistantRunId(),
+                            resource),
+                    completed.answer().status().publishesConclusion()
+                            ? PublicationChannel.ANSWER
+                            : PublicationChannel.FALLBACK,
+                    TRACE_JSON.writeValueAsString(completed.response()),
+                    completed.answer().status().name(),
+                    completed.answer().citations().stream().map(citation -> citation.chunkId()).toList()));
+        } catch (JsonProcessingException | RuntimeException ignored) {
+            captureGap(capture, completed.assistantRunId(), "ANSWER_PUBLICATION_CAPTURE_FAILED");
+        }
+    }
+
+    private static void captureGap(CaptureHandle capture, UUID assistantRunId, String code) {
+        try {
+            ResourceRef resource = new ResourceRef(ResourceType.ASSISTANT_RUN, assistantRunId);
+            capture.bindingOrFailure(new BindingOrFailure(
+                    TraceEventContext.create(
+                            Instant.now(),
+                            JourneyStage.ANSWER,
+                            assistantRunId,
+                            null,
+                            resource),
+                    LifecycleSignal.GAP,
+                    code,
+                    resource,
+                    null));
+        } catch (RuntimeException ignored) {
+            // The exact HTTP/SSE publication remains authoritative when optional capture is unavailable.
+        }
+    }
+
+    private boolean send(SseEmitter emitter, AtomicBoolean open, String event, Object data) {
+        if (!open.get()) return false;
         synchronized (emitter) {
-            if (!open.get()) return;
+            if (!open.get()) return false;
             try {
                 emitter.send(SseEmitter.event().name(event).data(data));
+                return true;
             } catch (IOException | RuntimeException exception) {
                 open.set(false);
                 LOGGER.debug("Structured answer stream disconnected before completion");
+                return false;
             }
         }
     }
@@ -352,6 +490,16 @@ public class StructuredRuleAnswerController {
             String previousQuestion,
             com.rulepilot.assistant.domain.LearningIntent learningIntent,
             String language) {}
+
+    private record PreparedWebAnswer(
+            GameSessionContextLookup.SessionContext session,
+            QuestionContext context,
+            PlayerLocale outputLanguage) {}
+
+    record CompletedWebAnswer(
+            AnswerResponse response,
+            UUID assistantRunId,
+            StructuredRuleAnswer answer) {}
 
     record AnswerResponse(
             PlayerFacingRuleAnswer answer,

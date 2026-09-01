@@ -1,5 +1,7 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.document.DocumentPageImageCropper;
@@ -52,11 +54,25 @@ public class RulebookIconGlossaryService {
     }
 
     public GlossaryView extract(UUID teachingPlanId, String owner, UUID assistantRunId) {
+        return extract(teachingPlanId, owner, assistantRunId, CaptureHandle.noop());
+    }
+
+    public GlossaryView extract(
+            UUID teachingPlanId,
+            String owner,
+            UUID assistantRunId,
+            CaptureHandle capture) {
         TeachingPlan plan = requireOwned(teachingPlanId, owner);
         List<DocumentProcessing.PageView> pages = documents.pages(plan.documentVersionId());
         if (!cataloger.available(owner)) return view(plan, pages, false);
-        cataloger.catalogAllIconPages(
-                plan.documentVersionId(), pages, plan.gameTitle(), owner, assistantRunId);
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
+        if (trace.enabled()) {
+            cataloger.catalogAllIconPages(
+                    plan.documentVersionId(), pages, plan.gameTitle(), owner, assistantRunId, trace);
+        } else {
+            cataloger.catalogAllIconPages(
+                    plan.documentVersionId(), pages, plan.gameTitle(), owner, assistantRunId);
+        }
         return view(plan, pages, true);
     }
 

@@ -13,6 +13,11 @@ public interface BoardGameRecommendationModel {
         return configured();
     }
 
+    /** Non-sensitive provider identity used only by an explicitly enabled private trace. */
+    default ModelDescriptor descriptor(String ownerUsername) {
+        return new ModelDescriptor("configured", "recommendation");
+    }
+
     Turn next(Request request);
 
     default Turn next(Request request, String ownerUsername) {
@@ -127,6 +132,16 @@ public interface BoardGameRecommendationModel {
         COMPLETE,
         OUTPUT_LIMIT,
         UNKNOWN
+    }
+
+    record ModelDescriptor(String providerId, String modelId) {
+        public ModelDescriptor {
+            if (blank(providerId) || blank(modelId) || providerId.length() > 120 || modelId.length() > 160) {
+                throw new IllegalArgumentException("recommendation model descriptor is invalid");
+            }
+            providerId = providerId.strip();
+            modelId = modelId.strip();
+        }
     }
 
     private static boolean blank(String value) {

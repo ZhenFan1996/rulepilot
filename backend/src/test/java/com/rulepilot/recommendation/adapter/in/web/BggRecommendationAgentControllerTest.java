@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -13,6 +14,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.Publication;
+import com.rulepilot.agenttrace.AgentTraceEvent.UserTurn;
+import com.rulepilot.agenttrace.CaptureHandle;
+import com.rulepilot.agenttrace.PrivateAgentTraceService;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
@@ -38,6 +45,7 @@ import com.rulepilot.recommendation.application.RecommendationConversationCoordi
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionSnapshot;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.TurnResult;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
+import jakarta.servlet.http.HttpSession;
 import java.math.BigDecimal;
 import java.security.Principal;
 import java.util.ArrayList;
@@ -46,6 +54,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -278,6 +288,107 @@ class BggRecommendationAgentControllerTest {
 
         statefulController.delete(conversationId, principal);
         verify(conversations).delete(conversationId, "player");
+    }
+
+    @Test
+    void capturesTheExactFinalStatefulResponseReturnedByTheHttpController() throws Exception {
+        RecommendationConversationCoordinator conversations = mock(RecommendationConversationCoordinator.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<PrivateAgentTraceService> traceServices = mock(ObjectProvider.class);
+        PrivateAgentTraceService traceService = mock(PrivateAgentTraceService.class);
+        CaptureHandle capture = mock(CaptureHandle.class);
+        HttpSession session = mock(HttpSession.class);
+        var tracedController = new BggRecommendationAgentController(
+                agent, presentation, conversations, traceServices);
+        UUID conversationId = UUID.randomUUID();
+        UUID clientTurnId = UUID.randomUUID();
+        ConversationResponse conversationResponse = new ConversationResponse(
+                Outcome.CONVERSATION,
+                DecisionMode.MODEL_ASSISTED,
+                "The exact controller response.",
+                RecommendationProfile.empty(),
+                null,
+                10,
+                0,
+                List.of());
+        when(traceServices.getIfAvailable()).thenReturn(traceService);
+        when(traceService.current(principal, session)).thenReturn(capture);
+        when(capture.enabled()).thenReturn(true);
+        when(conversations.converse(
+                        any(), eq("en"), eq("player"), any(), any(), eq(capture), any(UUID.class)))
+                .thenReturn(new TurnResult(
+                        conversationId, 5, clientTurnId, true, "en", conversationResponse));
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "en"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+        var request = new BggRecommendationAgentController.RecommendationConversationRequest(
+                null,
+                "Continue",
+                List.of(),
+                List.of(),
+                null,
+                List.of(),
+                List.of(),
+                conversationId,
+                4L,
+                clientTurnId);
+
+        var returned = tracedController.converse(request, "en", principal, session);
+
+        ArgumentCaptor<UserTurn> userTurn = ArgumentCaptor.forClass(UserTurn.class);
+        ArgumentCaptor<Publication> publication = ArgumentCaptor.forClass(Publication.class);
+        verify(capture).userTurn(userTurn.capture());
+        verify(capture).publication(publication.capture());
+        ObjectMapper json = new ObjectMapper().findAndRegisterModules();
+        assertThat(json.readTree(publication.getValue().playerFacingJson()))
+                .isEqualTo(json.readTree(json.writeValueAsString(returned)));
+        assertThat(userTurn.getValue().context().operationId()).isNotEqualTo(clientTurnId);
+        assertThat(publication.getValue().context().parentOperationId())
+                .isEqualTo(userTurn.getValue().context().operationId());
+        assertThat(returned.conversationId()).isEqualTo(conversationId);
+        assertThat(returned.clientTurnId()).isEqualTo(clientTurnId);
+        assertThat(returned.replayed()).isTrue();
+    }
+
+    @Test
+    void anUnrepresentablePrivateUserTurnEmitsAnHonestGapWithoutChangingTheHttpResult() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<PrivateAgentTraceService> traceServices = mock(ObjectProvider.class);
+        PrivateAgentTraceService traceService = mock(PrivateAgentTraceService.class);
+        CaptureHandle capture = mock(CaptureHandle.class);
+        HttpSession session = mock(HttpSession.class);
+        var tracedController = new BggRecommendationAgentController(
+                agent, presentation, null, traceServices);
+        String longMessage = "x".repeat(16_001);
+        ConversationResponse conversationResponse = new ConversationResponse(
+                Outcome.CONVERSATION,
+                DecisionMode.MODEL_ASSISTED,
+                "Still answered.",
+                RecommendationProfile.empty(),
+                null,
+                0,
+                0,
+                List.of());
+        when(traceServices.getIfAvailable()).thenReturn(traceService);
+        when(traceService.current(principal, session)).thenReturn(capture);
+        when(capture.enabled()).thenReturn(true);
+        when(agent.converse(
+                        any(), eq("en"), eq("player"), any(), any(), eq(capture), any(UUID.class)))
+                .thenReturn(conversationResponse);
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "en"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+
+        var returned = tracedController.converse(
+                new BggRecommendationAgentController.RecommendationConversationRequest(null, longMessage),
+                "en",
+                principal,
+                session);
+
+        assertThat(returned.assistantMessage()).isEqualTo("Still answered.");
+        verify(capture, never()).userTurn(any(UserTurn.class));
+        ArgumentCaptor<BindingOrFailure> gap = ArgumentCaptor.forClass(BindingOrFailure.class);
+        verify(capture).bindingOrFailure(gap.capture());
+        assertThat(gap.getValue().signal()).isEqualTo(LifecycleSignal.GAP);
+        assertThat(gap.getValue().code()).isEqualTo("RECOMMENDATION_USER_TURN_CAPTURE_FAILED");
     }
 
     @Test

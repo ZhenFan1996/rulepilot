@@ -142,6 +142,31 @@ class DeepSeekBggMetadataTranslationTest {
     }
 
     @Test
+    void reusesTheWorkerPersistedDigestInTheApiProcessWithoutCallingTheProvider() {
+        RedisMocks redis = redisWithMissAndBudget(1L);
+        MemoryTranslationStore store = new MemoryTranslationStore();
+        OkHttpClient unavailableProvider = mock(OkHttpClient.class);
+        String workerDigest = "e3b9c58862a21e6e047027305ac8b165de2623daaef4c96627195845add605fc";
+        store.values.put(
+                REQUEST.bggId() + ":" + workerDigest,
+                new Translation("预热进程已经保存的译文。", List.of("动物"), List.of("卡牌轮抽")));
+
+        var result = adapter(
+                        unavailableProvider,
+                        redis.template(),
+                        store,
+                        false,
+                        "http://provider.invalid")
+                .translate(REQUEST);
+
+        assertThat(result).hasValueSatisfying(value ->
+                assertThat(value.description()).isEqualTo("预热进程已经保存的译文。"));
+        assertThat(store.lastFindDigest).isEqualTo(workerDigest);
+        verify(redis.values(), never()).increment(anyString());
+        verify(unavailableProvider, never()).newCall(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void returnsAndPersistsAValidTranslationWhenTheRedisWriteFails() throws Exception {
         HttpServer server = responseServer(Map.of(
                 "description", "可用中文简介。",
@@ -339,9 +364,11 @@ class DeepSeekBggMetadataTranslationTest {
 
     private static final class MemoryTranslationStore implements BggMetadataTranslationStore {
         private final Map<String, Translation> values = new java.util.LinkedHashMap<>();
+        private String lastFindDigest;
 
         @Override
         public java.util.Optional<Translation> find(int bggId, String sourceSha256) {
+            lastFindDigest = sourceSha256;
             return java.util.Optional.ofNullable(values.get(bggId + ":" + sourceSha256));
         }
 

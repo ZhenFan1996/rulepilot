@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
@@ -8,6 +9,7 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.PrivateAgentTraceCapture;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
@@ -236,9 +238,24 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             IllustratedLesson previousLesson,
             Consumer<IllustratedLesson> progressPublisher) {
+        return createBase(
+                plan,
+                assistantRunId,
+                previousLesson,
+                progressPublisher,
+                CaptureHandle.noop());
+    }
+
+    public IllustratedLesson createBase(
+            TeachingPlan plan,
+            UUID assistantRunId,
+            IllustratedLesson previousLesson,
+            Consumer<IllustratedLesson> progressPublisher,
+            CaptureHandle capture) {
         return continueBase(
-                startBase(plan, assistantRunId, previousLesson, progressPublisher),
-                progressPublisher);
+                startBase(plan, assistantRunId, previousLesson, progressPublisher, capture),
+                progressPublisher,
+                capture);
     }
 
     /**
@@ -253,7 +270,22 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             IllustratedLesson previousLesson,
             Consumer<IllustratedLesson> progressPublisher) {
+        return startBase(
+                plan,
+                assistantRunId,
+                previousLesson,
+                progressPublisher,
+                CaptureHandle.noop());
+    }
+
+    BaseLessonContinuation startBase(
+            TeachingPlan plan,
+            UUID assistantRunId,
+            IllustratedLesson previousLesson,
+            Consumer<IllustratedLesson> progressPublisher,
+            CaptureHandle capture) {
         if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         TeachingWholeGameUnderstandingPolicy.validateBeforeChapterGeneration(plan);
         if (TeachingWholeGameUnderstandingPolicy.requiresValidatedContext(plan)) {
             invocations.record(
@@ -279,7 +311,8 @@ public class GroundedTeachingAgent {
                     lessonAssembly.continuityContext(sections),
                     reusable,
                     assistantRunId,
-                    queriesPerTopic);
+                    queriesPerTopic,
+                    trace);
             retrievalToolCalls += outcome.retrievalToolCalls();
             trackFailure(outcome, invalidDraftPositions, missingEvidencePositions);
             if (outcome.reviewCandidate() != null
@@ -313,9 +346,17 @@ public class GroundedTeachingAgent {
     IllustratedLesson continueBase(
             BaseLessonContinuation continuation,
             Consumer<IllustratedLesson> progressPublisher) {
+        return continueBase(continuation, progressPublisher, CaptureHandle.noop());
+    }
+
+    IllustratedLesson continueBase(
+            BaseLessonContinuation continuation,
+            Consumer<IllustratedLesson> progressPublisher,
+            CaptureHandle capture) {
         if (continuation == null || progressPublisher == null) {
             throw new IllegalArgumentException("lesson continuation and progress publisher are required");
         }
+        CaptureHandle trace = PrivateAgentTraceCapture.failOpen(capture);
         TeachingPlan plan = continuation.plan;
         UUID assistantRunId = continuation.assistantRunId;
         UUID lessonId = continuation.lessonId;
@@ -327,7 +368,11 @@ public class GroundedTeachingAgent {
         if (!remaining.isEmpty()) {
             // The first section is already durable before this method runs. A progressive visual plan can therefore
             // fill the remaining page-fact ledger now without extending the player's wait for first useful content.
-            evidenceRetriever.prefetchRemainingVisualFacts(plan, sections.size(), assistantRunId);
+            evidenceRetriever.prefetchRemainingVisualFacts(
+                    plan,
+                    sections.size(),
+                    assistantRunId,
+                    trace);
             List<PriorSectionContext> sharedContext = lessonAssembly.continuityContext(sections);
             Map<Integer, SectionOutcome> completed = new LinkedHashMap<>();
             int providerParallelism = Math.max(1, model.maxConcurrentSectionRequests(plan.createdBy()));
@@ -342,7 +387,8 @@ public class GroundedTeachingAgent {
                                 sharedContext,
                                 reusable,
                                 assistantRunId,
-                                queriesPerTopic)))
+                                queriesPerTopic,
+                                trace)))
                         .toList();
                 for (Future<SectionOutcome> future : futures) {
                     SectionOutcome outcome = await(future);
@@ -364,7 +410,7 @@ public class GroundedTeachingAgent {
         IllustratedLesson firstPass = lesson(lessonId, plan, sections, createdAt);
         if (firstPass.status() == LessonStatus.INCOMPLETE
                 && continuation.canRetryInvalidDrafts(maxToolCalls)) {
-            firstPass = retryInvalidDraftSections(continuation, progressPublisher);
+            firstPass = retryInvalidDraftSections(continuation, progressPublisher, trace);
         }
         if (firstPass.status() == LessonStatus.DRAFT_READY && !continuation.reviewCandidates.isEmpty()) {
             publishedLessonReviewer.review(
@@ -372,7 +418,8 @@ public class GroundedTeachingAgent {
                     List.copyOf(continuation.reviewCandidates),
                     sections,
                     assistantRunId,
-                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
+                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)),
+                    trace);
             return lesson(lessonId, plan, sections, createdAt);
         }
         return firstPass;
@@ -380,7 +427,8 @@ public class GroundedTeachingAgent {
 
     private IllustratedLesson retryInvalidDraftSections(
             BaseLessonContinuation continuation,
-            Consumer<IllustratedLesson> progressPublisher) {
+            Consumer<IllustratedLesson> progressPublisher,
+            CaptureHandle capture) {
         List<Integer> positions = List.copyOf(continuation.invalidDraftPositions);
         invocations.record(
                 continuation.assistantRunId,
@@ -399,7 +447,8 @@ public class GroundedTeachingAgent {
                     continuation.reusableSections,
                     continuation.assistantRunId,
                     Math.min(continuation.queriesPerTopic, remainingToolBudget),
-                    false);
+                    false,
+                    capture);
             continuation.replace(outcome);
             publishProgress(
                     progressPublisher,
@@ -512,7 +561,26 @@ public class GroundedTeachingAgent {
                 reusableSections,
                 assistantRunId,
                 queriesPerTopic,
-                true);
+                CaptureHandle.noop());
+    }
+
+    private SectionOutcome baseSection(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            Map<String, LessonSection> reusableSections,
+            UUID assistantRunId,
+            int queriesPerTopic,
+            CaptureHandle capture) {
+        return baseSection(
+                plan,
+                planned,
+                priorSections,
+                reusableSections,
+                assistantRunId,
+                queriesPerTopic,
+                true,
+                capture);
     }
 
     private SectionOutcome baseSection(
@@ -523,6 +591,26 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             int queriesPerTopic,
             boolean allowValidationRevision) {
+        return baseSection(
+                plan,
+                planned,
+                priorSections,
+                reusableSections,
+                assistantRunId,
+                queriesPerTopic,
+                allowValidationRevision,
+                CaptureHandle.noop());
+    }
+
+    private SectionOutcome baseSection(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            Map<String, LessonSection> reusableSections,
+            UUID assistantRunId,
+            int queriesPerTopic,
+            boolean allowValidationRevision,
+            CaptureHandle capture) {
         return generateSection(
                 plan,
                 planned,
@@ -532,7 +620,8 @@ public class GroundedTeachingAgent {
                 queriesPerTopic,
                 planned.position() - 1,
                 GenerationMode.PROGRESSIVE_BASE,
-                allowValidationRevision);
+                allowValidationRevision,
+                capture);
     }
 
     private int baseQueryBudget(TeachingPlan plan) {
@@ -550,6 +639,30 @@ public class GroundedTeachingAgent {
             int sectionIndex,
             GenerationMode mode,
             boolean allowValidationRevision) {
+        return generateSection(
+                plan,
+                planned,
+                priorSections,
+                reusableSections,
+                assistantRunId,
+                queryBudget,
+                sectionIndex,
+                mode,
+                allowValidationRevision,
+                CaptureHandle.noop());
+    }
+
+    private SectionOutcome generateSection(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            Map<String, LessonSection> reusableSections,
+            UUID assistantRunId,
+            int queryBudget,
+            int sectionIndex,
+            GenerationMode mode,
+            boolean allowValidationRevision,
+            CaptureHandle capture) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             return new SectionOutcome(
@@ -557,7 +670,12 @@ public class GroundedTeachingAgent {
                     ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION", SectionFailure.NONE);
         }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
-                plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
+                plan,
+                planned,
+                assistantRunId,
+                queryBudget,
+                mode.bindVisualPageEvidence(),
+                capture);
         if (evidenceRefiner != null) {
             try {
                 resolution = evidenceRefiner.refine(plan, planned, assistantRunId, resolution);
@@ -565,9 +683,9 @@ public class GroundedTeachingAgent {
                 throw stopped;
             } catch (RuntimeException optionalRefinementFailure) {
                 log.warn(
-                        "Optional teaching evidence refinement failed for topic {}; retaining verified base evidence: {}",
-                        planned.topicKey(),
-                        optionalRefinementFailure.getMessage());
+                        "Optional teaching evidence refinement failed for section {} (failureType={}); retaining verified base evidence",
+                        planned.position(),
+                        optionalRefinementFailure.getClass().getSimpleName());
             }
         }
         if (!resolution.verified()) {
@@ -592,7 +710,8 @@ public class GroundedTeachingAgent {
                     assistantRunId,
                     sectionIndex,
                     mode.includeVisualEvidence() && planned.visualEvidenceRecommended(),
-                    allowValidationRevision);
+                    allowValidationRevision,
+                    capture);
             LessonSection published = mode.publishAfterDeterministicValidation()
                     ? basePublication.publish(composed)
                     : composed.section();
@@ -602,7 +721,10 @@ public class GroundedTeachingAgent {
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException invalidDraft) {
-            log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
+            log.warn(
+                    "Teaching section {} was withheld (failureType={})",
+                    planned.position(),
+                    invalidDraft.getClass().getSimpleName());
             return new SectionOutcome(
                     planned.position(), planned, lessonAssembly.insufficient(planned), null, resolution.toolCalls(),
                     ActivityOutcome.REJECTED, mode.withheldCategory(), SectionFailure.INVALID_DRAFT);
@@ -637,7 +759,9 @@ public class GroundedTeachingAgent {
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
             boolean reusable = reusableSections.containsKey(planned.topicKey());
             if (!reusable && toolCalls >= maxToolCalls) {
-                log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
+                log.warn(
+                        "Teaching Agent tool budget exhausted before section {}",
+                        planned.position());
                 sections.add(lessonAssembly.insufficient(planned));
                 publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");

@@ -388,7 +388,11 @@ class VisualRulebookCatalogerTest {
                             false,
                             List.of(),
                             List.of("MOVE", "BUILD"),
-                            false)));
+                            false,
+                            List.of(),
+                            List.of(
+                                    new RuleGroupFact("MOVE", "MOVE", "当前玩家按照可见条件移动。"),
+                                    new RuleGroupFact("BUILD", "BUILD", "当前玩家按照可见条件建造。")))));
                 },
                 facts);
 
@@ -399,6 +403,9 @@ class VisualRulebookCatalogerTest {
         assertThat(inputs).singleElement().satisfies(input -> {
             assertThat(input.sourceRuleGroupIdentifiers()).containsExactly("MOVE", "BUILD");
             assertThat(input.sourceRuleGroupInventoryComplete()).isFalse();
+            assertThat(input.sourceRuleGroupFacts())
+                    .extracting(RuleGroupFact::identifier)
+                    .containsExactly("MOVE", "BUILD");
             assertThat(input.text()).contains("当前玩家按照可见条件移动", "当前玩家按照可见条件建造");
         });
     }
@@ -499,7 +506,10 @@ class VisualRulebookCatalogerTest {
                             false,
                             List.of(),
                             List.of("MOVE"),
-                            false)));
+                            false,
+                            List.of(),
+                            List.of(new RuleGroupFact(
+                                    "MOVE", "MOVE", "Only one visible relation was returned.")))));
                 },
                 facts);
 
@@ -510,11 +520,17 @@ class VisualRulebookCatalogerTest {
         assertThat(inputs).singleElement().satisfies(input -> {
             assertThat(input.sourceRuleGroupIdentifiers()).containsExactly("MOVE");
             assertThat(input.sourceRuleGroupInventoryComplete()).isFalse();
+            assertThat(input.sourceRuleGroupFacts())
+                    .extracting(RuleGroupFact::identifier)
+                    .containsExactly("MOVE");
             assertThat(input.text()).contains("Only one visible relation was returned.");
         });
         assertThat(facts.find(documentVersionId, Set.of(1))).singleElement().satisfies(fact -> {
             assertThat(fact.ruleGroupIdentifiers()).containsExactly("MOVE");
             assertThat(fact.ruleGroupInventoryComplete()).isFalse();
+            assertThat(fact.ruleGroupFacts())
+                    .extracting(RuleGroupFact::identifier)
+                    .containsExactly("MOVE");
         });
     }
 

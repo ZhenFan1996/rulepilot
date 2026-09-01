@@ -8,6 +8,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.openai.core.JsonValue;
 import com.openai.models.completions.CompletionUsage;
+import com.rulepilot.agenttrace.AgentTraceEvent.BindingOrFailure;
+import com.rulepilot.agenttrace.AgentTraceEvent.LifecycleSignal;
+import com.rulepilot.agenttrace.AgentTraceEvent.MediaDescriptor;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelCallStarted;
+import com.rulepilot.agenttrace.AgentTraceEvent.ModelTurn;
+import com.rulepilot.agenttrace.AgentTraceEvent.ToolArgumentValidation;
+import com.rulepilot.agenttrace.AgentTraceEvent.TraceEventContext;
+import com.rulepilot.agenttrace.CaptureHandle;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -17,10 +25,17 @@ import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.RuleFactDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import java.text.BreakIterator;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -61,6 +76,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     private static final String TEACHING_TEXT_OUTPUT_CONTRACT =
             "Return one JSON object matching this schema exactly; return no markdown or extra text:\n"
                     + QWEN_TEACHING_SCHEMA;
+    private static final int TRACE_MAXIMUM_OUTPUT_TOKENS = 4_096;
+    private static final String TRACE_EVIDENCE_INPUT_SCHEMA =
+            "{\"type\":\"object\",\"required\":[\"evidenceIds\"],\"properties\":{\"evidenceIds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"additionalProperties\":false}";
+    private static final String TRACE_MEDIA_INPUT_SCHEMA =
+            "{\"type\":\"object\",\"required\":[\"pageNumbers\"],\"properties\":{\"pageNumbers\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}},\"additionalProperties\":false}";
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
@@ -161,6 +181,18 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     @Override
+    public ModelInvocation composeInvocation(
+            SectionRequest request,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        Role role = roleFor(request);
+        requireConfigured(role, request.modelConfigurationOwner());
+        return composeOnce(
+                request, "", capture, context, attempt, "teaching-section-composition-v1");
+    }
+
+    @Override
     public SectionDraft repairCompositionContract(SectionRequest request) {
         return repairCompositionContractInvocation(request).draft();
     }
@@ -170,6 +202,23 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Role role = roleFor(request);
         requireConfigured(role, request.modelConfigurationOwner());
         return composeOnce(request, prompts.structuredOutputRepair());
+    }
+
+    @Override
+    public ModelInvocation repairCompositionContractInvocation(
+            SectionRequest request,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        Role role = roleFor(request);
+        requireConfigured(role, request.modelConfigurationOwner());
+        return composeOnce(
+                request,
+                prompts.structuredOutputRepair(),
+                capture,
+                context,
+                attempt,
+                "teaching-section-contract-repair-v1");
     }
 
     @Override
@@ -186,6 +235,25 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     @Override
+    public ModelInvocation reviseInvocation(
+            SectionRequest request,
+            SectionDraft previousDraft,
+            List<String> feedback,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        Role role = roleFor(request);
+        requireConfigured(role, request.modelConfigurationOwner());
+        return composeOnce(
+                request,
+                revisionInstruction(request, previousDraft, feedback),
+                capture,
+                context,
+                attempt,
+                "teaching-section-revision-v1");
+    }
+
+    @Override
     public SectionDraft repairRevisionContract(
             SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
         return repairRevisionContractInvocation(request, previousDraft, feedback).draft();
@@ -199,6 +267,25 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return composeOnce(
                 request,
                 revisionInstruction(request, previousDraft, feedback) + "\n" + prompts.structuredOutputRepair());
+    }
+
+    @Override
+    public ModelInvocation repairRevisionContractInvocation(
+            SectionRequest request,
+            SectionDraft previousDraft,
+            List<String> feedback,
+            CaptureHandle capture,
+            TraceEventContext context,
+            int attempt) {
+        Role role = roleFor(request);
+        requireConfigured(role, request.modelConfigurationOwner());
+        return composeOnce(
+                request,
+                revisionInstruction(request, previousDraft, feedback) + "\n" + prompts.structuredOutputRepair(),
+                capture,
+                context,
+                attempt,
+                "teaching-section-revision-contract-repair-v1");
     }
 
     private String revisionInstruction(
@@ -306,6 +393,22 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     private ModelInvocation composeOnce(SectionRequest request, String repairInstruction) {
+        return composeOnce(
+                request,
+                repairInstruction,
+                CaptureHandle.noop(),
+                null,
+                1,
+                "teaching-section-v1");
+    }
+
+    private ModelInvocation composeOnce(
+            SectionRequest request,
+            String repairInstruction,
+            CaptureHandle capture,
+            TraceEventContext traceContext,
+            int attempt,
+            String templateVersion) {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         Map<String, UUID> evidenceIds = evidenceIds(request);
@@ -359,19 +462,40 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                     new ByteArrayResource(image.content())));
                         }
                     });
+            captureModelVisibleInputs(capture, traceContext, request, attempt, role == Role.VISUAL);
+            captureModelStarted(
+                    capture,
+                    traceContext,
+                    role,
+                    owner,
+                    request,
+                    attempt,
+                    templateVersion);
             ChatResponse response = requestSpec.call().chatResponse();
             if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
                 throw new InvalidOutputException("teaching model returned no response", null);
             }
             String responseContent = response.getResult().getOutput().getText();
-            draft = responseContent == null ? null : parseStructuredDraft(responseContent);
             usage = response.getMetadata() == null ? null : response.getMetadata().getUsage();
+            captureModelTurn(
+                    capture,
+                    traceContext,
+                    role,
+                    owner,
+                    responseContent,
+                    usage,
+                    attempt);
+            draft = responseContent == null ? null : parseStructuredDraft(responseContent);
         } catch (JacksonException | JsonProcessingException invalidJson) {
+            captureModelFailure(capture, traceContext, "TEACHING_MODEL_INVALID_JSON");
             throw new InvalidOutputException("teaching model returned malformed structured output", invalidJson);
+        } catch (RuntimeException failure) {
+            captureModelFailure(capture, traceContext, "TEACHING_MODEL_CALL_FAILED");
+            throw failure;
         }
         if (role == Role.VISUAL) {
             log.info(
-                    "Visual teaching structure: title={}, kind={}, caption={}, citations={}, steps={}, visualSteps={}, describedFocus={}",
+                    "Visual teaching structure: titlePresent={}, kind={}, captionPresent={}, citationCount={}, stepCount={}, visualStepCount={}, describedFocusPresent={}",
                     draft != null && draft.title() != null && !draft.title().isBlank(),
                     draft == null ? null : draft.visualKind(),
                     draft != null && draft.visualCaption() != null && !draft.visualCaption().isBlank(),
@@ -396,15 +520,217 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             int completionTokens = usageValue(usage == null ? null : usage.getCompletionTokens());
             long cacheReadTokens = cacheReadTokens(usage);
             log.info(
-                    "Teaching model usage: provider={}, model={}, promptTokens={}, completionTokens={}, cacheReadInputTokens={}",
-                    resolvedProvider(role, owner),
-                    models.modelNameFor(role, owner),
+                    "Teaching model usage: promptTokens={}, completionTokens={}, cacheReadInputTokens={}",
                     promptTokens,
                     completionTokens,
                     cacheReadTokens);
             return new ModelInvocation(sectionDraft, promptTokens, completionTokens, cacheReadTokens);
         } catch (IllegalArgumentException invalidContract) {
+            captureModelFailure(capture, traceContext, "TEACHING_MODEL_CONTRACT_REJECTED");
             throw new InvalidOutputException("teaching model returned an invalid section contract", invalidContract);
+        }
+    }
+
+    private void captureModelStarted(
+            CaptureHandle capture,
+            TraceEventContext context,
+            Role role,
+            String owner,
+            SectionRequest request,
+            int attempt,
+            String templateVersion) {
+        if (context == null) return;
+        capture(capture, () -> {
+            InputTokenProfile profile = inputProfile(
+                    request,
+                    templateVersion.contains("repair") || templateVersion.contains("revision")
+                            ? "bounded-revision-metadata"
+                            : "");
+            capture.modelCallStarted(new ModelCallStarted(
+                    freshContext(context),
+                    resolvedProvider(role, owner),
+                    models.modelNameFor(role, owner),
+                    attempt,
+                    templateVersion,
+                    "teaching-section-v1",
+                    sha256(QWEN_TEACHING_SCHEMA),
+                    profile.totalTokens(),
+                    TRACE_MAXIMUM_OUTPUT_TOKENS));
+        });
+    }
+
+    private void captureModelTurn(
+            CaptureHandle capture,
+            TraceEventContext context,
+            Role role,
+            String owner,
+            String responseContent,
+            Usage usage,
+            int attempt) {
+        if (context == null) return;
+        capture(capture, () -> capture.modelTurn(new ModelTurn(
+                        freshContext(context),
+                        resolvedProvider(role, owner),
+                        models.modelNameFor(role, owner),
+                        attempt,
+                        responseContent == null ? "" : responseContent,
+                        List.of(),
+                        "RESPONSE_RECEIVED",
+                        usageValue(usage == null ? null : usage.getPromptTokens()),
+                        usageValue(usage == null ? null : usage.getCompletionTokens()),
+                        responseContent == null || responseContent.isBlank())));
+    }
+
+    private void captureModelFailure(CaptureHandle capture, TraceEventContext context, String code) {
+        if (context == null) return;
+        capture(capture, () -> capture.bindingOrFailure(new BindingOrFailure(
+                        freshContext(context),
+                        LifecycleSignal.FAILURE,
+                        code,
+                        context.resource(),
+                        null)));
+    }
+
+    private void captureModelVisibleInputs(
+            CaptureHandle capture,
+            TraceEventContext context,
+            SectionRequest request,
+            int attempt,
+            boolean mediaAttachedToProviderRequest) {
+        if (context == null) return;
+        try {
+            List<ModelEvidence> visibleEvidence = modelEvidence(request);
+            List<Map<String, Object>> exactEvidence = IntStream.range(0, visibleEvidence.size())
+                    .mapToObj(index -> {
+                        ModelEvidence visible = visibleEvidence.get(index);
+                        var source = request.evidence().get(index);
+                        Map<String, Object> value = new LinkedHashMap<>();
+                        value.put("evidenceRef", visible.evidenceRef());
+                        value.put("chunkId", source.chunkId().toString());
+                        value.put("sectionType", visible.sectionType());
+                        value.put("heading", visible.heading());
+                        value.put("excerpt", visible.excerpt());
+                        value.put("visualPresentation", visible.visualPresentation());
+                        value.put("contentKind", visible.contentKind().name());
+                        value.put("pageFrom", visible.pageFrom());
+                        value.put("pageTo", visible.pageTo());
+                        return value;
+                    })
+                    .toList();
+            String evidenceCallId = "teaching-section-evidence|" + attempt;
+            String evidenceArguments = traceJson(Map.of(
+                    "evidenceIds",
+                    request.evidence().stream().map(value -> value.chunkId().toString()).toList()));
+            capture(capture, () -> capture.toolCall(new com.rulepilot.agenttrace.AgentTraceEvent.ToolCall(
+                    freshContext(context),
+                    evidenceCallId,
+                    "provide_teaching_section_evidence",
+                    evidenceArguments,
+                    evidenceArguments,
+                    "teaching-section-evidence-input-v1",
+                    sha256(TRACE_EVIDENCE_INPUT_SCHEMA),
+                    ToolArgumentValidation.ACCEPTED)));
+            String evidenceObservation = traceJson(Map.of("evidence", exactEvidence));
+            capture(capture, () -> capture.toolObservation(new com.rulepilot.agenttrace.AgentTraceEvent.ToolObservation(
+                    freshContext(context),
+                    evidenceCallId,
+                    "provide_teaching_section_evidence",
+                    evidenceObservation,
+                    "VERIFIED_EVIDENCE_BOUND",
+                    exactEvidence.size(),
+                    false,
+                    List.of())));
+
+            if (mediaAttachedToProviderRequest && !request.pageImages().isEmpty()) {
+                String mediaCallId = "teaching-section-media|" + attempt;
+                String mediaArguments = traceJson(Map.of(
+                        "pageNumbers",
+                        request.pageImages().stream().map(TeachingLessonModel.PageImageInput::pageNumber).toList()));
+                List<MediaDescriptor> media = request.pageImages().stream()
+                        .map(page -> new MediaDescriptor(
+                                page.mediaType(),
+                                "pdf-page-" + page.pageNumber(),
+                                page.width(),
+                                page.height(),
+                                page.content().length,
+                                sha256(page.content())))
+                        .toList();
+                capture(capture, () -> capture.toolCall(new com.rulepilot.agenttrace.AgentTraceEvent.ToolCall(
+                        freshContext(context),
+                        mediaCallId,
+                        "provide_teaching_section_media",
+                        mediaArguments,
+                        mediaArguments,
+                        "teaching-section-media-input-v1",
+                        sha256(TRACE_MEDIA_INPUT_SCHEMA),
+                        ToolArgumentValidation.ACCEPTED)));
+                String mediaObservation = traceJson(Map.of(
+                        "media",
+                        media.stream()
+                                .map(descriptor -> Map.of(
+                                        "mediaType", descriptor.mediaType(),
+                                        "label", descriptor.label(),
+                                        "width", descriptor.width(),
+                                        "height", descriptor.height(),
+                                        "byteCount", descriptor.byteCount(),
+                                        "sha256", descriptor.sha256()))
+                                .toList()));
+                capture(capture, () -> capture.toolObservation(new com.rulepilot.agenttrace.AgentTraceEvent.ToolObservation(
+                        freshContext(context),
+                        mediaCallId,
+                        "provide_teaching_section_media",
+                        mediaObservation,
+                        "MEDIA_BOUND",
+                        media.size(),
+                        false,
+                        media)));
+            }
+        } catch (RuntimeException traceFailure) {
+            capture(capture, () -> capture.bindingOrFailure(new BindingOrFailure(
+                    freshContext(context),
+                    LifecycleSignal.GAP,
+                    "TEACHING_MODEL_VISIBLE_INPUT_TRACE_GAP",
+                    context.resource(),
+                    null)));
+        }
+    }
+
+    private void capture(CaptureHandle capture, Runnable emission) {
+        try {
+            if (capture != null && capture.enabled()) emission.run();
+        } catch (RuntimeException ignored) {
+            // Private diagnostics never alter the provider or the validated teaching result.
+        }
+    }
+
+    private TraceEventContext freshContext(TraceEventContext context) {
+        return new TraceEventContext(
+                UUID.randomUUID(),
+                Instant.now(),
+                context.stage(),
+                context.operationId(),
+                context.parentOperationId(),
+                context.resource());
+    }
+
+    private String sha256(String value) {
+        return sha256(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String sha256(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private String traceJson(Object value) {
+        try {
+            return STRICT_TEACHING_OUTPUT.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("teaching trace input serialization failed", exception);
         }
     }
 
@@ -482,7 +808,9 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             Long value = deepSeekCacheHitTokens.convert(Long.class);
             return value == null ? 0 : Math.max(0, value);
         } catch (RuntimeException invalidOptionalUsage) {
-            log.debug("Teaching model returned unreadable optional cache usage metadata", invalidOptionalUsage);
+            log.debug(
+                    "Teaching model returned unreadable optional cache usage metadata (failureType={})",
+                    invalidOptionalUsage.getClass().getSimpleName());
             return 0;
         }
     }
@@ -608,7 +936,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             .filter(java.util.Objects::nonNull)
                             .toList();
                     return new ModelTeachingUnit(
-                            unit.unitId(), unit.sourceIdentifiers(), directEvidenceReferences);
+                            unit.unitId(),
+                            unit.sourceIdentifiers(),
+                            directEvidenceReferences,
+                            unit.roles(),
+                            unit.availability());
                 })
                 .toList();
     }
@@ -713,7 +1045,9 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     record ModelTeachingUnit(
             String unitId,
             List<String> sourceIdentifiers,
-            List<String> directEvidenceIds) {}
+            List<String> directEvidenceIds,
+            List<SourceCoverageRole> roles,
+            SourceCoverageAvailability availability) {}
 
     record ModelSectionDraft(
             String title,
