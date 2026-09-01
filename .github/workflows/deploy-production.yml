@@ -447,8 +447,15 @@ jobs:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
           DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
+          qualified_main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
+          [[ "$qualified_main_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$qualified_main_sha" == "$DEPLOY_SHA" ]] || {
+            echo "Candidate release is no longer the current qualified main revision" >&2
+            exit 1
+          }
           previous_release_id=$(ssh \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
@@ -458,10 +465,11 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -p "$DEPLOY_SSH_PORT" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" <<'REMOTE'
+            'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" "$qualified_main_sha" <<'REMOTE'
           set -Eeuo pipefail
           application_root=$(readlink -f "$1")
           release_id=$2
+          qualified_main_sha=$3
           if [[ ! "$release_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]]; then
             echo "Rollback checkpoint release coordinate is invalid" >&2
             exit 1
@@ -479,7 +487,7 @@ jobs:
           bash -n "$temporary_guard"
           install -d -m 0700 "$guard_dir"
           install -m 0755 "$temporary_guard" "$guard_script"
-          previous_release_id=$("$guard_script" checkpoint "$application_root" "$release_id")
+          previous_release_id=$("$guard_script" checkpoint "$application_root" "$release_id" "$qualified_main_sha")
           printf '%s\n' "$previous_release_id"
           REMOTE
           )
