@@ -68,6 +68,7 @@ class ChatModelFactoryTest {
 
         assertThat((OpenAiChatOptions) model.getOptions()).satisfies(options -> {
             assertThat(options.getMaxRetries()).isZero();
+            assertThat(options.getTimeout()).isEqualTo(Duration.ofSeconds(30));
             assertThat(options.getBaseUrl()).isEqualTo("https://provider.example/v1");
             assertThat(options.getModel()).isEqualTo("qwen-test-model");
         });

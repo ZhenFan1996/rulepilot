@@ -81,19 +81,27 @@ class TeachingRichLessonPaidCanaryTest {
         artifact.put("caseLabel", label);
         artifact.put("sourceFile", pdf.getFileName().toString());
         artifact.put("startedAt", Instant.now().toString());
+        List<Map<String, Object>> rawOutline = new CopyOnWriteArrayList<>();
+        List<Map<String, Object>> rawSections = new CopyOnWriteArrayList<>();
+        CanaryInvocations invocations = new CanaryInvocations();
+        artifact.put("rawOutlineProviderResponses", rawOutline);
+        artifact.put("rawSectionProviderResponses", rawSections);
+        artifact.put("activities", invocations.events);
         long totalStarted = System.nanoTime();
         Throwable failure = null;
         try {
             Provider provider = provider();
             artifact.put("provider", provider.name());
             artifact.put("model", provider.model());
+            artifact.put("requestTimeoutSeconds", Long.parseLong(
+                    environment("RULEPILOT_TEACHING_CANARY_REQUEST_TIMEOUT_SECONDS", "300")));
+            artifact.put("deepSeekNonThinkingGeneration", "deepseek".equals(provider.name()));
             VersionedAgentPrompts prompts = prompts();
             UUID versionId = UUID.nameUUIDFromBytes(("teaching-canary:" + label)
                     .getBytes(StandardCharsets.UTF_8));
             PdfCorpus corpus = new PdfCorpus(pdf, versionId);
             artifact.put("pageCount", corpus.pages().size());
 
-            List<Map<String, Object>> rawOutline = new CopyOnWriteArrayList<>();
             RecordingChatModel outlineChat = recordingModel(provider, rawOutline);
             RuntimeModelConfiguration outlineConfiguration = configuration(provider, outlineChat);
             long outlineStarted = System.nanoTime();
@@ -105,7 +113,6 @@ class TeachingRichLessonPaidCanaryTest {
                             OWNER));
             artifact.put("outlineLatencyMs", elapsedMillis(outlineStarted));
             artifact.put("outline", outline);
-            artifact.put("rawOutlineProviderResponses", rawOutline);
 
             TeachingPlan generated = new TeachingPlanFactory().create(
                     versionId,
@@ -115,14 +122,12 @@ class TeachingRichLessonPaidCanaryTest {
             TeachingPlan plan = TeachingPlanPersistenceRoundTrip.serializeAndReload(generated);
             assertThat(plan).isEqualTo(generated);
 
-            List<Map<String, Object>> rawSections = new CopyOnWriteArrayList<>();
             RecordingChatModel sectionChat = recordingModel(provider, rawSections);
             RuntimeModelConfiguration sectionConfiguration = configuration(provider, sectionChat);
             SpringAiTeachingLessonModel lessonModel = new SpringAiTeachingLessonModel(
                     sectionConfiguration,
                     prompts,
                     Double.parseDouble(environment("RULEPILOT_TEACHING_CANARY_TEMPERATURE", "0.2")));
-            CanaryInvocations invocations = new CanaryInvocations();
             VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
             GroundedTeachingAgent agent = new GroundedTeachingAgent(
                     corpus,
@@ -138,13 +143,6 @@ class TeachingRichLessonPaidCanaryTest {
             artifact.put("plan", plan);
             artifact.put("lesson", lesson);
             artifact.put("progressSnapshots", progress);
-            artifact.put("rawSectionProviderResponses", rawSections);
-            artifact.put("activities", invocations.events);
-            artifact.put("calls", Map.of(
-                    "outlineModel", rawOutline.size(),
-                    "sectionModel", rawSections.size(),
-                    "auditedModel", invocations.modelCalls.get(),
-                    "tools", invocations.toolCalls.get()));
 
             assertThat(rawOutline).isNotEmpty();
             assertThat(rawSections).isNotEmpty();
@@ -165,6 +163,11 @@ class TeachingRichLessonPaidCanaryTest {
                     "message", String.valueOf(thrown.getMessage()),
                     "rootCause", rootCause(thrown)));
         } finally {
+            artifact.put("calls", Map.of(
+                    "outlineModel", rawOutline.size(),
+                    "sectionModel", rawSections.size(),
+                    "auditedModel", invocations.modelCalls.get(),
+                    "tools", invocations.toolCalls.get()));
             artifact.put("finishedAt", Instant.now().toString());
             artifact.put("totalLatencyMs", elapsedMillis(totalStarted));
             Files.writeString(
@@ -177,18 +180,22 @@ class TeachingRichLessonPaidCanaryTest {
     }
 
     private RuntimeModelConfiguration configuration(Provider provider, ChatModel model) {
+        return configuration(provider.name(), provider.model(), model);
+    }
+
+    static RuntimeModelConfiguration configuration(String provider, String modelName, ChatModel model) {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.providerFor(Role.TEACHING)).thenReturn(provider.name());
-        when(configuration.providerFor(Role.TEACHING, OWNER)).thenReturn(provider.name());
+        when(configuration.providerFor(Role.TEACHING)).thenReturn(provider);
+        when(configuration.providerFor(Role.TEACHING, OWNER)).thenReturn(provider);
         when(configuration.modelFor(Role.TEACHING, OWNER)).thenReturn(model);
-        when(configuration.modelNameFor(Role.TEACHING, OWNER)).thenReturn(provider.model());
+        when(configuration.modelNameFor(Role.TEACHING, OWNER)).thenReturn(modelName);
         when(configuration.resolvedModelFor(Role.TEACHING, OWNER))
                 .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
-                        model, provider.name(), provider.model(), false));
+                        model, provider, modelName, "deepseek".equals(provider)));
         when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
         when(configuration.usesFake(Role.TEACHING, OWNER)).thenReturn(false);
         when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, OWNER))
-                .thenReturn("deepseek".equals(provider.name()));
+                .thenReturn("deepseek".equals(provider));
         return configuration;
     }
 
@@ -254,18 +261,29 @@ class TeachingRichLessonPaidCanaryTest {
 
         @Override
         public ChatResponse call(Prompt prompt) {
-            ChatResponse response = delegate.call(prompt);
-            var output = response == null || response.getResult() == null
-                    ? null
-                    : response.getResult().getOutput();
+            long started = System.nanoTime();
             Map<String, Object> raw = new LinkedHashMap<>();
             raw.put("at", Instant.now().toString());
-            raw.put("text", output == null || output.getText() == null ? "" : output.getText());
-            raw.put("assistantMetadata", output == null ? "" : String.valueOf(output.getMetadata()));
-            raw.put("responseMetadata", response == null ? "" : String.valueOf(response.getMetadata()));
-            raw.put("completeResponse", String.valueOf(response));
-            rawResponses.add(Map.copyOf(raw));
-            return response;
+            try {
+                ChatResponse response = delegate.call(prompt);
+                var output = response == null || response.getResult() == null
+                        ? null
+                        : response.getResult().getOutput();
+                raw.put("outcome", "SUCCEEDED");
+                raw.put("latencyMs", elapsed(started));
+                raw.put("text", output == null || output.getText() == null ? "" : output.getText());
+                raw.put("assistantMetadata", output == null ? "" : String.valueOf(output.getMetadata()));
+                raw.put("responseMetadata", response == null ? "" : String.valueOf(response.getMetadata()));
+                raw.put("completeResponse", String.valueOf(response));
+                rawResponses.add(Map.copyOf(raw));
+                return response;
+            } catch (RuntimeException failure) {
+                raw.put("outcome", "FAILED");
+                raw.put("latencyMs", elapsed(started));
+                raw.put("failure", rootMessage(failure));
+                rawResponses.add(Map.copyOf(raw));
+                throw failure;
+            }
         }
 
         @Override
@@ -276,6 +294,16 @@ class TeachingRichLessonPaidCanaryTest {
         @Override
         public ChatOptions getOptions() {
             return delegate.getOptions();
+        }
+
+        private static long elapsed(long started) {
+            return Duration.ofNanos(System.nanoTime() - started).toMillis();
+        }
+
+        private static String rootMessage(Throwable failure) {
+            Throwable current = failure;
+            while (current.getCause() != null) current = current.getCause();
+            return current.getClass().getName() + ": " + String.valueOf(current.getMessage());
         }
     }
 

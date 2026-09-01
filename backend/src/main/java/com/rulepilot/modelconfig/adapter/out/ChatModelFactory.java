@@ -94,6 +94,7 @@ public class ChatModelFactory {
                         .apiKey(resolvedApiKey)
                         .baseUrl(resolvedBaseUrl)
                         .model(resolvedModel)
+                        .timeout(requestTimeout)
                         .maxRetries(0)
                         .build())
                 .openAiClient(new OpenAIClientImpl(syncOptions))

@@ -31,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.converter.BeanOutputConverter;
@@ -47,6 +48,7 @@ import tools.jackson.core.JacksonException;
 public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingLessonModel.class);
+    private static final String BASE_OUTPUT_LOCALE = "zh-CN";
     private static final BeanOutputConverter<ModelSectionDraft> TEACHING_OUTPUT_CONVERTER =
             new BeanOutputConverter<>(ModelSectionDraft.class);
     private static final ObjectMapper STRICT_TEACHING_OUTPUT = new ObjectMapper()
@@ -257,11 +259,12 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         Map<String, UUID> evidenceIds = evidenceIds(request);
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
+        ChatModel model = models.modelFor(role, owner);
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(model).prompt();
         Map<String, Object> providerOptions = providerOptions(role, owner);
         boolean deepSeek = "deepseek".equals(resolvedProvider(role, owner));
-        if (deepSeek || !providerOptions.isEmpty()) {
-            OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+        if (model.getOptions() instanceof OpenAiChatOptions defaults) {
+            OpenAiChatOptions.Builder options = defaults.mutate();
             options.model(models.modelNameFor(role, owner));
             options.temperature(temperature);
             if (!providerOptions.isEmpty()) options.extraBody(providerOptions);
@@ -277,8 +280,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             }
             prompt = prompt.options(options);
         } else {
-            prompt = prompt.options(ChatOptions.builder()
-                    .temperature(temperature));
+            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
         ModelSectionDraft draft;
         Usage usage;
@@ -413,6 +415,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             ObjectNode schema = (ObjectNode) mapper.readTree(
                     new BeanOutputConverter<>(ModelSectionDraft.class).getJsonSchema());
             ObjectNode properties = (ObjectNode) schema.path("properties");
+            ((ObjectNode) properties.path("locale")).putArray("enum").add(BASE_OUTPUT_LOCALE);
             ((ObjectNode) properties.path("title")).put("minLength", 1);
             ObjectNode steps = (ObjectNode) properties.path("steps");
             steps.put("minItems", 1);
@@ -504,6 +507,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Map<UUID, String> references = new LinkedHashMap<>();
         evidenceIds(request).forEach((reference, id) -> references.put(id, reference));
         return new ModelSectionDraft(
+                BASE_OUTPUT_LOCALE,
                 draft.title(),
                 draft.steps().stream()
                         .map(step -> new ModelStepDraft(
@@ -518,9 +522,12 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .toList());
     }
 
-    private SectionDraft toSectionDraft(ModelSectionDraft draft, Map<String, UUID> evidenceIds) {
+    SectionDraft toSectionDraft(ModelSectionDraft draft, Map<String, UUID> evidenceIds) {
         if (draft == null) {
             throw new IllegalArgumentException("teaching model returned no draft");
+        }
+        if (!BASE_OUTPUT_LOCALE.equals(draft.locale())) {
+            throw new IllegalArgumentException("teaching model returned a lesson in the wrong output locale");
         }
         if (draft.steps().stream().anyMatch(java.util.Objects::isNull)) {
             throw new IllegalArgumentException("teaching model returned a null step");
@@ -570,6 +577,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             int pageTo) {}
 
     record ModelSectionDraft(
+            String locale,
             String title,
             List<ModelStepDraft> steps) {
         ModelSectionDraft {
