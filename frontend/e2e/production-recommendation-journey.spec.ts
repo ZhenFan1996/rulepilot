@@ -543,6 +543,9 @@ async function renderedRecommendation(page: Page) {
           sourceIndexes: part.dataset.sourceIndexes
             ? part.dataset.sourceIndexes.split(',').map(Number)
             : [],
+          publisherDescriptionGrounded: part.querySelector(
+            '[data-testid="publisher-description-grounding"]',
+          ) !== null,
         })),
       })),
   }))
