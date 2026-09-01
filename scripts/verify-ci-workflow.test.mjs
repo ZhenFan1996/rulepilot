@@ -1489,7 +1489,7 @@ test('release guard stays live from checkpoint through the public commit', () =>
   assert.match(productionReleaseGuard,
     /bash "\$0" finalize-deadline[\s\S]*?record_watchdog_failure[\s\S]*?return "\$action_status"/)
   assert.match(productionReleaseGuard,
-    /start_watchdog\(\)[\s\S]*?watchdog_ready_matches "\$state_dir" "\$generation"[\s\S]*?watchdog_process_matches "\$process_id" "\$generation"[\s\S]*?Rollback watchdog did not become ready/)
+    /start_watchdog\(\)[\s\S]*?watchdog_ready_matches "\$state_dir" "\$generation"[\s\S]*?watchdog_process_matches "\$process_id" "\$generation"[\s\S]*?watchdog_process_alive "\$process_id"[\s\S]*?Rollback watchdog did not become ready/)
   for (const guardedAction of ['heartbeat()', 'arm()', 'assert_activation_held()']) {
     const start = productionReleaseGuard.indexOf(`\n${guardedAction}`)
     assert.ok(start >= 0)
@@ -2009,6 +2009,63 @@ test('watchdog start replaces a live but unrelated reused PID with a release gen
     assert.match(generation, /^\d+-\d+-\d+$/)
     assert.equal(readyGeneration, generation)
     process.kill(replacementPid, 0)
+  } finally {
+    await stopReleaseGuardWatchdog(fixture)
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('watchdog startup tolerates the detached child before it execs into its generation', async (context) => {
+  if (process.platform !== 'linux') {
+    context.skip('watchdog exec startup is exercised on the Linux CI runner')
+    return
+  }
+  const fixture = await createReleaseGuardFixture()
+  const guardPath = join(fixture.root, 'production-release-guard.slow-exec.sh')
+  const ordinarySpawn = `\tnohup bash "$0" watchdog "$application_root" "$release_id" "$previous_release_id" \\
+\t\t"$generation" \\
+\t\t>>"$log_file" 2>&1 </dev/null &`
+  const delayedSpawn = `\tRULEPILOT_TEST_GUARD="$0" \\
+\t\tRULEPILOT_TEST_ROOT="$application_root" \\
+\t\tRULEPILOT_TEST_RELEASE="$release_id" \\
+\t\tRULEPILOT_TEST_PREVIOUS="$previous_release_id" \\
+\t\tRULEPILOT_TEST_GENERATION="$generation" \\
+\t\tnohup bash -c 'sleep 0.2; exec bash "$RULEPILOT_TEST_GUARD" watchdog "$RULEPILOT_TEST_ROOT" "$RULEPILOT_TEST_RELEASE" "$RULEPILOT_TEST_PREVIOUS" "$RULEPILOT_TEST_GENERATION"' \\
+\t\t>>"$log_file" 2>&1 </dev/null &`
+  const slowExecGuard = productionReleaseGuard.replace(ordinarySpawn, delayedSpawn)
+  assert.notEqual(slowExecGuard, productionReleaseGuard)
+  try {
+    await writeFile(guardPath, slowExecGuard, { mode: 0o755 })
+    await mkdir(fixture.guardState, { recursive: true })
+    await writeFile(
+      join(fixture.root, 'deployment-guards', 'active-transaction'),
+      `${fixture.release}\n`,
+      { mode: 0o600 },
+    )
+    await writeFile(join(fixture.guardState, 'previous-release'), `${fixture.previous}\n`, { mode: 0o600 })
+    await writeFile(join(fixture.guardState, 'environment.snapshot'), 'CHECKPOINT=true\n', { mode: 0o600 })
+
+    await execFileAsync('bash', [
+      guardPath,
+      'start',
+      fixture.root,
+      fixture.release,
+      fixture.previous,
+    ], { env: fixture.processEnvironment })
+
+    const pid = Number.parseInt(
+      await readFile(join(fixture.guardState, 'watchdog.pid'), 'utf8'),
+      10,
+    )
+    const generation = (await readFile(
+      join(fixture.guardState, 'watchdog-generation'),
+      'utf8',
+    )).trim()
+    assert.equal(
+      (await readFile(join(fixture.guardState, 'watchdog-ready'), 'utf8')).trim(),
+      generation,
+    )
+    process.kill(pid, 0)
   } finally {
     await stopReleaseGuardWatchdog(fixture)
     await rm(fixture.root, { recursive: true, force: true })
