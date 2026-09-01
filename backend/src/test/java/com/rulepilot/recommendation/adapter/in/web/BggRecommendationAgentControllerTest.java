@@ -604,6 +604,13 @@ class BggRecommendationAgentControllerTest {
                 "mechanics",
                 "Card Drafting",
                 List.of());
+        CandidateObservation publisherDescription = new CandidateObservation(
+                "B266192:publisherDescription",
+                266192,
+                CandidateObservation.Kind.STRUCTURED_METADATA,
+                "publisherDescription",
+                "Build a wildlife preserve around birds whose abilities form an engine.",
+                List.of());
         CandidateClaim fit = new CandidateClaim(
                 266192,
                 "playerCount",
@@ -619,7 +626,7 @@ class BggRecommendationAgentControllerTest {
                 null,
                 CandidateClaim.Relation.OBSERVED,
                 "模型原文保留 Animals 与 Card Drafting；它支持 4 人且标注 40–70 分钟。",
-                List.of(playerCount, mechanics));
+                List.of(playerCount, mechanics, publisherDescription));
         when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenReturn(new ConversationResponse(
                 Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
@@ -666,6 +673,7 @@ class BggRecommendationAgentControllerTest {
                 assertThat(part.role()).isEqualTo("why_fit");
                 assertThat(part.text()).isEqualTo(
                         "模型原文保留 Animals 与 Card Drafting；它支持 4 人且标注 40–70 分钟。");
+                assertThat(part.publisherDescriptionGrounded()).isTrue();
             });
             assertThat(game.fitClaims()).singleElement().satisfies(claim -> {
                 assertThat(claim.subject()).isEqualTo("playerCount");

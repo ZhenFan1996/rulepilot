@@ -171,6 +171,65 @@ class RecommendationReActContractTest {
     }
 
     @Test
+    void typedDescriptionConceptsRankTheHardFilteredCatalogWithoutAddingAnotherRead() throws Exception {
+        Game quietArchive = game(541, "Quiet Archive", BggGameType.FAMILY, 2, 4, 50, "2.0");
+        Game stormShelter = game(542, "Storm Shelter", BggGameType.FAMILY, 2, 4, 55, "2.1");
+        RecordingCatalog catalog = new RecordingCatalog(quietArchive, stormShelter);
+        ScriptedModel model = new ScriptedModel(
+                action(
+                        "description-ranked-search",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"requestedCount\":2,\"includeTypes\":[\"FAMILY\"],"
+                                + "\"excludeTypes\":[],\"requiredInteraction\":\"ANY\","
+                                + "\"descriptionQuery\":\"shelter secrets storm atmosphere\","
+                                + "\"players\":3,\"maxMinutes\":60}"),
+                action(
+                        "publish-description-ranked",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"playerReply\":\"两款都满足三人和一小时的硬条件，简介证据提供了不同主题方向。\","
+                                + "\"selections\":["
+                                + "{\"bggId\":541,\"whyFit\":\"偏向安静的档案主题。\","
+                                + "\"internalEvidenceIds\":[\"B541:publisherDescription\"]},"
+                                + "{\"bggId\":542,\"whyFit\":\"偏向暴风雨中的庇护所主题。\","
+                                + "\"internalEvidenceIds\":[\"B542:publisherDescription\"]}]}"));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "想找两款三人、一小时内，带有暴雨、庇护所和秘密氛围的家庭游戏。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(catalog.lastFilters.get()).satisfies(filters -> {
+            assertThat(filters.types()).containsExactly(BggGameType.FAMILY);
+            assertThat(filters.textQuery()).isEqualTo("shelter secrets storm atmosphere");
+            assertThat(filters.sort()).isEqualTo(BoardGameRecommendationCatalog.CatalogSort.RELEVANCE);
+        });
+        JsonNode searchObservation = toolObservation(model.requests.getLast(), "description-ranked-search");
+        assertThat(searchObservation.path("appliedSearchContract").path("descriptionQuery").asText())
+                .isEqualTo("shelter secrets storm atmosphere");
+        String terminalContext = model.requests.getLast().messages().stream()
+                .map(Message::content)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertThat(terminalContext)
+                .contains("Verified fixture description for Quiet Archive.")
+                .contains("Verified fixture description for Storm Shelter.");
+        assertThat(model.requests.getFirst().tools().stream()
+                        .filter(tool -> BoardGameRecommendationAgent.SEARCH_TOOL.equals(tool.name()))
+                        .findFirst()
+                        .orElseThrow()
+                        .inputSchema())
+                .contains("descriptionQuery");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void singleIncludedTypeBecomesThePublishedProfileAndATypeFitClaim() throws Exception {
         Game socialSignal = game(551, "Social Signal", BggGameType.PARTY, 3, 8, 75, "2.1");
         Game quietEngine = game(552, "Quiet Engine", BggGameType.STRATEGY, 2, 5, 80, "2.2");
@@ -215,6 +274,10 @@ class RecommendationReActContractTest {
         assertThat(toolObservation(model.requests.getLast(), "typed-search")
                         .path("verifiedCandidateBggIds").toString())
                 .isEqualTo("[551]");
+        assertThat(catalog.lastFilters.get()).satisfies(filters -> {
+            assertThat(filters.textQuery()).isNull();
+            assertThat(filters.sort()).isEqualTo(BoardGameRecommendationCatalog.CatalogSort.RANK);
+        });
         loop.stopBoundedCalls();
     }
 
@@ -495,6 +558,36 @@ class RecommendationReActContractTest {
         assertThat(searchSchema.path("properties").has("excludeTypes")).isTrue();
         assertThat(searchSchema.toString())
                 .doesNotContain("preferenceUpdates", "titleConstraint", "types\"", "browse_bgg_catalog");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void descriptionRankingCannotReplaceANamedTitleLookup() throws Exception {
+        RecordingCatalog catalog = new RecordingCatalog(
+                game(602, "Named Harbor", BggGameType.FAMILY, 2, 4, 40, "1.7"));
+        ScriptedModel model = new ScriptedModel(
+                action(
+                        "incompatible-description-query",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[],"
+                                + "\"excludeTypes\":[],\"requiredInteraction\":\"ANY\","
+                                + "\"requiredTitle\":{\"match\":\"EXACT\",\"value\":\"Named Harbor\"},"
+                                + "\"descriptionQuery\":\"quiet harbor atmosphere\"}"),
+                answer("我会保留点名游戏的身份边界，不用主题排序替代标题查找。"));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "介绍一下 Named Harbor 的氛围。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(catalog.searches).hasValue(0);
+        assertThat(toolObservation(model.requests.getLast(), "incompatible-description-query")
+                        .path("code")
+                        .asText())
+                .isEqualTo("DESCRIPTION_QUERY_WITH_TITLE");
         loop.stopBoundedCalls();
     }
 

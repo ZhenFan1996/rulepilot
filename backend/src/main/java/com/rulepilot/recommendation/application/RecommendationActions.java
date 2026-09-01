@@ -273,6 +273,14 @@ final class RecommendationActions {
         String experienceQuestion = arguments.has("experienceQuestion")
                 ? experienceQuestion(arguments.path("experienceQuestion"))
                 : null;
+        String descriptionQuery = arguments.has("descriptionQuery")
+                ? descriptionQuery(arguments.path("descriptionQuery"))
+                : null;
+        if (title != null && descriptionQuery != null) {
+            throw new InvalidAction(
+                    "DESCRIPTION_QUERY_WITH_TITLE",
+                    "For a named-title lookup, keep requiredTitle and omit descriptionQuery; the verified title's description remains available after lookup.");
+        }
         RecommendationProfile selectionProfile = new RecommendationProfile(
                 players == null
                         ? null
@@ -328,8 +336,10 @@ final class RecommendationActions {
                                 null,
                                 null,
                                 null,
-                                title == null ? null : title.value(),
-                                title == null ? CatalogSort.RANK : CatalogSort.RELEVANCE,
+                                title == null ? descriptionQuery : title.value(),
+                                title == null && descriptionQuery == null
+                                        ? CatalogSort.RANK
+                                        : CatalogSort.RELEVANCE,
                                 CATALOG_PAGE_SIZE,
                                 currentOffset));
             } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
@@ -389,6 +399,7 @@ final class RecommendationActions {
             appliedContract.put("complexity", range);
         }
         if (experienceQuestion != null) appliedContract.put("experienceQuestion", experienceQuestion);
+        if (descriptionQuery != null) appliedContract.put("descriptionQuery", descriptionQuery);
         List<Integer> verifiedIds = candidates.stream()
                 .map(game -> game.ranking().bggId())
                 .toList();
@@ -881,6 +892,14 @@ final class RecommendationActions {
         String value = text(node);
         if (value.codePointCount(0, value.length()) > 500) {
             throw new InvalidAction("EXPERIENCE_QUESTION_INVALID");
+        }
+        return value;
+    }
+
+    private String descriptionQuery(JsonNode node) {
+        String value = text(node);
+        if (value.codePointCount(0, value.length()) > 200) {
+            throw new InvalidAction("DESCRIPTION_QUERY_INVALID");
         }
         return value;
     }

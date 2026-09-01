@@ -70,10 +70,11 @@ describe('RecommendationGameCard', () => {
           replyParts: [
             {
               role: 'why_fit',
-              claimType: 'constraint_fit',
-              subject: 'durationMinutes',
-              text: '候选时长 45–75 分钟与当前时长条件相符。',
+              claimType: 'preference_inference',
+              subject: 'interaction',
+              text: '出版方简介描述了连续协作的共同决策。',
               sourceIndexes: [],
+              publisherDescriptionGrounded: true,
             },
             {
               role: 'tradeoff',
@@ -91,9 +92,12 @@ describe('RecommendationGameCard', () => {
     })
 
     expect(wrapper.text()).toContain('为什么选它')
-    expect(wrapper.text()).toContain('候选时长 45–75 分钟')
+    expect(wrapper.text()).toContain('出版方简介描述了连续协作的共同决策。')
+    expect(wrapper.get('[data-testid="publisher-description-grounding"]').text())
+      .toBe('参考 BGG 出版方简介')
     expect(wrapper.text()).toContain('需要留意')
     expect(wrapper.text()).toContain('BGG 标注复杂度：2.2 / 5')
+    expect(wrapper.findAll('[data-testid="publisher-description-grounding"]')).toHaveLength(1)
     expect(wrapper.find('[data-testid="recommendation-reason-unavailable"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('evidenceId')
   })

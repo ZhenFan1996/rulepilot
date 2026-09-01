@@ -19,6 +19,7 @@ import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
+import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Request;
@@ -344,6 +345,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .getFirst()
                     .argumentsJson());
             assertThat(search.path("requiredInteraction").asText()).isEqualTo("COOPERATIVE");
+            assertThat(search.path("descriptionQuery").asText()).isNotBlank();
+            assertThat(response.games().stream()
+                            .flatMap(game -> game.replyParts().stream())
+                            .flatMap(part -> part.claim().evidence().stream())
+                            .map(CandidateObservation::attribute))
+                    .contains("publisherDescription");
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)).hasSize(1);
             assertThat(totalMs).isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
             writeArtifact("candlelight-cooperative", capture, response, totalMs, null);
