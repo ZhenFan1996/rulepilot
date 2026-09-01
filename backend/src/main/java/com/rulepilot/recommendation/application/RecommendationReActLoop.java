@@ -82,6 +82,7 @@ final class RecommendationReActLoop {
     private final ObjectMapper json;
     private final ExecutorService boundedCalls;
     private final long maximumRunMillis;
+    private final int maximumOutputTokens;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions actionExecutor;
     private final RecommendationPublication publication;
@@ -113,9 +114,16 @@ final class RecommendationReActLoop {
         boundedCalls = AsyncContextPropagation.executorService(Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().name("recommendation-bounded-call-", 0).factory()));
         maximumRunMillis = properties.timeout().toMillis();
+        maximumOutputTokens = properties.maxOutputTokens();
         evidenceReview = new RecommendationEvidenceReview(json, this);
         actionExecutor = new RecommendationActions(tools, selector, properties, json, evidenceReview, this);
-        publication = new RecommendationPublication(selector, evidenceReview, actionExecutor, this, json);
+        publication = new RecommendationPublication(
+                selector,
+                evidenceReview,
+                actionExecutor,
+                this,
+                properties,
+                json);
         toolCatalog = new RecommendationToolCatalog(selector, properties, json, evidenceReview, actionExecutor);
         readBatchExecutor = new RecommendationReadBatchExecutor(actionExecutor, this, boundedCalls, json);
     }
@@ -282,7 +290,10 @@ final class RecommendationReActLoop {
                 Request modelRequest = new Request(
                         messages,
                         currentActions,
-                        ToolChoice.AUTO);
+                        maximumOutputTokens,
+                        state.pendingPublicationSeed == null
+                                ? ToolChoice.AUTO
+                                : ToolChoice.REQUIRED);
                 turn = withinDeadline(state, () -> model.next(modelRequest, state.modelConfigurationOwner));
             } catch (RunDeadlineExceeded exception) {
                 state.recordModelCallElapsed(modelCallStartedAt);
@@ -321,6 +332,26 @@ final class RecommendationReActLoop {
                     progress.fail();
                     state.actions.add("EMPTY_MODEL_RESPONSE");
                     return unavailable(state, locale, "EMPTY_MODEL_RESPONSE");
+                }
+                if (state.pendingPublicationSeed != null) {
+                    if (recommendableIds(state).isEmpty()) {
+                        if (state.activeSearch != null) {
+                            decisionObservation.stop("completed", true, null);
+                            progress.complete();
+                            return publishNoMatch(state, locale, progress);
+                        }
+                        decisionObservation.stop("rejected", false, null);
+                        progress.fail();
+                        state.actions.add("PUBLICATION_FAILED:PUBLICATION_CANDIDATE_MISSING");
+                        return unavailable(
+                                state,
+                                locale,
+                                "PUBLICATION_INVALID:PUBLICATION_CANDIDATE_MISSING");
+                    }
+                    decisionObservation.stop("rejected", false, null);
+                    progress.fail();
+                    state.actions.add("PUBLICATION_FAILED:PUBLICATION_MISSING");
+                    return unavailable(state, locale, "PUBLICATION_INVALID:PUBLICATION_MISSING");
                 }
                 decisionObservation.stop("completed", false, null);
                 progress.complete();
@@ -366,7 +397,6 @@ final class RecommendationReActLoop {
                     }
                     toolCatalog.appendActionObservations(
                             messages,
-                            turn.text(),
                             calls,
                             batchObservations,
                             state);
@@ -391,7 +421,7 @@ final class RecommendationReActLoop {
                         if (step.terminalResponse() != null) return step.terminalResponse();
                         observations.add(step.outcome().observation());
                     }
-                    toolCatalog.appendActionObservations(messages, turn.text(), calls, observations, state);
+                    toolCatalog.appendActionObservations(messages, calls, observations, state);
                     continue;
                 }
                 String fingerprint = calls.stream()
@@ -423,7 +453,6 @@ final class RecommendationReActLoop {
                                 compatibility.issues()));
                 toolCatalog.appendActionObservations(
                         messages,
-                        turn.text(),
                         calls,
                         java.util.Collections.nCopies(calls.size(), observation),
                         state);
@@ -446,7 +475,6 @@ final class RecommendationReActLoop {
             if (step.terminalResponse() != null) return step.terminalResponse();
             toolCatalog.appendActionObservations(
                     messages,
-                    turn.text(),
                     calls,
                     List.of(step.outcome().observation()),
                     state);
@@ -492,13 +520,13 @@ final class RecommendationReActLoop {
                         state,
                         request,
                         locale,
-                        (stage, focus) -> progress.start(stage, progressAction(call.name()), focus));
+                        (stage, focus) -> progress.start(stage, progressAction(call.name(), stage), focus));
                 if (outcome.publicationArgumentsJson() != null) {
                     try {
                         PreparedPublication prepared = publication.prepare(
                                 state,
                                 outcome.publicationArgumentsJson());
-                        actionObservation.stop("completed", false, null);
+                        actionObservation.stop("completed", prepared.localized(), null);
                         progress.complete();
                         return new ActionStep(
                                 null,
@@ -509,11 +537,14 @@ final class RecommendationReActLoop {
                                         prepared,
                                         progress));
                     } catch (RecommendationPublication.InvalidPublication failure) {
-                        state.actions.add("REJECTED_ACTION:" + failure.code().name());
-                        outcome = RecommendationActions.ActionOutcome.rejectedContract(
-                                recommendationRepairObservation(call, failure, currentActions, state),
-                                failure.code().name());
+                        String failureCode = failure.code().name();
+                        state.actions.add("PUBLICATION_FAILED:" + failureCode);
                         actionObservation.stop("rejected", false, null);
+                        progress.fail();
+                        return new ActionStep(
+                                null,
+                                stateEpoch,
+                                unavailable(state, locale, "PUBLICATION_INVALID:" + failureCode));
                     }
                 } else {
                     actionObservation.stop(
@@ -548,6 +579,15 @@ final class RecommendationReActLoop {
         if (outcome.settledRead()) {
             checkpointListener.accept(new TurnCheckpoint(state.profile, state.verifiedForAgent()));
         }
+        if (!outcome.rejected()
+                && SEARCH_TOOL.equals(call.name())
+                && recommendableIds(state).isEmpty()) {
+            progress.complete();
+            return new ActionStep(
+                    null,
+                    nextStateEpoch,
+                    publishNoMatch(state, locale, progress));
+        }
         if (outcome.response() != null) {
             progress.complete();
             return new ActionStep(
@@ -565,49 +605,6 @@ final class RecommendationReActLoop {
 
     String actionFingerprint(ToolCall call) {
         return readBatchExecutor.fingerprint(call);
-    }
-
-    private String recommendationRepairObservation(
-            ToolCall call,
-            RecommendationPublication.InvalidPublication failure,
-            List<ToolSpec> currentActions,
-            RecommendationAgentState state) {
-        Map<String, Object> repair = new LinkedHashMap<>();
-        repair.put("rejectedAction", call.name());
-        try {
-            JsonNode arguments = readBatchExecutor.strictArguments(call);
-            if (arguments != null) repair.put("rejectedArguments", arguments);
-        } catch (JsonProcessingException ignored) {
-            repair.put("rejectedArgumentsJson", call.argumentsJson());
-        }
-        repair.put("errorPath", failure.path());
-        if (!failure.details().isEmpty()) repair.put("errorDetails", failure.details());
-        currentActions.stream()
-                .filter(action -> action.name().equals(call.name()))
-                .findFirst()
-                .ifPresent(action -> {
-                    try {
-                        repair.put("replacementInputSchema", json.readTree(action.inputSchema()));
-                    } catch (JsonProcessingException exception) {
-                        repair.put("replacementInputSchemaJson", action.inputSchema());
-                    }
-                });
-        List<Integer> candidateIds = toolCatalog.recommendableIds(state);
-        repair.put("allowedCandidateBggIds", candidateIds);
-        Map<Integer, List<String>> evidenceIdsByCandidate = new LinkedHashMap<>();
-        for (Integer candidateId : candidateIds) {
-            var game = state.verified.get(candidateId);
-            if (game == null) continue;
-            evidenceIdsByCandidate.put(
-                    candidateId,
-                    List.copyOf(actionExecutor.narrativeObservations(game, state.research).keySet()));
-        }
-        repair.put("allowedEvidenceIdsByBggId", evidenceIdsByCandidate);
-
-        return error(
-                failure.code().name(),
-                "The complete recommendation JSON above was not published. Correct the exact error and submit one complete replacement recommend_games JSON; the current tool schema is the replacement contract. Preserve every unaffected supported field.",
-                repair);
     }
 
     private ConversationResponse publishValidatedResponse(
@@ -649,6 +646,40 @@ final class RecommendationReActLoop {
                         state.modelCallElapsedMs),
                 List.of(),
                 state.comparison,
+                null);
+        progress.complete();
+        logRun(response);
+        return response;
+    }
+
+    private ConversationResponse publishNoMatch(
+            RecommendationAgentState state,
+            String locale,
+            ProgressTracker progress) {
+        progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.REPLY_TO_USER);
+        state.actions.add("NO_MATCH");
+        ConversationResponse response = new ConversationResponse(
+                Outcome.NO_MATCH,
+                DecisionMode.MODEL_ASSISTED,
+                chinese(locale)
+                        ? "当前目录里没有找到符合条件的游戏。你可以告诉我最愿意放宽哪一项，我再换一组。"
+                        : "The current catalog has no game matching those conditions. Tell me which constraint you would most like to relax, and I can try a different set.",
+                state.selectionProfile(),
+                null,
+                state.sourceCount,
+                state.freshVerifiedIds.size(),
+                evidenceReview.userModelView(state, locale),
+                List.of(),
+                new HarnessTrace(
+                        state.modelCalls,
+                        state.catalogCalls,
+                        state.webResearchCalls,
+                        true,
+                        state.actions,
+                        state.elapsedMs(),
+                        state.modelCallElapsedMs),
+                List.of(),
+                null,
                 null);
         progress.complete();
         logRun(response);
@@ -712,6 +743,12 @@ final class RecommendationReActLoop {
             case COMPARE_TOOL -> ProgressAction.COMPARE_CANDIDATES;
             default -> ProgressAction.OBSERVE_AND_DECIDE;
         };
+    }
+
+    private ProgressAction progressAction(String action, ProgressStage stage) {
+        return stage == ProgressStage.RESEARCHING_GAME_FIT
+                ? ProgressAction.RESEARCH_GAME_FIT
+                : progressAction(action);
     }
 
     ConversationResponse unavailable(RecommendationAgentState state, String locale, String code) {

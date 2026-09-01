@@ -78,7 +78,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             @Value("${rulepilot.bgg.recommendation-agent.web-research.api-key:}") String apiKey,
             @Value("${rulepilot.bgg.recommendation-agent.web-research.base-url:https://api.openai.com/v1}") String baseUrl,
             @Value("${rulepilot.bgg.recommendation-agent.web-research.model:}") String model,
-            @Value("${rulepilot.bgg.recommendation-agent.web-research.timeout:PT25S}") Duration timeout,
+            @Value("${rulepilot.bgg.recommendation-agent.web-research.timeout:PT5S}") Duration timeout,
             @Value("${rulepilot.bgg.recommendation-agent.web-research.cache-ttl:P7D}") Duration cacheTtl,
             @Value("${rulepilot.bgg.recommendation-agent.web-research.hourly-limit:60}") int hourlyLimit,
             @Value("${rulepilot.bgg.recommendation-agent.web-research.provider-concurrency:2}") int concurrency) {

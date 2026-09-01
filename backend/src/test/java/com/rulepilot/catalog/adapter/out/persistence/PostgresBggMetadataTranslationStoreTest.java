@@ -94,6 +94,24 @@ class PostgresBggMetadataTranslationStoreTest {
     }
 
     @Test
+    void findsOneExactSourceAliasWithoutFallingBackByGameId() {
+        Translation matching = new Translation("精确命中", List.of("策略"), List.of("轮抽"));
+        Translation unrelated = new Translation("同游戏的其他源", List.of("家庭"), List.of("合作"));
+        Instant translatedAt = Instant.parse("2026-08-20T08:00:00Z");
+        store.save(new Key(266192, "zh-CN", 4, FIRST_DIGEST), matching, translatedAt);
+        store.save(new Key(266192, "zh-CN", 4, "c".repeat(64)), unrelated, translatedAt.plusSeconds(1));
+
+        assertThat(store.findAnySourceAlias(List.of(
+                        new Key(266192, "zh-CN", 4, SECOND_DIGEST),
+                        new Key(266192, "zh-CN", 4, FIRST_DIGEST))))
+                .contains(matching);
+        assertThat(store.findAnySourceAlias(List.of(
+                        new Key(266192, "zh-CN", 4, SECOND_DIGEST),
+                        new Key(266192, "zh-CN", 4, "d".repeat(64)))))
+                .isEmpty();
+    }
+
+    @Test
     void keepsPreviousReleaseWritesCompatibleDuringRollingDeployment() throws Exception {
         Instant translatedAt = Instant.parse("2026-08-20T08:00:00Z");
         Key currentKey = new Key(266192, "zh-CN", 5, FIRST_DIGEST);

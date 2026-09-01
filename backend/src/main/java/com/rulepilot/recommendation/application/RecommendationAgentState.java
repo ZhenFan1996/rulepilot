@@ -27,6 +27,7 @@ final class RecommendationAgentState {
     final RecommendationProfile profile;
     final Set<Integer> excludedIds;
     final Set<Integer> previouslyShownIds = new LinkedHashSet<>();
+    final Set<Integer> agentVisiblePriorIds = new LinkedHashSet<>();
     final Map<Integer, Game> verified = new LinkedHashMap<>();
     final Set<Integer> freshVerifiedIds = new LinkedHashSet<>();
     final Set<Integer> comparisonSubjectIds = new LinkedHashSet<>();
@@ -60,9 +61,18 @@ final class RecommendationAgentState {
         profile = request.profile();
         excludedIds = new LinkedHashSet<>(request.excludedBggIds());
         previouslyShownIds.addAll(request.shownBggIds());
+        agentVisiblePriorIds.addAll(request.shownBggIds());
+        if (request.focusedBggId() != null) agentVisiblePriorIds.add(request.focusedBggId());
         comparisonSubjectIds.addAll(request.shownBggIds());
         if (request.focusedBggId() != null) comparisonSubjectIds.add(request.focusedBggId());
         request.priorVerifiedGames().forEach(this::restoreVerified);
+        List<Integer> restoredShownCandidates = request.shownBggIds().stream()
+                .filter(verified::containsKey)
+                .filter(id -> !excludedIds.contains(id))
+                .toList();
+        if (!restoredShownCandidates.isEmpty()) {
+            pendingPublicationSeed = new PublicationSeed(restoredShownCandidates);
+        }
         webResearchAvailable = webResearchConfigured;
     }
 
@@ -78,6 +88,7 @@ final class RecommendationAgentState {
                         freshVerifiedIds.stream().map(verified::get),
                         verified.entrySet().stream()
                                 .filter(entry -> !freshVerifiedIds.contains(entry.getKey()))
+                                .filter(entry -> agentVisiblePriorIds.contains(entry.getKey()))
                                 .map(Map.Entry::getValue))
                 .filter(java.util.Objects::nonNull)
                 .toList();
@@ -140,7 +151,9 @@ final class RecommendationAgentState {
     record CatalogSearch(
             List<BggGameType> includeTypes,
             List<BggGameType> excludeTypes,
+            List<String> mechanics,
             TitleFilter title,
+            int requestedCount,
             Integer players,
             Integer maxMinutes,
             ConstraintRange<BigDecimal> complexity,
@@ -149,7 +162,11 @@ final class RecommendationAgentState {
         CatalogSearch {
             includeTypes = includeTypes == null ? List.of() : List.copyOf(includeTypes);
             excludeTypes = excludeTypes == null ? List.of() : List.copyOf(excludeTypes);
-            if (evidenceId == null || evidenceId.isBlank() || selectionProfile == null) {
+            mechanics = mechanics == null ? List.of() : List.copyOf(mechanics);
+            if (requestedCount < 1
+                    || evidenceId == null
+                    || evidenceId.isBlank()
+                    || selectionProfile == null) {
                 throw new IllegalArgumentException("catalog search contract is invalid");
             }
         }
@@ -159,6 +176,7 @@ final class RecommendationAgentState {
             List<BggGameType> actualTypes = game.ranking().types();
             if (!includeTypes.isEmpty() && includeTypes.stream().noneMatch(actualTypes::contains)) return false;
             if (excludeTypes.stream().anyMatch(actualTypes::contains)) return false;
+            if (!game.details().mechanics().containsAll(mechanics)) return false;
             return title == null || title.matches(game);
         }
     }

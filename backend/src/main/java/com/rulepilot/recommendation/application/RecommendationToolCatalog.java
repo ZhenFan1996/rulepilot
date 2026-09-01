@@ -61,7 +61,10 @@ final class RecommendationToolCatalog {
             data.put("locale", locale);
             data.put("recentConversation", conversationEvidence(request));
             if (request.focusedBggId() != null) data.put("focusedBggId", request.focusedBggId());
+            Set<Integer> visibleKnownIds = new LinkedHashSet<>(request.shownBggIds());
+            if (request.focusedBggId() != null) visibleKnownIds.add(request.focusedBggId());
             putIfNotEmpty(data, "knownGames", request.knownGames().stream()
+                    .filter(game -> visibleKnownIds.contains(game.bggId()))
                     .map(game -> Map.of(
                             "bggId", game.bggId(),
                             "name", game.name(),
@@ -69,7 +72,7 @@ final class RecommendationToolCatalog {
                     .toList());
             putIfNotEmpty(data, "shownBggIds", request.shownBggIds());
             putIfNotEmpty(data, "excludedBggIds", request.excludedBggIds());
-            if (!state.verified.isEmpty() || state.hasVerifiedPublicContext()) {
+            if (!state.verifiedForAgent().isEmpty() || state.hasVerifiedPublicContext()) {
                 Set<Integer> focusedIds = request.focusedBggId() == null
                         ? Set.of()
                         : Set.of(request.focusedBggId());
@@ -100,9 +103,9 @@ final class RecommendationToolCatalog {
 
     static String systemPrompt() {
         return """
-                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Use a typed action only when its observation is genuinely needed; otherwise answer directly in this model turn. Greetings, casual conversation, corrections, and follow-up discussion about already shown games normally need no action. Never repeat a catalog search just because an earlier turn contained recommendations. Typed JSON owns actions and constraints, while all player-facing prose is authored by you.
+                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Use a typed action only when its observation is genuinely needed; greetings, casual conversation, and corrections normally need no action. A follow-up about shown games must use recommend_games whenever that terminal action is offered; cite restored observations and do not bypass its evidence boundary with free-form text. When subjective experience is not represented there, use one attributed read or say what remains unknown instead of filling the gap from memory. Never repeat a catalog search just because an earlier turn contained recommendations. Submit at most one typed action in a model turn and observe it before deciding what happens next; never submit a conditional future action together with its prerequisite. On a non-terminal action turn, emit only the tool call and no player-facing prose. Typed JSON owns actions and constraints, while all player-facing prose is authored by you inside the terminal action. Stay within every action schema's length and item bounds; write concise table-ready prose that distinguishes choices instead of repeating observed metadata.
 
-                When the player asks you to recommend titles, search_bgg_catalog is the only BGG candidate entry. Its one current-turn contract explicitly separates included and excluded BGG product types and carries every title, player-count, duration, and complexity constraint used for that search; no saved profile is inherited into candidate selection. An exact named game uses the same title field with EXACT. After every observation, decide for yourself whether the request is answerable, another available read would materially help, or you should finish transparently. recommend_games is terminal and should contain the complete natural response and every complete card in that one call. Explain why each game fits this player's request and what meaningfully distinguishes it; synthesize the cited observations instead of copying a publisher description as the recommendation reason. Use public relationship discovery only for an external/current identity fact. When player experience matters, use research_game_fit and keep it attributed; never turn a catalog taxonomy or mechanism label into an unobserved experience claim. Never guess a title or factual game detail.
+                When the player asks you to recommend titles, search_bgg_catalog is the only BGG candidate entry. Submit one complete current-turn catalog contract: requestedCount is the number of new titles the player asked for, while includeTypes and excludeTypes are separate and every explicitly named title, positive cooperative/team mode, explicitly required mechanism, player-count, duration, and complexity constraint used for that search must be carried too; no saved profile is inherited into candidate selection. Set requiredInteraction to COOPERATIVE or TEAM only when that positive mode is explicit, otherwise ANY; it is a hard catalog gate. Put other mechanisms in requiredMechanics only when the player explicitly requires them. Subjective experience preferences such as stronger interaction, friendliness, tension, or laughter are not catalog taxonomy. When the new recommendation already hinges on one of them, put the exact missing experience dimension in experienceQuestion on the search action; the application will run at most one attributed read over its bounded publishable candidate window before returning the search observation. Omit experienceQuestion when structured facts are enough. If a genuinely new subjective gap becomes apparent only after seeing candidates, you may instead use the one available research_game_fit read; never repeat experience research already completed by the search. Use requiredTitle only when the current player turn explicitly names a title or title fragment; omit it for generic discovery, and use EXACT for one exact named game. Do not silently loosen or replace that contract when it has no match. After every observation, decide whether another distinct read would materially help or you should finish. recommend_games is terminal and should contain the complete natural response and every complete card in that one call; the search contract already owns its selection count and terminal publication cannot change it. Explain why each game fits this player's request and what meaningfully distinguishes it; synthesize the cited observations instead of copying a publisher description as the recommendation reason. Use public relationship discovery only for an external/current identity fact, and never turn a taxonomy label into an unobserved experience claim.
                 """;
     }
 
@@ -117,7 +120,7 @@ final class RecommendationToolCatalog {
                                 + "},\"subject\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"evidence\",\"subject\"]}"),
                 new ToolSpec(
                         RESEARCH_TOOL,
-                        "Read attributed player-reported experience for already verified candidate IDs.",
+                        "The one attributed player-experience read for this turn. Use it only when the current question hinges on subjective experience absent from structured facts; include every candidate that could affect that answer in this single bggIds batch.",
                         "{\"type\":\"object\",\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"bggIds\",\"question\"]}"));
     }
 
@@ -127,43 +130,66 @@ final class RecommendationToolCatalog {
             List<String> ignoredEvidenceIds,
             List<String> ignoredCurrentEvidenceIds) {
         List<ToolSpec> available = actions.stream()
+                .filter(action -> state.activeSearch == null || !SEARCH_TOOL.equals(action.name()))
                 .filter(action -> state.webResearchAvailable
                         || !DISCOVER_TOOL.equals(action.name()) && !RESEARCH_TOOL.equals(action.name()))
-                .filter(action -> !state.verified.isEmpty() || !RESEARCH_TOOL.equals(action.name()))
+                .filter(action -> !state.verifiedForAgent().isEmpty() || !RESEARCH_TOOL.equals(action.name()))
+                .filter(action -> !RESEARCH_TOOL.equals(action.name())
+                        || !state.actions.contains("RESEARCH_GAME_FIT"))
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         List<Integer> comparableIds = state.comparisonSubjectIds.stream()
                 .filter(state.verified::containsKey)
                 .toList();
-        if (comparableIds.size() >= 2) available.add(comparisonAction(state, comparableIds));
+        boolean offlineComparisonAvailable = !state.webResearchAvailable
+                && !state.actions.contains("RESEARCH_GAME_FIT")
+                && !state.actions.contains("COMPARE_CANDIDATES");
+        if (state.activeSearch == null && comparableIds.size() >= 2 && offlineComparisonAvailable) {
+            available.add(comparisonAction(state, comparableIds));
+        }
         List<Integer> pendingIds = pendingPublicationIds(state);
-        if (!pendingIds.isEmpty()) available.add(recommendationAction(state, pendingIds));
+        if (!pendingIds.isEmpty()) {
+            available.add(recommendationAction(state, pendingIds));
+        }
         return List.copyOf(available);
     }
 
     private ToolSpec searchAction(List<String> currentTurnEvidenceIds) {
         String typeArray = "{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                 + GAME_TYPES + "}}";
+        String mechanics = "{\"type\":\"array\",\"maxItems\":8,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80}}";
         String complexity = "{\"type\":\"object\",\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5},\"maximum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5}}}";
         return new ToolSpec(
                 SEARCH_TOOL,
-                "Search and verify BGG candidates from one current-turn contract. includeTypes and excludeTypes are separate and may be empty. title supports EXACT or CONTAINS.",
+                "Search and verify BGG candidates from the one complete current-turn contract. requestedCount is exactly how many new titles the player asked for; includeTypes and excludeTypes are separate and may be empty; requiredInteraction is COOPERATIVE or TEAM only for an explicit positive play mode and otherwise ANY; requiredMechanics contains other literal BGG mechanism labels explicitly required by the player; requiredTitle is optional and must be omitted unless the current player turn names a title or title fragment. experienceQuestion is optional and replaces a later research decision: set it only when this new recommendation hinges on a subjective experience dimension absent from structured BGG facts.",
                 "{\"type\":\"object\",\"properties\":{"
                         + "\"evidence\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(currentTurnEvidenceIds)
+                        + "},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1"
                         + "},\"includeTypes\":"
                         + typeArray
                         + ",\"excludeTypes\":"
                         + typeArray
-                        + ",\"title\":{\"type\":\"object\",\"properties\":{\"match\":{\"type\":\"string\",\"enum\":[\"EXACT\",\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"match\",\"value\"]},"
+                        + ",\"requiredMechanics\":"
+                        + mechanics
+                        + ",\"requiredInteraction\":{\"type\":\"string\",\"enum\":[\"ANY\",\"COOPERATIVE\",\"TEAM\"]}"
+                        + ",\"requiredTitle\":{\"type\":\"object\",\"properties\":{\"match\":{\"type\":\"string\",\"enum\":[\"EXACT\",\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"match\",\"value\"]},"
+                        + "\"experienceQuestion\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":500},"
                         + "\"players\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},\"maxMinutes\":{\"type\":\"integer\",\"minimum\":5,\"maximum\":1440},\"complexity\":"
                         + complexity
-                        + "},\"required\":[\"evidence\",\"includeTypes\",\"excludeTypes\"]}");
+                        + "},\"required\":[\"evidence\",\"requestedCount\",\"includeTypes\",\"excludeTypes\",\"requiredInteraction\"]}");
     }
 
     List<Integer> recommendableIds(RecommendationAgentState state) {
         CatalogSearch search = state.activeSearch;
         PublicationSeed pending = state.pendingPublicationSeed;
-        if (search == null || pending == null) return List.of();
+        if (pending == null) return List.of();
+        if (search == null) {
+            return pending.candidateBggIds().stream()
+                    .filter(state.verified::containsKey)
+                    .filter(state.comparisonSubjectIds::contains)
+                    .filter(id -> !state.excludedIds.contains(id))
+                    .toList();
+        }
         boolean exactTitle = search.title() != null && search.title().match() == TitleMatch.EXACT;
         return pending.candidateBggIds().stream()
                 .filter(state.verified::containsKey)
@@ -186,40 +212,47 @@ final class RecommendationToolCatalog {
     }
 
     private ToolSpec recommendationAction(RecommendationAgentState state, List<Integer> candidateIds) {
-        PublicationSeed pending = Objects.requireNonNull(
+        Objects.requireNonNull(
                 state.pendingPublicationSeed, "pending recommendation publication is required");
-        int maximumSelections = candidateIds.size();
+        int searchRequestedCount = state.activeSearch == null
+                ? properties.resultCount()
+                : state.activeSearch.requestedCount();
+        int maximumSelections = Math.min(
+                searchRequestedCount,
+                Math.min(properties.resultCount(), candidateIds.size()));
         List<String> replyEvidenceIds = candidateIds.stream()
                 .map(state.verified::get)
                 .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).keySet().stream())
                 .distinct()
                 .toList();
-        String candidateSchemas = candidateIds.stream()
-                .map(id -> recommendationSelectionSchema(state, id))
-                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        boolean searchOwnsCount = state.activeSearch != null;
+        String requestedCountProperty = searchOwnsCount
+                ? ""
+                : "\"requestedCount\":{\"type\":\"integer\",\"minimum\":1},";
+        String requiredFields = searchOwnsCount
+                ? "[\"playerReply\",\"selections\"]"
+                : "[\"requestedCount\",\"playerReply\",\"selections\"]";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Terminal publication for verified candidates when you decide the request is answered. playerReply is the substantive natural response that frames the selection logic and important tradeoffs; it is not a heading or card lead. Each whyFit is candidate-specific synthesis of the player's request and cited observations, never copied publisher-description copy.",
-                "{\"type\":\"object\",\"properties\":{\"requestedCount\":{\"type\":\"integer\",\"minimum\":1},\"playerReply\":{\"type\":\"string\",\"minLength\":1},\"playerReplyEvidenceIds\":{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
-                        + jsonArray(replyEvidenceIds)
-                        + "}},\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
+                "Terminal publication for verified candidates when you decide the request is answered. This call permits at most "
                         + maximumSelections
-                        + ",\"uniqueItems\":true,\"items\":{\"oneOf\":"
-                        + candidateSchemas
-                        + "}}},\"required\":[\"requestedCount\",\"playerReply\",\"playerReplyEvidenceIds\",\"selections\"]}");
-    }
-
-    private String recommendationSelectionSchema(RecommendationAgentState state, int bggId) {
-        Game game = Objects.requireNonNull(state.verified.get(bggId));
-        List<String> evidenceIds = actionExecutor.narrativeObservations(game, state.research)
-                .keySet()
-                .stream()
-                .toList();
-        return "{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":["
-                + bggId
-                + "]},\"whyFit\":{\"type\":\"string\",\"description\":\"A complete, natural explanation of why this specific candidate fits the player's stated request and how its observed characteristics shape the experience. Synthesize; do not copy or lightly paraphrase publisherDescription.\",\"minLength\":1},\"tradeoff\":{\"type\":\"string\",\"description\":\"An important candidate-specific limitation or uncertainty when one matters; omit it when there is no supported tradeoff.\",\"minLength\":1},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
-                + jsonArray(evidenceIds)
-                + "}}},\"required\":[\"bggId\",\"whyFit\",\"internalEvidenceIds\"]}";
+                        + " selection(s); choose within that bound instead of describing extras. For a current search, do not reinterpret its requestedCount here. playerReply is the substantive natural response that frames the selection logic and important tradeoffs; it is not a heading or card lead. Each whyFit is candidate-specific synthesis of the player's request and cited observations, never copied publisher-description copy.",
+                "{\"type\":\"object\",\"properties\":{" + requestedCountProperty
+                        + "\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":"
+                        + RecommendationPublication.PLAYER_REPLY_MAX_CODE_POINTS
+                        + "},\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
+                        + maximumSelections
+                        + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":"
+                        + candidateIds
+                        + "},\"whyFit\":{\"type\":\"string\",\"description\":\"A complete, natural explanation of why this specific candidate fits the player's stated request and how its observed characteristics shape the experience. Synthesize; do not copy or lightly paraphrase publisherDescription.\",\"minLength\":1,\"maxLength\":"
+                        + RecommendationPublication.WHY_FIT_MAX_CODE_POINTS
+                        + "},\"tradeoff\":{\"type\":\"string\",\"description\":\"An important candidate-specific limitation or uncertainty when one matters; omit it when there is no supported tradeoff.\",\"minLength\":1,\"maxLength\":"
+                        + RecommendationPublication.TRADEOFF_MAX_CODE_POINTS
+                        + "},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
+                        + jsonArray(replyEvidenceIds)
+                        + "}}},\"required\":[\"bggId\",\"whyFit\",\"internalEvidenceIds\"]}}},\"required\":"
+                        + requiredFields
+                        + "}");
     }
 
     private ToolSpec comparisonAction(RecommendationAgentState state, List<Integer> comparableIds) {
@@ -248,7 +281,13 @@ final class RecommendationToolCatalog {
                 "T", "literal BGG taxonomy label",
                 "A", "attributed public report",
                 "R", "rulebook fact"));
-        memory.put("verifiedGames", state.verifiedForAgent().stream()
+        List<Game> contextGames = state.activeSearch == null || state.pendingPublicationSeed == null
+                ? state.verifiedForAgent()
+                : state.pendingPublicationSeed.candidateBggIds().stream()
+                        .map(state.verified::get)
+                        .filter(Objects::nonNull)
+                        .toList();
+        memory.put("verifiedGames", contextGames.stream()
                 .map(game -> actionExecutor.gameObservation(
                         game,
                         detailedGameIds.contains(game.ranking().bggId())))
@@ -286,12 +325,11 @@ final class RecommendationToolCatalog {
     private Map<String, Boolean> availableCapabilities(RecommendationAgentState state) {
         return Map.of(
                 "publicRelationship", state.webResearchAvailable,
-                "subjectiveFitResearch", state.webResearchAvailable && !state.verified.isEmpty());
+                "subjectiveFitResearch", state.webResearchAvailable && !state.verifiedForAgent().isEmpty());
     }
 
     void appendActionObservations(
             List<Message> messages,
-            String assistantText,
             List<ToolCall> calls,
             List<String> observations,
             RecommendationAgentState state) {
@@ -299,7 +337,7 @@ final class RecommendationToolCatalog {
             throw new IllegalArgumentException("every recommendation action requires one correlated observation");
         }
         compactPriorToolState(messages);
-        messages.add(Message.assistant(assistantText, calls));
+        messages.add(Message.assistant("", calls));
         for (int index = 0; index < calls.size(); index++) {
             String observation = index == calls.size() - 1
                     ? contextualObservation(observations.get(index), state)

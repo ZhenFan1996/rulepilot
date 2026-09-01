@@ -55,12 +55,12 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
   │    → 模型再次自行决定
   └─ 返回完整终态
        → 应用只校验发布边界
-       → 通过则原样发布模型自然文案
+       → 发布通过边界的部分；没有可发布核心时返回 typed failure
 ```
 
 系统不再单独调用“下一步动作模型”，也不规定一次请求必须经过几次模型、几次工具、几次修正或几个固定阶段。普通问候和不需要资料的闲聊可以一次模型调用、零工具结束；需要资料时，模型可在首轮直接选择搜索。
 
-调用次数和延迟是审计事实，不是正确性合同。同步答疑保留持久化 hard token 包络；逐章发布的讲解把 workload token 阈值作为容量观测，不因估算阈值被跨过而停止或清除已发布章节。真实停止边界仍是 provider 上下文/输出与额度、active-work deadline、取消、并发准入、安全尺寸、数据库能力，以及明确启用的资源包络。完全相同的已拒绝 action/observation 再次出现时，以 no-progress 停止，避免无意义循环；新的完整候选仍可继续修正。
+调用次数和延迟是审计事实，不是正确性合同。同步答疑保留持久化 hard token 包络；逐章发布的讲解把 workload token 阈值作为容量观测，不因估算阈值被跨过而停止或清除已发布章节。真实停止边界仍是 provider 上下文/输出与额度、active-work deadline、取消、并发准入、安全尺寸、数据库能力，以及明确启用的资源包络。完全相同的已拒绝 action/observation 再次出现时，以 no-progress 停止，避免无意义循环；非终态的新完整候选仍可继续修正。已经声明完成的终态由发布边界一次性消费，不重新进入模型循环。
 
 自由文本只用于玩家展示，不参与意图、实体、偏好、数量、证据、工具或状态路由。应用不得从旧稿抽字段、套模板或拼接玩家回复。
 
@@ -71,12 +71,14 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
 1. 模型收到自然对话、当前 turn 的显式证据和当前可用工具。
 2. 它可以直接自然回复，或调用目录搜索、目录发现、公开资料研究和比较等 typed tools。
 3. 相互独立的只读动作可以同 turn 并行；结果按原 call 顺序作为 observation 返回。
-4. `recommend_games` 是完整终态：同时包含完整 `playerReply`、目标卡片数量以及每张卡的身份、证据绑定说明和可选取舍。
-5. 应用不写 lead、不补卡片话术、不根据已有候选伪造成功回复。
+4. `recommend_games` 是一次性完整终态：包含候选身份，以及模型希望发布的 `playerReply`、证据绑定说明和可选取舍；当前搜索的目标数量由搜索 contract 提供，只有不搜索的已展示候选 follow-up 才在终态声明数量。调用后不会再进入 Agent 修正轮次。
+5. 应用不写推荐理由或取舍，也不根据已有候选伪造成功回复；局部叙述未通过证据边界时，只能显示透明的降级状态并保留已核验卡片。
 
-搜索工具把肯定和排除条件分开表达；“不要扩展”不会再被保存成“偏好扩展”。候选选择只使用当前 turn 明确产生的 typed 约束，不把历史的错误 profile 隐式继承进本轮。请求数量由终态拥有，搜索池大小不再被误当成最终发布数量。
+搜索工具用一个完整的 current-turn contract 表达肯定类型、排除类型、显式机制、标题、人数、时长、复杂度和 `requestedCount`；“不要扩展”不会再被保存成“偏好扩展”。候选选择不继承历史 profile。当前搜索拥有请求数量，`recommend_games` 的 schema 不再重复这个字段，也不能把“换一款”扩成三款；产品配置只作为最终展示上限，候选池大小仍不是发布数量。
 
-发布边界只验证：BGG 身份、玩家明确的硬条件与排除项、候选和证据归属、完整终态结构。additive unknown JSON 字段被忽略。终态不合格时，完整原参数只在前一条 assistant tool call 中保留一次；correction 只补充 `code/path/reason`、当前 schema、允许候选 ID 和每个候选的允许证据 ID，再由同一 Agent 返回一份完整替代结果。
+一次 turn 最多有一个目录搜索和一个有出处的体验研究。已有候选的主观体验追问在研究可用时直接选择研究或基于已有 observation 诚实回答，不再先运行一个只会重排相同字段的比较阶段；离线时仍可把已核验字段整理成一次结构化比较。内部 checkpoint 可以保留未发布候选供恢复审计，但 Agent 下一轮只能看到已经展示或明确聚焦的候选，不能把内部候选当成玩家已经收到的推荐。
+
+`recommend_games` 的工具 schema 对候选 ID 和本轮全部允许证据各保留一个扁平 enum；每条证据是否属于对应候选仍由应用边界校验，不为每个候选复制一套 `oneOf` schema。发布边界验证 BGG 身份、玩家明确的硬条件与排除项、候选和证据归属。additive unknown JSON 字段被忽略。至少一个候选通过身份和硬条件时，安全子集立即发布：无效候选形成 shortfall，无效的 `playerReply`、理由、取舍或证据绑定只删除对应叙述并明确降级，不触发新的模型调用。没有任何候选通过时返回 typed publication failure。完整原参数只存在于这一次 assistant tool call，不再复制成 correction payload。
 
 `NO_MATCH` 是有解释的成功结果；provider、协议、空响应、输出截断、deadline、取消、持久化或发布边界停止是 typed failure。失败 turn 不覆盖最近一次成功发布结果，也不把内部 checkpoint 冒充成玩家已收到的卡片。
 
@@ -150,9 +152,9 @@ NativeRuleAnswerAgent
 | `local-degradation` | 单页、单章、单张配图或一个可选读取不可用 | 保留正文和成功 sibling，继续其余工作；终态列出具体缺口 |
 | `retry-preserved` | provider、队列、transport、deadline、账户暂不可用或取消 | 当前 owner 停止；持久化进度保留，可用原输入启动新 run |
 | `repair-required` | 认证、输入、来源、所有权、版本、持久化、身份或引用硬边界不成立 | 先修复前置事实；无变化重试既不安全也不会成功 |
-| `internal-correction` | typed JSON、工具参数、协议或计划候选不合法 | 不是玩家请求失败；完整候选和精确诊断回到同一 Agent 整包重生 |
+| `internal-correction` | 非终态 typed JSON、工具参数、协议或计划候选不合法 | 不是玩家请求失败；完整候选和精确诊断回到同一 Agent 整包重生 |
 
-`internal-correction` 只有在完全相同的拒绝重复、资源停止或 provider 无法继续时才转成最终停止。持久化活动只记录格式受限的 terminal rejection code；生产 canary 可以公开 nullable `completionRejectionCode`，但不会公开 path、reason、原候选、问题、证据、owner 或 subject。前端不解析自由文本来判断分类，不展示已退休的 `nextAction`，也不承诺“自动重试一次”或固定分钟数。
+`internal-correction` 只有在完全相同的拒绝重复、资源停止或 provider 无法继续时才转成最终停止。已经声明完成的终态不属于 internal correction：边界发布安全子集并局部降级，或在没有有效核心时直接停止。持久化活动只记录格式受限的 terminal rejection code；生产 canary 可以公开 nullable `completionRejectionCode`，但不会公开 path、reason、原候选、问题、证据、owner 或 subject。前端不解析自由文本来判断分类，不展示已退休的 `nextAction`，也不承诺“自动重试一次”或固定分钟数。
 
 ## 持久化、并发与恢复
 
@@ -169,14 +171,15 @@ PR CI 只运行可重复、无付费模型的确定性检查；真实模型 cana
 
 合并到 `main` 后，部署 workflow 只接受该 SHA 已成功的 CI。源码、控制面和运行产物先在无生产权限 job 中封存并绑定 SHA，再交给隔离的生产 runner；release guard 在部署锁内验证镜像、数据库迁移、API、worker、前端、健康状态和 exact release identity，失败时回滚到上一个已提交 release。
 
-生产主机装载应用镜像后，PostgreSQL、Redis、RabbitMQ 和 MinIO 必须在至少 60 秒内各自完成至少 12 个新的成功 Docker healthcheck，候选应用才会启动；重复读取尚未翻转的旧 `healthy` 状态不算成功。每个 Docker 查询和整个观察阶段都有硬上限。应用发布对有状态依赖只有观察权：不会 build、create、start、restart 或 recreate 容器，也不会删除持久卷；缺失、停止或声明配置漂移要求走单独评审的 stateful maintenance/bootstrap。观察开始时固定每个运行容器的 ID、实际 image ID、启动时间、重启次数和 Compose 配置 hash，窗口内任一运行时身份变化都会 fail closed。可变镜像标签后来指向另一个 image 不代表运行容器被替换，也不参与应用发布的身份判定。对于已在运行但 unhealthy 的容器，部署只观察其自行恢复。失败诊断先记录全部共享依赖与应用容器的安全状态，再执行耗时的磁盘扫描，避免丢失最接近故障时刻的 owner 证据。
+生产主机装载应用镜像后，PostgreSQL、Redis、RabbitMQ 和 MinIO 必须在至少 60 秒内各自完成至少 12 个新的成功 Docker healthcheck，候选应用才会启动；重复读取尚未翻转的旧 `healthy` 状态不算成功。每个 Docker 查询和整个观察阶段都有硬上限。应用发布对有状态依赖只有观察权：不会 build、create、start、restart 或 recreate 容器，也不会删除持久卷；缺失、停止或声明配置漂移要求走单独评审的 stateful maintenance/bootstrap。观察开始时固定每个运行容器的 ID、实际 image ID、启动时间、重启次数和 Compose 配置 hash，窗口内任一运行时身份变化都会 fail closed。可变镜像标签后来指向另一个 image 不代表运行容器被替换，也不参与应用发布的身份判定。对于已在运行但 unhealthy 的容器，部署只观察其自行恢复。失败诊断先记录全部共享依赖与应用容器的安全状态，再执行耗时的磁盘扫描，避免丢失最接近故障时刻的 owner 证据。已经在共享环境执行的 Flyway 版本及 checksum 不可改写；发现漂移时恢复原 migration，并以新的前向版本迁移数据和兼容写入，不能用 `repair` 把源码漂移变成新真相。
 
 推荐 canary 与规则书→讲解→答疑 canary 分开运行。它们记录完整结果、模型/工具调用图、各段延迟、typed failure、部署 SHA 和清理结果，但不以固定模型调用数、固定页数、固定章节数或固定延迟充当产品正确性合同。sanitizer 删除凭据、模型私有 reasoning、用户上传和受版权保护的原始规则书内容；有 artifact 不等于旅程成功。
 
-2026-08-30/31 的 Qwen3.8 Flash 与 Qwen3.7 Plus 真实基线保存在仓库外 `.local/agent-evaluation`：
+2026-08-30 至 2026-09-01 的 Qwen3.8 Flash 与 Qwen3.7 Plus 真实基线保存在仓库外 `.local/agent-evaluation`：
 
 - 推荐普通问候/非游戏闲聊/轻桌游闲聊均为一次模型、零工具；复杂推荐为模型自主搜索、研究后提交完整终态。
 - Qwen3.7 Plus 在复杂 Harbor 样例中自主执行目录搜索、非终态比较 observation、体验研究和最终发布；两张卡分别生成针对当前玩家条件的完整说明，普通问候仍为一次模型、零工具。
+- 2026-09-01 的最终真实登录、PostgreSQL 会话、SSE 与 trace 链路覆盖 4 个自然场景、8 个连续 turn，8/8 发布成功；Agent 平均 13.73 秒、最慢 16.41 秒。三轮工人放置对话只在需要新候选时搜索，“换成一款”由 current-turn search contract 锁定为一张不重复卡；已有候选的比较追问均为一次模型、零目录、零研究。目录阶段合计 0.34 秒，发布阶段合计 0.008 秒；一次可选研究超时被限制在 5 秒。终态不再进入 repair loop。原始模型输出、发布结果、PromQL/TraceQL、时间窗和 trace ID 继续只保存在任务证据与忽略的 `.local/agent-evaluation` 中。
 - Q&A 普通问候为一次模型、零工具；SETI raw 轨迹自主并行读页并得到正确规则答案。一次新 endpoint 的终态合成独占约 60 秒后 provider failure，证明这是外部调用停止而不是本地固定流水线等待。
 - Captain is Dead 新讲解 Agent 自主完成 5 次读页、7 次章节发布和一次 complete，7/7 章发布、无 activity failure；具体未覆盖主题保留为 unresolved，未冒充完整课程。
 - Ark Nova 20 页长规则书 canary 用 15 次 outline 决策和 9 次章节模型调用发布 9/9 个有引用章节及 9 个递增进度快照，所有 56 条 activity 均无失败；5 个未覆盖主题诚实保留，所以结果为 `DRAFT_READY`。独立持久化控制测试证明讲解跨过观测阈值仍继续，而答疑 hard token 上限仍会停止。

@@ -60,6 +60,34 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
+    void requiresOneGeminiActionAfterCandidatesHaveBeenVerified() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "gemini", "gemini-test", false));
+        when(chatModel.getOptions()).thenReturn(GoogleGenAiChatOptions.builder()
+                .model("gemini-test")
+                .build());
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                "tool_calls",
+                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        adapter.next(request(
+                List.of(new ToolSpec("recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        GoogleGenAiChatOptions options = (GoogleGenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getToolChoice()).satisfies(choice -> {
+            assertThat(choice.mode()).isEqualTo(GoogleGenAiChatOptions.ToolChoice.Mode.ANY);
+            assertThat(choice.allowedFunctionNames()).containsExactly("recommend_games");
+        });
+    }
+
+    @Test
     void keepsDeepSeekAutoWireModeForOneActionWithoutEnablingThinking() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "deepseek", "deepseek-v4-flash");
@@ -124,6 +152,49 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isTrue();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+    }
+
+    @Test
+    void keepsQwenOnItsSupportedAutoWireModeButSerializesTheRequiredApplicationBoundary() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                "tool_calls",
+                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        adapter.next(request(
+                List.of(
+                        new ToolSpec("research_game_fit", "Read experience", "{\"type\":\"object\"}"),
+                        new ToolSpec("recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getToolChoice()).isEqualTo("auto");
+        assertThat(options.getParallelToolCalls()).isFalse();
+        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+    }
+
+    @Test
+    void usesNativeRequiredModeForOpenAiAfterCandidatesHaveBeenVerified() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "openai", "gpt-test");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                "tool_calls",
+                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        adapter.next(request(
+                List.of(new ToolSpec("recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getParallelToolCalls()).isNull();
     }
 
     @Test
@@ -264,11 +335,15 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     private Request request(List<ToolSpec> tools) {
+        return request(tools, ToolChoice.AUTO);
+    }
+
+    private Request request(List<ToolSpec> tools, ToolChoice toolChoice) {
         return new Request(
                 List.of(Message.system("Choose one typed action."), Message.user("Help me choose.")),
                 tools,
                 4_096,
-                ToolChoice.AUTO);
+                toolChoice);
     }
 
     private ChatResponse response(

@@ -28,15 +28,20 @@ import java.util.Set;
 /** The single structure, candidate, evidence-ownership, and publication boundary for recommendation prose. */
 final class RecommendationPublication {
 
-    private static final Set<String> ROOT_FIELDS =
-            Set.of("requestedCount", "playerReply", "playerReplyEvidenceIds", "selections");
-    private static final Set<String> SELECTION_REQUIRED_FIELDS =
-            Set.of("bggId", "whyFit", "internalEvidenceIds");
+    static final int PLAYER_REPLY_MAX_CODE_POINTS = 600;
+    static final int WHY_FIT_MAX_CODE_POINTS = 400;
+    static final int TRADEOFF_MAX_CODE_POINTS = 240;
+
+    private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("playerReply", "selections");
+    private static final Set<String> FOLLOW_UP_PUBLICATION_FIELDS =
+            Set.of("requestedCount", "playerReply", "selections");
+    private static final Set<String> SELECTION_REQUIRED_FIELDS = Set.of("bggId");
 
     private final BoardGameRecommendationSelector selector;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions observations;
     private final RecommendationReActLoop runtime;
+    private final int maximumResultCount;
     private final ObjectMapper publicationJson;
 
     RecommendationPublication(
@@ -44,25 +49,29 @@ final class RecommendationPublication {
             RecommendationEvidenceReview evidenceReview,
             RecommendationActions observations,
             RecommendationReActLoop runtime,
+            BoardGameRecommendationProperties properties,
             ObjectMapper json) {
         this.selector = selector;
         this.evidenceReview = evidenceReview;
         this.observations = observations;
         this.runtime = runtime;
+        maximumResultCount = properties.resultCount();
         publicationJson = json.copy()
                 .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
                 .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     }
 
     PreparedPublication prepare(RecommendationAgentState state, String argumentsJson) {
-        if (state == null) throw invalid(Code.PUBLICATION_STATE_MISSING, "$", Map.of());
+        if (state == null) throw invalid(Code.PUBLICATION_STATE_MISSING);
         PublicationSeed pending = state.pendingPublicationSeed;
-        if (pending == null) throw invalid(Code.PUBLICATION_STATE_MISSING, "$", Map.of());
+        if (pending == null) throw invalid(Code.PUBLICATION_STATE_MISSING);
 
         JsonNode root = parse(argumentsJson);
-        requireObject(root, "$", ROOT_FIELDS);
-        int requestedCount = positiveInteger(root.path("requestedCount"), "$.requestedCount");
-        String playerReply = playerText(root.path("playerReply"), "$.playerReply");
+        boolean searchOwnsCount = state.activeSearch != null;
+        requireObject(root, searchOwnsCount ? SEARCH_PUBLICATION_FIELDS : FOLLOW_UP_PUBLICATION_FIELDS);
+        int requestedCount = searchOwnsCount
+                ? state.activeSearch.requestedCount()
+                : positiveInteger(root.path("requestedCount"));
 
         List<Integer> currentlyRecommendable = runtime.recommendableIds(state);
         List<Integer> allowedCandidateIds = pending.candidateBggIds().stream()
@@ -72,60 +81,100 @@ final class RecommendationPublication {
                     return game != null && !observations.narrativeObservations(game, state.research).isEmpty();
                 })
                 .toList();
-        int maximumSelections = Math.min(requestedCount, allowedCandidateIds.size());
-        JsonNode selections = root.path("selections");
-        if (!selections.isArray()
-                || selections.isEmpty()
-                || maximumSelections == 0
-                || selections.size() > maximumSelections) {
-            throw invalid(
-                    Code.PUBLICATION_SELECTION_COUNT_INVALID,
-                    "$.selections",
-                    Map.of("maximumSelections", maximumSelections));
+        int maximumSelections = Math.min(
+                maximumResultCount,
+                Math.min(requestedCount, allowedCandidateIds.size()));
+        JsonNode rawSelections = root.path("selections");
+        JsonNode selections = selectionArray(rawSelections);
+        if (!rawSelections.isArray()) {
+            state.actions.add("RECOMMENDATION_WIRE_FORMAT_NORMALIZED");
+        }
+        if (selections.isEmpty()
+                || maximumSelections == 0) {
+            throw invalid(Code.PUBLICATION_SELECTION_COUNT_INVALID);
         }
 
         List<CandidateReplyDraft> candidates = new ArrayList<>();
         List<Game> selectedGames = new ArrayList<>();
         Set<Integer> selectedIds = new LinkedHashSet<>();
-        Set<String> selectedEvidenceIds = new LinkedHashSet<>();
+        Set<Code> localizedFailures = new LinkedHashSet<>();
+        InvalidPublication firstCandidateFailure = null;
+        boolean candidateSetChanged = selections.size() > maximumSelections;
+        if (selections.size() > maximumSelections) {
+            localizedFailures.add(Code.PUBLICATION_SELECTION_COUNT_INVALID);
+        }
         for (int index = 0; index < selections.size(); index++) {
-            String selectionPath = "$.selections[" + index + "]";
+            if (selectedGames.size() == maximumSelections) break;
             JsonNode selection = selections.get(index);
-            requireObject(selection, selectionPath, SELECTION_REQUIRED_FIELDS);
-            int bggId = positiveInteger(selection.path("bggId"), selectionPath + ".bggId");
-            if (!selectedIds.add(bggId)) {
-                throw invalid(
-                        Code.DUPLICATE_SELECTION,
-                        selectionPath + ".bggId",
-                        Map.of("bggId", bggId));
+            Game game;
+            int bggId;
+            try {
+                requireObject(selection, SELECTION_REQUIRED_FIELDS);
+                bggId = positiveInteger(selection.path("bggId"));
+                if (!selectedIds.add(bggId)) {
+                    throw invalid(Code.DUPLICATE_SELECTION);
+                }
+                game = validatedCandidate(
+                        state,
+                        pending,
+                        currentlyRecommendable,
+                        bggId);
+            } catch (InvalidPublication failure) {
+                if (firstCandidateFailure == null) firstCandidateFailure = failure;
+                candidateSetChanged = true;
+                localizedFailures.add(failure.code());
+                continue;
             }
-            Game game = validatedCandidate(state, pending, currentlyRecommendable, bggId, selectionPath + ".bggId");
             Map<String, CandidateObservation> availableEvidence =
                     observations.narrativeObservations(game, state.research);
-            String whyFit = playerText(selection.path("whyFit"), selectionPath + ".whyFit");
-            String tradeoff = selection.has("tradeoff")
-                    ? playerText(selection.path("tradeoff"), selectionPath + ".tradeoff")
-                    : null;
-            List<String> evidenceIds = evidenceIds(
-                    selection.path("internalEvidenceIds"),
-                    selectionPath + ".internalEvidenceIds",
-                    1,
-                    availableEvidence.keySet());
+            String whyFit = null;
+            String tradeoff = null;
+            List<String> evidenceIds = List.of();
+            try {
+                whyFit = playerText(selection.path("whyFit"), WHY_FIT_MAX_CODE_POINTS);
+                evidenceIds = evidenceIds(
+                        selection.path("internalEvidenceIds"),
+                        1,
+                        availableEvidence.keySet());
+                if (selection.has("tradeoff")) {
+                    try {
+                        tradeoff = playerText(selection.path("tradeoff"), TRADEOFF_MAX_CODE_POINTS);
+                    } catch (InvalidPublication failure) {
+                        localizedFailures.add(failure.code());
+                    }
+                }
+            } catch (InvalidPublication failure) {
+                localizedFailures.add(failure.code());
+                whyFit = null;
+                tradeoff = null;
+                evidenceIds = List.of();
+            }
             candidates.add(new CandidateReplyDraft(bggId, whyFit, tradeoff, evidenceIds));
             selectedGames.add(game);
-            selectedEvidenceIds.addAll(availableEvidence.keySet());
         }
 
-        List<String> playerReplyEvidenceIds = evidenceIds(
-                root.path("playerReplyEvidenceIds"),
-                "$.playerReplyEvidenceIds",
-                0,
-                selectedEvidenceIds);
-        PublicationDraft draft = new PublicationDraft(playerReply, playerReplyEvidenceIds, candidates);
+        if (selectedGames.isEmpty()) {
+            if (firstCandidateFailure != null) throw firstCandidateFailure;
+            throw invalid(Code.PUBLICATION_SELECTION_COUNT_INVALID);
+        }
+
+        String playerReply = null;
+        if (!candidateSetChanged) {
+            try {
+                playerReply = playerText(root.path("playerReply"), PLAYER_REPLY_MAX_CODE_POINTS);
+            } catch (InvalidPublication failure) {
+                localizedFailures.add(failure.code());
+                playerReply = null;
+            }
+        }
+        PublicationDraft draft = new PublicationDraft(playerReply, candidates);
         RecommendationShortfall shortfall = selectedGames.size() < requestedCount
                 ? new RecommendationShortfall(requestedCount, selectedGames.size())
                 : null;
-        return new PreparedPublication(new Permit(requestedCount, selectedGames, shortfall), draft);
+        return new PreparedPublication(
+                new Permit(requestedCount, selectedGames, shortfall),
+                draft,
+                List.copyOf(localizedFailures));
     }
 
     ConversationResponse publish(
@@ -147,14 +196,18 @@ final class RecommendationPublication {
                         state,
                         locale))
                 .toList();
-        state.actions.add("MODEL_AUTHORED_RECOMMENDATION");
+        if (draft.playerReply() != null
+                || draft.candidates().stream().anyMatch(candidate -> candidate.whyFit() != null)) {
+            state.actions.add("MODEL_AUTHORED_RECOMMENDATION");
+        }
+        if (prepared.localized()) state.actions.add("RECOMMENDATION_NARRATIVE_PARTIAL");
         return response(
                 state,
                 permit,
                 games,
-                draft.playerReply(),
-                draft.playerReplyEvidenceIds(),
-                locale);
+                draft.playerReply() == null ? localizedReply(locale) : draft.playerReply(),
+                locale,
+                prepared.localized());
     }
 
     private ConversationResponse response(
@@ -162,9 +215,9 @@ final class RecommendationPublication {
             Permit permit,
             List<RecommendedGame> games,
             String assistantMessage,
-            List<String> playerReplyEvidenceIds,
-            String locale) {
-        Set<String> publishedEvidenceIds = new LinkedHashSet<>(playerReplyEvidenceIds);
+            String locale,
+            boolean recovered) {
+        Set<String> publishedEvidenceIds = new LinkedHashSet<>();
         games.stream()
                 .flatMap(game -> java.util.stream.Stream.concat(
                         game.claims().stream(),
@@ -192,7 +245,7 @@ final class RecommendationPublication {
                         state.modelCalls,
                         state.catalogCalls,
                         state.webResearchCalls,
-                        false,
+                        recovered,
                         responseActions,
                         state.elapsedMs(),
                         state.modelCallElapsedMs),
@@ -209,48 +262,53 @@ final class RecommendationPublication {
     private JsonNode parse(String argumentsJson) {
         try {
             JsonNode value = publicationJson.readTree(argumentsJson);
-            if (value == null) throw invalid(Code.INVALID_JSON, "$", Map.of());
+            if (value == null) throw invalid(Code.INVALID_JSON);
             return value;
         } catch (JsonProcessingException failure) {
-            Map<String, Object> details = new LinkedHashMap<>();
-            details.put("message", failure.getOriginalMessage());
-            if (failure.getLocation() != null) {
-                details.put("line", failure.getLocation().getLineNr());
-                details.put("column", failure.getLocation().getColumnNr());
-            }
-            throw invalid(Code.INVALID_JSON, "$", details);
+            throw invalid(Code.INVALID_JSON);
         }
     }
 
-    private void requireObject(JsonNode value, String path, Set<String> requiredFields) {
+    /** Decodes one provider-style nested JSON value, then subjects it to the ordinary boundary. */
+    private JsonNode selectionArray(JsonNode value) {
+        if (value != null && value.isArray()) return value;
+        if (value != null && value.isTextual()) {
+            JsonNode decoded = parse(value.asText());
+            if (decoded.isArray()) return decoded;
+        }
+        throw invalid(Code.PUBLICATION_SELECTION_COUNT_INVALID);
+    }
+
+    private void requireObject(JsonNode value, Set<String> requiredFields) {
         if (value == null || !value.isObject()) {
-            throw invalid(Code.RECOMMENDATION_OBJECT_INVALID, path, Map.of());
+            throw invalid(Code.RECOMMENDATION_OBJECT_INVALID);
         }
         List<String> missing = requiredFields.stream()
                 .filter(field -> !value.has(field))
                 .sorted()
                 .toList();
         if (!missing.isEmpty()) {
-            throw invalid(
-                    Code.RECOMMENDATION_REQUIRED_FIELD_MISSING,
-                    path + "." + missing.getFirst(),
-                    Map.of("missingFields", missing));
+            throw invalid(Code.RECOMMENDATION_REQUIRED_FIELD_MISSING);
         }
     }
 
-    private String playerText(JsonNode value, String path) {
+    private String playerText(JsonNode value, int maximumCodePoints) {
         if (value == null || !value.isTextual() || value.asText().isBlank()) {
-            throw invalid(Code.RECOMMENDATION_REPLY_INVALID, path, Map.of());
+            throw invalid(Code.RECOMMENDATION_REPLY_INVALID);
         }
-        return value.asText();
+        String text = value.asText();
+        if (text.codePointCount(0, text.length()) > maximumCodePoints) {
+            throw invalid(Code.RECOMMENDATION_REPLY_INVALID);
+        }
+        return text;
     }
 
-    private int positiveInteger(JsonNode value, String path) {
+    private int positiveInteger(JsonNode value) {
         if (value == null
                 || !value.isIntegralNumber()
                 || !value.canConvertToInt()
                 || value.intValue() <= 0) {
-            throw invalid(Code.FINAL_ID_NOT_VERIFIED, path, Map.of());
+            throw invalid(Code.FINAL_ID_NOT_VERIFIED);
         }
         return value.intValue();
     }
@@ -259,68 +317,54 @@ final class RecommendationPublication {
             RecommendationAgentState state,
             PublicationSeed pending,
             List<Integer> currentlyRecommendable,
-            int bggId,
-            String path) {
+            int bggId) {
         Game game = state.verified.get(bggId);
-        if (game == null) throw invalid(Code.FINAL_ID_NOT_VERIFIED, path, Map.of("bggId", bggId));
+        if (game == null) throw invalid(Code.FINAL_ID_NOT_VERIFIED);
         if (!pending.candidateBggIds().contains(bggId)) {
-            throw invalid(
-                    Code.PUBLICATION_SELECTION_OUTSIDE_PENDING,
-                    path,
-                    Map.of("bggId", bggId));
+            throw invalid(Code.PUBLICATION_SELECTION_OUTSIDE_PENDING);
         }
         if (state.excludedIds.contains(bggId)) {
-            throw invalid(Code.FINAL_ID_EXCLUDED, path, Map.of("bggId", bggId));
+            throw invalid(Code.FINAL_ID_EXCLUDED);
         }
         boolean exactTitle = state.activeSearch != null
                 && state.activeSearch.title() != null
                 && state.activeSearch.title().match() == RecommendationAgentState.TitleMatch.EXACT;
-        if (state.previouslyShownIds.contains(bggId) && !exactTitle) {
-            throw invalid(Code.FINAL_ID_PREVIOUSLY_SHOWN, path, Map.of("bggId", bggId));
+        boolean verifiedFollowUp = state.activeSearch == null;
+        if (state.previouslyShownIds.contains(bggId) && !exactTitle && !verifiedFollowUp) {
+            throw invalid(Code.FINAL_ID_PREVIOUSLY_SHOWN);
         }
         if (!currentlyRecommendable.contains(bggId)
                 || !selector.eligible(game, state.selectionProfile())) {
-            throw invalid(Code.FINAL_ID_FAILS_HARD_GATES, path, Map.of("bggId", bggId));
+            throw invalid(Code.FINAL_ID_FAILS_HARD_GATES);
         }
         if (observations.narrativeObservations(game, state.research).isEmpty()) {
-            throw invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED, path, Map.of("bggId", bggId));
+            throw invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED);
         }
         return game;
     }
 
     private List<String> evidenceIds(
             JsonNode value,
-            String path,
             int minimumItems,
             Set<String> allowedEvidenceIds) {
         if (value == null
                 || !value.isArray()
                 || value.size() < minimumItems) {
-            throw invalid(
-                    Code.RECOMMENDATION_EVIDENCE_LIST_INVALID,
-                    path,
-                    Map.of("minimumItems", minimumItems));
+            throw invalid(Code.RECOMMENDATION_EVIDENCE_LIST_INVALID);
         }
         List<String> evidenceIds = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         for (int index = 0; index < value.size(); index++) {
             JsonNode item = value.get(index);
-            String itemPath = path + "[" + index + "]";
             if (!item.isTextual() || item.asText().isBlank()) {
-                throw invalid(Code.RECOMMENDATION_EVIDENCE_LIST_INVALID, itemPath, Map.of());
+                throw invalid(Code.RECOMMENDATION_EVIDENCE_LIST_INVALID);
             }
             String evidenceId = item.asText();
             if (!seen.add(evidenceId)) {
-                throw invalid(
-                        Code.RECOMMENDATION_EVIDENCE_LIST_INVALID,
-                        itemPath,
-                        Map.of("duplicateEvidenceId", evidenceId));
+                throw invalid(Code.RECOMMENDATION_EVIDENCE_LIST_INVALID);
             }
             if (!allowedEvidenceIds.contains(evidenceId)) {
-                throw invalid(
-                        Code.RECOMMENDATION_EVIDENCE_NOT_GROUNDED,
-                        itemPath,
-                        Map.of("submittedEvidenceId", evidenceId));
+                throw invalid(Code.RECOMMENDATION_EVIDENCE_NOT_GROUNDED);
             }
             evidenceIds.add(evidenceId);
         }
@@ -335,13 +379,15 @@ final class RecommendationPublication {
         Map<String, CandidateObservation> available = observations.narrativeObservations(
                 game, state.research);
         List<RecommendationReplyPart> replyParts = new ArrayList<>();
-        replyParts.add(replyPart(
-                game.ranking().bggId(),
-                ReplyPartRole.WHY_FIT,
-                "whyFit",
-                draft.whyFit(),
-                draft.evidenceIds(),
-                available));
+        if (draft.whyFit() != null) {
+            replyParts.add(replyPart(
+                    game.ranking().bggId(),
+                    ReplyPartRole.WHY_FIT,
+                    "whyFit",
+                    draft.whyFit(),
+                    draft.evidenceIds(),
+                    available));
+        }
         if (draft.tradeoff() != null) {
             replyParts.add(replyPart(
                     game.ranking().bggId(),
@@ -379,11 +425,25 @@ final class RecommendationPublication {
         return new RecommendationReplyPart(role, claim);
     }
 
-    private InvalidPublication invalid(Code code, String path, Map<String, ?> details) {
-        return new InvalidPublication(code, path, details);
+    private String localizedReply(String locale) {
+        return runtime.chinese(locale)
+                ? "下面保留了已经核验的候选；未通过证据校验的说明已省略。"
+                : "The verified candidates are preserved below; explanations that failed evidence validation were omitted.";
     }
 
-    record PreparedPublication(Permit permit, PublicationDraft draft) {}
+    private InvalidPublication invalid(Code code) {
+        return new InvalidPublication(code);
+    }
+
+    record PreparedPublication(Permit permit, PublicationDraft draft, List<Code> localizedFailures) {
+        PreparedPublication {
+            localizedFailures = List.copyOf(localizedFailures);
+        }
+
+        boolean localized() {
+            return !localizedFailures.isEmpty();
+        }
+    }
 
     record Permit(
             int requestedCount,
@@ -396,10 +456,8 @@ final class RecommendationPublication {
 
     private record PublicationDraft(
             String playerReply,
-            List<String> playerReplyEvidenceIds,
             List<CandidateReplyDraft> candidates) {
         PublicationDraft {
-            playerReplyEvidenceIds = List.copyOf(playerReplyEvidenceIds);
             candidates = List.copyOf(candidates);
         }
     }
@@ -435,28 +493,14 @@ final class RecommendationPublication {
 
     static final class InvalidPublication extends RuntimeException {
         private final Code code;
-        private final String path;
-        private final Map<String, ?> details;
 
-        private InvalidPublication(Code code, String path, Map<String, ?> details) {
-            super(code.name() + " at " + path);
+        private InvalidPublication(Code code) {
+            super(code.name());
             this.code = code;
-            this.path = path;
-            this.details = details == null
-                    ? Map.of()
-                    : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(details));
         }
 
         Code code() {
             return code;
-        }
-
-        String path() {
-            return path;
-        }
-
-        Map<String, ?> details() {
-            return details;
         }
     }
 }

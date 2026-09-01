@@ -61,7 +61,7 @@ on:
         description: Effective recommendation model required for this canary
         required: true
         type: string
-        default: 'qwen3.8-flash'
+        default: 'qwen3.7-plus'
 
 permissions:
   contents: read

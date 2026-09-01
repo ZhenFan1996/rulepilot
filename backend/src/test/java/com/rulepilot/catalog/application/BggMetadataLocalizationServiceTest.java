@@ -2,6 +2,7 @@ package com.rulepilot.catalog.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -63,8 +64,59 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.categories()).containsExactly("Animals");
         assertThat(localized.mechanics()).containsExactly("Card Drafting");
         assertThat(localized.descriptionTranslated()).isFalse();
-        verify(translations).readStored(any());
         verify(translations, never()).prewarm(any());
+    }
+
+    @Test
+    void readsTheStableBggSourceNameBeforeThePreviouslyDeployedLocalizedName() {
+        var game = game(List.of("展翅翱翔"));
+        when(translations.readStored(any())).thenAnswer(invocation -> {
+            BggMetadataTranslation.Request request = invocation.getArgument(0);
+            return request.gameName().equals("Wingspan")
+                    ? Optional.of(new Translation("已持久化的中文简介。", List.of("动物"), List.of("卡牌轮抽")))
+                    : Optional.empty();
+        });
+
+        var localized = service.localize(game, "zh-CN");
+
+        assertThat(localized.name()).isEqualTo("展翅翱翔");
+        assertThat(localized.description()).isEqualTo("已持久化的中文简介。");
+        verify(translations).readStored(argThat(request -> request.gameName().equals("Wingspan")));
+    }
+
+    @Test
+    void fallsBackToThePreviouslyDeployedLocalizedNameWithoutStartingTranslation() {
+        var game = game(List.of("展翅翱翔"));
+        when(translations.readStored(any())).thenAnswer(invocation -> {
+            BggMetadataTranslation.Request request = invocation.getArgument(0);
+            return request.gameName().equals("展翅翱翔")
+                    ? Optional.of(new Translation("旧键中的中文简介。", List.of("动物"), List.of("卡牌轮抽")))
+                    : Optional.empty();
+        });
+
+        var localized = service.localize(game, "zh-CN");
+
+        assertThat(localized.description()).isEqualTo("旧键中的中文简介。");
+        verify(translations).readStored(argThat(request -> request.gameName().equals("Wingspan")));
+        verify(translations).readStored(argThat(request -> request.gameName().equals("展翅翱翔")));
+        verify(translations, never()).prewarm(any());
+    }
+
+    @Test
+    void prewarmKeysNewTranslationsByTheStableBggSourceName() {
+        BoardGameGeekCatalog.DiscoveryGame game = mock(BoardGameGeekCatalog.DiscoveryGame.class);
+        when(game.bggId()).thenReturn(266192);
+        when(game.name()).thenReturn("Wingspan");
+        when(game.chineseName()).thenReturn("展翅翱翔");
+        when(game.description()).thenReturn("Build a bird reserve.");
+        when(game.categories()).thenReturn(List.of("Animals"));
+        when(game.mechanics()).thenReturn(List.of("Card Drafting"));
+        when(translations.prewarm(any())).thenReturn(new BggMetadataTranslation.PrewarmResult(
+                BggMetadataTranslation.PrewarmStatus.READY));
+
+        assertThat(service.prewarm(game).status()).isEqualTo(BggMetadataTranslation.PrewarmStatus.READY);
+
+        verify(translations).prewarm(argThat(request -> request.gameName().equals("Wingspan")));
     }
 
     @Test

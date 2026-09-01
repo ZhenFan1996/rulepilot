@@ -11,7 +11,23 @@ public record BoardGameRecommendationProperties(
         int modelCandidateLimit,
         int resultCount,
         BigDecimal diversityOverlapLimit,
+        int maxOutputTokens,
         Duration timeout) {
+
+    static final int DEFAULT_MAX_OUTPUT_TOKENS = 2_000;
+
+    public BoardGameRecommendationProperties(
+            int modelCandidateLimit,
+            int resultCount,
+            BigDecimal diversityOverlapLimit,
+            Duration timeout) {
+        this(
+                modelCandidateLimit,
+                resultCount,
+                diversityOverlapLimit,
+                DEFAULT_MAX_OUTPUT_TOKENS,
+                timeout);
+    }
 
     @ConstructorBinding
     public BoardGameRecommendationProperties {
@@ -26,6 +42,9 @@ public record BoardGameRecommendationProperties(
                 || diversityOverlapLimit.compareTo(BigDecimal.ZERO) < 0
                 || diversityOverlapLimit.compareTo(BigDecimal.ONE) > 0) {
             throw new IllegalArgumentException("recommendation diversity overlap limit must be between 0 and 1");
+        }
+        if (maxOutputTokens < 256 || maxOutputTokens > 4_096) {
+            throw new IllegalArgumentException("recommendation output token budget must be between 256 and 4096");
         }
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("recommendation timeout must be positive");

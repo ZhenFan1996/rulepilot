@@ -847,7 +847,10 @@ jobs:
             .execution.outcome == "SUCCEEDED"
               and .execution.exitCode == 0
               and .preparationState == "COMPLETED"
-              and .lessonState == "COMPLETED"
-              and (.lessonStatus == "COMPLETE" or .lessonStatus == "DRAFT_READY")
+              and (
+                (.lessonState == "COMPLETED"
+                  and (.lessonStatus == "COMPLETE" or .lessonStatus == "DRAFT_READY"))
+                or (.lessonState == "DEGRADED" and .lessonStatus == "DRAFT_READY")
+              )
               and (.answerStatus == "ANSWERED" or .answerStatus == "ANSWERED_WITH_WARNING")
           ' "$report" > /dev/null

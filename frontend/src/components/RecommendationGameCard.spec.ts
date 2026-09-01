@@ -50,6 +50,8 @@ describe('RecommendationGameCard', () => {
     expect(wrapper.text()).toContain('2–5 players · 45–75 min · Weight 2.2')
     expect(wrapper.get('[data-testid="recommendation-game-card"]').attributes('data-bgg-id')).toBe('901')
     expect(wrapper.find('[data-testid="candidate-fit-claims"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="recommendation-reason-unavailable"]').text())
+      .toContain('did not produce a safe candidate-specific reason')
     expect(wrapper.text()).not.toContain('Constraint check')
     expect(wrapper.text()).not.toContain('Candidate player range is inside the request.')
 
@@ -92,6 +94,7 @@ describe('RecommendationGameCard', () => {
     expect(wrapper.text()).toContain('候选时长 45–75 分钟')
     expect(wrapper.text()).toContain('需要留意')
     expect(wrapper.text()).toContain('BGG 标注复杂度：2.2 / 5')
+    expect(wrapper.find('[data-testid="recommendation-reason-unavailable"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('evidenceId')
   })
 

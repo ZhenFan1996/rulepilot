@@ -41,6 +41,8 @@ the product must commit or fail them atomically.
 - Keep the Spring Modulith modular monolith. Top-level packages are business modules.
 - Domain code is pure Java. Application services own use cases and transactions. External systems use ports/adapters.
 - Modules do not access another module's repository or persistence entity; non-transactional crossings use events.
+- A Flyway version that has run in any shared environment is immutable. Restore its deployed checksum and express
+  every correction, data move, or compatibility bridge in a new forward migration; never use repair to bless drift.
 - Vue 3 and strict TypeScript remain mobile-first and keyboard accessible. Server state uses Vue Query; Pinia is only
   for genuine client-global state.
 - Do not add a microservice, framework, generic abstraction, or compatibility layer without replacing more complexity
@@ -81,7 +83,9 @@ the product must commit or fail them atomically.
   rejected candidate, preserve the complete candidate exactly once in the same conversation, then return the exact
   validation error, original schema, and allowed identities; let the Agent conditionally generate a new complete
   object. Do not duplicate the candidate in a correction message, crop it, parse prose patches, splice fields, or
-  force a repair call when the first candidate is valid.
+  force a repair call when the first candidate is valid. `recommend_games` is the terminal exception: consume it
+  once, publish its independently verified subset while omitting unsupported optional prose, or return a typed
+  publication failure when no verified selection remains. Never turn that terminal action into another model round.
 
 ## Complexity and retirement
 
