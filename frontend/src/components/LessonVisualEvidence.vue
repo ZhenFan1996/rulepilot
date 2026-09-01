@@ -6,6 +6,7 @@ import { useLocale } from '@/lib/locale'
 
 const props = defineProps<{
   focus: VisualFocus
+  narrationId?: string
   pageImageUrl: (page: number) => string
   pagePreviewImageUrl: (page: number) => string
   focusedPageImageUrl: (focus: VisualFocus) => string
@@ -267,7 +268,8 @@ function isReliableDetailViewport(focus: VisualFocus) {
 <template>
   <figure
     data-testid="lesson-visual-storyboard"
-    class="mt-5 overflow-hidden rounded-2xl border border-indigo/15 bg-canvas"
+    :aria-describedby="narrationId || undefined"
+    class="overflow-hidden rounded-2xl border border-indigo/15 bg-canvas"
   >
     <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-4 py-3">
       <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>

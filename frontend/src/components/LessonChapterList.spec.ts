@@ -178,6 +178,34 @@ describe('LessonChapterList', () => {
     expect(wrapper.text()).toContain('规则含义以上方有引用的步骤为准')
   })
 
+  it('keeps each cited visual inside the step narrative it explains', async () => {
+    const wrapper = mountDirectory([{
+      ...sections[0]!,
+      steps: [{
+        ...sections[0]!.steps[0]!,
+        kind: 'VISUAL',
+        visualFocus: {
+          pageNumber: 2,
+          label: '起始区域',
+          visibleDescription: '一张牌位于航线最左侧。',
+          x: 100,
+          y: 150,
+          width: 300,
+          height: 250,
+        },
+      }],
+    }])
+    await flushPromises()
+
+    const pairedStep = wrapper.get('[data-testid="lesson-step-paired"]')
+    const narrative = pairedStep.get('[data-testid="lesson-step-narrative"]')
+    const storyboard = pairedStep.get('[data-testid="lesson-visual-storyboard"]')
+
+    expect(narrative.text()).toContain('把主板放在桌面中央。')
+    expect(storyboard.attributes('aria-describedby')).toBe(narrative.attributes('id'))
+    expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).not.toContain('sm:grid-cols-2')
+  })
+
   it('renders every visual focus attached to the same cited step', async () => {
     const first: TestVisualFocus = { pageNumber: 2, label: '行动图标', x: 100, y: 150, width: 300, height: 250 }
     const second: TestVisualFocus = { pageNumber: 3, label: '牌面示例', x: 200, y: 250, width: 320, height: 280 }

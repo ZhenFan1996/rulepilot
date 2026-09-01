@@ -56,6 +56,10 @@ function stepVisuals(step: LessonReaderStep) {
   return step.visualFoci?.length ? step.visualFoci : step.visualFocus ? [step.visualFocus] : []
 }
 
+function stepNarrationId(sectionPosition: number, stepPosition: number) {
+  return `${props.idPrefix}-${sectionPosition}-step-${stepPosition}-narration`
+}
+
 function registerSection(element: unknown, position: number) {
   const previous = sectionElements.get(position)
   if (!(element instanceof HTMLElement)) {
@@ -210,29 +214,46 @@ function stepKindLabel(kind: string) {
           <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-ink/60">{{ section.visualCaption }}</p>
 
           <ol class="mt-7 grid gap-4">
-            <li v-for="step in section.steps" :key="step.position" :data-testid="stepTestId || undefined" class="rounded-2xl border p-5 lesson-step-shadow sm:p-6" :class="stepTone(step.kind)">
+            <li
+              v-for="step in section.steps"
+              :key="step.position"
+              :data-testid="stepTestId || undefined"
+              class="rounded-2xl border p-5 lesson-step-shadow sm:p-6"
+              :class="stepTone(step.kind)"
+            >
               <div class="flex gap-4">
                 <span class="grid size-8 shrink-0 place-items-center rounded-xl bg-ink text-sm font-bold text-canvas">{{ step.position }}</span>
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <h3 class="font-display text-xl font-semibold sm:text-2xl">{{ step.heading }}</h3>
-                    <span class="rounded-full border border-ink/10 bg-canvas/70 px-2.5 py-1 text-[11px] font-bold tracking-[0.08em] text-ink/45">{{ stepKindLabel(step.kind) }}</span>
-                  </div>
-                  <p class="mt-3 text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
-                  <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
+                <div
+                  :data-testid="stepVisuals(step).length ? 'lesson-step-paired' : undefined"
+                  class="min-w-0 flex-1"
+                  :class="stepVisuals(step).length ? 'lg:grid lg:grid-cols-[minmax(12rem,0.75fr)_minmax(22rem,1.25fr)] lg:items-start lg:gap-6' : ''"
+                >
+                  <div
+                    :id="stepNarrationId(section.position, step.position)"
+                    data-testid="lesson-step-narrative"
+                    class="min-w-0"
+                  >
+                    <div class="flex flex-wrap items-center gap-2">
+                      <h3 class="font-display text-xl font-semibold sm:text-2xl">{{ step.heading }}</h3>
+                      <span class="rounded-full border border-ink/10 bg-canvas/70 px-2.5 py-1 text-[11px] font-bold tracking-[0.08em] text-ink/45">{{ stepKindLabel(step.kind) }}</span>
+                    </div>
+                    <p class="mt-3 text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
+                    <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
 
-                  <div v-if="stepVisuals(step).length" class="grid gap-3 sm:grid-cols-2" data-testid="lesson-step-visuals">
+                    <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-ink/50 transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
+                  </div>
+
+                  <div v-if="stepVisuals(step).length" class="mt-5 grid gap-3 lg:mt-0" data-testid="lesson-step-visuals">
                     <LessonVisualEvidence
                       v-for="focus in stepVisuals(step)"
                       :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`"
                       :focus="focus"
+                      :narration-id="stepNarrationId(section.position, step.position)"
                       :page-image-url="props.pageImageUrl"
                       :page-preview-image-url="props.pagePreviewImageUrl"
                       :focused-page-image-url="props.focusedPageImageUrl"
                     />
                   </div>
-
-                  <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-ink/50 transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
                 </div>
               </div>
             </li>
