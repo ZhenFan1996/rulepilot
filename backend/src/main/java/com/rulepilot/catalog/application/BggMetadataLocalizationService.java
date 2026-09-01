@@ -9,6 +9,7 @@ import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,9 +41,17 @@ public class BggMetadataLocalizationService {
         if (description.isBlank() && game.categories().isEmpty() && game.mechanics().isEmpty()) return fallback;
 
         Request request = new Request(
-                game.bggId(), fallback.name(), description, game.categories(), game.mechanics());
+                game.bggId(), game.name(), description, game.categories(), game.mechanics());
         try {
-            return translations.readStored(request)
+            Optional<Translation> stored = translations.readStored(request);
+            // Deployed rows used the localized display name when one existed. Keep that exact
+            // source identity readable while V4 rows remain; new prewarms use the stable BGG source name.
+            if (stored.isEmpty() && !fallback.name().equals(game.name())) {
+                Request deployedDisplayNameRequest = new Request(
+                        game.bggId(), fallback.name(), description, game.categories(), game.mechanics());
+                stored = translations.readStored(deployedDisplayNameRequest);
+            }
+            return stored
                     .map(translation -> localized(fallback, request, translation))
                     .orElse(fallback);
         } catch (RuntimeException exception) {
@@ -69,10 +78,8 @@ public class BggMetadataLocalizationService {
         if (description.isBlank() && game.categories().isEmpty() && game.mechanics().isEmpty()) {
             return new PrewarmResult(PrewarmStatus.SKIPPED_INVALID_SOURCE);
         }
-        String sourceName = SimplifiedChineseText.normalize(game.name());
-        String displayName = game.chineseName().isBlank() ? sourceName : game.chineseName();
         Request request = new Request(
-                game.bggId(), displayName, description, game.categories(), game.mechanics());
+                game.bggId(), game.name(), description, game.categories(), game.mechanics());
         try {
             return translations.prewarm(request);
         } catch (RuntimeException exception) {

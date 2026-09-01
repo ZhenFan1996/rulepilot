@@ -18,6 +18,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,6 +50,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     private static final int KEY_LOCK_COUNT = 64;
     private static final String TRANSLATION_LOCALE = "zh-CN";
     private static final int TRANSLATION_CONTRACT_VERSION = 5;
+    private static final int DEPLOYED_UNORDERED_SOURCE_CONTRACT_VERSION = 4;
     private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
 
     private final Call.Factory calls;
@@ -167,6 +169,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         Optional<Translation> cached = cached(cacheKey, request);
         if (cached.isPresent()) return cached;
         Optional<Translation> persisted = persisted(translationKey(request, sourceDigest), request);
+        if (persisted.isEmpty()) persisted = persisted(deployedUnorderedSourceKeys(request), request);
         persisted.ifPresent(translation -> cache(cacheKey, translation));
         return persisted;
     }
@@ -199,6 +202,17 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         try {
             return persistentTranslations
                     .find(key)
+                    .map(translation -> normalizedTranslation(translation, request));
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Persistent BGG metadata translations are temporarily unavailable");
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Translation> persisted(List<Key> sourceAliases, Request request) {
+        try {
+            return persistentTranslations
+                    .findAnySourceAlias(sourceAliases)
                     .map(translation -> normalizedTranslation(translation, request));
         } catch (RuntimeException exception) {
             LOGGER.warn("Persistent BGG metadata translations are temporarily unavailable");
@@ -370,6 +384,50 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     private Key translationKey(Request request, String sourceDigest) {
         return new Key(
                 request.bggId(), TRANSLATION_LOCALE, TRANSLATION_CONTRACT_VERSION, sourceDigest);
+    }
+
+    private List<Key> deployedUnorderedSourceKeys(Request request) {
+        // V4 hashed Jackson output from Map.of; its JVM-dependent iteration order produced several
+        // durable digests for the same exact source. Retire these aliases with the V4 rows.
+        List<Map.Entry<String, Object>> fields = List.of(
+                Map.entry("gameName", bounded(request.gameName(), 500)),
+                Map.entry("description", request.description() == null ? "" : request.description().strip()),
+                Map.entry("categories", request.categories()),
+                Map.entry("mechanics", request.mechanics()));
+        LinkedHashSet<String> sourceDigests = new LinkedHashSet<>();
+        collectDeployedSourceDigests(fields, new boolean[fields.size()], new ArrayList<>(), sourceDigests);
+        return sourceDigests.stream()
+                .map(sourceDigest -> new Key(
+                        request.bggId(),
+                        TRANSLATION_LOCALE,
+                        DEPLOYED_UNORDERED_SOURCE_CONTRACT_VERSION,
+                        sourceDigest))
+                .toList();
+    }
+
+    private void collectDeployedSourceDigests(
+            List<Map.Entry<String, Object>> fields,
+            boolean[] used,
+            List<Map.Entry<String, Object>> ordered,
+            LinkedHashSet<String> sourceDigests) {
+        if (ordered.size() == fields.size()) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            ordered.forEach(field -> payload.put(field.getKey(), field.getValue()));
+            try {
+                sourceDigests.add(digest(json.writeValueAsString(payload)));
+            } catch (IOException exception) {
+                throw new IllegalStateException("BGG metadata could not be serialized", exception);
+            }
+            return;
+        }
+        for (int index = 0; index < fields.size(); index++) {
+            if (used[index]) continue;
+            used[index] = true;
+            ordered.add(fields.get(index));
+            collectDeployedSourceDigests(fields, used, ordered, sourceDigests);
+            ordered.removeLast();
+            used[index] = false;
+        }
     }
 
     private String sourceDigest(Request request) {

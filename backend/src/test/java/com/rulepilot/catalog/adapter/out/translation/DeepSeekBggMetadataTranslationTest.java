@@ -17,10 +17,12 @@ import com.rulepilot.catalog.application.BggMetadataTranslationStore.Key;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -144,6 +146,63 @@ class DeepSeekBggMetadataTranslationTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void servesTheExactV4SourceWrittenBeforeJsonFieldOrderBecameStable() {
+        RedisMocks redis = redisWithMissAndBudget(1L);
+        MemoryTranslationStore store = new MemoryTranslationStore();
+        store.values.put(
+                new Key(
+                        REQUEST.bggId(),
+                        "zh-CN",
+                        4,
+                        sha256("{\"description\":\"Build a bird reserve.\",\"gameName\":\"展翅翱翔\","
+                                + "\"categories\":[\"Animals\"],\"mechanics\":[\"Card Drafting\"]}")),
+                new Translation("V4 已持久化的中文简介。", List.of("动物"), List.of("卡牌轮抽")));
+        OkHttpClient unavailableProvider = mock(OkHttpClient.class);
+        var adapter = adapter(
+                unavailableProvider,
+                redis.template(),
+                store,
+                false,
+                "http://provider.invalid");
+
+        assertThat(adapter.readStored(REQUEST)).hasValueSatisfying(value ->
+                assertThat(value.description()).isEqualTo("V4 已持久化的中文简介。"));
+
+        verify(redis.values(), never()).increment(anyString());
+        verify(unavailableProvider, never()).newCall(org.mockito.ArgumentMatchers.any());
+        verify(redis.values()).set(
+                anyString(), anyString(), org.mockito.ArgumentMatchers.eq(Duration.ofDays(30)));
+    }
+
+    @Test
+    void neverReusesAV4TranslationWhenTheCurrentSourceContentChanged() {
+        RedisMocks redis = redisWithMissAndBudget(1L);
+        MemoryTranslationStore store = new MemoryTranslationStore();
+        store.values.put(
+                new Key(
+                        REQUEST.bggId(),
+                        "zh-CN",
+                        4,
+                        sha256("{\"description\":\"Build a bird reserve.\",\"gameName\":\"展翅翱翔\","
+                                + "\"categories\":[\"Animals\"],\"mechanics\":[\"Card Drafting\"]}")),
+                new Translation("过期简介。", List.of("动物"), List.of("卡牌轮抽")));
+        Request changedSource = new Request(
+                REQUEST.bggId(),
+                REQUEST.gameName(),
+                "Build a different reserve.",
+                REQUEST.categories(),
+                REQUEST.mechanics());
+        var adapter = adapter(
+                mock(OkHttpClient.class),
+                redis.template(),
+                store,
+                false,
+                "http://provider.invalid");
+
+        assertThat(adapter.readStored(changedSource)).isEmpty();
     }
 
     @Test
@@ -348,6 +407,15 @@ class DeepSeekBggMetadataTranslationTest {
     }
 
     private record RedisMocks(StringRedisTemplate template, ValueOperations<String, String> values) {}
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
 
     private static final class MemoryTranslationStore implements BggMetadataTranslationStore {
         private final Map<Key, Translation> values = new java.util.LinkedHashMap<>();

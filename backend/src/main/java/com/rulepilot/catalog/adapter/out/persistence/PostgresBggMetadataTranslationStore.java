@@ -8,6 +8,7 @@ import com.rulepilot.catalog.application.BggMetadataTranslationStore.Key;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -44,6 +45,37 @@ public class PostgresBggMetadataTranslationStore implements BggMetadataTranslati
                                 .addValue("locale", key.locale())
                                 .addValue("contractVersion", key.contractVersion())
                                 .addValue("sourceSha256", key.sourceSha256()),
+                        (result, row) -> read(result.getString("payload")))
+                .stream()
+                .findFirst();
+    }
+
+    @Override
+    public Optional<Translation> findAnySourceAlias(List<Key> keys) {
+        if (keys == null || keys.isEmpty()) return Optional.empty();
+        Key identity = keys.getFirst();
+        if (keys.stream().anyMatch(key -> key.bggId() != identity.bggId()
+                || !key.locale().equals(identity.locale())
+                || key.contractVersion() != identity.contractVersion())) {
+            throw new IllegalArgumentException("BGG translation source aliases must share one identity and contract");
+        }
+        List<String> sourceDigests = keys.stream().map(Key::sourceSha256).distinct().toList();
+        return jdbc.query(
+                        """
+                        SELECT payload::text AS payload
+                        FROM bgg_metadata_translation_versioned
+                        WHERE bgg_id = :bggId
+                          AND locale = :locale
+                          AND contract_version = :contractVersion
+                          AND source_sha256 IN (:sourceDigests)
+                        ORDER BY translated_at DESC
+                        LIMIT 1
+                        """,
+                        new MapSqlParameterSource()
+                                .addValue("bggId", identity.bggId())
+                                .addValue("locale", identity.locale())
+                                .addValue("contractVersion", identity.contractVersion())
+                                .addValue("sourceDigests", sourceDigests),
                         (result, row) -> read(result.getString("payload")))
                 .stream()
                 .findFirst();
