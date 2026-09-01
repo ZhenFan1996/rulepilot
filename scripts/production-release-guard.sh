@@ -1000,6 +1000,11 @@ watchdog_process_matches() {
 	return 1
 }
 
+watchdog_process_alive() {
+	local process_id=$1
+	[[ "$process_id" =~ ^[1-9][0-9]*$ ]] && kill -0 "$process_id" 2>/dev/null
+}
+
 watchdog_ready_matches() {
 	local state_dir=$1
 	local expected_generation=$2
@@ -1112,7 +1117,10 @@ start_watchdog() {
 			&& watchdog_process_matches "$process_id" "$generation"; then
 			return 0
 		fi
-		watchdog_process_matches "$process_id" "$generation" || break
+		# The detached child can still be the short-lived launcher between fork and exec. During that
+		# bounded startup window, liveness is sufficient; readiness and every later guard operation still
+		# require the exact release generation in /proc/<pid>/cmdline.
+		watchdog_process_alive "$process_id" || break
 		sleep "$WATCHDOG_READY_POLL_SECONDS"
 	done
 	if watchdog_process_matches "$process_id" "$generation"; then
