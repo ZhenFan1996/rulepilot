@@ -398,18 +398,26 @@ final class VisualLessonStepLocator {
             List<Integer> batch = pageNumbers.subList(
                     start, Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, pageNumbers.size()));
             try {
-                indexedRegions.find(documentVersionId, new LinkedHashSet<>(batch)).forEach(region -> proposed.merge(
-                        region.pageNumber(),
-                        List.of(new Proposal(new RulebookUnderstanding.Rectangle(
-                                region.x(), region.y(), region.width(), region.height()))),
-                        VisualLessonStepLocator::distinctProposals));
+                indexedRegions.find(documentVersionId, new LinkedHashSet<>(batch)).stream()
+                        .filter(region -> "PICTURE".equals(region.kind()))
+                        .forEach(region -> proposed.merge(
+                                region.pageNumber(),
+                                List.of(new Proposal(new RulebookUnderstanding.Rectangle(
+                                        region.x(), region.y(), region.width(), region.height()))),
+                                VisualLessonStepLocator::distinctProposals));
             } catch (RuntimeException ignored) {
                 // The optional plugin is not a publication dependency; local pixel proposals remain available.
             }
             if (!proposals.configured() || !proposalToolCircuit.available()) continue;
+            List<Integer> fallbackPages = batch.stream()
+                    .filter(pageNumber -> !proposed.containsKey(pageNumber))
+                    .toList();
+            if (fallbackPages.isEmpty()) continue;
             List<DocumentPageImages.PageImage> available;
             try {
-                available = pageImages.read(documentVersionId, new LinkedHashSet<>(batch));
+                // Docling is authoritative for pages where it found pictures. Pixel proposals are a page-local
+                // fallback, not a second candidate vocabulary mixed into a successful Docling result.
+                available = pageImages.read(documentVersionId, new LinkedHashSet<>(fallbackPages));
             } catch (RuntimeException pageReadFailure) {
                 continue;
             }

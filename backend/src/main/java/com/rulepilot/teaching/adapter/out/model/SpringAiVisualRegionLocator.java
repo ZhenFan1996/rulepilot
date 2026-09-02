@@ -60,8 +60,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             ACCEPT_CANDIDATE requires one offered candidateId, a short literal label and visibleDescription, and one
             or more offered C references belonging to that step whose sourcePages contain the candidate page.
             NO_VISUAL requires candidateId, label, and visibleDescription to be null and supportedClaimRefs to be an
-            empty array. A step may accept several different candidates. Select every useful candidate needed for the
-            lesson; do not target a fixed count. The same candidate may never be selected twice or shared across steps.
+            empty array. Return at least one review for every offered step in every batch: one or more accepted
+            candidates, or exactly one NO_VISUAL decision when nothing in that batch helps that step. A step may accept
+            several different candidates. Select every useful candidate needed for the lesson; do not target a fixed
+            count. The same candidate may never be selected twice or shared across steps.
 
             Select a crop only when its literal visible content helps a player inspect the offered claim. An image
             never proves a mechanical effect, condition, quantity, score, timing, or exception; cited text remains
@@ -83,11 +85,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             action, candidateId, label, visibleDescription,
             supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
             literal label/description, and only C refs for that step whose sourcePages contain the candidate page.
-            NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Never select
-            one candidate twice. Select all useful candidates without targeting a fixed count. Images prove appearance
-            only. Add no fields. Structured rejection feedback requires one complete replacement object, never a field
-            patch. Reconsider the offered opaque candidate ids and return a valid candidate or NO_VISUAL; never edit
-            pixels or return geometry.
+            NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Every
+            offered step needs at least one review in every batch: accepted candidate(s), or exactly one NO_VISUAL.
+            Never select one candidate twice. Select all useful candidates without targeting a fixed count. Images
+            prove appearance only. Add no fields. Structured rejection feedback requires one complete replacement
+            object, never a field patch. Reconsider the offered opaque candidate ids and return a valid candidate or
+            NO_VISUAL; never edit pixels or return geometry.
             """;
 
     private static final int MAX_ATTACHMENT_EDGE = 1_024;
@@ -416,6 +419,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     false,
                     candidate.sourceKind()));
             acceptedSteps.add(review.stepPosition());
+        }
+        Set<Integer> reviewedSteps = new LinkedHashSet<>(acceptedSteps);
+        reviewedSteps.addAll(rejectedSteps);
+        if (!reviewedSteps.equals(offeredSteps)) {
+            Set<Integer> missingSteps = new LinkedHashSet<>(offeredSteps);
+            missingSteps.removeAll(reviewedSteps);
+            return unsupported(candidateJson,
+                    "Every offered step needs an ACCEPT_CANDIDATE or NO_VISUAL review; missing " + missingSteps);
         }
         if (!accepted.isEmpty()) {
             return new GuideAttempt(

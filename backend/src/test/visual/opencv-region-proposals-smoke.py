@@ -69,6 +69,22 @@ def main() -> None:
     if blank_boxes:
         raise AssertionError("a blank page must not invent a visual region")
 
+    prose = blank.copy()
+    for index in range(9):
+        cv2.putText(
+            prose,
+            "A rulebook paragraph contains words but no illustration",
+            (100, 100 + index * 62),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            (20, 20, 20),
+            2,
+            cv2.LINE_AA,
+        )
+    prose_boxes = production.candidate_boxes(prose, 32)
+    if prose_boxes:
+        raise AssertionError("a prose-only page must not be offered as an illustration")
+
     diagram = blank.copy()
     cv2.rectangle(diagram, (170, 150), (1_030, 650), (0, 0, 0), 8)
     cv2.circle(diagram, (390, 390), 100, (0, 0, 0), 8)

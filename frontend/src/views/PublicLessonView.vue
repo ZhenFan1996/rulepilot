@@ -544,10 +544,6 @@ function sourcePageUrl(pageNumber: number) {
   return `/api/public/lessons/${encodeURIComponent(planId.value)}/pages/${pageNumber}/image`
 }
 
-function sourcePagePreviewUrl(pageNumber: number) {
-  return `${sourcePageUrl(pageNumber)}/preview`
-}
-
 function cropUrl(focus: VisualFocus) {
   const query = new URLSearchParams({
     x: String(focus.x), y: String(focus.y), width: String(focus.width), height: String(focus.height),
@@ -1227,7 +1223,6 @@ onUnmounted(() => {
           :sections="publicLesson.lesson.sections"
           id-prefix="public-chapter"
           :page-image-url="sourcePageUrl"
-          :page-preview-image-url="sourcePagePreviewUrl"
           :focused-page-image-url="cropUrl"
         />
       </article>

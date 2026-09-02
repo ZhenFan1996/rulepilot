@@ -335,11 +335,6 @@ function pageImageUrl(page: number | undefined) {
   return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image`
 }
 
-function pagePreviewImageUrl(page: number) {
-  if (!plan.value) return ''
-  return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image/preview`
-}
-
 function focusedPageImageUrl(focus: NonNullable<LessonSection['steps'][number]['visualFocus']>) {
   if (!plan.value) return ''
   const query = new URLSearchParams({
@@ -892,7 +887,6 @@ onUnmounted(() => {
           :sections="lesson.sections"
           id-prefix="private-chapter"
           :page-image-url="pageImageUrl"
-          :page-preview-image-url="pagePreviewImageUrl"
           :focused-page-image-url="focusedPageImageUrl"
           step-test-id="private-rule-step"
         />

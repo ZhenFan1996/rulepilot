@@ -206,6 +206,32 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
+    void rejectsASelectionThatSilentlySkipsAnOfferedTeachingStep() throws IOException {
+        String incomplete = """
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
+                "candidateId":"candidate_1","label":"组件","visibleDescription":"组件位于版图中央",
+                "supportedClaimRefs":["C1"]}]}
+                """;
+        Runtime runtime = runtime(incomplete, incomplete);
+        VisualLocationRequest request = request(
+                List.of(claim(1, 2), claim(2, 2)),
+                List.of(candidate("candidate_1", 2, new Rectangle(100, 100, 300, 300))),
+                List.of(page(2, solidPng(Color.WHITE))),
+                1);
+
+        assertThat(runtime.locator().locateGuideWithResult(request).diagnostic())
+                .isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(runtime.model(), times(2)).call(prompts.capture());
+        assertThat(prompts.getAllValues().get(1).getInstructions().stream()
+                .filter(UserMessage.class::isInstance)
+                .map(message -> message.getText())
+                .findFirst()
+                .orElseThrow())
+                .contains("Every offered step needs an ACCEPT_CANDIDATE or NO_VISUAL review; missing [2]");
+    }
+
+    @Test
     void preservesTypedNoVisualForAProseOnlyCandidateWithoutRetrying() throws IOException {
         Runtime runtime = runtime("""
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"NO_VISUAL","candidateId":null,

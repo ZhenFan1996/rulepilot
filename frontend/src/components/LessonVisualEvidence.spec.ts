@@ -19,7 +19,6 @@ function mountEvidence() {
     props: {
       focus,
       pageImageUrl: (page: number) => `/page/${page}`,
-      pagePreviewImageUrl: (page: number) => `/preview/${page}`,
       focusedPageImageUrl: visual => `/crop/${visual.pageNumber}`,
     },
   })
@@ -58,39 +57,29 @@ describe('LessonVisualEvidence', () => {
     setLocale('zh-CN')
   })
 
-  it('pairs a lightweight whole-page locator with the verified close-up', async () => {
+  it('renders only the selected crop with its observation inside one illustrated unit', async () => {
     const wrapper = mountEvidence()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('1 · 先定位')
-    expect(wrapper.text()).toContain('2 · 再看细节')
+    expect(wrapper.text()).toContain('结合图片 · 1/1')
+    expect(wrapper.text()).toContain('看这里：')
     expect(wrapper.text()).toContain('六张牌排成两行，箭头从左侧指向右侧。')
-    expect(wrapper.get('[data-testid="lesson-visual-context"] img').attributes('src')).toBe('/preview/6')
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
+    expect(wrapper.get('[data-testid="lesson-visual-image"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
     expect(fetch).toHaveBeenCalledWith('/crop/6', expect.objectContaining({ credentials: 'include' }))
-    expect(wrapper.get('[data-testid="lesson-visual-context"]').attributes('href')).toBe('/page/6')
-    expect(wrapper.get('[data-testid="lesson-visual-detail"]').attributes('href')).toBe('/page/6')
-    expect(wrapper.get('[data-testid="lesson-visual-context-focus"]').attributes('style')).toContain('left: 10%')
-    expect(wrapper.get('[data-testid="lesson-visual-context-focus"]').attributes('style')).toContain('top: 20%')
-    expect(wrapper.get('[data-testid="lesson-visual-context-focus"]').attributes('style')).toContain('width: 50%')
-    expect(wrapper.get('[data-testid="lesson-visual-context-focus"]').attributes('style')).toContain('height: 30%')
-    expect(wrapper.text()).toContain('规则含义以上方有引用的步骤为准')
+    expect(wrapper.get('[data-testid="lesson-visual-image"]').attributes('href')).toBe('/page/6')
+    expect(wrapper.find('[data-testid="lesson-visual-context"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('规则以本步骤及来源页为准')
   })
 
-  it('keeps the surviving scale and original-page escape hatch when either image fails', async () => {
+  it('keeps the observation and original-page escape hatch when the crop fails', async () => {
     const wrapper = mountEvidence()
     await flushPromises()
 
-    await wrapper.get('[data-testid="lesson-visual-context"] img').trigger('error')
-    expect(wrapper.find('[data-testid="lesson-visual-context"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
-    expect(wrapper.text()).toContain('原页定位预览暂时没有加载')
-    expect(wrapper.findAll('a[href="/page/6"]')).not.toHaveLength(0)
-
-    await wrapper.get('[data-testid="lesson-visual-detail"] img').trigger('error')
-    expect(wrapper.find('[data-testid="lesson-visual-detail"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="lesson-visual-image"] img').trigger('error')
+    expect(wrapper.find('[data-testid="lesson-visual-image"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('浏览器无法读取返回的局部图')
     expect(wrapper.text()).toContain('只省略此图，已发布的带引用正文保留')
+    expect(wrapper.text()).toContain('六张牌排成两行，箭头从左侧指向右侧。')
     expect(wrapper.findAll('a[href="/page/6"]')).not.toHaveLength(0)
   })
 
@@ -99,37 +88,28 @@ describe('LessonVisualEvidence', () => {
     const wrapper = mountEvidence()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('1 · Locate it')
-    expect(wrapper.text()).toContain('2 · Look closer')
-    expect(wrapper.text()).toContain('The cited step above remains the rule authority.')
-    expect(wrapper.get('img[alt*="highlighting 行动网格"]')).toBeTruthy()
-    expect(wrapper.get('[data-testid="lesson-visual-context-focus"]').attributes('style')).toContain('left: 10%')
+    expect(wrapper.text()).toContain('Illustrated step · 1/1')
+    expect(wrapper.text()).toContain('Look for:')
+    expect(wrapper.text()).toContain('this step and its source page remain authoritative')
+    expect(wrapper.get('img[alt*="Illustration for “行动网格”"]')).toBeTruthy()
   })
 
-  it('downgrades a thin corner-clipped region to page context instead of showing a false close-up', () => {
+  it('omits a thin corner-clipped candidate instead of falling back to a duplicate whole page', () => {
     const focusedPageImageUrl = vi.fn(() => '/crop/6')
     const wrapper = mount(LessonVisualEvidence, {
       props: {
         focus: { ...focus, x: 130, y: 880, width: 870, height: 120 },
         pageImageUrl: (page: number) => `/page/${page}`,
-        pagePreviewImageUrl: (page: number) => `/preview/${page}`,
         focusedPageImageUrl,
       },
     })
 
-    expect(wrapper.get('[data-testid="lesson-visual-context"] img').attributes('src')).toBe('/preview/6')
-    expect(wrapper.find('[data-testid="lesson-visual-context-focus"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="lesson-visual-detail"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="lesson-visual-detail-unreliable"]')).toBeTruthy()
-    expect(wrapper.text()).toContain('这次不强行放大')
-    expect(wrapper.text()).toContain('页眉、页脚或被截断的内容')
-    const contextAlt = wrapper.get('[data-testid="lesson-visual-context"] img').attributes('alt')
-    expect(contextAlt).toContain('用于核对')
-    expect(contextAlt).toContain('行动网格')
-    expect(contextAlt).toContain('页面上下文')
-    expect(contextAlt).not.toContain('框选')
-    expect(wrapper.text()).toContain('本页仅用于建立上下文')
-    expect(wrapper.text()).not.toContain('定位框和特写只说明')
+    expect(wrapper.find('[data-testid="lesson-visual-image"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lesson-visual-context"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="lesson-visual-image-unreliable"]')).toBeTruthy()
+    expect(wrapper.text()).toContain('这张候选图不够可靠')
+    expect(wrapper.text()).toContain('被截断内容')
+    expect(wrapper.text()).toContain('核对原页')
     expect(focusedPageImageUrl).not.toHaveBeenCalled()
   })
 
@@ -138,15 +118,13 @@ describe('LessonVisualEvidence', () => {
       props: {
         focus: { ...focus, x: 100, y: 400, width: 800, height: 120 },
         pageImageUrl: (page: number) => `/page/${page}`,
-        pagePreviewImageUrl: (page: number) => `/preview/${page}`,
         focusedPageImageUrl: visual => `/crop/${visual.pageNumber}`,
       },
     })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="lesson-visual-context-focus"]')).toBeTruthy()
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
-    expect(wrapper.find('[data-testid="lesson-visual-detail-unreliable"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="lesson-visual-image"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
+    expect(wrapper.find('[data-testid="lesson-visual-image-unreliable"]').exists()).toBe(false)
   })
 
   it('defers crop decoding until the visual approaches the viewport', async () => {
@@ -187,7 +165,7 @@ describe('LessonVisualEvidence', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const retrying = wrapper.get('[data-testid="lesson-visual-detail-retrying"]')
+    const retrying = wrapper.get('[data-testid="lesson-visual-image-retrying"]')
     expect(retrying.text()).toContain('图像解码容量暂时繁忙')
     expect(retrying.text()).toContain('正在按服务返回的状态重新读取这张局部图')
     expect(retrying.text()).toContain('已发布的带引用正文不受影响')
@@ -198,8 +176,8 @@ describe('LessonVisualEvidence', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
-    expect(wrapper.find('[data-testid="lesson-visual-detail-loading"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="lesson-visual-image"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
+    expect(wrapper.find('[data-testid="lesson-visual-image-loading"]').exists()).toBe(false)
   })
 
   it('does not retry a permanent crop failure and keeps a stable local fallback', async () => {
@@ -211,8 +189,8 @@ describe('LessonVisualEvidence', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith('/crop/6', expect.objectContaining({ credentials: 'include' }))
-    expect(wrapper.find('[data-testid="lesson-visual-detail"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="lesson-visual-detail-failure"]').text()).toContain('原页图或裁剪已永久不可用')
+    expect(wrapper.find('[data-testid="lesson-visual-image"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="lesson-visual-image-failure"]').text()).toContain('原页图或裁剪已永久不可用')
     expect(wrapper.text()).toContain('原样重试无益')
     expect(wrapper.text()).toContain('只省略此图，已发布的带引用正文保留')
     expect(wrapper.findAll('a[href="/page/6"]')).not.toHaveLength(0)
@@ -225,7 +203,7 @@ describe('LessonVisualEvidence', () => {
 
     const wrapper = mountEvidence()
     await flushPromises()
-    expect(wrapper.get('[data-testid="lesson-visual-detail-retrying"]').text()).toContain('原页图暂时无法读取')
+    expect(wrapper.get('[data-testid="lesson-visual-image-retrying"]').text()).toContain('原页图暂时无法读取')
     expect(wrapper.text()).toContain('已发布的带引用正文不受影响')
 
     await vi.advanceTimersByTimeAsync(1_000)
@@ -233,8 +211,8 @@ describe('LessonVisualEvidence', () => {
     await vi.runAllTimersAsync()
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(wrapper.find('[data-testid="lesson-visual-detail"]').exists()).toBe(false)
-    const failure = wrapper.get('[data-testid="lesson-visual-detail-failure"]')
+    expect(wrapper.find('[data-testid="lesson-visual-image"]').exists()).toBe(false)
+    const failure = wrapper.get('[data-testid="lesson-visual-image-failure"]')
     expect(failure.text()).toContain('原页图仍无法读取')
     expect(failure.text()).toContain('本次局部图已停止读取')
     expect(failure.text()).toContain('只省略此图，已发布的带引用正文保留')
@@ -252,17 +230,17 @@ describe('LessonVisualEvidence', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('[data-testid="lesson-visual-detail-failure"]').text()).toContain('局部图在传输或服务响应时失败')
+    expect(wrapper.get('[data-testid="lesson-visual-image-failure"]').text()).toContain('局部图在传输或服务响应时失败')
     expect(wrapper.text()).toContain('只省略此图，已发布的带引用正文保留')
     expect(wrapper.findAll('a[href="/page/6"]')).not.toHaveLength(0)
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
-    await wrapper.get('[data-testid="lesson-visual-detail-retry"]').trigger('click')
+    await wrapper.get('[data-testid="lesson-visual-image-retry"]').trigger('click')
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls.every(([url]) => url === '/crop/6')).toBe(true)
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src'))
+    expect(wrapper.get('[data-testid="lesson-visual-image"] img').attributes('src'))
       .toMatch(/^data:image\/jpeg;base64,/)
   })
 
@@ -283,7 +261,7 @@ describe('LessonVisualEvidence', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('[data-testid="lesson-visual-detail-failure"]').text()).toContain('浏览器无法读取返回的局部图')
+    expect(wrapper.get('[data-testid="lesson-visual-image-failure"]').text()).toContain('浏览器无法读取返回的局部图')
     expect(wrapper.text()).toContain('只省略此图，已发布的带引用正文保留')
   })
 })

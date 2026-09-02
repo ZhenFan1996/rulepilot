@@ -56,7 +56,6 @@ function mountDirectory(lessonSections: TestSection[] = sections) {
       sections: lessonSections,
       idPrefix: 'test-chapter',
       pageImageUrl: (page: number) => `/page/${page}`,
-      pagePreviewImageUrl: (page: number) => `/preview/${page}`,
       focusedPageImageUrl: (focus: { pageNumber: number }) => `/crop/${focus.pageNumber}`,
     },
   })
@@ -150,7 +149,7 @@ describe('LessonChapterList', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' })
   })
 
-  it('uses the same context-and-detail evidence storyboard in the shared reader', async () => {
+  it('uses one crop-first illustrated unit in the shared reader', async () => {
     const wrapper = mountDirectory([{
       ...sections[0]!,
       steps: [{
@@ -169,13 +168,13 @@ describe('LessonChapterList', () => {
     }])
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="lesson-visual-storyboard"]')).toBeTruthy()
-    expect(wrapper.get('[data-testid="lesson-visual-context"] img').attributes('src')).toBe('/preview/2')
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src'))
+    expect(wrapper.get('[data-testid="lesson-visual-evidence"]')).toBeTruthy()
+    expect(wrapper.find('[data-testid="lesson-visual-context"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="lesson-visual-image"] img').attributes('src'))
       .toMatch(/^data:image\/jpeg;base64,/)
     expect(fetch).toHaveBeenCalledWith('/crop/2', expect.objectContaining({ credentials: 'include' }))
     expect(wrapper.text()).toContain('把主板放在桌面中央。')
-    expect(wrapper.text()).toContain('规则含义以上方有引用的步骤为准')
+    expect(wrapper.text()).toContain('规则以本步骤及来源页为准')
   })
 
   it('keeps each cited visual inside the step narrative it explains', async () => {
@@ -199,11 +198,11 @@ describe('LessonChapterList', () => {
 
     const pairedStep = wrapper.get('[data-testid="lesson-step-paired"]')
     const narrative = pairedStep.get('[data-testid="lesson-step-narrative"]')
-    const storyboard = pairedStep.get('[data-testid="lesson-visual-storyboard"]')
+    const visual = pairedStep.get('[data-testid="lesson-visual-evidence"]')
 
     expect(narrative.text()).toContain('把主板放在桌面中央。')
-    expect(storyboard.attributes('aria-describedby')).toBe(narrative.attributes('id'))
-    expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).not.toContain('sm:grid-cols-2')
+    expect(visual.attributes('aria-describedby')).toBe(narrative.attributes('id'))
+    expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).toContain('sm:grid-cols-2')
   })
 
   it('renders every visual focus attached to the same cited step', async () => {
@@ -221,10 +220,12 @@ describe('LessonChapterList', () => {
     }])
     await flushPromises()
     await vi.waitFor(() => {
-      expect(wrapper.findAll('[data-testid="lesson-visual-detail"] img')).toHaveLength(3)
+      expect(wrapper.findAll('[data-testid="lesson-visual-image"] img')).toHaveLength(3)
     })
 
-    expect(wrapper.get('[data-testid="lesson-step-visuals"]').findAll('[data-testid="lesson-visual-storyboard"]')).toHaveLength(3)
+    expect(wrapper.get('[data-testid="lesson-step-visuals"]').findAll('[data-testid="lesson-visual-evidence"]')).toHaveLength(3)
+    expect(wrapper.text()).toContain('结合图片 · 1/3')
+    expect(wrapper.text()).toContain('结合图片 · 3/3')
     expect(vi.mocked(fetch).mock.calls.map(([input]) => String(input)))
       .toEqual(['/crop/2', '/crop/3', '/crop/4'])
   })

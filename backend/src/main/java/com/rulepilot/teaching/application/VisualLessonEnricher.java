@@ -7,7 +7,6 @@ import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionProposer;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
-import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.visualaid.VisualRegionCatalog;
@@ -15,10 +14,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -241,7 +237,6 @@ public class VisualLessonEnricher {
             VisualProgressListener progress) {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
-        Map<Integer, Set<Integer>> explicitVisualStepPositions = explicitVisualStepPositions(lesson);
         Set<Integer> selectedPositions = prioritizer.positions(lesson.sections());
         List<VisualFocus> acceptedVisuals = lesson.sections().stream()
                 .flatMap(section -> section.steps().stream())
@@ -263,8 +258,7 @@ public class VisualLessonEnricher {
                     compatibilityDeadline,
                     proposalToolCircuit,
                     progress,
-                    acceptedVisuals,
-                    explicitVisualStepPositions.getOrDefault(section.position(), Set.of()));
+                    acceptedVisuals);
             SectionResult sectionResult = sectionResult(enriched);
             sectionResults.add(sectionResult);
             currentSections.set(sectionIndex, sectionResult.section());
@@ -315,35 +309,13 @@ public class VisualLessonEnricher {
                 clock.instant().plus(compatibilityWorkflowTimeout),
                 sectionEnricher.beginProposalWorkflow(),
                 progress,
-                acceptedVisuals,
-                explicitVisualStepPositions(section));
+                acceptedVisuals);
         SectionResult reported = sectionResult(result);
         if (reported.outcome() != null) {
             progress.sectionFinished(new SectionProgress(
                     section.position(), section.title(), reported.outcome()));
         }
         return new SectionEnrichment(reported.section(), reported.outcome());
-    }
-
-    private Map<Integer, Set<Integer>> explicitVisualStepPositions(IllustratedLesson lesson) {
-        Map<Integer, Set<Integer>> positions = new LinkedHashMap<>();
-        for (LessonSection section : lesson.sections()) {
-            Set<Integer> sectionPositions = section.steps().stream()
-                    .filter(step -> step.kind() == IllustratedLesson.TeachingMove.VISUAL)
-                    .filter(step -> step.visualFoci().isEmpty())
-                    .map(LessonStep::position)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (!sectionPositions.isEmpty()) positions.put(section.position(), Set.copyOf(sectionPositions));
-        }
-        return Map.copyOf(positions);
-    }
-
-    private Set<Integer> explicitVisualStepPositions(LessonSection section) {
-        return section.steps().stream()
-                .filter(step -> step.kind() == IllustratedLesson.TeachingMove.VISUAL)
-                .filter(step -> step.visualFoci().isEmpty())
-                .map(LessonStep::position)
-                .collect(Collectors.toUnmodifiableSet());
     }
 
     private IllustratedLesson lessonWithSections(IllustratedLesson original, List<LessonSection> sections) {

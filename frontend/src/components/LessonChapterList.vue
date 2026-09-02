@@ -28,7 +28,6 @@ const props = withDefaults(defineProps<{
   sections: LessonReaderSection[]
   idPrefix: string
   pageImageUrl: (page: number) => string
-  pagePreviewImageUrl: (page: number) => string
   focusedPageImageUrl: (focus: VisualFocus) => string
   stepTestId?: string
 }>(), { stepTestId: '' })
@@ -226,7 +225,6 @@ function stepKindLabel(kind: string) {
                 <div
                   :data-testid="stepVisuals(step).length ? 'lesson-step-paired' : undefined"
                   class="min-w-0 flex-1"
-                  :class="stepVisuals(step).length ? 'lg:grid lg:grid-cols-[minmax(12rem,0.75fr)_minmax(22rem,1.25fr)] lg:items-start lg:gap-6' : ''"
                 >
                   <div
                     :id="stepNarrationId(section.position, step.position)"
@@ -237,22 +235,34 @@ function stepKindLabel(kind: string) {
                       <h3 class="font-display text-xl font-semibold sm:text-2xl">{{ step.heading }}</h3>
                       <span class="rounded-full border border-ink/10 bg-canvas/70 px-2.5 py-1 text-[11px] font-bold tracking-[0.08em] text-ink/45">{{ stepKindLabel(step.kind) }}</span>
                     </div>
-                    <p class="mt-3 text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
-                    <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
+                    <div
+                      class="mt-4"
+                      :class="stepVisuals(step).length ? 'lg:grid lg:grid-cols-[minmax(20rem,1.08fr)_minmax(16rem,0.92fr)] lg:items-start lg:gap-6' : ''"
+                    >
+                      <div
+                        v-if="stepVisuals(step).length"
+                        data-testid="lesson-step-visuals"
+                        class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2"
+                      >
+                        <LessonVisualEvidence
+                          v-for="(focus, visualIndex) in stepVisuals(step)"
+                          :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`"
+                          :focus="focus"
+                          :ordinal="visualIndex + 1"
+                          :total="stepVisuals(step).length"
+                          :narration-id="stepNarrationId(section.position, step.position)"
+                          :page-image-url="props.pageImageUrl"
+                          :focused-page-image-url="props.focusedPageImageUrl"
+                        />
+                      </div>
 
-                    <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-ink/50 transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
-                  </div>
+                      <div class="min-w-0" :class="stepVisuals(step).length ? 'mt-5 lg:mt-0' : ''">
+                        <p class="text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
+                        <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
 
-                  <div v-if="stepVisuals(step).length" class="mt-5 grid gap-3 lg:mt-0" data-testid="lesson-step-visuals">
-                    <LessonVisualEvidence
-                      v-for="focus in stepVisuals(step)"
-                      :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`"
-                      :focus="focus"
-                      :narration-id="stepNarrationId(section.position, step.position)"
-                      :page-image-url="props.pageImageUrl"
-                      :page-preview-image-url="props.pagePreviewImageUrl"
-                      :focused-page-image-url="props.focusedPageImageUrl"
-                    />
+                        <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-ink/50 transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,12 +36,15 @@ class VisualLessonStepLocatorTest {
         UUID documentVersionId = UUID.randomUUID();
         UUID evidenceId = UUID.randomUUID();
         DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        VisualRegionProposer localProposals = mock(VisualRegionProposer.class);
         VisualRegionLocator locator = mock(VisualRegionLocator.class);
+        when(localProposals.configured()).thenReturn(true);
         when(pageImages.read(documentVersionId, Set.of(2)))
                 .thenReturn(List.of(new DocumentPageImages.PageImage(
                         2, "image/png", new byte[] {1}, 1_000, 1_000)));
         when(locator.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(invocation -> {
             VisualRegionLocator.VisualLocationRequest request = invocation.getArgument(0);
+            assertThat(request.candidates()).hasSize(1);
             var candidate = request.candidates().getFirst();
             return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
                     candidate.pageNumber(),
@@ -56,13 +60,14 @@ class VisualLessonStepLocatorTest {
                     candidate.sourceKind())));
         });
         VisualRegionCatalog catalog = (versionId, pageNumbers) -> List.of(
+                new VisualRegionCatalog.Region(2, "TABLE", 40, 80, 800, 500),
                 new VisualRegionCatalog.Region(2, "PICTURE", 120, 180, 420, 360));
         LessonStep step = step(evidenceId, 2);
         LessonSection section = section(evidenceId, step);
         var stepLocator = new VisualLessonStepLocator(
                 pageImages,
                 new VisualRegionCandidateSelector(),
-                VisualRegionProposer.unavailable(),
+                localProposals,
                 catalog,
                 locator,
                 new VisualReaderCropPolicy(),
@@ -83,6 +88,7 @@ class VisualLessonStepLocatorTest {
             assertThat(new Rectangle(region.x(), region.y(), region.width(), region.height()))
                     .isEqualTo(new Rectangle(120, 180, 420, 360));
         });
+        verify(localProposals, never()).propose(any(), any(Duration.class));
     }
 
     @Test

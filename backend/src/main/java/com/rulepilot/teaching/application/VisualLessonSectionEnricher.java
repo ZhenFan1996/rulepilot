@@ -3,7 +3,6 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
-import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.time.Instant;
 import java.util.List;
@@ -44,12 +43,8 @@ final class VisualLessonSectionEnricher {
             Instant compatibilityDeadline,
             VisualLessonStepLocator.ProposalToolCircuit proposalToolCircuit,
             VisualLessonEnricher.VisualProgressListener progress,
-            List<VisualFocus> acceptedVisuals,
-            java.util.Set<Integer> explicitVisualStepPositions) {
-        if (explicitVisualStepPositions == null) {
-            throw new IllegalArgumentException("explicit visual step positions are required");
-        }
-        List<LessonStep> targets = visualTargets(section, explicitVisualStepPositions);
+            List<VisualFocus> acceptedVisuals) {
+        List<LessonStep> targets = visualTargets(section);
         if (targets.isEmpty()) return Result.rejected(section, VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
         targets.forEach(step -> progress.targetStarted(target(section, step)));
         VisualLessonStepLocator.Result location = stepLocator.locate(
@@ -97,17 +92,10 @@ final class VisualLessonSectionEnricher {
                 section.position(), section.title(), step.position(), step.heading());
     }
 
-    private List<LessonStep> visualTargets(
-            LessonSection section, java.util.Set<Integer> explicitVisualStepPositions) {
-        List<LessonStep> eligible = section.steps().stream()
+    /** Every cited step is a possible visual teaching move; VISUAL marks content, not exclusive eligibility. */
+    static List<LessonStep> visualTargets(LessonSection section) {
+        return section.steps().stream()
                 .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
-                .toList();
-        boolean hasExplicitVisualIntent = !explicitVisualStepPositions.isEmpty()
-                || eligible.stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL);
-        return eligible.stream()
-                .filter(step -> !hasExplicitVisualIntent
-                        || explicitVisualStepPositions.contains(step.position())
-                        || step.kind() == TeachingMove.VISUAL)
                 .sorted(java.util.Comparator.comparingInt(LessonStep::position))
                 .toList();
     }

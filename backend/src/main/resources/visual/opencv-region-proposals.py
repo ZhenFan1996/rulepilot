@@ -221,6 +221,50 @@ def visual_score(
     return score, color_coverage, area_ratio
 
 
+def looks_like_prose(
+    box: tuple[int, int, int, int],
+    gray: np.ndarray,
+    saturation: np.ndarray,
+) -> bool:
+    """Reject paragraph-shaped ink without OCR or exposing recognized text."""
+    x, y, width, height = box
+    region_gray = gray[y : y + height, x : x + width]
+    region_saturation = saturation[y : y + height, x : x + width]
+    pixels = max(1, width * height)
+    if float(np.count_nonzero(region_saturation >= 48)) / pixels >= 0.035:
+        return False
+
+    ink = cv2.inRange(region_gray, 0, 205)
+    component_count, _, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    small_glyphs = 0
+    for index in range(1, component_count):
+        component_width = int(stats[index, cv2.CC_STAT_WIDTH])
+        component_height = int(stats[index, cv2.CC_STAT_HEIGHT])
+        component_area = int(stats[index, cv2.CC_STAT_AREA])
+        if (
+            2 <= component_area <= max(16, pixels * 0.015)
+            and component_width <= max(8, width * 0.24)
+            and component_height <= max(8, height * 0.16)
+        ):
+            small_glyphs += 1
+
+    line_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (max(7, round(width * 0.035)), max(1, round(height * 0.006)))
+    )
+    joined = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, line_kernel, iterations=1)
+    line_contours, _ = cv2.findContours(joined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    text_lines = 0
+    for contour in line_contours[:MAX_CONTOURS_SCANNED_PER_ROUND]:
+        _, _, line_width, line_height = cv2.boundingRect(contour)
+        if (
+            line_width >= width * 0.18
+            and line_height <= max(6, height * 0.18)
+            and line_width / max(1, line_height) >= 2.8
+        ):
+            text_lines += 1
+    return small_glyphs >= 12 and text_lines >= 3
+
+
 def scale_diverse_order(
     proposals: list[tuple[tuple[int, int, int, int], float, float]],
 ) -> list[tuple[tuple[int, int, int, int], float, float]]:
@@ -228,8 +272,8 @@ def scale_diverse_order(
     # otherwise fills it with repeated small tokens, while pure area ordering recreates the old broad-crop failure.
     lanes = (
         [proposal for proposal in proposals if proposal[2] < 0.015],
-        [proposal for proposal in proposals if proposal[2] >= 0.08],
         [proposal for proposal in proposals if 0.015 <= proposal[2] < 0.08],
+        [proposal for proposal in proposals if proposal[2] >= 0.08],
     )
     ordered: list[tuple[tuple[int, int, int, int], float, float]] = []
     for index in range(max((len(lane) for lane in lanes), default=0)):
@@ -276,9 +320,9 @@ def candidate_boxes(
 
     proposals: list[tuple[tuple[int, int, int, int], float, float]] = []
     proposal_cap = min(MAX_PROPOSALS_PER_ROUND, max(64, maximum * 8))
-    # Two geometry scales keep compact component diagrams and larger reference panels in the same typed candidate
+    # Several bounded geometry scales keep compact components and larger diagrams in the same typed candidate
     # space. This is candidate generation only; the vision model still decides whether a region supports a claim.
-    for ratio, iterations in ((0.006, 1), (0.012, 2)):
+    for ratio, iterations in ((0.003, 1), (0.006, 1), (0.010, 2)):
         kernel_size = max(5, round(long_edge * ratio))
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
         connected = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=iterations)
@@ -290,15 +334,16 @@ def candidate_boxes(
                 break
             scanned += 1
             x, y, width, height = cv2.boundingRect(contour)
+            raw_box = (x, y, width, height)
             area_ratio = width * height / page_area
             aspect = max(width / max(height, 1), height / max(width, 1))
             if (
-                0.004 <= area_ratio <= 0.60
+                0.004 <= area_ratio <= 0.52
                 and width >= minimum_width
                 and height >= minimum_height
                 and aspect <= 8
+                and not looks_like_prose(raw_box, gray, saturation)
             ):
-                raw_box = (x, y, width, height)
                 score, _, measured_area_ratio = visual_score(
                     raw_box, saturation, edges, 48, page_area
                 )
@@ -338,10 +383,11 @@ def candidate_boxes(
             aspect = max(width / max(height, 1), height / max(width, 1))
             raw_box = (x, y, width, height)
             if (
-                0.002 <= area_ratio <= 0.60
+                0.002 <= area_ratio <= 0.52
                 and width >= minimum_width
                 and height >= minimum_height
                 and aspect <= 8
+                and not looks_like_prose(raw_box, gray, saturation)
             ):
                 score, color_coverage, measured_area_ratio = visual_score(
                     raw_box, saturation, edges, threshold, page_area

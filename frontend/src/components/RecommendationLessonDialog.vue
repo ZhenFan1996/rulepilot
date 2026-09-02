@@ -280,10 +280,6 @@ function pageImageUrl(page: number) {
   return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image` : ''
 }
 
-function pagePreviewImageUrl(page: number) {
-  return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image/preview` : ''
-}
-
 function focusedPageImageUrl(focus: VisualFocus) {
   if (!plan.value) return ''
   const query = new URLSearchParams({
@@ -568,7 +564,7 @@ onBeforeUnmount(() => {
               <p class="font-semibold">{{ locale === 'en' ? 'Locally unavailable topics' : '局部未完成主题' }}</p>
               <ul class="mt-1 list-disc pl-5"><li v-for="topic in plan.unresolvedTopics" :key="topic">{{ topic }}</li></ul>
             </div>
-            <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :page-preview-image-url="pagePreviewImageUrl" :focused-page-image-url="focusedPageImageUrl" />
+            <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :focused-page-image-url="focusedPageImageUrl" />
           </template>
         </div>
       </section>
