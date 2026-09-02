@@ -497,11 +497,13 @@ jobs:
           fi
           printf 'DEPLOY_PREVIOUS_RELEASE_ID=%s\n' "$previous_release_id" >> "$GITHUB_ENV"
 
-      - name: Synchronize protected BGG credential and managed runtime configuration
+      - name: Synchronize protected integration credentials and managed runtime configuration
         id: synchronize_runtime
         shell: bash
         env:
           BGG_API_TOKEN: ${{ secrets.BGG_API_TOKEN }}
+          DOCLING_API_KEY: ${{ secrets.DOCLING_API_KEY }}
+          DOCLING_SERVICE_URL: ${{ secrets.DOCLING_SERVICE_URL }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
           DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
@@ -516,15 +518,31 @@ jobs:
             echo "BGG_API_TOKEN has an invalid format" >&2
             exit 1
           fi
+          if [[ -z "$DOCLING_SERVICE_URL" || ${#DOCLING_SERVICE_URL} -gt 2048
+            || ! "$DOCLING_SERVICE_URL" =~ ^https://[A-Za-z0-9][A-Za-z0-9./:_?\&=%+-]*$ ]]; then
+            echo "DOCLING_SERVICE_URL has an invalid format" >&2
+            exit 1
+          fi
+          if [[ -z "$DOCLING_API_KEY" || ${#DOCLING_API_KEY} -gt 4096
+            || ! "$DOCLING_API_KEY" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "DOCLING_API_KEY has an invalid format" >&2
+            exit 1
+          fi
 
           local_token_file="$RUNNER_TEMP/rulepilot-bgg-token-${DEPLOY_RELEASE_ID}"
           remote_token_file="/tmp/rulepilot-bgg-token-${DEPLOY_RELEASE_ID}"
+          local_docling_url_file="$RUNNER_TEMP/rulepilot-docling-url-${DEPLOY_RELEASE_ID}"
+          remote_docling_url_file="/tmp/rulepilot-docling-url-${DEPLOY_RELEASE_ID}"
+          local_docling_key_file="$RUNNER_TEMP/rulepilot-docling-key-${DEPLOY_RELEASE_ID}"
+          remote_docling_key_file="/tmp/rulepilot-docling-key-${DEPLOY_RELEASE_ID}"
           cleanup_local() {
-            rm -f "$local_token_file"
+            rm -f "$local_token_file" "$local_docling_url_file" "$local_docling_key_file"
           }
           trap cleanup_local EXIT
           umask 077
           printf '%s' "$BGG_API_TOKEN" > "$local_token_file"
+          printf '%s' "$DOCLING_SERVICE_URL" > "$local_docling_url_file"
+          printf '%s' "$DOCLING_API_KEY" > "$local_docling_key_file"
           scp \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
@@ -535,6 +553,26 @@ jobs:
             -P "$DEPLOY_SSH_PORT" \
             "$local_token_file" \
             "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_token_file}"
+          scp \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -P "$DEPLOY_SSH_PORT" \
+            "$local_docling_url_file" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_docling_url_file}"
+          scp \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -P "$DEPLOY_SSH_PORT" \
+            "$local_docling_key_file" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_docling_key_file}"
           ssh \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
@@ -547,13 +585,17 @@ jobs:
             'bash -s' -- \
               "$DEPLOY_PATH" \
               "$remote_token_file" \
+              "$remote_docling_url_file" \
+              "$remote_docling_key_file" \
               "$DEPLOY_RELEASE_ID" \
               "$DEPLOY_PREVIOUS_RELEASE_ID" <<'REMOTE'
           set -Eeuo pipefail
           application_root=$1
           token_file=$2
-          release_id=$3
-          previous_release_id=$4
+          docling_url_file=$3
+          docling_key_file=$4
+          release_id=$5
+          previous_release_id=$6
           if [[ ! "$release_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$
             || ! "$previous_release_id" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
             echo "Runtime synchronization release coordinates are invalid" >&2
@@ -563,16 +605,31 @@ jobs:
           temporary_env="${application_root}/.env.${GITHUB_RUN_ID:-sync}.tmp"
           guard_script="${application_root}/deployment-guards/${release_id}/production-release-guard.sh"
           cleanup_remote() {
-            rm -f "$token_file" "$temporary_env"
+            rm -f "$token_file" "$docling_url_file" "$docling_key_file" "$temporary_env"
           }
           trap cleanup_remote EXIT
 
           test -f "$env_file"
           test -f "$token_file"
+          test -f "$docling_url_file"
+          test -f "$docling_key_file"
           chmod 600 "$token_file"
+          chmod 600 "$docling_url_file" "$docling_key_file"
           token=$(<"$token_file")
           if [[ -z "$token" ]] || (( ${#token} > 4096 )) || [[ ! "$token" =~ ^[A-Za-z0-9._-]+$ ]]; then
             echo "Uploaded BGG credential has an invalid format" >&2
+            exit 1
+          fi
+          docling_service_url=$(<"$docling_url_file")
+          docling_api_key=$(<"$docling_key_file")
+          if [[ -z "$docling_service_url" || ${#docling_service_url} -gt 2048
+            || ! "$docling_service_url" =~ ^https://[A-Za-z0-9][A-Za-z0-9./:_?\&=%+-]*$ ]]; then
+            echo "Uploaded Docling service URL has an invalid format" >&2
+            exit 1
+          fi
+          if [[ -z "$docling_api_key" || ${#docling_api_key} -gt 4096
+            || ! "$docling_api_key" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Uploaded Docling credential has an invalid format" >&2
             exit 1
           fi
 
@@ -590,7 +647,7 @@ jobs:
           deepseek_enabled=false
           deepseek_key_present=false
           model_credential_key_present=false
-          managed_runtime_keys=' TEACHING_PROVIDER TEACHING_MODEL_PROVIDER TEACHING_AGENT_MAX_WORKLOAD_TIMEOUT TEACHING_AGENT_MAX_WORKLOAD_TOKENS TEACHING_OUTLINE_SHARD_PARALLELISM VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER DEEPSEEK_GENERATION_THINKING AGENT_TIMEOUT BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_MAXIMUM_ENTRIES BGG_CACHE_MAXIMUM_BYTES BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_TEMPERATURE BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY PRODUCTION_TRACING_EXPORT_OTLP_ENABLED PRODUCTION_TRACING_OTLP_ENDPOINT PRODUCTION_TRACING_SAMPLING_PROBABILITY '
+          managed_runtime_keys=' DOCLING_ENABLED DOCLING_SERVICE_URL DOCLING_API_KEY DOCLING_TIMEOUT DOCLING_POLL_INTERVAL DOCLING_MAX_FILE_BYTES DOCLING_MAX_RESULT_BYTES TEACHING_PROVIDER TEACHING_MODEL_PROVIDER TEACHING_AGENT_MAX_WORKLOAD_TIMEOUT TEACHING_AGENT_MAX_WORKLOAD_TOKENS TEACHING_OUTLINE_SHARD_PARALLELISM VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER DEEPSEEK_GENERATION_THINKING AGENT_TIMEOUT BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_MAXIMUM_ENTRIES BGG_CACHE_MAXIMUM_BYTES BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_TEMPERATURE BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY PRODUCTION_TRACING_EXPORT_OTLP_ENABLED PRODUCTION_TRACING_OTLP_ENDPOINT PRODUCTION_TRACING_SAMPLING_PROBABILITY '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
@@ -630,7 +687,14 @@ jobs:
           if [[ "$model_credential_key_present" != true ]]; then
             printf 'MODEL_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32 | tr -d '\n')" >> "$temporary_env"
           fi
+          printf 'DOCLING_SERVICE_URL=%s\n' "$docling_service_url" >> "$temporary_env"
+          printf 'DOCLING_API_KEY=%s\n' "$docling_api_key" >> "$temporary_env"
           printf '%s\n' \
+            'DOCLING_ENABLED=true' \
+            'DOCLING_TIMEOUT=PT5M' \
+            'DOCLING_POLL_INTERVAL=PT1S' \
+            'DOCLING_MAX_FILE_BYTES=104857600' \
+            'DOCLING_MAX_RESULT_BYTES=33554432' \
             'TEACHING_PROVIDER=spring-ai' \
             'TEACHING_MODEL_PROVIDER=deepseek' \
             'TEACHING_AGENT_MAX_WORKLOAD_TIMEOUT=PT16H' \
@@ -675,11 +739,11 @@ jobs:
             'PRODUCTION_TRACING_SAMPLING_PROBABILITY=0.05' >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"
-          unset token
+          unset token docling_service_url docling_api_key
           echo "Synchronized managed production integration configuration."
           REMOTE
 
-      - name: Remove staged BGG credential
+      - name: Remove staged integration credentials
         if: always() && steps.configure_ssh.outcome == 'success'
         shell: bash
         env:
@@ -704,7 +768,10 @@ jobs:
             echo "Staged credential release coordinate is invalid" >&2
             exit 1
           fi
-          rm -f -- "/tmp/rulepilot-bgg-token-${release_id}"
+          rm -f -- \
+            "/tmp/rulepilot-bgg-token-${release_id}" \
+            "/tmp/rulepilot-docling-url-${release_id}" \
+            "/tmp/rulepilot-docling-key-${release_id}"
           REMOTE
 
       - name: Activate release and verify production health
