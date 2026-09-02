@@ -5,13 +5,13 @@ import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
-import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /** Keeps deterministic lesson assembly separate from retrieval and model orchestration. */
@@ -61,36 +61,7 @@ final class TeachingLessonAssemblyPolicy {
         return previousLesson.sections().stream()
                 .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
                 .filter(section -> currentTopics.contains(section.topicKey()))
-                .collect(Collectors.toUnmodifiableMap(LessonSection::topicKey, this::primaryVisualOnly));
-    }
-
-    private LessonSection primaryVisualOnly(LessonSection section) {
-        List<LessonStep> steps = section.steps().stream().map(step -> {
-            if (step.visualFoci().size() <= 1) return step;
-            var primary = step.visualFoci().getFirst();
-            return new LessonStep(
-                    step.position(),
-                    step.heading(),
-                    step.kind(),
-                    step.text(),
-                    step.sourcePages(),
-                    step.sourceChunkIds(),
-                    step.ruleFacts(),
-                    primary,
-                    List.of(primary));
-        }).toList();
-        return new LessonSection(
-                section.position(),
-                section.topicKey(),
-                section.coverageTags(),
-                section.title(),
-                section.required(),
-                section.evidenceStatus(),
-                section.visualKind(),
-                section.visualCaption(),
-                section.visualSourcePages(),
-                section.visualSourceChunkIds(),
-                steps);
+                .collect(Collectors.toUnmodifiableMap(LessonSection::topicKey, Function.identity()));
     }
 
     List<PriorSectionContext> continuityContext(List<LessonSection> sections) {

@@ -54,7 +54,7 @@ const navigation = [
   { name: 'catalog', path: '/catalog', labelKey: 'nav.games', icon: 'meeple' },
   { name: 'account', path: '/account', labelKey: 'nav.account', icon: 'players' },
 ] as const
-const mobileNavigation = navigation.filter((item) => item.name !== 'account' && item.name !== 'public-library')
+const mobileNavigation = navigation.filter((item) => item.name !== 'account')
 
 const currentNavigationName = computed(() => {
   if (route.name === 'catalog-manage') return 'catalog'

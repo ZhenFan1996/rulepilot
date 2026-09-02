@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -193,7 +194,7 @@ class VisualLessonStepLocatorTest {
                         1, "image/png", new byte[] {1}, 1_000, 1_000)));
         when(locator.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(invocation -> {
             VisualRegionLocator.VisualLocationRequest request = invocation.getArgument(0);
-            assertThat(request.candidates()).hasSize(1);
+            assertThat(request.candidates()).hasSize(3);
             return VisualRegionLocator.LocateGuideResult.unavailable(
                     VisualRegionLocator.Diagnostic.EXPLICIT_NO_REGION);
         });
@@ -250,6 +251,206 @@ class VisualLessonStepLocatorTest {
         verify(locator).locateGuideWithResult(any(), any(Duration.class));
     }
 
+    @Test
+    void isolatesOneRejectedCandidateInputWithoutDiscardingTheOtherHalfBatch() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        VisualRegionCandidateSelector candidates = mock(VisualRegionCandidateSelector.class);
+        VisualRegionLocator locator = mock(VisualRegionLocator.class);
+        List<VisualRegionCandidateSelector.Candidate> offered = List.of(
+                candidate("candidate_1", 0),
+                candidate("candidate_2", 220),
+                candidate("candidate_3", 440),
+                candidate("candidate_4", 660));
+        when(candidates.select(any(), any(), any(), any())).thenReturn(offered);
+        when(pageImages.read(documentVersionId, Set.of(1)))
+                .thenReturn(List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 1_000, 1_000)));
+        List<List<String>> attemptedCandidateIds = new java.util.ArrayList<>();
+        when(locator.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(invocation -> {
+            VisualRegionLocator.VisualLocationRequest request = invocation.getArgument(0);
+            attemptedCandidateIds.add(request.candidates().stream()
+                    .map(VisualRegionCandidateSelector.Candidate::candidateId)
+                    .toList());
+            if (attemptedCandidateIds.size() <= 2) {
+                return VisualRegionLocator.LocateGuideResult.unavailable(
+                        VisualRegionLocator.Diagnostic.PROVIDER_INPUT_REJECTED);
+            }
+            var accepted = request.candidates().getFirst();
+            return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
+                    accepted.pageNumber(),
+                    "usable diagram",
+                    "A usable diagram remains visible.",
+                    accepted.rectangle().x(),
+                    accepted.rectangle().y(),
+                    accepted.rectangle().width(),
+                    accepted.rectangle().height(),
+                    List.of(evidenceId),
+                    List.of(3))));
+        });
+        List<LessonStep> steps = java.util.stream.IntStream.rangeClosed(1, 4)
+                .mapToObj(position -> new LessonStep(
+                        position,
+                        "Step " + position,
+                        TeachingMove.DO,
+                        "Follow cited step " + position + ".",
+                        List.of(1),
+                        List.of(evidenceId)))
+                .toList();
+        var stepLocator = new VisualLessonStepLocator(
+                pageImages,
+                candidates,
+                locator,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(5));
+
+        VisualLessonStepLocator.Result result = stepLocator.locate(
+                mock(RulebookUnderstanding.class),
+                documentVersionId,
+                section(evidenceId, steps.getFirst()),
+                steps,
+                "player");
+
+        assertThat(attemptedCandidateIds).containsExactly(
+                List.of("candidate_1", "candidate_2", "candidate_3", "candidate_4"),
+                List.of("candidate_1", "candidate_2"),
+                List.of("candidate_3", "candidate_4"));
+        assertThat(result.regions()).singleElement().satisfies(region ->
+                assertThat(region.x()).isEqualTo(440));
+        verify(locator, times(3)).locateGuideWithResult(any(), any(Duration.class));
+    }
+
+    @Test
+    void doesNotAmplifyAnUnclassifiedProviderFailureAcrossCandidates() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        VisualRegionCandidateSelector candidates = mock(VisualRegionCandidateSelector.class);
+        VisualRegionLocator locator = mock(VisualRegionLocator.class);
+        when(candidates.select(any(), any(), any(), any())).thenReturn(List.of(
+                candidate("candidate_1", 0), candidate("candidate_2", 220)));
+        when(pageImages.read(documentVersionId, Set.of(1)))
+                .thenReturn(List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 1_000, 1_000)));
+        when(locator.locateGuideWithResult(any(), any(Duration.class)))
+                .thenReturn(VisualRegionLocator.LocateGuideResult.unavailable(
+                        VisualRegionLocator.Diagnostic.PROVIDER_FAILURE));
+        List<LessonStep> steps = List.of(
+                new LessonStep(1, "Step 1", TeachingMove.DO, "First cited step.", List.of(1), List.of(evidenceId)),
+                new LessonStep(2, "Step 2", TeachingMove.DO, "Second cited step.", List.of(1), List.of(evidenceId)));
+        var stepLocator = new VisualLessonStepLocator(
+                pageImages,
+                candidates,
+                locator,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(5));
+
+        VisualLessonStepLocator.Result result = stepLocator.locate(
+                mock(RulebookUnderstanding.class),
+                documentVersionId,
+                section(evidenceId, steps.getFirst()),
+                steps,
+                "player");
+
+        assertThat(result.rejection()).isEqualTo(VisualLessonEnricher.Outcome.MODEL_PROVIDER_FAILURE);
+        verify(locator, times(1)).locateGuideWithResult(any(), any(Duration.class));
+    }
+
+    @Test
+    void offersAllBoundedCandidatesAcrossPageWindowsWithoutAOnePerStepBudget() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        VisualRegionCandidateSelector candidates = mock(VisualRegionCandidateSelector.class);
+        VisualRegionLocator locator = mock(VisualRegionLocator.class);
+        when(pageImages.read(any(), any())).thenAnswer(invocation -> {
+            Set<Integer> pages = invocation.getArgument(1);
+            return pages.stream()
+                    .map(page -> new DocumentPageImages.PageImage(
+                            page, "image/png", new byte[] {1}, 1_000, 1_000))
+                    .toList();
+        });
+        when(candidates.select(any(), any(), any(), any())).thenAnswer(invocation -> {
+            Set<Integer> pages = invocation.getArgument(1);
+            return pages.stream()
+                    .flatMap(page -> List.of(
+                                    new VisualRegionCandidateSelector.Candidate(
+                                            "candidate_" + page + "a",
+                                            page,
+                                            new Rectangle(0, 0, 200, 200),
+                                            VisualSourceKind.PAGE_REGION),
+                                    new VisualRegionCandidateSelector.Candidate(
+                                            "candidate_" + page + "b",
+                                            page,
+                                            new Rectangle(300, 0, 200, 200),
+                                            VisualSourceKind.PAGE_REGION))
+                            .stream())
+                    .toList();
+        });
+        List<List<Integer>> attemptedPages = new java.util.ArrayList<>();
+        when(locator.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(invocation -> {
+            VisualRegionLocator.VisualLocationRequest request = invocation.getArgument(0);
+            attemptedPages.add(request.candidates().stream()
+                    .map(VisualRegionCandidateSelector.Candidate::pageNumber)
+                    .toList());
+            var accepted = request.candidates().getFirst();
+            int stepPosition = attemptedPages.size() == 1 ? 1 : 3;
+            return VisualRegionLocator.LocateGuideResult.found(
+                    List.of(new VisualRegionLocator.LocatedRegion(
+                            accepted.pageNumber(),
+                            "useful diagram",
+                            "A useful diagram is visible.",
+                            accepted.rectangle().x(),
+                            accepted.rectangle().y(),
+                            accepted.rectangle().width(),
+                            accepted.rectangle().height(),
+                            List.of(evidenceId),
+                            List.of(stepPosition))),
+                    attemptedPages.size() == 1
+                            ? VisualRegionLocator.BatchAction.CONTINUE
+                            : VisualRegionLocator.BatchAction.STOP);
+        });
+        List<LessonStep> steps = java.util.stream.IntStream.rangeClosed(1, 4)
+                .mapToObj(position -> new LessonStep(
+                        position,
+                        "Step " + position,
+                        TeachingMove.DO,
+                        "Follow cited step " + position + ".",
+                        List.of(1),
+                        List.of(evidenceId)))
+                .toList();
+        var stepLocator = new VisualLessonStepLocator(
+                pageImages,
+                candidates,
+                locator,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(5));
+
+        VisualLessonStepLocator.Result result = stepLocator.locate(
+                mock(RulebookUnderstanding.class),
+                documentVersionId,
+                section(evidenceId, steps.getFirst()),
+                steps,
+                "player",
+                null,
+                Instant.now().plus(Duration.ofMinutes(5)),
+                stepLocator.beginProposalWorkflow(),
+                List.of(),
+                List.of(1, 2, 3, 4, 5, 6));
+
+        assertThat(attemptedPages).containsExactly(
+                List.of(1, 1, 2, 2, 3, 3, 4, 4, 5, 5), List.of(6, 6));
+        assertThat(attemptedPages.stream().mapToInt(List::size).sum()).isEqualTo(12);
+        assertThat(result.regions()).hasSize(2);
+    }
+
     private LessonStep step(UUID evidenceId, int pageNumber) {
         return new LessonStep(
                 1,
@@ -261,6 +462,11 @@ class VisualLessonStepLocatorTest {
                 List.of(),
                 null,
                 List.of());
+    }
+
+    private VisualRegionCandidateSelector.Candidate candidate(String id, int x) {
+        return new VisualRegionCandidateSelector.Candidate(
+                id, 1, new Rectangle(x, 0, 200, 200), VisualSourceKind.PAGE_REGION);
     }
 
     private LessonSection section(UUID evidenceId, LessonStep step) {

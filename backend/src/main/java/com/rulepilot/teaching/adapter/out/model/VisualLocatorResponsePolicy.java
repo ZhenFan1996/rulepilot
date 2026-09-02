@@ -209,6 +209,7 @@ final class VisualLocatorResponsePolicy {
             case EXPLICIT_NO_REGION -> Diagnostic.EXPLICIT_NO_REGION;
             case MALFORMED_JSON -> Diagnostic.MALFORMED_RESPONSE;
             case UNSUPPORTED_SCOPE -> Diagnostic.UNSUPPORTED_SCOPE;
+            case PROVIDER_INPUT_REJECTED -> Diagnostic.PROVIDER_INPUT_REJECTED;
             case PROVIDER_FAILURE -> Diagnostic.PROVIDER_FAILURE;
             case CANDIDATE_PREPARATION_FAILED -> Diagnostic.CANDIDATE_PREPARATION_FAILED;
         };
@@ -258,6 +259,7 @@ final class VisualLocatorResponsePolicy {
         EXPLICIT_NO_REGION,
         MALFORMED_JSON,
         UNSUPPORTED_SCOPE,
+        PROVIDER_INPUT_REJECTED,
         PROVIDER_FAILURE,
         CANDIDATE_PREPARATION_FAILED;
 

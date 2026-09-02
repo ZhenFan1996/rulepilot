@@ -42,7 +42,7 @@ class TeachingLessonAssemblyPolicyTest {
     }
 
     @Test
-    void reusesOnlyThePrimaryVisualFromPreviouslyOverloadedSteps() {
+    void reusesComplementaryVisualsWithoutSilentlyDiscardingThem() {
         UUID citation = UUID.randomUUID();
         VisualFocus primary = new VisualFocus(2, "primary", 10, 20, 200, 120);
         VisualFocus extra = new VisualFocus(2, "extra", 300, 20, 200, 120);
@@ -77,11 +77,11 @@ class TeachingLessonAssemblyPolicyTest {
                 "test",
                 Instant.EPOCH);
 
-        LessonSection normalized = policy.reusableSections(currentPlan, previous, Set.of("test"))
+        LessonSection reused = policy.reusableSections(currentPlan, previous, Set.of("test"))
                 .get("chapter-1");
 
-        assertThat(normalized.steps().getFirst().visualFoci()).containsExactly(primary);
-        assertThat(normalized.steps().getFirst().visualFocus()).isEqualTo(primary);
+        assertThat(reused.steps().getFirst().visualFoci()).containsExactly(primary, extra);
+        assertThat(reused.steps().getFirst().visualFocus()).isEqualTo(primary);
     }
 
     private TeachingPlan plan(List<String> unresolved) {

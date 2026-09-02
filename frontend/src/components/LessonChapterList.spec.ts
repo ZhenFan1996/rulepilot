@@ -204,7 +204,8 @@ describe('LessonChapterList', () => {
     expect(narrative.get('.mt-4').classes()).toContain('2xl:grid')
     expect(narrative.text()).toContain('把主板放在桌面中央。')
     expect(visual.attributes('aria-describedby')).toBe(narrative.attributes('id'))
-    expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).toContain('sm:grid-cols-2')
+    expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).toContain('grid')
+    expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).not.toContain('overflow-x-auto')
   })
 
   it('renders every visual focus attached to the same cited step', async () => {
@@ -225,7 +226,14 @@ describe('LessonChapterList', () => {
       expect(wrapper.findAll('[data-testid="lesson-visual-image"] img')).toHaveLength(3)
     })
 
-    expect(wrapper.get('[data-testid="lesson-step-visuals"]').findAll('[data-testid="lesson-visual-evidence"]')).toHaveLength(3)
+    const gallery = wrapper.get('[data-testid="lesson-step-visuals"]')
+    expect(gallery.findAll('[data-testid="lesson-visual-evidence"]')).toHaveLength(3)
+    expect(gallery.classes()).toContain('overflow-x-auto')
+    expect(gallery.classes()).toContain('snap-mandatory')
+    expect(gallery.attributes('aria-label')).toBe('本步骤的 3 张互补图片')
+    expect(gallery.attributes('tabindex')).toBe('0')
+    expect(gallery.findAll('li')).toHaveLength(3)
+    expect(gallery.find('li').classes()).toContain('snap-start')
     expect(wrapper.text()).toContain('结合图片 · 1/3')
     expect(wrapper.text()).toContain('结合图片 · 3/3')
     expect(vi.mocked(fetch).mock.calls.map(([input]) => String(input)))

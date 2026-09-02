@@ -55,6 +55,14 @@ function stepVisuals(step: LessonReaderStep) {
   return step.visualFoci?.length ? step.visualFoci : step.visualFocus ? [step.visualFocus] : []
 }
 
+function scrollVisualGroup(event: KeyboardEvent, direction: -1 | 1) {
+  if (!(event.currentTarget instanceof HTMLElement)) return
+  event.currentTarget.scrollBy({
+    left: direction * Math.max(240, event.currentTarget.clientWidth * 0.8),
+    behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+  })
+}
+
 function stepNarrationId(sectionPosition: number, stepPosition: number) {
   return `${props.idPrefix}-${sectionPosition}-step-${stepPosition}-narration`
 }
@@ -239,22 +247,38 @@ function stepKindLabel(kind: string) {
                       class="mt-4"
                       :class="stepVisuals(step).length ? '2xl:grid 2xl:grid-cols-[minmax(20rem,1.08fr)_minmax(16rem,0.92fr)] 2xl:items-start 2xl:gap-6' : ''"
                     >
-                      <div
+                      <ul
                         v-if="stepVisuals(step).length"
                         data-testid="lesson-step-visuals"
-                        class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2"
+                        :aria-label="t('lesson.visualEvidence.group', { total: stepVisuals(step).length })"
+                        :tabindex="stepVisuals(step).length > 1 ? 0 : undefined"
+                        class="min-w-0"
+                        :class="stepVisuals(step).length > 1
+                          ? 'flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain rounded-xl pb-3 focus:outline-none focus:ring-4 focus:ring-indigo/15'
+                          : 'grid'"
+                        @keydown.left.prevent="scrollVisualGroup($event, -1)"
+                        @keydown.right.prevent="scrollVisualGroup($event, 1)"
                       >
-                        <LessonVisualEvidence
+                        <li
                           v-for="(focus, visualIndex) in stepVisuals(step)"
                           :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`"
-                          :focus="focus"
-                          :ordinal="visualIndex + 1"
-                          :total="stepVisuals(step).length"
-                          :narration-id="stepNarrationId(section.position, step.position)"
-                          :page-image-url="props.pageImageUrl"
-                          :focused-page-image-url="props.focusedPageImageUrl"
-                        />
-                      </div>
+                          class="min-w-0"
+                          :class="stepVisuals(step).length > 1
+                            ? 'w-[min(78vw,21rem)] shrink-0 snap-start sm:w-[19rem] 2xl:w-[17rem]'
+                            : ''"
+                        >
+                          <LessonVisualEvidence
+                            class="h-full"
+                            :focus="focus"
+                            :ordinal="visualIndex + 1"
+                            :total="stepVisuals(step).length"
+                            :compact="stepVisuals(step).length > 1"
+                            :narration-id="stepNarrationId(section.position, step.position)"
+                            :page-image-url="props.pageImageUrl"
+                            :focused-page-image-url="props.focusedPageImageUrl"
+                          />
+                        </li>
+                      </ul>
 
                       <div class="min-w-0" :class="stepVisuals(step).length ? 'mt-5 2xl:mt-0' : ''">
                         <p class="text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>

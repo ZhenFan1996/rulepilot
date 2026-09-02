@@ -46,7 +46,17 @@ final class VisualLessonSectionEnricher {
             List<VisualFocus> acceptedVisuals,
             List<Integer> plannedVisualPages) {
         List<LessonStep> targets = visualTargets(section);
-        if (targets.isEmpty()) return Result.rejected(section, VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
+        if (targets.isEmpty()) {
+            boolean everyCitedStepAlreadyIllustrated = section.steps().stream()
+                    .filter(VisualLessonSectionEnricher::hasCitedEvidence)
+                    .allMatch(step -> !step.visualFoci().isEmpty());
+            boolean hasCitedStep = section.steps().stream().anyMatch(VisualLessonSectionEnricher::hasCitedEvidence);
+            return Result.rejected(
+                    section,
+                    hasCitedStep && everyCitedStepAlreadyIllustrated
+                            ? VisualLessonEnricher.Outcome.ALREADY_PRESENT
+                            : VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
+        }
         targets.forEach(step -> progress.targetStarted(target(section, step)));
         VisualLessonStepLocator.Result location = stepLocator.locate(
                 understanding,
@@ -98,10 +108,14 @@ final class VisualLessonSectionEnricher {
     /** Every cited step is a possible visual teaching move; VISUAL marks content, not exclusive eligibility. */
     static List<LessonStep> visualTargets(LessonSection section) {
         return section.steps().stream()
-                .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
+                .filter(VisualLessonSectionEnricher::hasCitedEvidence)
                 .filter(step -> step.visualFoci().isEmpty())
                 .sorted(java.util.Comparator.comparingInt(LessonStep::position))
                 .toList();
+    }
+
+    private static boolean hasCitedEvidence(LessonStep step) {
+        return !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty();
     }
 
     record Result(LessonSection section, VisualLessonEnricher.Outcome outcome, int addedCount) {

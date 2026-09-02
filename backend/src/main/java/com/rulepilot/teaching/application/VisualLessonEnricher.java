@@ -375,6 +375,14 @@ public class VisualLessonEnricher {
         };
     }
 
+    static boolean isSuccessfulOutcome(Outcome outcome) {
+        return outcome == Outcome.ADDED
+                || outcome == Outcome.ADDED_WITH_CLAIM_CONFLICT
+                || outcome == Outcome.ALREADY_PRESENT
+                || outcome == Outcome.NO_CITED_CANDIDATE
+                || outcome == Outcome.MODEL_EXPLICIT_NO_REGION;
+    }
+
     public record EnrichmentResult(IllustratedLesson lesson, List<SectionOutcome> outcomes) {
         public EnrichmentResult {
             if (lesson == null || outcomes == null) throw new IllegalArgumentException("visual enrichment result is invalid");

@@ -9,6 +9,7 @@ const props = defineProps<{
   narrationId?: string
   ordinal?: number
   total?: number
+  compact?: boolean
   pageImageUrl: (page: number) => string
   focusedPageImageUrl: (focus: VisualFocus) => string
 }>()
@@ -266,7 +267,8 @@ function isReliableDetailViewport(focus: VisualFocus) {
         <img
           :src="loadedDetailImageUrl"
           :alt="t('lesson.visualEvidence.alt', { page: focus.pageNumber, label: focus.label })"
-          class="block max-h-[32rem] min-h-40 w-full object-contain"
+          class="block w-full object-contain"
+          :class="compact ? 'aspect-[4/3] max-h-64 min-h-36' : 'max-h-[32rem] min-h-40'"
           loading="lazy"
           decoding="async"
           @error="handleDetailDecodeFailure"
@@ -276,7 +278,8 @@ function isReliableDetailViewport(focus: VisualFocus) {
         v-else-if="detailLoading && detailRetryReason"
         data-testid="lesson-visual-image-retrying"
         role="status"
-        class="min-h-48 px-4 py-10 text-center"
+        class="px-4 py-10 text-center"
+        :class="compact ? 'min-h-36' : 'min-h-48'"
       >
         <p class="text-xs leading-5 text-ink/65">{{ detailRetryMessage }}</p>
       </div>
@@ -285,7 +288,8 @@ function isReliableDetailViewport(focus: VisualFocus) {
         data-testid="lesson-visual-image-loading"
         role="status"
         :aria-label="t('lesson.visualEvidence.loading')"
-        class="min-h-48 animate-pulse bg-indigo/[0.035]"
+        class="animate-pulse bg-indigo/[0.035]"
+        :class="compact ? 'min-h-36' : 'min-h-48'"
       />
       <div
         v-else

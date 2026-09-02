@@ -62,6 +62,7 @@ public interface VisualRegionLocator {
         TIMEOUT,
         INTERRUPTED,
         EXECUTOR_BUSY,
+        PROVIDER_INPUT_REJECTED,
         PROVIDER_FAILURE,
         CANDIDATE_PREPARATION_FAILED
     }

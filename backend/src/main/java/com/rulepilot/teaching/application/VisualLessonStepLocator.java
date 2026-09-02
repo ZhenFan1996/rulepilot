@@ -18,6 +18,7 @@ import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -273,7 +274,6 @@ final class VisualLessonStepLocator {
                     proposed.byPage()).stream()
                     .filter(candidate -> acceptedVisuals.stream()
                             .noneMatch(existing -> cropPolicy.overlapsSubstantially(candidate, existing)))
-                    .limit(steps.size())
                     .toList();
             if (selected.isEmpty()) continue;
             candidateFound = true;
@@ -310,53 +310,73 @@ final class VisualLessonStepLocator {
                     if (firstRejection == null) firstRejection = VisualLessonEnricher.Outcome.NO_PAGE_IMAGE;
                     continue;
                 }
-                List<PageImage> batchPages = batch.stream()
-                        .map(VisualRegionCandidateSelector.Candidate::pageNumber)
-                        .distinct()
-                        .map(availablePages::get)
-                        .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
-                        .toList();
-                boolean hasMoreCandidates = end < selected.size() || pageEnd < candidatePages.size();
-                boundary = boundary(runId, workflowDeadline);
-                if (boundary.stoppedOutcome() != null) {
-                    if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
-                    stopped = true;
-                    break;
-                }
-                VisualRegionLocator.LocateGuideResult guide;
-                try {
-                    guide = locator.locateGuideWithResult(
-                            new VisualRegionLocator.VisualLocationRequest(
-                                    section.title(),
-                                    claims,
-                                    batch,
-                                    batchPages,
-                                    modelConfigurationOwner,
-                                    runId == null ? null : documentVersionId,
-                                    runId,
-                                    batchNumber++,
-                                    hasMoreCandidates),
-                            boundary.remaining());
-                } catch (AgentExecutionStoppedException modelStopped) {
-                    throw modelStopped;
-                }
-                if (guide.regions().isEmpty()) {
-                    if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
-                    if (guide.batchAction() == BatchAction.STOP) stopped = true;
-                    if (stopped) break;
-                    continue;
-                }
-                for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
-                    VisualLessonEnricher.Outcome rejection = rejectionFor(candidate, batch, evidenceIds);
-                    if (rejection == null && !supportsExactStep(candidate, steps)) {
-                        rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
+                var pending = new ArrayDeque<CandidateBatch>();
+                pending.addLast(new CandidateBatch(batch, true));
+                while (!pending.isEmpty()) {
+                    CandidateBatch candidateBatch = pending.removeFirst();
+                    boundary = boundary(runId, workflowDeadline);
+                    if (boundary.stoppedOutcome() != null) {
+                        if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
+                        stopped = true;
+                        break;
                     }
-                    if (rejection == null) accepted.add(candidate);
-                    else if (firstRejection == null) firstRejection = rejection;
-                }
-                if (guide.batchAction() == BatchAction.STOP) {
-                    stopped = true;
-                    break;
+                    List<PageImage> batchPages = candidateBatch.candidates().stream()
+                            .map(VisualRegionCandidateSelector.Candidate::pageNumber)
+                            .distinct()
+                            .map(availablePages::get)
+                            .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
+                            .toList();
+                    boolean hasMoreCandidates = !pending.isEmpty()
+                            || end < selected.size()
+                            || pageEnd < candidatePages.size();
+                    VisualRegionLocator.LocateGuideResult guide;
+                    try {
+                        guide = locator.locateGuideWithResult(
+                                new VisualRegionLocator.VisualLocationRequest(
+                                        section.title(),
+                                        claims,
+                                        candidateBatch.candidates(),
+                                        batchPages,
+                                        modelConfigurationOwner,
+                                        runId == null ? null : documentVersionId,
+                                        runId,
+                                        batchNumber++,
+                                        hasMoreCandidates),
+                                boundary.remaining());
+                    } catch (AgentExecutionStoppedException modelStopped) {
+                        throw modelStopped;
+                    }
+                    if (guide.diagnostic() == VisualRegionLocator.Diagnostic.PROVIDER_INPUT_REJECTED) {
+                        if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
+                        if (candidateBatch.mayIsolate() && candidateBatch.candidates().size() > 1) {
+                            int split = (candidateBatch.candidates().size() + 1) / 2;
+                            pending.addFirst(new CandidateBatch(
+                                    candidateBatch.candidates().subList(split, candidateBatch.candidates().size()),
+                                    false));
+                            pending.addFirst(new CandidateBatch(
+                                    candidateBatch.candidates().subList(0, split), false));
+                        }
+                        continue;
+                    }
+                    if (guide.regions().isEmpty()) {
+                        if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
+                        if (guide.batchAction() == BatchAction.STOP) stopped = true;
+                        if (stopped) break;
+                        continue;
+                    }
+                    for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
+                        VisualLessonEnricher.Outcome rejection =
+                                rejectionFor(candidate, candidateBatch.candidates(), evidenceIds);
+                        if (rejection == null && !supportsExactStep(candidate, steps)) {
+                            rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
+                        }
+                        if (rejection == null) accepted.add(candidate);
+                        else if (firstRejection == null) firstRejection = rejection;
+                    }
+                    if (guide.batchAction() == BatchAction.STOP) {
+                        stopped = true;
+                        break;
+                    }
                 }
             }
         }
@@ -536,10 +556,20 @@ final class VisualLessonStepLocator {
             case TIMEOUT -> VisualLessonEnricher.Outcome.MODEL_TIMEOUT;
             case INTERRUPTED -> VisualLessonEnricher.Outcome.MODEL_INTERRUPTED;
             case EXECUTOR_BUSY -> VisualLessonEnricher.Outcome.MODEL_BUSY;
+            case PROVIDER_INPUT_REJECTED -> VisualLessonEnricher.Outcome.MODEL_PROVIDER_FAILURE;
             case PROVIDER_FAILURE -> VisualLessonEnricher.Outcome.MODEL_PROVIDER_FAILURE;
             case CANDIDATE_PREPARATION_FAILED -> VisualLessonEnricher.Outcome.CANDIDATE_PREPARATION_FAILED;
             case FOUND -> throw new IllegalArgumentException("found visual location cannot be rejected");
         };
+    }
+
+    private record CandidateBatch(
+            List<VisualRegionCandidateSelector.Candidate> candidates,
+            boolean mayIsolate) {
+        private CandidateBatch {
+            candidates = List.copyOf(candidates);
+            if (candidates.isEmpty()) throw new IllegalArgumentException("candidate batch cannot be empty");
+        }
     }
 
     record Result(List<VisualRegionLocator.LocatedRegion> regions, VisualLessonEnricher.Outcome rejection) {

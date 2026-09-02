@@ -19,6 +19,7 @@ import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Mode
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelReview;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Rejection;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import com.openai.errors.BadRequestException;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -60,9 +61,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             ACCEPT_CANDIDATE requires one offered candidateId, a literal label of at most 80 characters,
             and visibleDescription. The application, not you, owns and binds the step's validated rule evidence.
             NO_VISUAL requires candidateId, label, and visibleDescription to be null. Reviews may be sparse: omit a
-            step when this batch has no useful crop for it. A step may accept
-            several different candidates. Select every useful candidate needed for the lesson; do not target a fixed
-            count. The same candidate may never be selected twice or shared across steps.
+            step when this batch has no useful crop for it. Return the smallest set of distinct, complementary crops
+            that materially helps the lesson. A step may accept multiple candidates only when each shows different
+            visible information, such as overview and detail, before and after, or example and result. The same
+            candidate may never be selected twice or shared across steps.
 
             Select a crop only when its literal visible content helps a player inspect the offered claim. An image
             never proves a mechanical effect, condition, quantity, score, timing, or exception; cited text remains
@@ -86,9 +88,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             action, candidateId, label, visibleDescription. label must contain at most 80
             characters. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
             literal label/description. The application binds the selected step's rule evidence; do not return evidence
-            references. NO_VISUAL uses null candidateId/label/visibleDescription. Reviews
-            may be sparse; omit a step when this batch has no useful crop for it. Never select one candidate twice.
-            Select all useful candidates without targeting a fixed count. Images
+            references. NO_VISUAL uses null candidateId/label/visibleDescription. Reviews may be sparse; omit a step
+            when this batch has no useful crop for it. Return the smallest set of distinct, complementary crops that
+            materially helps the lesson. A step may accept multiple candidates only when each shows different visible
+            information, such as overview and detail, before and after, or example and result. Never select one
+            candidate twice. Images
             prove appearance only. Write label and visibleDescription in the explicitly supplied outputLocale,
             preserving useful literal crop text. Add no fields. Structured rejection feedback requires one complete
             replacement object, never a field patch. Reconsider the offered opaque candidate ids and return a valid
@@ -196,6 +200,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             return invokeGuideAttempt(request, owner, correction, attachments, attemptNumber);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
+        } catch (BadRequestException rejectedInput) {
+            return unavailable(
+                    Rejection.PROVIDER_INPUT_REJECTED,
+                    "",
+                    "Visual provider rejected one or more candidate inputs");
         } catch (RuntimeException providerFailure) {
             return unavailable(
                     Rejection.PROVIDER_FAILURE,
@@ -215,7 +224,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         ActivityOutcome outcome = switch (rejection) {
             case NONE, EXPLICIT_NO_REGION -> ActivityOutcome.SUCCEEDED;
             case MALFORMED_JSON, UNSUPPORTED_SCOPE -> ActivityOutcome.REJECTED;
-            case PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED -> ActivityOutcome.FAILED;
+            case PROVIDER_INPUT_REJECTED, PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED -> ActivityOutcome.FAILED;
         };
         invocations.record(
                 request.runId(),
@@ -235,7 +244,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return switch (rejection) {
             case NONE -> "accepted";
             case EXPLICIT_NO_REGION -> "no-visual";
-            case MALFORMED_JSON, UNSUPPORTED_SCOPE, PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED ->
+            case MALFORMED_JSON, UNSUPPORTED_SCOPE, PROVIDER_INPUT_REJECTED, PROVIDER_FAILURE,
+                    CANDIDATE_PREPARATION_FAILED ->
                 "local-unavailable";
         };
     }
@@ -426,6 +436,13 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     false,
                     candidate.sourceKind()));
         }
+        if (validationError != null) {
+            return unavailable(
+                    Rejection.UNSUPPORTED_SCOPE,
+                    batchAction,
+                    candidateJson,
+                    validationError);
+        }
         if (!accepted.isEmpty()) {
             return new GuideAttempt(
                     LocateGuideResult.found(accepted, batchAction), Rejection.NONE, candidateJson, "");
@@ -441,9 +458,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 Rejection.UNSUPPORTED_SCOPE,
                 batchAction,
                 candidateJson,
-                validationError == null
-                        ? "The complete selection contains no admissible candidate or explicit NO_VISUAL decision"
-                        : validationError);
+                "The complete selection contains no admissible candidate or explicit NO_VISUAL decision");
     }
 
     List<VisualRegionLocator.Claim> ownedClaims(

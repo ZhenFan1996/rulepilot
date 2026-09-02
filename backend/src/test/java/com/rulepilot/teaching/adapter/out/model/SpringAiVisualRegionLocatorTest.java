@@ -16,6 +16,8 @@ import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.application.BudgetedAgentInvocations;
+import com.openai.core.http.Headers;
+import com.openai.errors.BadRequestException;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
@@ -162,7 +164,8 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(recovered.locator().locateGuideWithResult(request).diagnostic())
                 .isEqualTo(Diagnostic.FOUND);
         assertThat(localizedDuplicate.locator().locateGuideWithResult(request).diagnostic())
-                .isEqualTo(Diagnostic.FOUND);
+                .isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
+        verify(localizedDuplicate.model(), times(2)).call(any(Prompt.class));
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(recovered.model(), times(3)).call(prompts.capture());
         String replacementPrompt = prompts.getAllValues().get(1).getInstructions().stream()
@@ -183,7 +186,6 @@ class SpringAiVisualRegionLocatorTest {
                         "\"allowedDecisions\":[\"ACCEPT_CANDIDATE\",\"NO_VISUAL\"]",
                         "\"PATCH_PREVIOUS_FIELDS\"",
                         "\"EDIT_PIXELS\"");
-        verify(localizedDuplicate.model(), times(1)).call(any(Prompt.class));
     }
 
     @Test
@@ -232,6 +234,34 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
         assertThat(result.regions()).singleElement().satisfies(region ->
                 assertThat(region.supportedStepPositions()).containsExactly(1));
+        verify(runtime.model(), times(1)).call(any(Prompt.class));
+    }
+
+    @Test
+    void acceptsDistinctComplementaryCandidatesForTheSameStep() throws IOException {
+        Runtime runtime = runtime("""
+                {"batchAction":"STOP","reviews":[
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"overview",
+                "label":"流程概览","visibleDescription":"完整流程和阶段顺序"},
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"detail",
+                "label":"阶段细节","visibleDescription":"单个阶段的图标与状态"}]}
+                """);
+        VisualLocationRequest request = request(
+                List.of(claim(1, 2)),
+                List.of(
+                        candidate("overview", 2, new Rectangle(0, 0, 450, 400)),
+                        candidate("detail", 2, new Rectangle(500, 0, 400, 400))),
+                List.of(page(2, solidPng(Color.WHITE))),
+                1);
+
+        var result = runtime.locator().locateGuideWithResult(request);
+
+        assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
+        assertThat(result.regions())
+                .extracting(VisualRegionLocator.LocatedRegion::label)
+                .containsExactly("流程概览", "阶段细节");
+        assertThat(result.regions())
+                .allSatisfy(region -> assertThat(region.supportedStepPositions()).containsExactly(1));
         verify(runtime.model(), times(1)).call(any(Prompt.class));
     }
 
@@ -372,6 +402,33 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(locator.locateGuideWithResult(request).diagnostic()).isEqualTo(Diagnostic.PROVIDER_FAILURE);
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(model, times(1)).call(prompts.capture());
+    }
+
+    @Test
+    void distinguishesProviderInputRejectionFromTransientProviderFailure() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel model = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("visual-test").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("visual-test");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(model);
+        when(model.getDefaultOptions()).thenReturn(defaults);
+        when(model.getOptions()).thenReturn(defaults);
+        when(model.call(any(Prompt.class))).thenThrow(BadRequestException.builder()
+                .headers(Headers.builder().build())
+                .build());
+        var locator = new SpringAiVisualRegionLocator(configuration);
+        VisualLocationRequest request = request(
+                List.of(claim(1, 3)),
+                List.of(candidate("candidate_1", 3, new Rectangle(0, 0, 550, 550))),
+                List.of(page(3, solidPng(Color.GREEN))),
+                1);
+
+        assertThat(locator.locateGuideWithResult(request).diagnostic())
+                .isEqualTo(Diagnostic.PROVIDER_INPUT_REJECTED);
+        verify(model, times(1)).call(any(Prompt.class));
     }
 
     @Test

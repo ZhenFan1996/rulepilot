@@ -1,6 +1,8 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -15,7 +17,7 @@ import org.junit.jupiter.api.Test;
 class VisualLessonSectionEnricherTest {
 
     @Test
-    void targetsEveryCitedTeachingMoveThatStillNeedsAPrimaryVisual() {
+    void targetsEveryCitedTeachingMoveThatHasNoVisualGroupYet() {
         UUID evidence = UUID.randomUUID();
         LessonStep understand = step(1, TeachingMove.UNDERSTAND, evidence);
         LessonStep visual = step(2, TeachingMove.VISUAL, evidence);
@@ -23,9 +25,9 @@ class VisualLessonSectionEnricherTest {
         VisualFocus existing = new VisualFocus(2, "existing", 10, 20, 200, 120);
         LessonStep alreadyIllustrated = new LessonStep(
                 4,
-                "已有主图",
+                "已有图组",
                 TeachingMove.VISUAL,
-                "这个步骤已经有一张主图。",
+                "这个步骤已经有图文讲解。",
                 List.of(2),
                 List.of(evidence),
                 existing);
@@ -47,6 +49,67 @@ class VisualLessonSectionEnricherTest {
         assertThat(VisualLessonSectionEnricher.visualTargets(section))
                 .extracting(LessonStep::position)
                 .containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void treatsACompleteVisualSectionAsAlreadyPresentWithoutCallingTheLocator() {
+        UUID evidence = UUID.randomUUID();
+        VisualFocus existing = new VisualFocus(2, "existing", 10, 20, 200, 120);
+        LessonStep illustrated = new LessonStep(
+                1,
+                "已有图组",
+                TeachingMove.VISUAL,
+                "这个步骤已经有图文讲解。",
+                List.of(2),
+                List.of(evidence),
+                existing);
+        LessonSection section = new LessonSection(
+                1,
+                "turn",
+                List.of("turn"),
+                "完成一回合",
+                true,
+                EvidenceStatus.SUPPORTED,
+                VisualKind.FLOW_DIAGRAM,
+                "按图完成回合。",
+                List.of(2),
+                List.of(evidence),
+                List.of(illustrated));
+        VisualLessonStepLocator locator = mock(VisualLessonStepLocator.class);
+        var enricher = new VisualLessonSectionEnricher(
+                mock(VisualLessonMergePolicy.class), locator);
+
+        VisualLessonSectionEnricher.Result result = enricher.enrich(
+                mock(com.rulepilot.ingestion.layout.RulebookUnderstanding.class),
+                UUID.randomUUID(),
+                section,
+                "player",
+                null,
+                java.time.Instant.now().plusSeconds(60),
+                null,
+                new VisualLessonEnricher.VisualProgressListener() {},
+                List.of(existing),
+                List.of(2));
+
+        assertThat(result.section()).isEqualTo(section);
+        assertThat(result.outcome()).isEqualTo(VisualLessonEnricher.Outcome.ALREADY_PRESENT);
+        verifyNoInteractions(locator);
+    }
+
+    @Test
+    void classifiesValidNoVisualAndAlreadyCompleteAsSuccessfulLocalDecisions() {
+        assertThat(VisualLessonEnricher.isSuccessfulOutcome(VisualLessonEnricher.Outcome.ALREADY_PRESENT)).isTrue();
+        assertThat(VisualLessonEnricher.isSuccessfulOutcome(
+                        VisualLessonEnricher.Outcome.MODEL_EXPLICIT_NO_REGION))
+                .isTrue();
+        assertThat(VisualLessonEnricher.isSuccessfulOutcome(VisualLessonEnricher.Outcome.ADDED)).isTrue();
+        assertThat(VisualLessonEnricher.isSuccessfulOutcome(
+                        VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE))
+                .isTrue();
+        assertThat(VisualLessonEnricher.isSuccessfulOutcome(
+                        VisualLessonEnricher.Outcome.MODEL_PROVIDER_FAILURE))
+                .isFalse();
+        assertThat(VisualLessonEnricher.isSuccessfulOutcome(VisualLessonEnricher.Outcome.NO_PAGE_IMAGE)).isFalse();
     }
 
     private LessonStep step(int position, TeachingMove move, UUID evidence) {
