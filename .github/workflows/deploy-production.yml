@@ -518,15 +518,17 @@ jobs:
             echo "BGG_API_TOKEN has an invalid format" >&2
             exit 1
           fi
-          if [[ -z "$DOCLING_SERVICE_URL" || ${#DOCLING_SERVICE_URL} -gt 2048
-            || ! "$DOCLING_SERVICE_URL" =~ ^https://[A-Za-z0-9][A-Za-z0-9./:_?\&=%+-]*$ ]]; then
-            echo "DOCLING_SERVICE_URL has an invalid format" >&2
-            exit 1
-          fi
-          if [[ -z "$DOCLING_API_KEY" || ${#DOCLING_API_KEY} -gt 4096
-            || ! "$DOCLING_API_KEY" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "DOCLING_API_KEY has an invalid format" >&2
-            exit 1
+          if [[ -n "$DOCLING_SERVICE_URL" || -n "$DOCLING_API_KEY" ]]; then
+            if [[ -z "$DOCLING_SERVICE_URL" || ${#DOCLING_SERVICE_URL} -gt 2048
+              || ! "$DOCLING_SERVICE_URL" =~ ^https://[A-Za-z0-9][A-Za-z0-9./:_?\&=%+-]*$ ]]; then
+              echo "DOCLING_SERVICE_URL has an invalid format" >&2
+              exit 1
+            fi
+            if [[ -z "$DOCLING_API_KEY" || ${#DOCLING_API_KEY} -gt 4096
+              || ! "$DOCLING_API_KEY" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "DOCLING_API_KEY has an invalid format" >&2
+              exit 1
+            fi
           fi
 
           local_token_file="$RUNNER_TEMP/rulepilot-bgg-token-${DEPLOY_RELEASE_ID}"
@@ -622,15 +624,19 @@ jobs:
           fi
           docling_service_url=$(<"$docling_url_file")
           docling_api_key=$(<"$docling_key_file")
-          if [[ -z "$docling_service_url" || ${#docling_service_url} -gt 2048
-            || ! "$docling_service_url" =~ ^https://[A-Za-z0-9][A-Za-z0-9./:_?\&=%+-]*$ ]]; then
-            echo "Uploaded Docling service URL has an invalid format" >&2
-            exit 1
-          fi
-          if [[ -z "$docling_api_key" || ${#docling_api_key} -gt 4096
-            || ! "$docling_api_key" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "Uploaded Docling credential has an invalid format" >&2
-            exit 1
+          docling_enabled=false
+          if [[ -n "$docling_service_url" || -n "$docling_api_key" ]]; then
+            if [[ -z "$docling_service_url" || ${#docling_service_url} -gt 2048
+              || ! "$docling_service_url" =~ ^https://[A-Za-z0-9][A-Za-z0-9./:_?\&=%+-]*$ ]]; then
+              echo "Uploaded Docling service URL has an invalid format" >&2
+              exit 1
+            fi
+            if [[ -z "$docling_api_key" || ${#docling_api_key} -gt 4096
+              || ! "$docling_api_key" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "Uploaded Docling credential has an invalid format" >&2
+              exit 1
+            fi
+            docling_enabled=true
           fi
 
           # Arm under the deployment lock before the first shared-environment mutation. If the runner disappears
@@ -689,8 +695,8 @@ jobs:
           fi
           printf 'DOCLING_SERVICE_URL=%s\n' "$docling_service_url" >> "$temporary_env"
           printf 'DOCLING_API_KEY=%s\n' "$docling_api_key" >> "$temporary_env"
+          printf 'DOCLING_ENABLED=%s\n' "$docling_enabled" >> "$temporary_env"
           printf '%s\n' \
-            'DOCLING_ENABLED=true' \
             'DOCLING_TIMEOUT=PT5M' \
             'DOCLING_POLL_INTERVAL=PT1S' \
             'DOCLING_MAX_FILE_BYTES=104857600' \
@@ -739,7 +745,7 @@ jobs:
             'PRODUCTION_TRACING_SAMPLING_PROBABILITY=0.05' >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"
-          unset token docling_service_url docling_api_key
+          unset token docling_service_url docling_api_key docling_enabled
           echo "Synchronized managed production integration configuration."
           REMOTE
 
