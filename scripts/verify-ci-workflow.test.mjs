@@ -3091,7 +3091,8 @@ test('deployment keeps protected integration credentials out of packages and com
     /'bash -s' -- "\$DEPLOY_PATH" "\$DOCLING_(?:API_KEY|SERVICE_URL)"/)
   assert.match(deploymentWorkflow,
     /managed_runtime_keys='[^']* DOCLING_ENABLED DOCLING_SERVICE_URL DOCLING_API_KEY [^']*'/)
-  assert.match(deploymentWorkflow, /'DOCLING_ENABLED=true'/)
+  assert.match(deploymentWorkflow,
+    /if \[\[ -n "\$docling_service_url" \|\| -n "\$docling_api_key" \]\]; then[\s\S]*?docling_enabled=true[\s\S]*?printf 'DOCLING_ENABLED=%s\\n' "\$docling_enabled"/)
   assert.match(deploymentCompose, /DOCLING_ENABLED: \$\{DOCLING_ENABLED:-false\}/)
   assert.match(deploymentCompose, /DOCLING_API_KEY: \$\{DOCLING_API_KEY:-\}/)
   assert.match(productionReleaseGuard,
