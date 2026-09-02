@@ -3,6 +3,7 @@ package com.rulepilot.ingestion.application;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentPageImageStore;
+import com.rulepilot.document.RenderedDocumentAvailable;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.UUID;
@@ -12,7 +13,9 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -33,8 +36,10 @@ public class UploadedDocumentIngestion {
     private final ProcessingProgressTracker progress;
     private final RuleStructureService structures;
     private final RuleChunkEmbeddingService embeddings;
+    private final ApplicationEventPublisher events;
     private final MeterRegistry metrics;
 
+    @Autowired
     public UploadedDocumentIngestion(
             DocumentProcessing documents,
             PdfRulebookPreparation pdfPreparation,
@@ -43,6 +48,7 @@ public class UploadedDocumentIngestion {
             ProcessingProgressTracker progress,
             RuleStructureService structures,
             RuleChunkEmbeddingService embeddings,
+            ApplicationEventPublisher events,
             MeterRegistry metrics) {
         this.documents = documents;
         this.pdfPreparation = pdfPreparation;
@@ -51,7 +57,29 @@ public class UploadedDocumentIngestion {
         this.progress = progress;
         this.structures = structures;
         this.embeddings = embeddings;
+        this.events = events;
         this.metrics = metrics;
+    }
+
+    UploadedDocumentIngestion(
+            DocumentProcessing documents,
+            PdfRulebookPreparation pdfPreparation,
+            DocumentPageImageStore pageImages,
+            BoundedPageImageStoragePipeline pageImageStorage,
+            ProcessingProgressTracker progress,
+            RuleStructureService structures,
+            RuleChunkEmbeddingService embeddings,
+            MeterRegistry metrics) {
+        this(
+                documents,
+                pdfPreparation,
+                pageImages,
+                pageImageStorage,
+                progress,
+                structures,
+                embeddings,
+                ignored -> {},
+                metrics);
     }
 
     public void process(UUID documentVersionId, DocumentProcessingStage stage) {
@@ -143,6 +171,8 @@ public class UploadedDocumentIngestion {
         if (renderedPageCount.get() != totalPages) {
             throw new IllegalStateException("rendered page count does not match extracted page count");
         }
+        // Optional modules can enrich a fully rendered immutable document without being coupled into this pipeline.
+        events.publishEvent(new RenderedDocumentAvailable(documentVersionId, totalPages));
         // Keep the positioned extraction that just produced the durable page text. Re-opening the same PDF in the
         // next queue stage adds substantial work on a small worker and can only reproduce these same source blocks.
         documents.markStructuring(documentVersionId);
