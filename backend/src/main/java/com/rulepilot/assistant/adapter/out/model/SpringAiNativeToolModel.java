@@ -28,6 +28,8 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.springframework.ai.retry.NonTransientAiException;
 import org.springframework.ai.retry.TransientAiException;
 import org.springframework.ai.tool.ToolCallback;
@@ -70,6 +72,14 @@ public class SpringAiNativeToolModel implements NativeToolModel {
                 openAiOptions.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else if (qwen) {
                 openAiOptions.extraBody(Map.of("enable_thinking", false));
+            }
+            if (request.jsonOutputRequired()) {
+                // OpenAI-compatible chat providers expose JSON mode alongside tool calls. The application still
+                // validates the domain schema and evidence identities; this provider option only guarantees that
+                // the terminal candidate is syntactically JSON instead of spending repair turns on prose fences.
+                openAiOptions.responseFormat(ResponseFormat.builder()
+                        .type(Type.JSON_OBJECT)
+                        .build());
             }
             optionsBuilder = openAiOptions;
         } else if (chatModel.getDefaultOptions() instanceof ToolCallingChatOptions defaults) {

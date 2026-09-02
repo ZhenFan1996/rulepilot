@@ -39,6 +39,7 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.springframework.ai.retry.NonTransientAiException;
 
 class SpringAiNativeToolModelTest {
@@ -93,6 +94,35 @@ class SpringAiNativeToolModelTest {
         assertThat(options.getToolContext()).containsEntry("ownerUsername", "player")
                 .containsEntry("documentVersionId", documentVersionId)
                 .containsEntry("runId", runId);
+    }
+
+    @Test
+    void requestsProviderJsonModeForACustomTerminalContractWhileKeepingToolsAvailable() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.ANSWER, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("test-model")
+                .build());
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder().content("{\"kind\":\"CHAT\",\"shortVerdict\":\"Hello\"}").build()))));
+        SpringAiNativeToolModel model = new SpringAiNativeToolModel(configuration);
+
+        model.next(new ModelRequest(
+                Role.ANSWER,
+                new ToolScope("player", UUID.randomUUID(), UUID.randomUUID(), Instant.now().plusSeconds(30)),
+                List.of(ConversationMessage.system("Return JSON."), ConversationMessage.user("Hello")),
+                List.of(new ToolSpec(
+                        "search_rule_evidence", "Search evidence", "{\"type\":\"object\"}", "1", "hash")),
+                true));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
+        assertThat(options.getToolCallbacks()).hasSize(1);
     }
 
     @Test

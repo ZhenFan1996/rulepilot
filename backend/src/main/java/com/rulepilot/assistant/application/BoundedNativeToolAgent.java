@@ -119,7 +119,8 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                         request.role(),
                                         request.scope(),
                                         messages,
-                                        advertisedTools))),
+                                        advertisedTools,
+                                        request.terminalContract().custom()))),
                         completed -> additionalTokens(completed, estimatedInputTokens));
             } catch (RuntimeException exception) {
                 return fallback(request, stopReason(exception), iteration, toolCalls, observations);

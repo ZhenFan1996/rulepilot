@@ -98,22 +98,52 @@ done
 
 latest_plan="$DEMO_DIR/latest-plan.json"
 plan_status=$(checked_status "$BASE_URL/api/v1/document-versions/$document_version_id/teaching-plans/latest" "$latest_plan")
-if [ "$plan_status" = 200 ]; then
-	plan_id=$(jq -er .id "$latest_plan")
-else
-	plan=$(curl -fsS -b "$COOKIE_FILE" -H "$csrf_header: $csrf_token" -H 'Content-Type: application/json' \
-		--data '{}' \
+if [ "$plan_status" != 200 ]; then
+	[ "$plan_status" = 404 ] || fail "demo teaching plan lookup returned HTTP $plan_status"
+	plan_launch="$DEMO_DIR/plan-launch.json"
+	launch_status=$(curl -sS -o "$plan_launch" -w '%{http_code}' -b "$COOKIE_FILE" \
+		-H "$csrf_header: $csrf_token" -H 'Content-Type: application/json' --data '{}' \
 		"$BASE_URL/api/v1/document-versions/$document_version_id/teaching-plans")
-	plan_id=$(printf '%s' "$plan" | jq -er .id)
-	printf '%s\n' "$plan" > "$latest_plan"
+	case "$launch_status" in 200|202|409) ;; *) fail "demo teaching plan launch returned HTTP $launch_status" ;; esac
+	attempt=1
+	while [ "$attempt" -le 300 ]; do
+		plan_status=$(checked_status \
+			"$BASE_URL/api/v1/document-versions/$document_version_id/teaching-plans/latest" "$latest_plan")
+		[ "$plan_status" = 200 ] && break
+		[ "$plan_status" = 404 ] || fail "demo teaching plan lookup returned HTTP $plan_status"
+		attempt=$((attempt + 1))
+		sleep 2
+	done
+	[ "$plan_status" = 200 ] || fail "demo teaching plan was not published within 10 minutes"
 fi
+plan_id=$(jq -er .id "$latest_plan")
 
 latest_lesson="$DEMO_DIR/latest-lesson.json"
 lesson_status=$(checked_status "$BASE_URL/api/v1/teaching-plans/$plan_id/illustrated-lessons/latest" "$latest_lesson")
 if [ "$lesson_status" != 200 ]; then
-	curl -fsS -o "$latest_lesson" -b "$COOKIE_FILE" -H "$csrf_header: $csrf_token" -X POST \
-		"$BASE_URL/api/v1/teaching-plans/$plan_id/illustrated-lessons"
+	[ "$lesson_status" = 404 ] || fail "demo lesson lookup returned HTTP $lesson_status"
+	lesson_launch="$DEMO_DIR/lesson-launch.json"
+	launch_status=$(curl -sS -o "$lesson_launch" -w '%{http_code}' -b "$COOKIE_FILE" \
+		-H "$csrf_header: $csrf_token" -X POST \
+		"$BASE_URL/api/v1/teaching-plans/$plan_id/illustrated-lessons")
+	case "$launch_status" in 200|202|409) ;; *) fail "demo lesson launch returned HTTP $launch_status" ;; esac
 fi
+
+attempt=1
+lesson_state=''
+while [ "$attempt" -le 300 ]; do
+	lesson_status=$(checked_status "$BASE_URL/api/v1/teaching-plans/$plan_id/illustrated-lessons/latest" "$latest_lesson")
+	if [ "$lesson_status" = 200 ]; then
+		lesson_state=$(jq -er .status "$latest_lesson")
+		[ "$lesson_state" = COMPLETE ] && break
+		[ "$lesson_state" = INCOMPLETE ] && fail "demo lesson generation ended in INCOMPLETE"
+	elif [ "$lesson_status" != 404 ]; then
+		fail "demo lesson lookup returned HTTP $lesson_status"
+	fi
+	attempt=$((attempt + 1))
+	sleep 2
+done
+[ "$lesson_state" = COMPLETE ] || fail "demo lesson did not reach COMPLETE within 10 minutes"
 
 evaluation_file="$DEMO_DIR/retrieval-evaluation.json"
 curl -fsS -o "$evaluation_file" -b "$COOKIE_FILE" -H "$csrf_header: $csrf_token" -X POST \

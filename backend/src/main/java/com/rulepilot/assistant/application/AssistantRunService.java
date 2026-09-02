@@ -38,7 +38,7 @@ public class AssistantRunService implements AssistantRuns {
     public AssistantRunService(
             AssistantRunRepository repository,
             AgentExecutionControl execution,
-            @Value("${rulepilot.agent.max-tokens:64000}") int maxTokens,
+            @Value("${rulepilot.answer.agent.max-tokens:64000}") int answerMaxTokens,
             @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout,
             @Value("${rulepilot.teaching.agent.model-call-capacity-baseline:72}")
                     int teachingModelCallCapacityBaseline,
@@ -54,7 +54,7 @@ public class AssistantRunService implements AssistantRuns {
                     Duration visualEnrichmentTimeout) {
         this.repository = repository;
         this.execution = execution;
-        this.answerLimits = new BudgetLimits(maxTokens, timeout);
+        this.answerLimits = new BudgetLimits(answerMaxTokens, timeout);
         this.teachingLimits = BudgetLimits.observationalTokens(teachingMaxTokens, teachingTimeout);
         if (teachingModelCallCapacityBaseline < 1) {
             throw new IllegalArgumentException("teaching model-call capacity baseline must be positive");
