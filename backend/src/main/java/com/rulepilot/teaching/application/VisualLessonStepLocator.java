@@ -283,21 +283,11 @@ final class VisualLessonStepLocator {
                     continue;
                 }
                 for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
-                    VisualRegionLocator.LocatedRegion region = candidate;
-                    if (cropPolicy.needsReaderViewport(region)) {
-                        if (!cropPolicy.canExpandIntoReaderViewport(region)) {
-                            if (firstRejection == null) {
-                                firstRejection = VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
-                            }
-                            continue;
-                        }
-                        region = cropPolicy.expandIntoReaderViewport(region);
-                    }
-                    VisualLessonEnricher.Outcome rejection = rejectionFor(region, batch, evidenceIds);
-                    if (rejection == null && !supportsExactStep(region, steps)) {
+                    VisualLessonEnricher.Outcome rejection = rejectionFor(candidate, batch, evidenceIds);
+                    if (rejection == null && !supportsExactStep(candidate, steps)) {
                         rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
                     }
-                    if (rejection == null) accepted.add(region);
+                    if (rejection == null) accepted.add(candidate);
                     else if (firstRejection == null) firstRejection = rejection;
                 }
                 if (guide.batchAction() == BatchAction.STOP) {
@@ -442,7 +432,9 @@ final class VisualLessonStepLocator {
         if (!cropPolicy.isReadableForPlayer(region)) return VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
         if (region.visibleDescription().isBlank()) return VisualLessonEnricher.Outcome.REJECTED_MISSING_OBSERVATION;
         if (!cropPolicy.isUsefulPlayerVisual(region)) return VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL;
-        if (!cropPolicy.intersectsCandidate(region, attachedCandidates)) return VisualLessonEnricher.Outcome.REJECTED_OUTSIDE_CANDIDATE;
+        if (!cropPolicy.matchesCandidate(region, attachedCandidates)) {
+            return VisualLessonEnricher.Outcome.REJECTED_OUTSIDE_CANDIDATE;
+        }
         if (!evidenceIds.containsAll(region.supportedEvidenceIds())) return VisualLessonEnricher.Outcome.REJECTED_UNKNOWN_EVIDENCE;
         return null;
     }

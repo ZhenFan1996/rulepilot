@@ -16,18 +16,16 @@ class VisualReaderCropPolicyTest {
     private final UUID evidence = UUID.randomUUID();
 
     @Test
-    void expands_a_small_icon_group_into_a_player_readable_viewport() {
+    void keepsApplicationOwnedSmallGeometryExactInsteadOfInventingSurroundingContext() {
         LocatedRegion icon = region("回合顺序图标", "一个箭头图标连接两个行动", 40, 50, 40, 40);
+        LocatedRegion unreadableFragment = region("碎片", "像素区域过小", 40, 50, 31, 31);
 
-        LocatedRegion expanded = policy.expandIntoReaderViewport(icon);
-
-        assertThat(policy.needsReaderViewport(icon)).isTrue();
-        assertThat(policy.canExpandIntoReaderViewport(icon)).isTrue();
-        assertThat(expanded.x()).isEqualTo(0);
-        assertThat(expanded.y()).isEqualTo(10);
-        assertThat(expanded.width()).isEqualTo(180);
-        assertThat(expanded.height()).isEqualTo(120);
-        assertThat(policy.isReadableForPlayer(expanded)).isTrue();
+        assertThat(policy.isReadableForPlayer(icon)).isTrue();
+        assertThat(icon.x()).isEqualTo(40);
+        assertThat(icon.y()).isEqualTo(50);
+        assertThat(icon.width()).isEqualTo(40);
+        assertThat(icon.height()).isEqualTo(40);
+        assertThat(policy.isReadableForPlayer(unreadableFragment)).isFalse();
     }
 
     @Test
@@ -67,13 +65,13 @@ class VisualReaderCropPolicyTest {
                 VisualSourceKind.FULL_PAGE);
 
         assertThat(policy.isReadableForPlayer(wholePage)).isTrue();
-        assertThat(policy.needsReaderViewport(wholePage)).isFalse();
         assertThat(policy.isUsefulPlayerVisual(wholePage)).isTrue();
     }
 
     @Test
     void keeps_candidate_and_duplicate_geometry_checks_independent_of_model_work() {
-        LocatedRegion region = region("行动箭头", "箭头指向下一个行动", 180, 180, 200, 160);
+        LocatedRegion region = region("行动箭头", "箭头指向下一个行动", 100, 100, 300, 300);
+        LocatedRegion overlappingButAltered = region("行动箭头", "箭头指向下一个行动", 180, 180, 200, 160);
         var matchingCandidate = new VisualRegionCandidateSelector.Candidate(
                 "matching_1", 2, new Rectangle(100, 100, 300, 300), VisualSourceKind.PAGE_REGION);
         var otherPageCandidate = new VisualRegionCandidateSelector.Candidate(
@@ -81,8 +79,9 @@ class VisualReaderCropPolicyTest {
         VisualFocus sameViewport = new VisualFocus(2, "行动", 190, 190, 180, 150);
         VisualFocus differentViewport = new VisualFocus(2, "另一处", 600, 600, 120, 120);
 
-        assertThat(policy.intersectsCandidate(region, List.of(matchingCandidate))).isTrue();
-        assertThat(policy.intersectsCandidate(region, List.of(otherPageCandidate))).isFalse();
+        assertThat(policy.matchesCandidate(region, List.of(matchingCandidate))).isTrue();
+        assertThat(policy.matchesCandidate(overlappingButAltered, List.of(matchingCandidate))).isFalse();
+        assertThat(policy.matchesCandidate(region, List.of(otherPageCandidate))).isFalse();
         assertThat(policy.overlapsSubstantially(
                 new VisualFocus(2, "行动", 180, 180, 200, 160), sameViewport)).isTrue();
         assertThat(policy.overlapsSubstantially(

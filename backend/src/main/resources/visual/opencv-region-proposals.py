@@ -197,6 +197,48 @@ def original_box(
     return left, top, max(1, right - left), max(1, bottom - top)
 
 
+def visual_score(
+    box: tuple[int, int, int, int],
+    saturation: np.ndarray,
+    edges: np.ndarray,
+    saturation_threshold: int,
+    page_area: int,
+) -> tuple[float, float, float]:
+    x, y, width, height = box
+    saturation_region = saturation[y : y + height, x : x + width]
+    edge_region = edges[y : y + height, x : x + width]
+    pixels = max(1, width * height)
+    color_coverage = float(np.count_nonzero(saturation_region >= saturation_threshold)) / pixels
+    edge_density = float(np.count_nonzero(edge_region)) / pixels
+    area_ratio = pixels / page_area
+    # Chroma separates many component illustrations from black body prose. Edge density preserves grayscale diagrams;
+    # area is a small tie-breaker only, so a page-sized text panel cannot outrank a compact visual object.
+    score = (
+        3.0 * color_coverage
+        + min(edge_density, 0.25)
+        + 0.12 * min(1.0, math.sqrt(area_ratio / 0.04))
+    )
+    return score, color_coverage, area_ratio
+
+
+def scale_diverse_order(
+    proposals: list[tuple[tuple[int, int, int, int], float, float]],
+) -> list[tuple[tuple[int, int, int, int], float, float]]:
+    # A first bounded vision batch must contain both complete diagrams and compact components. Pure score ordering
+    # otherwise fills it with repeated small tokens, while pure area ordering recreates the old broad-crop failure.
+    lanes = (
+        [proposal for proposal in proposals if proposal[2] < 0.015],
+        [proposal for proposal in proposals if proposal[2] >= 0.08],
+        [proposal for proposal in proposals if 0.015 <= proposal[2] < 0.08],
+    )
+    ordered: list[tuple[tuple[int, int, int, int], float, float]] = []
+    for index in range(max((len(lane) for lane in lanes), default=0)):
+        for lane in lanes:
+            if index < len(lane):
+                ordered.append(lane[index])
+    return ordered
+
+
 def candidate_boxes(
     source: np.ndarray,
     maximum: int,
@@ -220,6 +262,7 @@ def candidate_boxes(
     minimum_height = max(8, math.ceil(40 * page_height / original_height))
     gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 60, 160)
+    saturation = cv2.cvtColor(working, cv2.COLOR_BGR2HSV)[:, :, 1]
 
     if diagnostics is not None:
         diagnostics.update(
@@ -231,7 +274,7 @@ def candidate_boxes(
             }
         )
 
-    proposals: list[tuple[int, int, int, int]] = []
+    proposals: list[tuple[tuple[int, int, int, int], float, float]] = []
     proposal_cap = min(MAX_PROPOSALS_PER_ROUND, max(64, maximum * 8))
     # Two geometry scales keep compact component diagrams and larger reference panels in the same typed candidate
     # space. This is candidate generation only; the vision model still decides whether a region supports a claim.
@@ -255,11 +298,18 @@ def candidate_boxes(
                 and height >= minimum_height
                 and aspect <= 8
             ):
-                proposals.append(padded((x, y, width, height), page_width, page_height))
+                raw_box = (x, y, width, height)
+                score, _, measured_area_ratio = visual_score(
+                    raw_box, saturation, edges, 48, page_area
+                )
+                proposals.append(
+                    (padded(raw_box, page_width, page_height), score, measured_area_ratio)
+                )
                 retained += 1
         if diagnostics is not None:
             diagnostics["rounds"].append(
                 {
+                    "source": "edge",
                     "contoursReturned": len(contours),
                     "contoursScanned": scanned,
                     "proposalsRetained": retained,
@@ -268,18 +318,69 @@ def candidate_boxes(
         # Do not overlap one round's native contour graph with the next round's allocations.
         del contours, connected, kernel
 
-    proposals.sort(key=lambda box: (-(box[2] * box[3]), box[1], box[0]))
-    selected: list[tuple[int, int, int, int]] = []
+    # Saturated components frequently carry the exact card, token, icon, or board-example geometry that an outer-edge
+    # contour loses inside a bordered rulebook page. These are still pixel-only candidates: no OCR or prose enters the
+    # geometry path, and the visual Agent must reject headings, decoration, and other semantically useless regions.
+    for threshold in (48, 96):
+        mask = cv2.inRange(saturation, threshold, 255)
+        kernel_size = max(5, round(long_edge * 0.004))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+        connected = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        contours, _ = cv2.findContours(connected, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        scanned = 0
+        retained = 0
+        for contour in contours:
+            if scanned >= MAX_CONTOURS_SCANNED_PER_ROUND or retained >= proposal_cap:
+                break
+            scanned += 1
+            x, y, width, height = cv2.boundingRect(contour)
+            area_ratio = width * height / page_area
+            aspect = max(width / max(height, 1), height / max(width, 1))
+            raw_box = (x, y, width, height)
+            if (
+                0.002 <= area_ratio <= 0.60
+                and width >= minimum_width
+                and height >= minimum_height
+                and aspect <= 8
+            ):
+                score, color_coverage, measured_area_ratio = visual_score(
+                    raw_box, saturation, edges, threshold, page_area
+                )
+                if color_coverage >= 0.08:
+                    proposals.append(
+                        (
+                            padded(raw_box, page_width, page_height),
+                            score,
+                            measured_area_ratio,
+                        )
+                    )
+                    retained += 1
+        if diagnostics is not None:
+            diagnostics["rounds"].append(
+                {
+                    "source": f"saturation-{threshold}",
+                    "contoursReturned": len(contours),
+                    "contoursScanned": scanned,
+                    "proposalsRetained": retained,
+                }
+            )
+        del contours, connected, kernel, mask
+
+    proposals.sort(key=lambda proposal: (-proposal[1], proposal[0][1], proposal[0][0]))
+    deduplicated: list[tuple[tuple[int, int, int, int], float, float]] = []
     for proposal in proposals:
-        if any(intersection_over_union(proposal, existing) >= 0.86 for existing in selected):
+        if any(intersection_over_union(proposal[0], existing[0]) >= 0.86 for existing in deduplicated):
             continue
-        selected.append(proposal)
-        if len(selected) >= maximum:
-            break
+        deduplicated.append(proposal)
+    selected = scale_diverse_order(deduplicated)[:maximum]
+
+    if diagnostics is not None:
+        diagnostics["deduplicatedProposals"] = len(deduplicated)
+        diagnostics["selectedProposals"] = len(selected)
 
     mapped: list[tuple[int, int, int, int]] = []
     seen: set[tuple[int, int, int, int]] = set()
-    for proposal in selected:
+    for proposal, _, _ in selected:
         restored = original_box(
             proposal,
             page_width,
@@ -290,6 +391,8 @@ def candidate_boxes(
         if restored not in seen:
             seen.add(restored)
             mapped.append(restored)
+        if len(mapped) >= maximum:
+            break
     return mapped
 
 

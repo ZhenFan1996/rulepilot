@@ -79,6 +79,27 @@ def main() -> None:
         raise AssertionError("a bounded synthetic diagram must produce a candidate")
     assert_valid(diagram_boxes, width, height)
 
+    component_page = blank.copy()
+    component_boxes = []
+    for index in range(5):
+        left = 110 + index * 180
+        component_boxes.append((left, 250, 105, 170))
+        cv2.rectangle(component_page, (left, 250), (left + 105, 420), (40, 95, 190), -1)
+        cv2.rectangle(component_page, (left, 250), (left + 105, 420), (15, 15, 15), 4)
+    detected_components = production.candidate_boxes(component_page, 32)
+    assert_valid(detected_components, width, height)
+    for expected in component_boxes:
+        expected_x, expected_y, expected_width, expected_height = expected
+        if not any(
+            candidate_x <= expected_x + 8
+            and candidate_y <= expected_y + 8
+            and candidate_x + candidate_width >= expected_x + expected_width - 8
+            and candidate_y + candidate_height >= expected_y + expected_height - 8
+            and candidate_width * candidate_height <= expected_width * expected_height * 2
+            for candidate_x, candidate_y, candidate_width, candidate_height in detected_components
+        ):
+            raise AssertionError("a nested colored component did not receive a focused candidate")
+
     near_limit_width, near_limit_height = 4_000, 3_000
     working_width, working_height = production.working_dimensions(
         near_limit_width, near_limit_height
