@@ -13,6 +13,7 @@ import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -33,6 +34,7 @@ final class VisualLessonStepLocator {
     private final DocumentPageImages pageImages;
     private final VisualRegionCandidateSelector candidates;
     private final VisualRegionProposer proposals;
+    private final VisualRegionCatalog indexedRegions;
     private final VisualRegionLocator locator;
     private final VisualReaderCropPolicy cropPolicy;
     private final AgentExecutionControl execution;
@@ -48,6 +50,7 @@ final class VisualLessonStepLocator {
                 pageImages,
                 candidates,
                 VisualRegionProposer.unavailable(),
+                VisualRegionCatalog.empty(),
                 locator,
                 cropPolicy,
                 null,
@@ -67,6 +70,7 @@ final class VisualLessonStepLocator {
                 pageImages,
                 candidates,
                 VisualRegionProposer.unavailable(),
+                VisualRegionCatalog.empty(),
                 locator,
                 cropPolicy,
                 execution,
@@ -83,8 +87,31 @@ final class VisualLessonStepLocator {
             AgentExecutionControl execution,
             Clock clock,
             Duration compatibilityWorkflowTimeout) {
+        this(
+                pageImages,
+                candidates,
+                proposals,
+                VisualRegionCatalog.empty(),
+                locator,
+                cropPolicy,
+                execution,
+                clock,
+                compatibilityWorkflowTimeout);
+    }
+
+    VisualLessonStepLocator(
+            DocumentPageImages pageImages,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionProposer proposals,
+            VisualRegionCatalog indexedRegions,
+            VisualRegionLocator locator,
+            VisualReaderCropPolicy cropPolicy,
+            AgentExecutionControl execution,
+            Clock clock,
+            Duration compatibilityWorkflowTimeout) {
         if (pageImages == null || candidates == null || locator == null || cropPolicy == null || clock == null
                 || proposals == null
+                || indexedRegions == null
                 || compatibilityWorkflowTimeout == null
                 || compatibilityWorkflowTimeout.isZero()
                 || compatibilityWorkflowTimeout.isNegative()) {
@@ -93,6 +120,7 @@ final class VisualLessonStepLocator {
         this.pageImages = pageImages;
         this.candidates = candidates;
         this.proposals = proposals;
+        this.indexedRegions = indexedRegions;
         this.locator = locator;
         this.cropPolicy = cropPolicy;
         this.execution = execution;
@@ -198,7 +226,7 @@ final class VisualLessonStepLocator {
             }
             int pageEnd = Math.min(pageStart + DocumentPageImages.MAX_PAGES_PER_READ, citedPages.size());
             List<Integer> pageWindow = citedPages.subList(pageStart, pageEnd);
-            ProposedRegions proposed = proposalToolCircuit.available()
+            ProposedRegions proposed = indexedRegions.configured() || proposalToolCircuit.available()
                     ? proposeRegions(
                             documentVersionId,
                             pageWindow,
@@ -283,21 +311,11 @@ final class VisualLessonStepLocator {
                     continue;
                 }
                 for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
-                    VisualRegionLocator.LocatedRegion region = candidate;
-                    if (cropPolicy.needsReaderViewport(region)) {
-                        if (!cropPolicy.canExpandIntoReaderViewport(region)) {
-                            if (firstRejection == null) {
-                                firstRejection = VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
-                            }
-                            continue;
-                        }
-                        region = cropPolicy.expandIntoReaderViewport(region);
-                    }
-                    VisualLessonEnricher.Outcome rejection = rejectionFor(region, batch, evidenceIds);
-                    if (rejection == null && !supportsExactStep(region, steps)) {
+                    VisualLessonEnricher.Outcome rejection = rejectionFor(candidate, batch, evidenceIds);
+                    if (rejection == null && !supportsExactStep(candidate, steps)) {
                         rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
                     }
-                    if (rejection == null) accepted.add(region);
+                    if (rejection == null) accepted.add(candidate);
                     else if (firstRejection == null) firstRejection = rejection;
                 }
                 if (guide.batchAction() == BatchAction.STOP) {
@@ -369,10 +387,9 @@ final class VisualLessonStepLocator {
             UUID runId,
             Instant workflowDeadline,
             ProposalToolCircuit proposalToolCircuit) {
-        if (!proposals.configured()) return ProposedRegions.unavailable();
         Map<Integer, List<Proposal>> proposed = new java.util.LinkedHashMap<>();
         for (int start = 0;
-                proposalToolCircuit.available() && start < pageNumbers.size();
+                start < pageNumbers.size();
                 start += DocumentPageImages.MAX_PAGES_PER_READ) {
             Boundary boundary = boundary(runId, workflowDeadline);
             if (boundary.stoppedOutcome() != null) {
@@ -380,6 +397,16 @@ final class VisualLessonStepLocator {
             }
             List<Integer> batch = pageNumbers.subList(
                     start, Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, pageNumbers.size()));
+            try {
+                indexedRegions.find(documentVersionId, new LinkedHashSet<>(batch)).forEach(region -> proposed.merge(
+                        region.pageNumber(),
+                        List.of(new Proposal(new RulebookUnderstanding.Rectangle(
+                                region.x(), region.y(), region.width(), region.height()))),
+                        VisualLessonStepLocator::distinctProposals));
+            } catch (RuntimeException ignored) {
+                // The optional plugin is not a publication dependency; local pixel proposals remain available.
+            }
+            if (!proposals.configured() || !proposalToolCircuit.available()) continue;
             List<DocumentPageImages.PageImage> available;
             try {
                 available = pageImages.read(documentVersionId, new LinkedHashSet<>(batch));
@@ -400,7 +427,7 @@ final class VisualLessonStepLocator {
                     continue;
                 }
                 if (!result.proposals().isEmpty()) {
-                    proposed.put(page.pageNumber(), result.proposals());
+                    proposed.merge(page.pageNumber(), result.proposals(), VisualLessonStepLocator::distinctProposals);
                 }
                 if (result.diagnostic() == Diagnostic.UNAVAILABLE || result.diagnostic() == Diagnostic.TIMEOUT) {
                     proposalToolCircuit.recordRuntimeFailure();
@@ -416,6 +443,10 @@ final class VisualLessonStepLocator {
 
     ProposalToolCircuit beginProposalWorkflow() {
         return new ProposalToolCircuit(proposals.configured());
+    }
+
+    private static List<Proposal> distinctProposals(List<Proposal> first, List<Proposal> second) {
+        return java.util.stream.Stream.concat(first.stream(), second.stream()).distinct().toList();
     }
 
     private List<Claim> claims(List<LessonStep> steps) {
@@ -442,7 +473,9 @@ final class VisualLessonStepLocator {
         if (!cropPolicy.isReadableForPlayer(region)) return VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
         if (region.visibleDescription().isBlank()) return VisualLessonEnricher.Outcome.REJECTED_MISSING_OBSERVATION;
         if (!cropPolicy.isUsefulPlayerVisual(region)) return VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL;
-        if (!cropPolicy.intersectsCandidate(region, attachedCandidates)) return VisualLessonEnricher.Outcome.REJECTED_OUTSIDE_CANDIDATE;
+        if (!cropPolicy.matchesCandidate(region, attachedCandidates)) {
+            return VisualLessonEnricher.Outcome.REJECTED_OUTSIDE_CANDIDATE;
+        }
         if (!evidenceIds.containsAll(region.supportedEvidenceIds())) return VisualLessonEnricher.Outcome.REJECTED_UNKNOWN_EVIDENCE;
         return null;
     }

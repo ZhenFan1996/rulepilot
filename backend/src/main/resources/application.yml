@@ -135,6 +135,16 @@ rulepilot:
       exchange: ${DOCUMENT_READY_EXCHANGE:rulepilot.document.ready}
       queue: ${DOCUMENT_READY_QUEUE:rulepilot.document.ready.api.v1}
       routing-key: ${DOCUMENT_READY_ROUTING_KEY:document.ready.v1}
+  visual-aid:
+    # Optional plugin: document ingestion publishes a rendered-document event; teaching never calls Docling directly.
+    docling:
+      enabled: ${DOCLING_ENABLED:false}
+      service-url: ${DOCLING_SERVICE_URL:}
+      api-key: ${DOCLING_API_KEY:}
+      timeout: ${DOCLING_TIMEOUT:PT5M}
+      poll-interval: ${DOCLING_POLL_INTERVAL:PT1S}
+      max-file-bytes: ${DOCLING_MAX_FILE_BYTES:104857600}
+      max-result-bytes: ${DOCLING_MAX_RESULT_BYTES:33554432}
   teaching:
     provider: ${TEACHING_PROVIDER:fake}
     model-provider: ${TEACHING_MODEL_PROVIDER:gemini}

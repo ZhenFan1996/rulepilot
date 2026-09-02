@@ -8,47 +8,19 @@ import java.util.List;
 /** Geometry- and provenance-only policy for player-facing visual crops. */
 final class VisualReaderCropPolicy {
 
-    private static final int MIN_READER_VIEWPORT_WIDTH = 180;
-    private static final int MIN_READER_VIEWPORT_HEIGHT = 120;
-
     boolean isReadableForPlayer(LocatedRegion region) {
         return region.width() >= 32 && region.height() >= 32;
-    }
-
-    boolean needsReaderViewport(LocatedRegion region) {
-        return region.width() < 80 || region.height() < 60;
-    }
-
-    boolean canExpandIntoReaderViewport(LocatedRegion region) {
-        return !region.claimContradicted();
-    }
-
-    LocatedRegion expandIntoReaderViewport(LocatedRegion region) {
-        int width = Math.max(MIN_READER_VIEWPORT_WIDTH, region.width());
-        int height = Math.max(MIN_READER_VIEWPORT_HEIGHT, region.height());
-        int x = centeredAndBounded(region.x(), region.width(), width);
-        int y = centeredAndBounded(region.y(), region.height(), height);
-        return new LocatedRegion(
-                region.pageNumber(),
-                region.label(),
-                region.visibleDescription(),
-                x,
-                y,
-                width,
-                height,
-                region.supportedEvidenceIds(),
-                region.supportedStepPositions(),
-                region.claimContradicted(),
-                region.sourceKind());
     }
 
     boolean isUsefulPlayerVisual(LocatedRegion region) {
         return !region.claimContradicted();
     }
 
-    boolean intersectsCandidate(LocatedRegion region, List<VisualRegionCandidateSelector.Candidate> candidates) {
+    boolean matchesCandidate(LocatedRegion region, List<VisualRegionCandidateSelector.Candidate> candidates) {
         return candidates.stream().anyMatch(candidate -> candidate.pageNumber() == region.pageNumber()
-                && intersects(candidate.rectangle(), region.x(), region.y(), region.width(), region.height()));
+                && candidate.sourceKind() == region.sourceKind()
+                && candidate.rectangle().equals(new Rectangle(
+                        region.x(), region.y(), region.width(), region.height())));
     }
 
     boolean overlapsSubstantially(VisualFocus first, VisualFocus second) {
@@ -62,13 +34,4 @@ final class VisualReaderCropPolicy {
         return smallerArea > 0 && overlapArea * 100 >= smallerArea * 75;
     }
 
-    private int centeredAndBounded(int origin, int focusSize, int viewportSize) {
-        int centered = origin + (focusSize - viewportSize) / 2;
-        return Math.max(0, Math.min(1_000 - viewportSize, centered));
-    }
-
-    private boolean intersects(Rectangle candidate, int x, int y, int width, int height) {
-        return candidate.x() < x + width && x < candidate.x() + candidate.width()
-                && candidate.y() < y + height && y < candidate.y() + candidate.height();
-    }
 }

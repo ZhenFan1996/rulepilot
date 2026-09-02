@@ -10,6 +10,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -45,6 +46,7 @@ public class VisualLessonEnricher {
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionProposer proposals,
+            VisualRegionCatalog indexedRegions,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
             AgentExecutionControl execution,
@@ -55,6 +57,7 @@ public class VisualLessonEnricher {
                 pageImages,
                 candidates,
                 proposals,
+                indexedRegions,
                 locator,
                 prioritizer,
                 execution,
@@ -93,6 +96,30 @@ public class VisualLessonEnricher {
             AgentExecutionControl execution,
             Duration compatibilityWorkflowTimeout,
             Clock clock) {
+        this(
+                understanding,
+                pageImages,
+                candidates,
+                proposals,
+                VisualRegionCatalog.empty(),
+                locator,
+                prioritizer,
+                execution,
+                compatibilityWorkflowTimeout,
+                clock);
+    }
+
+    VisualLessonEnricher(
+            RulebookUnderstandingCatalog understanding,
+            DocumentPageImages pageImages,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionProposer proposals,
+            VisualRegionCatalog indexedRegions,
+            VisualRegionLocator locator,
+            VisualSectionPrioritizer prioritizer,
+            AgentExecutionControl execution,
+            Duration compatibilityWorkflowTimeout,
+            Clock clock) {
         if (clock == null) throw new IllegalArgumentException("visual enrichment clock is required");
         this.understanding = understanding;
         this.prioritizer = prioritizer;
@@ -106,6 +133,7 @@ public class VisualLessonEnricher {
                         pageImages,
                         candidates,
                         proposals,
+                        indexedRegions,
                         locator,
                         cropPolicy,
                         execution,
@@ -127,7 +155,8 @@ public class VisualLessonEnricher {
                 locator,
                 prioritizer,
                 null,
-                VisualLessonStepLocator.DEFAULT_COMPATIBILITY_WORKFLOW_TIMEOUT);
+                VisualLessonStepLocator.DEFAULT_COMPATIBILITY_WORKFLOW_TIMEOUT,
+                Clock.systemUTC());
     }
 
     public VisualLessonEnricher(

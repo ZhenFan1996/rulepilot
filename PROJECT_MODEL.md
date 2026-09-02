@@ -118,6 +118,17 @@ Agent 每次都看到可用页、已读页原文、已发布章节、未读可�
 4. 同一个章节任务继续准备可选配图；图片读取、模型选择或 crop 失败只省略当前图片。
 5. 正文与可选图片作为一次完整章节快照原子发布，不向玩家暴露半拼接章节。
 
+配图的语义和几何分属不同责任：本地像素工具生成有界的视觉对象候选，视觉 Agent 只能按 opaque
+candidate ID 判断哪个候选支持某一已引用步骤。模型不生成坐标，发布边界也不自动扩张已选区域；最终几何必须与
+应用提供的候选完全一致。PDF 正文块和固定页面象限不是视觉对象几何；像素工具无结果时省略配图，不用粗糙大图伪装成
+精准插图。
+
+`visualaid` 是独立的可选业务模块。文档页全部持久化后，document 模块只发布
+`RenderedDocumentAvailable`；visualaid 可以把不可变 PDF 交给 Docling 一次性检测 picture/table 布局，将 provider
+坐标转换成统一的左上角 0–1000 几何并持久化。teaching 只读取 provider-neutral `VisualRegionCatalog`，不知道 Docling、
+HTTP、API key 或 visualaid 表结构；本地像素候选可作为补充。模块关闭、远端失败、页身份不一致或没有候选时均为局部降级，
+不得阻断文档处理、正文发布或删除本地候选。
+
 生成主路径没有 critic 或 localizer 模型阶段。localization 只在玩家显式请求时作为发布后投影，失败不修改中文源课程；质量 evaluator 是只读管理报告，不阻止章节发布。
 
 只要有一个可读章节，结果就保留。缺章、不可读页、未引用页、unresolved topic 或局部图像失败使结果成为 `DRAFT_READY/DEGRADED`，而不是抹掉全部章节。只有来源整体不可用、零可发布章节、身份/版本/引用越界、不可恢复的持久化失败、provider/deadline、全局取消或明确启用的资源边界才结束整个 owner；讲解 workload token 观测阈值本身不再是停止原因。

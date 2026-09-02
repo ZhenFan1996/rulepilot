@@ -11,12 +11,14 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionProposer;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
+import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,6 +29,61 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class VisualLessonStepLocatorTest {
+
+    @Test
+    void offersPersistedLayoutCandidatesWhenTheLocalPixelToolIsUnavailable() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        VisualRegionLocator locator = mock(VisualRegionLocator.class);
+        when(pageImages.read(documentVersionId, Set.of(2)))
+                .thenReturn(List.of(new DocumentPageImages.PageImage(
+                        2, "image/png", new byte[] {1}, 1_000, 1_000)));
+        when(locator.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(invocation -> {
+            VisualRegionLocator.VisualLocationRequest request = invocation.getArgument(0);
+            var candidate = request.candidates().getFirst();
+            return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
+                    candidate.pageNumber(),
+                    "setup diagram",
+                    "A bounded setup diagram is visible.",
+                    candidate.rectangle().x(),
+                    candidate.rectangle().y(),
+                    candidate.rectangle().width(),
+                    candidate.rectangle().height(),
+                    List.of(evidenceId),
+                    List.of(1),
+                    false,
+                    candidate.sourceKind())));
+        });
+        VisualRegionCatalog catalog = (versionId, pageNumbers) -> List.of(
+                new VisualRegionCatalog.Region(2, "PICTURE", 120, 180, 420, 360));
+        LessonStep step = step(evidenceId, 2);
+        LessonSection section = section(evidenceId, step);
+        var stepLocator = new VisualLessonStepLocator(
+                pageImages,
+                new VisualRegionCandidateSelector(),
+                VisualRegionProposer.unavailable(),
+                catalog,
+                locator,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(5));
+
+        VisualLessonStepLocator.Result result = stepLocator.locate(
+                mock(RulebookUnderstanding.class),
+                documentVersionId,
+                section,
+                List.of(step),
+                "player");
+
+        assertThat(result.rejection()).isNull();
+        assertThat(result.regions()).singleElement().satisfies(region -> {
+            assertThat(region.pageNumber()).isEqualTo(2);
+            assertThat(new Rectangle(region.x(), region.y(), region.width(), region.height()))
+                    .isEqualTo(new Rectangle(120, 180, 420, 360));
+        });
+    }
 
     @Test
     void observationalTeachingTokensDoNotPreventOptionalVisualWork() {
@@ -101,5 +158,33 @@ class VisualLessonStepLocatorTest {
         assertThat(result.regions()).isEmpty();
         assertThat(result.rejection()).isEqualTo(VisualLessonEnricher.Outcome.MODEL_EXPLICIT_NO_REGION);
         verify(locator).locateGuideWithResult(any(), any(Duration.class));
+    }
+
+    private LessonStep step(UUID evidenceId, int pageNumber) {
+        return new LessonStep(
+                1,
+                "Apply the cited rule",
+                TeachingMove.DO,
+                "Follow the rule shown on the cited page.",
+                List.of(pageNumber),
+                List.of(evidenceId),
+                List.of(),
+                null,
+                List.of());
+    }
+
+    private LessonSection section(UUID evidenceId, LessonStep step) {
+        return new LessonSection(
+                1,
+                "rule",
+                List.of(),
+                "Rule",
+                true,
+                EvidenceStatus.SUPPORTED,
+                VisualKind.REFERENCE_CARD,
+                "Rule",
+                step.sourcePages(),
+                List.of(evidenceId),
+                List.of(step));
     }
 }
