@@ -217,7 +217,7 @@ function stepKindLabel(kind: string) {
               v-for="step in section.steps"
               :key="step.position"
               :data-testid="stepTestId || undefined"
-              class="rounded-2xl border p-5 lesson-step-shadow sm:p-6"
+              class="min-w-0 rounded-2xl border p-5 lesson-step-shadow sm:p-6"
               :class="stepTone(step.kind)"
             >
               <div class="flex gap-4">
@@ -237,7 +237,7 @@ function stepKindLabel(kind: string) {
                     </div>
                     <div
                       class="mt-4"
-                      :class="stepVisuals(step).length ? 'lg:grid lg:grid-cols-[minmax(20rem,1.08fr)_minmax(16rem,0.92fr)] lg:items-start lg:gap-6' : ''"
+                      :class="stepVisuals(step).length ? '2xl:grid 2xl:grid-cols-[minmax(20rem,1.08fr)_minmax(16rem,0.92fr)] 2xl:items-start 2xl:gap-6' : ''"
                     >
                       <div
                         v-if="stepVisuals(step).length"
@@ -256,7 +256,7 @@ function stepKindLabel(kind: string) {
                         />
                       </div>
 
-                      <div class="min-w-0" :class="stepVisuals(step).length ? 'mt-5 lg:mt-0' : ''">
+                      <div class="min-w-0" :class="stepVisuals(step).length ? 'mt-5 2xl:mt-0' : ''">
                         <p class="text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
                         <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
 

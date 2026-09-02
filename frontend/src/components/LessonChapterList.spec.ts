@@ -200,6 +200,8 @@ describe('LessonChapterList', () => {
     const narrative = pairedStep.get('[data-testid="lesson-step-narrative"]')
     const visual = pairedStep.get('[data-testid="lesson-visual-evidence"]')
 
+    expect(wrapper.get('.lesson-step-shadow').classes()).toContain('min-w-0')
+    expect(narrative.get('.mt-4').classes()).toContain('2xl:grid')
     expect(narrative.text()).toContain('把主板放在桌面中央。')
     expect(visual.attributes('aria-describedby')).toBe(narrative.attributes('id'))
     expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).toContain('sm:grid-cols-2')

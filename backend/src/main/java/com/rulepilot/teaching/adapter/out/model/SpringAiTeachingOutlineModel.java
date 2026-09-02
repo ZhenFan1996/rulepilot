@@ -448,7 +448,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             }
             Set<String> coveredIds = new LinkedHashSet<>(covered);
             List<Integer> unreadPages = unreadAvailablePages();
-            List<Integer> unusedReadPages = uncoveredReadPages();
             List<TopicDraft> topics = chapters.values().stream()
                     .map(chapter -> new TopicDraft(
                             chapter.key(),
@@ -466,7 +465,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     .toList();
             List<String> durableUnresolved = new ArrayList<>(unresolved.stream().map(String::strip).toList());
             unreadPages.forEach(page -> durableUnresolved.add("Unread available rulebook page " + page));
-            unusedReadPages.forEach(page -> durableUnresolved.add("Read rulebook page not used by any chapter " + page));
             chapters.keySet().stream()
                     .filter(id -> !coveredIds.contains(id))
                     .forEach(id -> durableUnresolved.add("Published chapter not acknowledged as covered: " + id));

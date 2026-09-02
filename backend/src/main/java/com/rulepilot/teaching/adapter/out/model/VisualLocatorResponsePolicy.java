@@ -20,6 +20,8 @@ import java.util.Set;
 /** Strict admission for a model that may select application-owned candidates but can never author geometry. */
 final class VisualLocatorResponsePolicy {
 
+    static final int MAX_LABEL_CHARACTERS = 80;
+
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
@@ -99,6 +101,7 @@ final class VisualLocatorResponsePolicy {
         String candidateId = review.get("candidateId").textValue().strip();
         String label = review.get("label").textValue().strip();
         String visibleDescription = review.get("visibleDescription").textValue().strip();
+        if (label.length() > MAX_LABEL_CHARACTERS) return Optional.empty();
         return Optional.of(new ModelReview(
                 stepPosition,
                 action,
@@ -199,6 +202,19 @@ final class VisualLocatorResponsePolicy {
             JsonNode root = JSON.readTree(content.strip());
             if (root == null || !root.isObject()) {
                 return "The visual selection candidate must be one JSON object.";
+            }
+            JsonNode reviews = root.path("reviews");
+            if (reviews.isArray()) {
+                for (JsonNode review : reviews) {
+                    if (nonBlankText(review, "label")) {
+                        int length = review.get("label").textValue().strip().length();
+                        if (length > MAX_LABEL_CHARACTERS) {
+                            return "An ACCEPT_CANDIDATE label contains " + length
+                                    + " characters; shorten every label to at most "
+                                    + MAX_LABEL_CHARACTERS + " characters.";
+                        }
+                    }
+                }
             }
             return "The candidate does not match the exact batchAction plus non-empty reviews contract; every review "
                     + "must contain exactly stepPosition, action, candidateId, label, visibleDescription, and "

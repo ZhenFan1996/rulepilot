@@ -1,5 +1,6 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.time.Duration;
@@ -141,8 +142,32 @@ public interface VisualRegionLocator {
             UUID documentVersionId,
             UUID runId,
             int batchNumber,
-            boolean hasMoreCandidates) {
+            boolean hasMoreCandidates,
+            PlayerLocale outputLocale) {
         public static final int MAX_CANDIDATES_PER_BATCH = 12;
+
+        public VisualLocationRequest(
+                String sectionTitle,
+                List<Claim> claims,
+                List<Candidate> candidates,
+                List<PageImage> pages,
+                String modelConfigurationOwner,
+                UUID documentVersionId,
+                UUID runId,
+                int batchNumber,
+                boolean hasMoreCandidates) {
+            this(
+                    sectionTitle,
+                    claims,
+                    candidates,
+                    pages,
+                    modelConfigurationOwner,
+                    documentVersionId,
+                    runId,
+                    batchNumber,
+                    hasMoreCandidates,
+                    PlayerLocale.ZH_CN);
+        }
 
         public VisualLocationRequest(
                 String sectionTitle,
@@ -188,7 +213,8 @@ public interface VisualRegionLocator {
                     || pages == null || pages.isEmpty()
                     || candidates.size() > MAX_CANDIDATES_PER_BATCH
                     || pages.size() > MAX_CANDIDATES_PER_BATCH
-                    || batchNumber < 1) {
+                    || batchNumber < 1
+                    || outputLocale == null) {
                 throw new IllegalArgumentException("visual location request is invalid");
             }
             claims = List.copyOf(claims);

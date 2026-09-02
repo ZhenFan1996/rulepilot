@@ -57,18 +57,20 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             only when hasMoreCandidates is true and inspecting the next finite batch is still useful after this batch's
             selections; otherwise use STOP. Every review has exactly stepPosition, action, candidateId, label,
             visibleDescription, and supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL.
-            ACCEPT_CANDIDATE requires one offered candidateId, a short literal label and visibleDescription, and one
-            or more offered C references belonging to that step whose sourcePages contain the candidate page.
+            ACCEPT_CANDIDATE requires one offered candidateId, a literal label of at most 80 characters,
+            visibleDescription, and one or more offered C references belonging to that step whose sourcePages contain
+            the candidate page.
             NO_VISUAL requires candidateId, label, and visibleDescription to be null and supportedClaimRefs to be an
-            empty array. Return at least one review for every offered step in every batch: one or more accepted
-            candidates, or exactly one NO_VISUAL decision when nothing in that batch helps that step. A step may accept
+            empty array. Reviews may be sparse: omit a step when this batch has no useful crop for it. A step may accept
             several different candidates. Select every useful candidate needed for the lesson; do not target a fixed
             count. The same candidate may never be selected twice or shared across steps.
 
             Select a crop only when its literal visible content helps a player inspect the offered claim. An image
             never proves a mechanical effect, condition, quantity, score, timing, or exception; cited text remains
-            authoritative. Reject decorative, prose-only, contradictory, or ambiguous crops. Do not add fields,
-            page numbers, geometry, source kinds, reasoning, or prose outside the JSON object.
+            authoritative. Reject decorative, prose-only, contradictory, or ambiguous crops. Write label and
+            visibleDescription in the explicitly supplied outputLocale, preserving literal text visible in the crop
+            when it helps identification. Do not add fields, page numbers, geometry, source kinds, reasoning, or prose
+            outside the JSON object.
 
             When the application supplies structured rejection feedback, reconsider the whole batch and return one
             complete replacement object. Never patch fields from the rejected object. Choose only an offered opaque
@@ -82,15 +84,16 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             pages, attachment order, and source kind; never return coordinates. Return JSON only with exactly
             batchAction and reviews. batchAction is STOP or CONTINUE; CONTINUE is legal only when hasMoreCandidates is
             true and another batch remains useful after the current selections. Each review has exactly stepPosition,
-            action, candidateId, label, visibleDescription,
-            supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
+            action, candidateId, label, visibleDescription, supportedClaimRefs. label must contain at most 80
+            characters. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
             literal label/description, and only C refs for that step whose sourcePages contain the candidate page.
-            NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Every
-            offered step needs at least one review in every batch: accepted candidate(s), or exactly one NO_VISUAL.
-            Never select one candidate twice. Select all useful candidates without targeting a fixed count. Images
-            prove appearance only. Add no fields. Structured rejection feedback requires one complete replacement
-            object, never a field patch. Reconsider the offered opaque candidate ids and return a valid candidate or
-            NO_VISUAL; never edit pixels or return geometry.
+            NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Reviews
+            may be sparse; omit a step when this batch has no useful crop for it. Never select one candidate twice.
+            Select all useful candidates without targeting a fixed count. Images
+            prove appearance only. Write label and visibleDescription in the explicitly supplied outputLocale,
+            preserving useful literal crop text. Add no fields. Structured rejection feedback requires one complete
+            replacement object, never a field patch. Reconsider the offered opaque candidate ids and return a valid
+            candidate or NO_VISUAL; never edit pixels or return geometry.
             """;
 
     private static final int MAX_ATTACHMENT_EDGE = 1_024;
@@ -325,6 +328,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .user(user -> {
                     user.text("""
                                     Section: {section}
+                                    outputLocale: {outputLocale}
                                     Claims: {claims}
                                     Candidate manifest (same order as image attachments): {manifest}
                                     batchNumber: {batchNumber}
@@ -334,6 +338,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Return the exact batchAction plus reviews JSON object only.
                                     """)
                             .param("section", request.sectionTitle())
+                            .param("outputLocale", request.outputLocale().promptName())
                             .param("claims", VisualLocatorResponsePolicy.promptJson(
                                     IntStream.range(0, request.claims().size())
                                             .mapToObj(index -> Map.of(
@@ -375,35 +380,42 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 (first, ignored) -> first,
                 LinkedHashMap::new));
         Set<String> selectedIds = new LinkedHashSet<>();
-        Set<Integer> acceptedSteps = new LinkedHashSet<>();
-        Set<Integer> rejectedSteps = new LinkedHashSet<>();
         List<LocatedRegion> accepted = new ArrayList<>();
+        String validationError = null;
+        boolean validNoVisual = false;
 
         for (ModelReview review : guide.reviews()) {
             if (!offeredSteps.contains(review.stepPosition())) {
-                return unsupported(candidateJson, "stepPosition " + review.stepPosition()
-                        + " is not one of the offered step identities " + offeredSteps);
-            }
-            if (review.action() == ModelAction.NO_VISUAL) {
-                if (!rejectedSteps.add(review.stepPosition()) || acceptedSteps.contains(review.stepPosition())) {
-                    return unsupported(candidateJson,
-                            "A step may be reviewed only once as NO_VISUAL and cannot also accept a candidate");
+                if (validationError == null) {
+                    validationError = "stepPosition " + review.stepPosition()
+                            + " is not one of the offered step identities " + offeredSteps;
                 }
                 continue;
             }
-            if (rejectedSteps.contains(review.stepPosition()) || !selectedIds.add(review.candidateId())) {
-                return unsupported(candidateJson,
-                        "A candidate identity cannot be selected twice or attached to a step already marked NO_VISUAL");
+            if (review.action() == ModelAction.NO_VISUAL) {
+                validNoVisual = true;
+                continue;
+            }
+            if (!selectedIds.add(review.candidateId())) {
+                if (validationError == null) {
+                    validationError = "A candidate identity cannot be selected twice";
+                }
+                continue;
             }
             Candidate candidate = candidates.get(review.candidateId());
             if (candidate == null) {
-                return unsupported(candidateJson, "candidateId " + review.candidateId()
-                        + " is not one of the offered identities " + candidates.keySet());
+                if (validationError == null) {
+                    validationError = "candidateId " + review.candidateId()
+                            + " is not one of the offered identities " + candidates.keySet();
+                }
+                continue;
             }
             List<VisualRegionLocator.Claim> claims = ownedClaims(review, candidate, request);
             if (claims.isEmpty()) {
-                return unsupported(candidateJson,
-                        "supportedClaimRefs must belong to the selected step and include the candidate page");
+                if (validationError == null) {
+                    validationError = "supportedClaimRefs must belong to the selected step and include the candidate page";
+                }
+                continue;
             }
             Rectangle rectangle = candidate.rectangle();
             accepted.add(new LocatedRegion(
@@ -418,21 +430,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     List.of(review.stepPosition()),
                     false,
                     candidate.sourceKind()));
-            acceptedSteps.add(review.stepPosition());
-        }
-        Set<Integer> reviewedSteps = new LinkedHashSet<>(acceptedSteps);
-        reviewedSteps.addAll(rejectedSteps);
-        if (!reviewedSteps.equals(offeredSteps)) {
-            Set<Integer> missingSteps = new LinkedHashSet<>(offeredSteps);
-            missingSteps.removeAll(reviewedSteps);
-            return unsupported(candidateJson,
-                    "Every offered step needs an ACCEPT_CANDIDATE or NO_VISUAL review; missing " + missingSteps);
         }
         if (!accepted.isEmpty()) {
             return new GuideAttempt(
                     LocateGuideResult.found(accepted, batchAction), Rejection.NONE, candidateJson, "");
         }
-        if (guide.hasOnlyNoVisual()) {
+        if (validationError == null && validNoVisual) {
             return unavailable(
                     Rejection.EXPLICIT_NO_REGION,
                     batchAction,
@@ -443,7 +446,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 Rejection.UNSUPPORTED_SCOPE,
                 batchAction,
                 candidateJson,
-                "The complete selection contains no admissible candidate or explicit NO_VISUAL decision");
+                validationError == null
+                        ? "The complete selection contains no admissible candidate or explicit NO_VISUAL decision"
+                        : validationError);
     }
 
     List<VisualRegionLocator.Claim> ownedClaims(

@@ -32,7 +32,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 class SpringAiTeachingOutlineModelRetryTest {
 
     @Test
-    void letsOneAgentReadPublishAndFinishWhileKeepingUnresolvedEvidenceVisible() {
+    void letsOneAgentReadContextWithoutTurningANonRulePageIntoAMissingTopic() {
         Fixture fixture = fixture();
         when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
                 response("""
@@ -56,7 +56,7 @@ class SpringAiTeachingOutlineModelRetryTest {
             assertThat(topic.sourcePageNumbers()).containsExactly(1);
         });
         assertThat(outline.unresolvedTopics())
-                .containsExactly("维修细节仍需补充", "Read rulebook page not used by any chapter 2");
+                .containsExactly("维修细节仍需补充");
         verify(fixture.chatModel, times(3)).call(any(Prompt.class));
     }
 
