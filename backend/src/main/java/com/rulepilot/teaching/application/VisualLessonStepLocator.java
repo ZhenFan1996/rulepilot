@@ -273,6 +273,7 @@ final class VisualLessonStepLocator {
                     proposed.byPage()).stream()
                     .filter(candidate -> acceptedVisuals.stream()
                             .noneMatch(existing -> cropPolicy.overlapsSubstantially(candidate, existing)))
+                    .limit(steps.size())
                     .toList();
             if (selected.isEmpty()) continue;
             candidateFound = true;

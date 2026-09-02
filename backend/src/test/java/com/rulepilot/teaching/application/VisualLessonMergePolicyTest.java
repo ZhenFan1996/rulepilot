@@ -19,7 +19,7 @@ class VisualLessonMergePolicyTest {
     private final VisualLessonMergePolicy policy = new VisualLessonMergePolicy(new VisualReaderCropPolicy());
 
     @Test
-    void attachesSeveralOwnedVisualsToOneStepWithoutChangingValidatedProse() {
+    void attachesOnlyOnePrimaryVisualToEachStepWithoutChangingValidatedProse() {
         UUID evidence = UUID.randomUUID();
         LessonSection source = section(List.of(ruleStep(evidence)), List.of(), List.of());
         List<LocatedRegion> regions = List.of(
@@ -42,18 +42,18 @@ class VisualLessonMergePolicyTest {
                 source, regions, new ArrayList<>());
 
         LessonStep step = merged.section().steps().getFirst();
-        assertThat(merged.addedCount()).isEqualTo(3);
+        assertThat(merged.addedCount()).isEqualTo(1);
+        assertThat(merged.duplicateCount()).isEqualTo(2);
         assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
         assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
         assertThat(step.visualFocus()).isEqualTo(step.visualFoci().getFirst());
-        assertThat(step.visualFoci()).hasSize(3)
+        assertThat(step.visualFoci()).hasSize(1)
                 .extracting(VisualFocus::label)
-                .containsExactly("行动图标", "轨道状态", "牌面示例");
-        assertThat(step.visualFoci().get(2).sourceKind()).isEqualTo(VisualSourceKind.EMBEDDED_AUTHOR_IMAGE);
+                .containsExactly("行动图标");
     }
 
     @Test
-    void keepsAnExistingFullPageVisualAndAddsASeparateOwnedRegion() {
+    void keepsAnExistingPrimaryVisualInsteadOfAppendingAnotherRegion() {
         UUID evidence = UUID.randomUUID();
         VisualFocus fullPage = new VisualFocus(
                 2,
@@ -82,9 +82,11 @@ class VisualLessonMergePolicyTest {
                 new ArrayList<>(List.of(fullPage)));
 
         assertThat(merged.section().steps().getFirst().text()).isEqualTo("依次执行三个阶段。");
+        assertThat(merged.addedCount()).isZero();
+        assertThat(merged.duplicateCount()).isEqualTo(1);
         assertThat(merged.section().steps().getFirst().visualFoci())
                 .extracting(VisualFocus::sourceKind)
-                .containsExactly(VisualSourceKind.FULL_PAGE, VisualSourceKind.PAGE_REGION);
+                .containsExactly(VisualSourceKind.FULL_PAGE);
     }
 
     @Test

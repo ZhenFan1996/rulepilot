@@ -182,13 +182,21 @@ class VisualLessonStepLocatorTest {
                 1,
                 new Rectangle(0, 0, 550, 550),
                 VisualSourceKind.PAGE_REGION);
-        when(candidates.select(any(), any(), any(), any())).thenReturn(List.of(candidate));
+        when(candidates.select(any(), any(), any(), any())).thenReturn(List.of(
+                candidate,
+                new VisualRegionCandidateSelector.Candidate(
+                        "candidate_2", 1, new Rectangle(560, 0, 400, 400), VisualSourceKind.PAGE_REGION),
+                new VisualRegionCandidateSelector.Candidate(
+                        "candidate_3", 1, new Rectangle(0, 560, 400, 400), VisualSourceKind.PAGE_REGION)));
         when(pageImages.read(documentVersionId, Set.of(1)))
                 .thenReturn(List.of(new DocumentPageImages.PageImage(
                         1, "image/png", new byte[] {1}, 1_000, 1_000)));
-        when(locator.locateGuideWithResult(any(), any(Duration.class)))
-                .thenReturn(VisualRegionLocator.LocateGuideResult.unavailable(
-                        VisualRegionLocator.Diagnostic.EXPLICIT_NO_REGION));
+        when(locator.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(invocation -> {
+            VisualRegionLocator.VisualLocationRequest request = invocation.getArgument(0);
+            assertThat(request.candidates()).hasSize(1);
+            return VisualRegionLocator.LocateGuideResult.unavailable(
+                    VisualRegionLocator.Diagnostic.EXPLICIT_NO_REGION);
+        });
         when(execution.budget(runId)).thenReturn(new AgentExecutionControl.BudgetSnapshot(
                 10,
                 0,

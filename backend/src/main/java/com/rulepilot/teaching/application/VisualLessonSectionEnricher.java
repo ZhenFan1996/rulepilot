@@ -99,6 +99,7 @@ final class VisualLessonSectionEnricher {
     static List<LessonStep> visualTargets(LessonSection section) {
         return section.steps().stream()
                 .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
+                .filter(step -> step.visualFoci().isEmpty())
                 .sorted(java.util.Comparator.comparingInt(LessonStep::position))
                 .toList();
     }

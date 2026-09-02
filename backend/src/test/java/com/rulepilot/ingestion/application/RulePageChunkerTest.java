@@ -83,6 +83,22 @@ class RulePageChunkerTest {
     }
 
     @Test
+    void keepsPunctuationFragmentsInsideTheirOwningSectionWithoutCreatingBlankHeadings() {
+        var page = new ExtractedPage(8, "ACTIONS\n:\nSpend one energy to move.", List.of(
+                new ExtractedTextBlock(0, "ACTIONS", 50, 50, 300, 35),
+                new ExtractedTextBlock(1, ":", 50, 100, 20, 20),
+                new ExtractedTextBlock(2, "Spend one energy to move.", 80, 140, 700, 28)));
+        var understanding = new RulebookUnderstandingBuilder().build(List.of(page));
+
+        var chunks = chunker.chunk(List.of(page), understanding);
+
+        assertThat(chunks).singleElement().satisfies(chunk -> {
+            assertThat(chunk.heading()).isEqualTo("ACTIONS");
+            assertThat(chunk.content()).contains(":", "Spend one energy to move.");
+        });
+    }
+
+    @Test
     void retainsImageOnlyPagesAsVisualEvidenceInsteadOfRejectingTheRulebook() {
         var chunks = chunk(List.of(new ExtractedPage(9, "")));
 

@@ -47,6 +47,10 @@ final class VisualLessonMergePolicy {
                     .findFirst();
             if (supportedStepIndex.isEmpty()) continue;
             LessonStep supportedStep = steps.get(supportedStepIndex.get());
+            if (!supportedStep.visualFoci().isEmpty()) {
+                duplicates++;
+                continue;
+            }
             VisualFocus focus = new VisualFocus(
                     region.pageNumber(),
                     region.label(),

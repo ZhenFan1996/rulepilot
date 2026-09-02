@@ -62,5 +62,9 @@ public interface DocumentProcessing {
         }
     }
 
-    record PageView(int pageNumber, String text, int characterCount) {}
+    record PageView(int pageNumber, String text, int characterCount, boolean imageAvailable) {
+        public PageView(int pageNumber, String text, int characterCount) {
+            this(pageNumber, text, characterCount, false);
+        }
+    }
 }
