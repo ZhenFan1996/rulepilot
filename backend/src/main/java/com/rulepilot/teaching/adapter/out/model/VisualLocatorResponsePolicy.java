@@ -11,11 +11,9 @@ import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidat
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /** Strict admission for a model that may select application-owned candidates but can never author geometry. */
 final class VisualLocatorResponsePolicy {
@@ -65,13 +63,12 @@ final class VisualLocatorResponsePolicy {
     private static Optional<ModelReview> parseReview(JsonNode review) {
         if (review == null
                 || !review.isObject()
-                || review.size() != 6
+                || review.size() != 5
                 || !integral(review, "stepPosition")
                 || !text(review, "action")
                 || !review.has("candidateId")
                 || !review.has("label")
-                || !review.has("visibleDescription")
-                || !review.has("supportedClaimRefs")) {
+                || !review.has("visibleDescription")) {
             return Optional.empty();
         }
         int stepPosition = review.get("stepPosition").intValue();
@@ -85,17 +82,14 @@ final class VisualLocatorResponsePolicy {
         if (action == ModelAction.NO_VISUAL) {
             if (!review.get("candidateId").isNull()
                     || !review.get("label").isNull()
-                    || !review.get("visibleDescription").isNull()
-                    || !review.get("supportedClaimRefs").isArray()
-                    || !review.get("supportedClaimRefs").isEmpty()) {
+                    || !review.get("visibleDescription").isNull()) {
                 return Optional.empty();
             }
-            return Optional.of(new ModelReview(stepPosition, action, null, null, null, List.of()));
+            return Optional.of(new ModelReview(stepPosition, action, null, null, null));
         }
         if (!nonBlankText(review, "candidateId")
                 || !nonBlankText(review, "label")
-                || !nonBlankText(review, "visibleDescription")
-                || !uniqueTextArray(review, "supportedClaimRefs")) {
+                || !nonBlankText(review, "visibleDescription")) {
             return Optional.empty();
         }
         String candidateId = review.get("candidateId").textValue().strip();
@@ -107,8 +101,7 @@ final class VisualLocatorResponsePolicy {
                 action,
                 candidateId,
                 label,
-                visibleDescription,
-                strings(review.get("supportedClaimRefs"))));
+                visibleDescription));
     }
 
     private static boolean integral(JsonNode object, String field) {
@@ -121,21 +114,6 @@ final class VisualLocatorResponsePolicy {
 
     private static boolean nonBlankText(JsonNode object, String field) {
         return text(object, field) && !object.get(field).asText().isBlank();
-    }
-
-    private static boolean uniqueTextArray(JsonNode object, String field) {
-        if (!object.has(field) || !object.get(field).isArray()) return false;
-        Set<String> unique = new LinkedHashSet<>();
-        for (JsonNode value : object.get(field)) {
-            if (!value.isTextual() || value.asText().isBlank() || !unique.add(value.asText())) return false;
-        }
-        return !unique.isEmpty();
-    }
-
-    private static List<String> strings(JsonNode values) {
-        List<String> result = new ArrayList<>();
-        values.forEach(value -> result.add(value.textValue()));
-        return List.copyOf(result);
     }
 
     static List<Map<String, Object>> candidateManifest(List<Candidate> candidates) {
@@ -164,11 +142,10 @@ final class VisualLocatorResponsePolicy {
             String rejectedCandidate,
             String validationError,
             List<String> allowedCandidateIds,
-            List<Integer> allowedStepPositions,
-            List<String> allowedClaimRefs) {
+            List<Integer> allowedStepPositions) {
         if (rejection == null || !rejection.retryable()
                 || rejectedCandidate == null || validationError == null || validationError.isBlank()
-                || allowedCandidateIds == null || allowedStepPositions == null || allowedClaimRefs == null) {
+                || allowedCandidateIds == null || allowedStepPositions == null) {
             throw new IllegalArgumentException("visual selection rejection cannot be corrected");
         }
         Map<String, Object> feedback = new LinkedHashMap<>();
@@ -180,12 +157,10 @@ final class VisualLocatorResponsePolicy {
                 "rootFields", List.of("batchAction", "reviews"),
                 "batchAction", List.of("STOP", "CONTINUE"),
                 "reviewFields", List.of(
-                        "stepPosition", "action", "candidateId", "label",
-                        "visibleDescription", "supportedClaimRefs"),
+                        "stepPosition", "action", "candidateId", "label", "visibleDescription"),
                 "actions", List.of("ACCEPT_CANDIDATE", "NO_VISUAL")));
         feedback.put("allowedCandidateIds", List.copyOf(allowedCandidateIds));
         feedback.put("allowedStepPositions", List.copyOf(allowedStepPositions));
-        feedback.put("allowedClaimRefs", List.copyOf(allowedClaimRefs));
         feedback.put("requiredAction", "RETURN_COMPLETE_REPLACEMENT");
         feedback.put("allowedDecisions", List.of("ACCEPT_CANDIDATE", "NO_VISUAL"));
         feedback.put("forbiddenActions", List.of(
@@ -217,8 +192,8 @@ final class VisualLocatorResponsePolicy {
                 }
             }
             return "The candidate does not match the exact batchAction plus non-empty reviews contract; every review "
-                    + "must contain exactly stepPosition, action, candidateId, label, visibleDescription, and "
-                    + "supportedClaimRefs with the action-dependent nullability described in the original contract.";
+                    + "must contain exactly stepPosition, action, candidateId, label, and visibleDescription with "
+                    + "the action-dependent nullability described in the original contract.";
         } catch (JsonProcessingException invalidJson) {
             String location = invalidJson.getLocation() == null
                     ? ""
@@ -249,18 +224,15 @@ final class VisualLocatorResponsePolicy {
             ModelAction action,
             String candidateId,
             String label,
-            String visibleDescription,
-            List<String> supportedClaimRefs) {
+            String visibleDescription) {
         ModelReview {
-            if (stepPosition < 1 || action == null || supportedClaimRefs == null) {
+            if (stepPosition < 1 || action == null) {
                 throw new IllegalArgumentException("model visual review is invalid");
             }
-            supportedClaimRefs = List.copyOf(supportedClaimRefs);
             boolean noVisual = action == ModelAction.NO_VISUAL;
             if (noVisual != (candidateId == null)
                     || noVisual != (label == null)
-                    || noVisual != (visibleDescription == null)
-                    || noVisual != supportedClaimRefs.isEmpty()) {
+                    || noVisual != (visibleDescription == null)) {
                 throw new IllegalArgumentException("model visual review action is invalid");
             }
         }

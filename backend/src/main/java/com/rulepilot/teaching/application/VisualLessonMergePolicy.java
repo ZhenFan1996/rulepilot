@@ -43,7 +43,6 @@ final class VisualLessonMergePolicy {
                     .boxed()
                     .filter(index -> region.supportedStepPositions().isEmpty()
                             || region.supportedStepPositions().contains(steps.get(index).position()))
-                    .filter(index -> steps.get(index).sourcePages().contains(region.pageNumber()))
                     .filter(index -> steps.get(index).sourceChunkIds().stream().anyMatch(supportedEvidence::contains))
                     .findFirst();
             if (supportedStepIndex.isEmpty()) continue;
@@ -69,7 +68,7 @@ final class VisualLessonMergePolicy {
                     supportedStep.heading(),
                     TeachingMove.VISUAL,
                     supportedStep.text(),
-                    distinct(supportedStep.sourcePages(), region.pageNumber()),
+                    supportedStep.sourcePages(),
                     distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
                     supportedStep.ruleFacts(),
                     stepVisuals.getFirst(),

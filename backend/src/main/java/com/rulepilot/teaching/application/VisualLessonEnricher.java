@@ -170,9 +170,12 @@ public class VisualLessonEnricher {
     static int estimatedTeachingRunModelCalls(TeachingPlan plan) {
         if (plan == null || plan.sections().isEmpty()) return 0;
         long estimated = plan.sections().stream()
-                .filter(section -> section.visualEvidenceRecommended() && !section.sourcePageNumbers().isEmpty())
+                .filter(TeachingPlan.PlannedSection::visualEvidenceRecommended)
                 .mapToLong(section -> {
-                    long pages = section.sourcePageNumbers().stream().distinct().count();
+                    List<Integer> candidatePages = section.visualSourcePageNumbers().isEmpty()
+                            ? section.sourcePageNumbers()
+                            : section.visualSourcePageNumbers();
+                    long pages = candidatePages.stream().distinct().count();
                     return Math.max(1L, (pages + DocumentPageImages.MAX_PAGES_PER_READ - 1L)
                             / DocumentPageImages.MAX_PAGES_PER_READ);
                 })
@@ -180,8 +183,8 @@ public class VisualLessonEnricher {
         if (estimated > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("teaching visual workload is too large");
         }
-        // This sizes the initial token/deadline envelope from real source-page windows. It is not a call limit:
-        // additional candidate pages and complete Agent corrections continue while durable resources remain.
+        // This sizes the initial token/deadline envelope from the Agent's bounded visual-page windows. It is not a
+        // call limit: complete Agent corrections continue while durable resources remain.
         return (int) estimated;
     }
 
@@ -258,7 +261,8 @@ public class VisualLessonEnricher {
                     compatibilityDeadline,
                     proposalToolCircuit,
                     progress,
-                    acceptedVisuals);
+                    acceptedVisuals,
+                    List.of());
             SectionResult sectionResult = sectionResult(enriched);
             sectionResults.add(sectionResult);
             currentSections.set(sectionIndex, sectionResult.section());
@@ -284,12 +288,13 @@ public class VisualLessonEnricher {
      */
     public SectionEnrichment enrichSection(
             UUID documentVersionId,
+            TeachingPlan.PlannedSection planned,
             LessonSection section,
             List<LessonSection> alreadyPublished,
             String modelConfigurationOwner,
             UUID runId,
             VisualProgressListener progress) {
-        if (documentVersionId == null || section == null || alreadyPublished == null || progress == null) {
+        if (documentVersionId == null || planned == null || section == null || alreadyPublished == null || progress == null) {
             throw new IllegalArgumentException("section visual enrichment input is invalid");
         }
         var map = understanding.understanding(documentVersionId);
@@ -309,7 +314,8 @@ public class VisualLessonEnricher {
                 clock.instant().plus(compatibilityWorkflowTimeout),
                 sectionEnricher.beginProposalWorkflow(),
                 progress,
-                acceptedVisuals);
+                acceptedVisuals,
+                planned.visualSourcePageNumbers());
         SectionResult reported = sectionResult(result);
         if (reported.outcome() != null) {
             progress.sectionFinished(new SectionProgress(

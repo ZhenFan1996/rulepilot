@@ -171,7 +171,6 @@ public class LessonComprehensionEvaluator {
     private boolean isCitedVisual(LessonStep step) {
         return step.kind() == TeachingMove.VISUAL
                 && step.visualFocus() != null
-                && step.sourcePages().contains(step.visualFocus().pageNumber())
                 && !step.sourceChunkIds().isEmpty();
     }
 

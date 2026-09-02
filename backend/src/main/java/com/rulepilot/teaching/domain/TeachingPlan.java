@@ -110,7 +110,8 @@ public record TeachingPlan(
             boolean visualEvidenceRecommended,
             List<String> retrievalQueries,
             List<String> coverageTags,
-            List<Integer> sourcePageNumbers) {
+            List<Integer> sourcePageNumbers,
+            List<Integer> visualSourcePageNumbers) {
         public PlannedSection {
             if (position < 1
                     || topicKey == null || topicKey.isBlank()
@@ -120,7 +121,10 @@ public record TeachingPlan(
                     || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank())
                     || coverageTags == null
                     || sourcePageNumbers == null
-                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
+                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
+                    || visualSourcePageNumbers == null
+                    || visualSourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
+                    || (!visualEvidenceRecommended && !visualSourcePageNumbers.isEmpty())) {
                 throw new IllegalArgumentException("generated teaching topic is invalid");
             }
             retrievalQueries = retrievalQueries.stream().distinct().toList();
@@ -129,6 +133,30 @@ public record TeachingPlan(
                     .distinct()
                     .toList();
             sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
+            visualSourcePageNumbers = visualSourcePageNumbers.stream().distinct().toList();
+        }
+
+        public PlannedSection(
+                int position,
+                String topicKey,
+                String title,
+                String objective,
+                boolean required,
+                boolean visualEvidenceRecommended,
+                List<String> retrievalQueries,
+                List<String> coverageTags,
+                List<Integer> sourcePageNumbers) {
+            this(
+                    position,
+                    topicKey,
+                    title,
+                    objective,
+                    required,
+                    visualEvidenceRecommended,
+                    retrievalQueries,
+                    coverageTags,
+                    sourcePageNumbers,
+                    List.of());
         }
 
         public PlannedSection(
@@ -140,7 +168,7 @@ public record TeachingPlan(
                 boolean visualEvidenceRecommended,
                 List<String> retrievalQueries,
                 List<String> coverageTags) {
-            this(position, topicKey, title, objective, required, visualEvidenceRecommended, retrievalQueries, coverageTags, List.of());
+            this(position, topicKey, title, objective, required, visualEvidenceRecommended, retrievalQueries, coverageTags, List.of(), List.of());
         }
     }
 }

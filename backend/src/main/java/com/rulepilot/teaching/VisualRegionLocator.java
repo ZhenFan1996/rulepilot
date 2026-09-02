@@ -9,7 +9,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-/** A vision-only port: it may locate a cited region but can never compose lesson prose. */
+/** A vision-only port: it may select an application-owned rulebook region but can never compose lesson prose. */
 public interface VisualRegionLocator {
 
     Optional<LocatedRegion> locate(VisualLocationRequest request);

@@ -13,6 +13,7 @@ import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.time.Clock;
 import java.time.Duration;
@@ -183,7 +184,9 @@ final class VisualLessonStepLocator {
                 modelConfigurationOwner,
                 runId,
                 compatibilityDeadline,
-                beginProposalWorkflow());
+                beginProposalWorkflow(),
+                List.of(),
+                List.of());
     }
 
     Result locate(
@@ -195,10 +198,34 @@ final class VisualLessonStepLocator {
             UUID runId,
             Instant compatibilityDeadline,
             ProposalToolCircuit proposalToolCircuit) {
+        return locate(
+                understanding,
+                documentVersionId,
+                section,
+                steps,
+                modelConfigurationOwner,
+                runId,
+                compatibilityDeadline,
+                proposalToolCircuit,
+                List.of(),
+                List.of());
+    }
+
+    Result locate(
+            RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            List<LessonStep> steps,
+            String modelConfigurationOwner,
+            UUID runId,
+            Instant compatibilityDeadline,
+            ProposalToolCircuit proposalToolCircuit,
+            List<VisualFocus> acceptedVisuals,
+            List<Integer> plannedVisualPages) {
         if (steps == null || steps.isEmpty()) {
             throw new IllegalArgumentException("visual lesson steps are required");
         }
-        if (proposalToolCircuit == null) {
+        if (proposalToolCircuit == null || acceptedVisuals == null || plannedVisualPages == null) {
             throw new IllegalArgumentException("visual proposal workflow is required");
         }
         Instant workflowDeadline = compatibilityDeadline == null
@@ -206,6 +233,11 @@ final class VisualLessonStepLocator {
                 : compatibilityDeadline;
         List<Integer> citedPages = steps.stream()
                 .flatMap(step -> step.sourcePages().stream())
+                .distinct()
+                .sorted()
+                .toList();
+        List<Integer> candidatePages = (plannedVisualPages.isEmpty() ? citedPages : plannedVisualPages).stream()
+                .filter(page -> page != null && page > 0)
                 .distinct()
                 .sorted()
                 .toList();
@@ -217,15 +249,15 @@ final class VisualLessonStepLocator {
         boolean stopped = false;
         int batchNumber = 1;
         for (int pageStart = 0;
-                !stopped && pageStart < citedPages.size();
+                !stopped && pageStart < candidatePages.size();
                 pageStart += DocumentPageImages.MAX_PAGES_PER_READ) {
             Boundary boundary = boundary(runId, workflowDeadline);
             if (boundary.stoppedOutcome() != null) {
                 if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
                 break;
             }
-            int pageEnd = Math.min(pageStart + DocumentPageImages.MAX_PAGES_PER_READ, citedPages.size());
-            List<Integer> pageWindow = citedPages.subList(pageStart, pageEnd);
+            int pageEnd = Math.min(pageStart + DocumentPageImages.MAX_PAGES_PER_READ, candidatePages.size());
+            List<Integer> pageWindow = candidatePages.subList(pageStart, pageEnd);
             ProposedRegions proposed = indexedRegions.configured() || proposalToolCircuit.available()
                     ? proposeRegions(
                             documentVersionId,
@@ -238,7 +270,10 @@ final class VisualLessonStepLocator {
                     understanding,
                     new LinkedHashSet<>(pageWindow),
                     terms(section, steps),
-                    proposed.byPage());
+                    proposed.byPage()).stream()
+                    .filter(candidate -> acceptedVisuals.stream()
+                            .noneMatch(existing -> cropPolicy.overlapsSubstantially(candidate, existing)))
+                    .toList();
             if (selected.isEmpty()) continue;
             candidateFound = true;
 
@@ -280,7 +315,7 @@ final class VisualLessonStepLocator {
                         .map(availablePages::get)
                         .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
                         .toList();
-                boolean hasMoreCandidates = end < selected.size() || pageEnd < citedPages.size();
+                boolean hasMoreCandidates = end < selected.size() || pageEnd < candidatePages.size();
                 boundary = boundary(runId, workflowDeadline);
                 if (boundary.stoppedOutcome() != null) {
                     if (firstRejection == null) firstRejection = boundary.stoppedOutcome();

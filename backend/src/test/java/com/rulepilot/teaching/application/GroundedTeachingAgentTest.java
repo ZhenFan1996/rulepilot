@@ -57,7 +57,7 @@ class GroundedTeachingAgentTest {
         VisualLessonEnricher visuals = mock(VisualLessonEnricher.class);
         when(visuals.supportsVisualEvidence("player")).thenReturn(true);
         when(visuals.enrichSection(
-                        eq(versionId), any(LessonSection.class), any(), eq("player"), any(), any()))
+                        eq(versionId), any(TeachingPlan.PlannedSection.class), any(LessonSection.class), any(), eq("player"), any(), any()))
                 .thenThrow(new IllegalStateException("image provider unavailable"));
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 tools,

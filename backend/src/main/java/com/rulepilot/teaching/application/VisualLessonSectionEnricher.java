@@ -43,7 +43,8 @@ final class VisualLessonSectionEnricher {
             Instant compatibilityDeadline,
             VisualLessonStepLocator.ProposalToolCircuit proposalToolCircuit,
             VisualLessonEnricher.VisualProgressListener progress,
-            List<VisualFocus> acceptedVisuals) {
+            List<VisualFocus> acceptedVisuals,
+            List<Integer> plannedVisualPages) {
         List<LessonStep> targets = visualTargets(section);
         if (targets.isEmpty()) return Result.rejected(section, VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
         targets.forEach(step -> progress.targetStarted(target(section, step)));
@@ -55,7 +56,9 @@ final class VisualLessonSectionEnricher {
                 modelConfigurationOwner,
                 runId,
                 compatibilityDeadline,
-                proposalToolCircuit);
+                proposalToolCircuit,
+                acceptedVisuals,
+                plannedVisualPages);
         for (LessonStep step : targets) {
             boolean acceptedForStep = location.regions().stream().anyMatch(region ->
                     region.supportedStepPositions().isEmpty()

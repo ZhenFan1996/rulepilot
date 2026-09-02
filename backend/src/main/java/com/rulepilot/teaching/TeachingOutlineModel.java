@@ -94,7 +94,7 @@ public interface TeachingOutlineModel {
     }
 
     /** Full text is revealed only after a read action; availability is an observation, never a coverage verdict. */
-    record PageInput(int pageNumber, String text, boolean available) {
+    record PageInput(int pageNumber, String text, boolean available, boolean visualAidAvailable) {
         public PageInput {
             if (pageNumber < 1 || text == null || text.isBlank()) {
                 throw new IllegalArgumentException("rulebook page input is invalid");
@@ -103,7 +103,11 @@ public interface TeachingOutlineModel {
         }
 
         public PageInput(int pageNumber, String text) {
-            this(pageNumber, text, true);
+            this(pageNumber, text, true, false);
+        }
+
+        public PageInput(int pageNumber, String text, boolean available) {
+            this(pageNumber, text, available, false);
         }
     }
 
@@ -168,19 +172,33 @@ public interface TeachingOutlineModel {
             String title,
             String objective,
             boolean visualEvidenceRecommended,
-            List<Integer> sourcePageNumbers) {
+            List<Integer> sourcePageNumbers,
+            List<Integer> visualSourcePageNumbers) {
         public TopicDraft {
             if (key == null || !key.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
                     || title == null || title.isBlank()
                     || objective == null || objective.isBlank()
                     || sourcePageNumbers == null
-                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
+                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
+                    || visualSourcePageNumbers == null
+                    || visualSourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
+                    || (!visualEvidenceRecommended && !visualSourcePageNumbers.isEmpty())) {
                 throw new IllegalArgumentException("teaching outline topic is invalid");
             }
             key = key.strip();
             title = title.strip();
             objective = objective.strip();
             sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
+            visualSourcePageNumbers = visualSourcePageNumbers.stream().distinct().toList();
+        }
+
+        public TopicDraft(
+                String key,
+                String title,
+                String objective,
+                boolean visualEvidenceRecommended,
+                List<Integer> sourcePageNumbers) {
+            this(key, title, objective, visualEvidenceRecommended, sourcePageNumbers, List.of());
         }
     }
 

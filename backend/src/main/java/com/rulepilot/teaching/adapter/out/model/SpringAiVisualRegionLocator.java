@@ -55,13 +55,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
             Return one JSON object with exactly batchAction and reviews. batchAction is STOP or CONTINUE. Use CONTINUE
             only when hasMoreCandidates is true and inspecting the next finite batch is still useful after this batch's
-            selections; otherwise use STOP. Every review has exactly stepPosition, action, candidateId, label,
-            visibleDescription, and supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL.
+            selections; otherwise use STOP. Every review has exactly stepPosition, action, candidateId, label, and
+            visibleDescription. action is ACCEPT_CANDIDATE or NO_VISUAL.
             ACCEPT_CANDIDATE requires one offered candidateId, a literal label of at most 80 characters,
-            visibleDescription, and one or more offered C references belonging to that step whose sourcePages contain
-            the candidate page.
-            NO_VISUAL requires candidateId, label, and visibleDescription to be null and supportedClaimRefs to be an
-            empty array. Reviews may be sparse: omit a step when this batch has no useful crop for it. A step may accept
+            and visibleDescription. The application, not you, owns and binds the step's validated rule evidence.
+            NO_VISUAL requires candidateId, label, and visibleDescription to be null. Reviews may be sparse: omit a
+            step when this batch has no useful crop for it. A step may accept
             several different candidates. Select every useful candidate needed for the lesson; do not target a fixed
             count. The same candidate may never be selected twice or shared across steps.
 
@@ -84,10 +83,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             pages, attachment order, and source kind; never return coordinates. Return JSON only with exactly
             batchAction and reviews. batchAction is STOP or CONTINUE; CONTINUE is legal only when hasMoreCandidates is
             true and another batch remains useful after the current selections. Each review has exactly stepPosition,
-            action, candidateId, label, visibleDescription, supportedClaimRefs. label must contain at most 80
+            action, candidateId, label, visibleDescription. label must contain at most 80
             characters. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
-            literal label/description, and only C refs for that step whose sourcePages contain the candidate page.
-            NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Reviews
+            literal label/description. The application binds the selected step's rule evidence; do not return evidence
+            references. NO_VISUAL uses null candidateId/label/visibleDescription. Reviews
             may be sparse; omit a step when this batch has no useful crop for it. Never select one candidate twice.
             Select all useful candidates without targeting a fixed count. Images
             prove appearance only. Write label and visibleDescription in the explicitly supplied outputLocale,
@@ -180,10 +179,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                             .map(VisualRegionLocator.Claim::stepPosition)
                             .filter(position -> position > 0)
                             .distinct()
-                            .toList(),
-                    IntStream.range(0, request.claims().size())
-                            .filter(index -> request.claims().get(index).stepPosition() > 0)
-                            .mapToObj(index -> "C" + (index + 1))
                             .toList());
         }
     }
@@ -410,10 +405,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 }
                 continue;
             }
-            List<VisualRegionLocator.Claim> claims = ownedClaims(review, candidate, request);
+            List<VisualRegionLocator.Claim> claims = ownedClaims(review, request);
             if (claims.isEmpty()) {
                 if (validationError == null) {
-                    validationError = "supportedClaimRefs must belong to the selected step and include the candidate page";
+                    validationError = "stepPosition does not own any validated rule evidence";
                 }
                 continue;
             }
@@ -453,26 +448,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     List<VisualRegionLocator.Claim> ownedClaims(
             ModelReview review,
-            Candidate candidate,
             VisualLocationRequest request) {
-        List<VisualRegionLocator.Claim> claims = review.supportedClaimRefs().stream()
-                .map(reference -> claim(reference, request))
-                .filter(java.util.Objects::nonNull)
+        return request.claims().stream()
                 .filter(claim -> claim.stepPosition() == review.stepPosition())
-                .filter(claim -> claim.sourcePages().contains(candidate.pageNumber()))
                 .distinct()
                 .toList();
-        return claims.size() == review.supportedClaimRefs().size() ? claims : List.of();
-    }
-
-    private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {
-        if (reference == null || !reference.matches("C[1-9][0-9]*")) return null;
-        try {
-            int index = Integer.parseInt(reference.substring(1)) - 1;
-            return index >= 0 && index < request.claims().size() ? request.claims().get(index) : null;
-        } catch (NumberFormatException invalidReference) {
-            return null;
-        }
     }
 
     List<CandidateAttachment> candidateAttachments(VisualLocationRequest request) {

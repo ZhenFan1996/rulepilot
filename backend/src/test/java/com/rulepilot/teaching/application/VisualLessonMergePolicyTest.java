@@ -118,6 +118,37 @@ class VisualLessonMergePolicyTest {
         assertThat(merged.section()).isEqualTo(source);
     }
 
+    @Test
+    void keepsRuleCitationsOnTheirOwnPagesWhenAVisualComesFromAnotherRulebookPage() {
+        UUID evidence = UUID.randomUUID();
+        LessonStep citedStep = new LessonStep(
+                1,
+                "建立市场",
+                TeachingMove.DO,
+                "按引用规则建立市场。",
+                List.of(4),
+                List.of(evidence));
+        LessonSection source = section(List.of(citedStep), List.of(4), List.of(evidence));
+        LocatedRegion illustration = new LocatedRegion(
+                5,
+                "市场示意图",
+                "三叠牌下方各有两张蔬菜卡。",
+                100,
+                120,
+                700,
+                400,
+                List.of(evidence),
+                List.of(1));
+
+        var merged = policy.mergeVisualIntoSupportedSteps(
+                source, List.of(illustration), new ArrayList<>());
+
+        assertThat(merged.addedCount()).isEqualTo(1);
+        assertThat(merged.section().visualSourcePages()).containsExactly(4, 5);
+        assertThat(merged.section().steps().getFirst().sourcePages()).containsExactly(4);
+        assertThat(merged.section().steps().getFirst().visualFocus().pageNumber()).isEqualTo(5);
+    }
+
     private LocatedRegion region(UUID evidence, String label, int x, int y, int width, int height) {
         return new LocatedRegion(
                 2,

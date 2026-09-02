@@ -41,7 +41,7 @@ class SpringAiTeachingOutlineModelRetryTest {
                 response("""
                         {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
                         "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
-                        "afterChapterIds":[],"providerMetadata":{"ignored":true}},"reason":"Page 1 supports it"}
+                        "visualSourcePageNumbers":[],"afterChapterIds":[],"providerMetadata":{"ignored":true}},"reason":"Page 1 supports it"}
                         """),
                 response("""
                         {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动并维护系统。",
@@ -66,14 +66,14 @@ class SpringAiTeachingOutlineModelRetryTest {
         String invalid = """
                 {"action":"publish_chapter","chapter":{"key":"bad_key","title":"坏标识",
                 "objective":"测试","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
-                "afterChapterIds":[]},"reason":"try"}
+                "visualSourcePageNumbers":[],"afterChapterIds":[]},"reason":"try"}
                 """;
         when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
                 response(invalid),
                 response("""
                         {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
                         "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
-                        "afterChapterIds":[]},"reason":"correct identity"}
+                        "visualSourcePageNumbers":[],"afterChapterIds":[]},"reason":"correct identity"}
                         """),
                 response("""
                         {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动。",
@@ -103,7 +103,7 @@ class SpringAiTeachingOutlineModelRetryTest {
                 response("""
                         {"action":"publish_chapter","chapter":{"key":"setup","title":"设置",
                         "objective":"完成设置","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
-                        "afterChapterIds":[]},"reason":"Page 1 is enough for this chapter"}
+                        "visualSourcePageNumbers":[],"afterChapterIds":[]},"reason":"Page 1 is enough for this chapter"}
                         """),
                 response("""
                         {"action":"complete","gameTitle":"示例游戏","premise":"先设置。",
@@ -121,6 +121,90 @@ class SpringAiTeachingOutlineModelRetryTest {
                 .contains("\"outputLocale\":\"zh-CN\"")
                 .contains("\"unreadAvailablePageIds\":[2]")
                 .contains("\"publishedChapters\":[{");
+    }
+
+    @Test
+    void acceptsAReadVisualPageThatDiffersFromTheRuleEvidencePage() {
+        Fixture fixture = fixture();
+        when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
+                response("""
+                        {"action":"read_pages","pageNumbers":[2],"reason":"Inspect the worked diagram"}
+                        """),
+                response("""
+                        {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
+                        "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":true,
+                        "visualSourcePageNumbers":[2],"afterChapterIds":[]},"reason":"Page 1 states the rule and page 2 illustrates it"}
+                        """),
+                response("""
+                        {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动。",
+                        "coveredChapterIds":["play-turn"],"unresolvedTopics":[],"reason":"done"}
+                        """));
+
+        var topic = fixture.model.organize(request()).topics().getFirst();
+
+        assertThat(topic.sourcePageNumbers()).containsExactly(1);
+        assertThat(topic.visualSourcePageNumbers()).containsExactly(2);
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel, times(3)).call(prompts.capture());
+        assertThat(promptText(prompts.getAllValues().get(1)))
+                .contains("\"pageNumber\":2")
+                .contains("\"visualAidAvailable\":true");
+    }
+
+    @Test
+    void rejectsAnUnreadVisualPageBeforePublishingTheChapter() {
+        Fixture fixture = fixture();
+        String unreadVisual = """
+                {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
+                "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":true,
+                "visualSourcePageNumbers":[2],"afterChapterIds":[]},"reason":"Use page 2 diagram"}
+                """;
+        when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
+                response(unreadVisual),
+                response("""
+                        {"action":"read_pages","pageNumbers":[2],"reason":"Read the intended visual page first"}
+                        """),
+                response(unreadVisual),
+                response("""
+                        {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动。",
+                        "coveredChapterIds":["play-turn"],"unresolvedTopics":[],"reason":"done"}
+                        """));
+
+        assertThat(fixture.model.organize(request()).topics()).singleElement();
+
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel, times(4)).call(prompts.capture());
+        assertThat(promptText(prompts.getAllValues().get(1)))
+                .contains("\"code\":\"UNREAD_VISUAL_SOURCE_PAGE\"")
+                .contains("\"path\":\"$.chapter.visualSourcePageNumbers\"");
+    }
+
+    @Test
+    void rejectsAReadPageWithoutAnIndexedVisualAid() {
+        Fixture fixture = fixture();
+        when(fixture.chatModel.call(any(Prompt.class))).thenReturn(
+                response("""
+                        {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
+                        "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":true,
+                        "visualSourcePageNumbers":[1],"afterChapterIds":[]},"reason":"Try the text-only page"}
+                        """),
+                response("""
+                        {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
+                        "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
+                        "visualSourcePageNumbers":[],"afterChapterIds":[]},"reason":"Publish without an unavailable visual"}
+                        """),
+                response("""
+                        {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动。",
+                        "coveredChapterIds":["play-turn"],"unresolvedTopics":[],"reason":"done"}
+                        """));
+
+        assertThat(fixture.model.organize(onePageRequest()).topics()).singleElement();
+
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel, times(3)).call(prompts.capture());
+        assertThat(promptText(prompts.getAllValues().get(1)))
+                .contains("\"code\":\"VISUAL_AID_UNAVAILABLE\"")
+                .contains("visualAidAvailable=true");
     }
 
     @Test
@@ -154,7 +238,7 @@ class SpringAiTeachingOutlineModelRetryTest {
                 response("""
                         {"action":"publish_chapter","chapter":{"key":"play-turn","title":"进行回合",
                         "objective":"完成一个回合","sourcePageNumbers":[1],"visualEvidenceRecommended":false,
-                        "afterChapterIds":[]},"reason":"Page 1 supports it"}
+                        "visualSourcePageNumbers":[],"afterChapterIds":[]},"reason":"Page 1 supports it"}
                         """),
                 response("""
                         {"action":"complete","gameTitle":"示例游戏","premise":"轮流行动。",
@@ -210,7 +294,7 @@ class SpringAiTeachingOutlineModelRetryTest {
         return new OutlineRequest(
                 List.of(
                         new PageInput(1, "SETUP: Place one marker. TAKE TURN: Move one marker."),
-                        new PageInput(2, "SYSTEMS AND REPAIR: Repair a damaged system.")),
+                        new PageInput(2, "SYSTEMS AND REPAIR: Repair a damaged system.", true, true)),
                 List.of(),
                 "player");
     }

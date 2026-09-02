@@ -15,6 +15,8 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import com.rulepilot.visualaid.VisualRegionCatalog;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -43,6 +45,7 @@ public class TeachingPlanService {
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
     private final TeachingPlanPublication publication;
+    private final VisualRegionCatalog visualRegions;
 
     public TeachingPlanService(
             DocumentProcessing documents,
@@ -53,7 +56,8 @@ public class TeachingPlanService {
             AuditedAgentInvocations invocations,
             TeachingPlanFactory plans,
             TeachingPlanRepository repository,
-            TeachingPlanPublication publication) {
+            TeachingPlanPublication publication,
+            VisualRegionCatalog visualRegions) {
         this.documents = documents;
         this.documentScopes = documentScopes;
         this.catalog = catalog;
@@ -63,6 +67,7 @@ public class TeachingPlanService {
         this.plans = plans;
         this.repository = repository;
         this.publication = publication;
+        this.visualRegions = visualRegions;
     }
 
     public TeachingPlan create(
@@ -89,6 +94,7 @@ public class TeachingPlanService {
                                         ? VISUAL_PAGE_CATALOG
                                         : page.text().strip()))
                         .toList();
+        pages = withVisualAidAvailability(documentVersionId, pages);
         var outlineRequest = new OutlineRequest(
                 pages, List.of(), learningGoal, createdBy);
         var outline = organizeInitialOutline(playerGameTitle, outlineRequest, pages, assistantRunId);
@@ -115,7 +121,8 @@ public class TeachingPlanService {
                 outline.gameTitle(),
                 outline.topics().stream()
                         .map(topic -> topic.key() + " visual=" + topic.visualEvidenceRecommended()
-                                + " pages=" + topic.sourcePageNumbers())
+                                + " pages=" + topic.sourcePageNumbers()
+                                + " visualPages=" + topic.visualSourcePageNumbers())
                         .toList());
         return publication.publish(plans.create(
                 documentVersionId,
@@ -215,6 +222,32 @@ public class TeachingPlanService {
     static boolean requiresCanonicalPagePlanning(List<DocumentProcessing.PageView> pages) {
         if (pages == null || pages.isEmpty()) return false;
         return pages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
+    }
+
+    private List<PageInput> withVisualAidAvailability(UUID documentVersionId, List<PageInput> pages) {
+        if (!visualRegions.configured()) return pages;
+        LinkedHashSet<Integer> visualPages = new LinkedHashSet<>();
+        List<Integer> pageNumbers = pages.stream().map(PageInput::pageNumber).distinct().sorted().toList();
+        try {
+            for (int start = 0; start < pageNumbers.size(); start += 64) {
+                Set<Integer> batch = new LinkedHashSet<>(pageNumbers.subList(
+                        start, Math.min(start + 64, pageNumbers.size())));
+                visualRegions.find(documentVersionId, batch).stream()
+                        .filter(region -> "PICTURE".equals(region.kind()))
+                        .map(VisualRegionCatalog.Region::pageNumber)
+                        .forEach(visualPages::add);
+            }
+        } catch (RuntimeException unavailableIndex) {
+            log.warn("Visual aid index was unavailable during lesson planning; continuing without page hints");
+            return pages;
+        }
+        return pages.stream()
+                .map(page -> new PageInput(
+                        page.pageNumber(),
+                        page.text(),
+                        page.available(),
+                        visualPages.contains(page.pageNumber())))
+                .toList();
     }
 
     @Transactional(readOnly = true)

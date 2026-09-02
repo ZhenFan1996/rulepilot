@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionProposer;
@@ -18,6 +19,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.time.Clock;
@@ -30,6 +32,80 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class VisualLessonStepLocatorTest {
+
+    @Test
+    void offersOnlyPlannedVisualPagesBeyondTheRuleCitationAndSkipsAlreadyUsedRegions() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        VisualRegionLocator locator = mock(VisualRegionLocator.class);
+        when(pageImages.read(documentVersionId, Set.of(6)))
+                .thenReturn(List.of(new DocumentPageImages.PageImage(
+                        6, "image/png", new byte[] {1}, 1_000, 1_000)));
+        when(locator.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(invocation -> {
+            VisualRegionLocator.VisualLocationRequest request = invocation.getArgument(0);
+            assertThat(request.candidates()).singleElement().satisfies(candidate -> {
+                assertThat(candidate.pageNumber()).isEqualTo(6);
+                assertThat(candidate.rectangle()).isEqualTo(new Rectangle(220, 240, 500, 320));
+            });
+            var candidate = request.candidates().getFirst();
+            return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
+                    candidate.pageNumber(),
+                    "worked example",
+                    "A worked example is visible.",
+                    candidate.rectangle().x(),
+                    candidate.rectangle().y(),
+                    candidate.rectangle().width(),
+                    candidate.rectangle().height(),
+                    List.of(evidenceId),
+                    List.of(1),
+                    false,
+                    candidate.sourceKind())));
+        });
+        VisualRegionCatalog catalog = (versionId, pageNumbers) -> List.of(
+                new VisualRegionCatalog.Region(5, "PICTURE", 100, 120, 420, 300),
+                new VisualRegionCatalog.Region(6, "PICTURE", 220, 240, 500, 320));
+        RulebookUnderstanding understanding = new RulebookUnderstanding(
+                List.of(
+                        pageBlock(2, 0),
+                        pageBlock(5, 1),
+                        pageBlock(6, 2)),
+                List.of(),
+                List.of(),
+                List.of());
+        LessonStep step = step(evidenceId, 2);
+        LessonSection section = section(evidenceId, step);
+        var stepLocator = new VisualLessonStepLocator(
+                pageImages,
+                new VisualRegionCandidateSelector(),
+                VisualRegionProposer.unavailable(),
+                catalog,
+                locator,
+                new VisualReaderCropPolicy(),
+                null,
+                Clock.systemUTC(),
+                Duration.ofMinutes(5));
+        VisualFocus alreadyUsed = new VisualFocus(
+                5, "earlier figure", "An earlier figure.", 100, 120, 420, 300);
+
+        VisualLessonStepLocator.Result result = stepLocator.locate(
+                understanding,
+                documentVersionId,
+                section,
+                List.of(step),
+                "player",
+                null,
+                Instant.now().plus(Duration.ofMinutes(5)),
+                stepLocator.beginProposalWorkflow(),
+                List.of(alreadyUsed),
+                List.of(5, 6));
+
+        assertThat(result.rejection()).isNull();
+        assertThat(result.regions()).singleElement().satisfies(region -> {
+            assertThat(region.pageNumber()).isEqualTo(6);
+            assertThat(region.supportedEvidenceIds()).containsExactly(evidenceId);
+        });
+    }
 
     @Test
     void offersPersistedLayoutCandidatesWhenTheLocalPixelToolIsUnavailable() {
@@ -192,5 +268,16 @@ class VisualLessonStepLocatorTest {
                 step.sourcePages(),
                 List.of(evidenceId),
                 List.of(step));
+    }
+
+    private RulebookUnderstanding.PageBlock pageBlock(int pageNumber, int blockIndex) {
+        return new RulebookUnderstanding.PageBlock(
+                pageNumber,
+                blockIndex,
+                blockIndex,
+                BlockRole.BODY,
+                "Rule text on page " + pageNumber,
+                new Rectangle(0, 0, 1_000, 100),
+                null);
     }
 }

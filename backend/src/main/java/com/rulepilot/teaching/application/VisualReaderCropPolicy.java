@@ -34,4 +34,21 @@ final class VisualReaderCropPolicy {
         return smallerArea > 0 && overlapArea * 100 >= smallerArea * 75;
     }
 
+    boolean overlapsSubstantially(
+            VisualRegionCandidateSelector.Candidate candidate,
+            VisualFocus existing) {
+        if (candidate.pageNumber() != existing.pageNumber()
+                || candidate.sourceKind() != existing.sourceKind()) return false;
+        Rectangle rectangle = candidate.rectangle();
+        int overlapWidth = Math.max(0, Math.min(rectangle.x() + rectangle.width(), existing.x() + existing.width())
+                - Math.max(rectangle.x(), existing.x()));
+        int overlapHeight = Math.max(0, Math.min(rectangle.y() + rectangle.height(), existing.y() + existing.height())
+                - Math.max(rectangle.y(), existing.y()));
+        long overlapArea = (long) overlapWidth * overlapHeight;
+        long smallerArea = Math.min(
+                (long) rectangle.width() * rectangle.height(),
+                (long) existing.width() * existing.height());
+        return smallerArea > 0 && overlapArea * 100 >= smallerArea * 75;
+    }
+
 }

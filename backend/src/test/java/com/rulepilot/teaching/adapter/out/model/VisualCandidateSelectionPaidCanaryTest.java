@@ -35,7 +35,7 @@ class VisualCandidateSelectionPaidCanaryTest {
             .build();
 
     @Test
-    void acceptsTheProductionSixFieldCandidateProtocolAndAbstainsWithoutEmittingGeometry() throws Exception {
+    void acceptsTheProductionFiveFieldCandidateProtocolAndAbstainsWithoutEmittingGeometry() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_VISUAL_CANDIDATE_EVAL")));
         Path fixtures = Path.of(requiredEnvironment("RULEPILOT_VISUAL_CANDIDATE_FIXTURE_DIR"));
         List<CandidateFixture> candidates = List.of(
@@ -85,8 +85,7 @@ class VisualCandidateSelectionPaidCanaryTest {
                         "action",
                         "candidateId",
                         "label",
-                        "visibleDescription",
-                        "supportedClaimRefs"));
+                        "visibleDescription"));
         var guide = VisualLocatorResponsePolicy.parseModelGuide(content).orElseThrow();
 
         assertThat(guide.reviews())
@@ -107,8 +106,6 @@ class VisualCandidateSelectionPaidCanaryTest {
                 .allSatisfy(review -> {
                     assertThat(review.label()).isNotBlank();
                     assertThat(review.visibleDescription()).isNotBlank();
-                    assertThat(review.supportedClaimRefs())
-                            .containsExactly("C" + review.stepPosition());
                 });
         assertThat(content)
                 .doesNotContain(

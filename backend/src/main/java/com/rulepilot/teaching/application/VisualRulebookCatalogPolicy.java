@@ -97,7 +97,8 @@ final class VisualRulebookCatalogPolicy {
             return new PageInput(
                     page.pageNumber(),
                     page.text() + "\n\n" + observed.text(),
-                    page.available() && observed.available());
+                    page.available() && observed.available(),
+                    page.visualAidAvailable());
         }).toList();
     }
 

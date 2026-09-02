@@ -58,7 +58,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private static final String ACTION_SCHEMA = """
             One JSON object matching exactly one action:
             {"action":"read_pages","pageNumbers":[1],"reason":"..."}
-            {"action":"publish_chapter","chapter":{"key":"kebab-case","title":"player-facing title in outputLocale","objective":"player-facing objective in outputLocale","sourcePageNumbers":[1],"visualEvidenceRecommended":false,"afterChapterIds":[]},"reason":"..."}
+            {"action":"publish_chapter","chapter":{"key":"kebab-case","title":"player-facing title in outputLocale","objective":"player-facing objective in outputLocale","sourcePageNumbers":[1],"visualEvidenceRecommended":true,"visualSourcePageNumbers":[2],"afterChapterIds":[]},"reason":"..."}
             {"action":"complete","gameTitle":"printed source title","premise":"natural Simplified-Chinese orientation","coveredChapterIds":["chapter-id"],"unresolvedTopics":[],"reason":"..."}
             """;
 
@@ -79,8 +79,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 models,
                 prompts,
                 temperature,
-                read(new ClassPathResource("prompts/teaching-outline-v19-autonomous-units-system.txt")),
-                read(new ClassPathResource("prompts/teaching-outline-v19-user.txt")));
+                read(new ClassPathResource("prompts/teaching-outline-v20-visual-pages-system.txt")),
+                read(new ClassPathResource("prompts/teaching-outline-v20-user.txt")));
     }
 
     @Autowired
@@ -88,8 +88,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             RuntimeModelConfiguration models,
             VersionedAgentPrompts prompts,
             @Value("${rulepilot.teaching.outline-temperature:0.1}") double temperature,
-            @Value("classpath:prompts/teaching-outline-v19-autonomous-units-system.txt") Resource systemPrompt,
-            @Value("classpath:prompts/teaching-outline-v19-user.txt") Resource userPrompt) {
+            @Value("classpath:prompts/teaching-outline-v20-visual-pages-system.txt") Resource systemPrompt,
+            @Value("classpath:prompts/teaching-outline-v20-user.txt") Resource userPrompt) {
         this(models, prompts, temperature, read(systemPrompt), read(userPrompt));
     }
 
@@ -354,7 +354,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             List<ReadPage> read = readPages.stream()
                     .map(pages::get)
                     .filter(java.util.Objects::nonNull)
-                    .map(page -> new ReadPage(page.pageNumber(), page.text()))
+                    .map(page -> new ReadPage(page.pageNumber(), page.text(), page.visualAidAvailable()))
                     .toList();
             return new AgentView(
                     BASE_OUTPUT_LOCALE,
@@ -415,6 +415,33 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             if (chapter.sourcePageNumbers().stream().anyMatch(page -> page == null || !readPages.contains(page))) {
                 reject("UNREAD_CHAPTER_EVIDENCE", "$.chapter.sourcePageNumbers", "chapter may cite only read page IDs");
             }
+            if (chapter.visualSourcePageNumbers() == null) {
+                reject(
+                        "MISSING_VISUAL_SOURCE_PAGES",
+                        "$.chapter.visualSourcePageNumbers",
+                        "chapter must publish a visual page array, which may be empty");
+            }
+            if (chapter.visualSourcePageNumbers().stream()
+                    .anyMatch(page -> page == null || !readPages.contains(page))) {
+                reject(
+                        "UNREAD_VISUAL_SOURCE_PAGE",
+                        "$.chapter.visualSourcePageNumbers",
+                        "chapter visuals may use only read page IDs");
+            }
+            if (chapter.visualSourcePageNumbers().stream()
+                    .anyMatch(page -> !pages.get(page).visualAidAvailable())) {
+                reject(
+                        "VISUAL_AID_UNAVAILABLE",
+                        "$.chapter.visualSourcePageNumbers",
+                        "chapter visual pages must have visualAidAvailable=true");
+            }
+            boolean visualRecommended = Boolean.TRUE.equals(chapter.visualEvidenceRecommended());
+            if (visualRecommended != !chapter.visualSourcePageNumbers().isEmpty()) {
+                reject(
+                        "VISUAL_RECOMMENDATION_MISMATCH",
+                        "$.chapter.visualSourcePageNumbers",
+                        "visual pages must be non-empty exactly when visual evidence is recommended");
+            }
             List<String> dependencies = chapter.afterChapterIds() == null ? List.of() : chapter.afterChapterIds();
             if (dependencies.stream().anyMatch(id -> id == null || !chapters.containsKey(id))) {
                 reject("UNKNOWN_CHAPTER_DEPENDENCY", "$.chapter.afterChapterIds", "dependencies must name earlier published chapters");
@@ -424,7 +451,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     chapter.title().strip(),
                     chapter.objective().strip(),
                     chapter.sourcePageNumbers().stream().distinct().toList(),
-                    Boolean.TRUE.equals(chapter.visualEvidenceRecommended()),
+                    visualRecommended,
+                    chapter.visualSourcePageNumbers().stream().distinct().toList(),
                     dependencies.stream().distinct().toList());
             chapters.put(accepted.key(), accepted);
             latestObservation = Map.of(
@@ -454,7 +482,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                             chapter.title(),
                             chapter.objective(),
                             chapter.visualEvidenceRecommended(),
-                            chapter.sourcePageNumbers()))
+                            chapter.sourcePageNumbers(),
+                            chapter.visualSourcePageNumbers()))
                     .toList();
             List<TopicDependencyDraft> dependencies = chapters.values().stream()
                     .flatMap(chapter -> chapter.afterChapterIds().stream()
@@ -564,11 +593,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             String objective,
             List<Integer> sourcePageNumbers,
             Boolean visualEvidenceRecommended,
+            List<Integer> visualSourcePageNumbers,
             List<String> afterChapterIds) {}
 
     private record PagePreview(int pageNumber, String availability) {}
 
-    private record ReadPage(int pageNumber, String text) {}
+    private record ReadPage(int pageNumber, String text, boolean visualAidAvailable) {}
 
     private record AgentView(
             String outputLocale,
