@@ -63,6 +63,18 @@ staged_bgg_credential() {
 	printf '/tmp/rulepilot-bgg-token-%s\n' "$release_id"
 }
 
+staged_docling_service_url() {
+	local release_id=$1
+	require_candidate_release_id "$release_id"
+	printf '/tmp/rulepilot-docling-url-%s\n' "$release_id"
+}
+
+staged_docling_credential() {
+	local release_id=$1
+	require_candidate_release_id "$release_id"
+	printf '/tmp/rulepilot-docling-key-%s\n' "$release_id"
+}
+
 environment_snapshot() {
 	printf '%s/environment.snapshot\n' "$1"
 }
@@ -112,6 +124,8 @@ discard_transaction_secrets() {
 	rm -f -- \
 		"$(environment_snapshot "$state_dir")" \
 		"$(staged_bgg_credential "$release_id")" \
+		"$(staged_docling_service_url "$release_id")" \
+		"$(staged_docling_credential "$release_id")" \
 		"$state_dir/watchdog-failed"
 }
 

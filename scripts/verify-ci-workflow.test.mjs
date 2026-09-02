@@ -1410,7 +1410,7 @@ test('deployment seals control-plane code before build and keeps it isolated thr
 test('every mutation after checkpoint failure restores the validated environment and release', () => {
   const checkpoint = deploymentWorkflow.indexOf('name: Preserve the exact rollback checkpoint')
   const synchronization = deploymentWorkflow.indexOf(
-    'name: Synchronize protected BGG credential and managed runtime configuration',
+    'name: Synchronize protected integration credentials and managed runtime configuration',
   )
   const activation = deploymentWorkflow.indexOf('name: Activate release and verify production health')
   const availability = deploymentWorkflow.indexOf('name: Classify independent public observation')
@@ -1433,12 +1433,12 @@ test('release guard stays live from checkpoint through the public commit', () =>
   const checkpointStep = deploymentWorkflow.slice(
     deploymentWorkflow.indexOf('name: Preserve the exact rollback checkpoint'),
     deploymentWorkflow.indexOf(
-      'name: Synchronize protected BGG credential and managed runtime configuration',
+      'name: Synchronize protected integration credentials and managed runtime configuration',
     ),
   )
   const synchronizationStep = deploymentWorkflow.slice(
     deploymentWorkflow.indexOf(
-      'name: Synchronize protected BGG credential and managed runtime configuration',
+      'name: Synchronize protected integration credentials and managed runtime configuration',
     ),
     deploymentWorkflow.indexOf('name: Activate release and verify production health'),
   )
@@ -1805,7 +1805,7 @@ test('stale qualified commits cannot create a production checkpoint', async (con
   )
   const checkpointStep = deploymentWorkflow.slice(
     deploymentWorkflow.indexOf('name: Preserve the exact rollback checkpoint'),
-    deploymentWorkflow.indexOf('name: Synchronize protected BGG credential'),
+    deploymentWorkflow.indexOf('name: Synchronize protected integration credentials'),
   )
   const lock = checkpointGuard.indexOf('flock -x 9')
   const currentMainGate = checkpointGuard.indexOf(
@@ -3064,7 +3064,7 @@ test('official image-gallery production smoke requires explicit rights and posit
     /smoke:[\s\S]*?timeout-minutes: 135[\s\S]*?--timeout-seconds 6600/)
 })
 
-test('deployment keeps protected BGG credentials out of packages and command arguments', () => {
+test('deployment keeps protected integration credentials out of packages and command arguments', () => {
   assert.match(deploymentWorkflow, /BGG_API_TOKEN: \$\{\{ secrets\.BGG_API_TOKEN \}\}/)
   assert.match(deploymentWorkflow,
     /git archive --format=tar --prefix=\.\/ "\$WORKFLOW_SHA"/)
@@ -3074,12 +3074,28 @@ test('deployment keeps protected BGG credentials out of packages and command arg
   assert.match(deploymentWorkflow,
     /remote_token_file="\/tmp\/rulepilot-bgg-token-\$\{DEPLOY_RELEASE_ID\}"/)
   assert.match(deploymentWorkflow,
-    /name: Remove staged BGG credential[\s\S]*?if: always\(\)[^\n]*[\s\S]*?rm -f -- "\/tmp\/rulepilot-bgg-token-\$\{release_id\}"/)
+    /name: Remove staged integration credentials[\s\S]*?if: always\(\)[^\n]*[\s\S]*?rm -f --[\s\S]*?"\/tmp\/rulepilot-bgg-token-\$\{release_id\}"/)
   assert.match(productionReleaseGuard,
     /discard_transaction_secrets\(\)[\s\S]*?staged_bgg_credential "\$release_id"/)
   assert.doesNotMatch(deploymentWorkflow, /echo "\$BGG_API_TOKEN"/)
   assert.doesNotMatch(deploymentWorkflow,
     /'bash -s' -- "\$DEPLOY_PATH" "\$BGG_API_TOKEN"/)
+  assert.match(deploymentWorkflow, /DOCLING_API_KEY: \$\{\{ secrets\.DOCLING_API_KEY \}\}/)
+  assert.match(deploymentWorkflow, /DOCLING_SERVICE_URL: \$\{\{ secrets\.DOCLING_SERVICE_URL \}\}/)
+  assert.match(deploymentWorkflow,
+    /printf '%s' "\$DOCLING_API_KEY" > "\$local_docling_key_file"/)
+  assert.match(deploymentWorkflow,
+    /printf '%s' "\$DOCLING_SERVICE_URL" > "\$local_docling_url_file"/)
+  assert.doesNotMatch(deploymentWorkflow, /echo "\$DOCLING_(?:API_KEY|SERVICE_URL)"/)
+  assert.doesNotMatch(deploymentWorkflow,
+    /'bash -s' -- "\$DEPLOY_PATH" "\$DOCLING_(?:API_KEY|SERVICE_URL)"/)
+  assert.match(deploymentWorkflow,
+    /managed_runtime_keys='[^']* DOCLING_ENABLED DOCLING_SERVICE_URL DOCLING_API_KEY [^']*'/)
+  assert.match(deploymentWorkflow, /'DOCLING_ENABLED=true'/)
+  assert.match(deploymentCompose, /DOCLING_ENABLED: \$\{DOCLING_ENABLED:-false\}/)
+  assert.match(deploymentCompose, /DOCLING_API_KEY: \$\{DOCLING_API_KEY:-\}/)
+  assert.match(productionReleaseGuard,
+    /discard_transaction_secrets\(\)[\s\S]*?staged_docling_credential "\$release_id"/)
 })
 
 test('deployment isolates the recommendation startup model from shared Qwen roles', () => {
