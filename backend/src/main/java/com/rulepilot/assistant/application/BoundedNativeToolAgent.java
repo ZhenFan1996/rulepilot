@@ -37,6 +37,8 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class BoundedNativeToolAgent implements NativeToolAgent {
 
+    private static final int MAX_TERMINAL_REPAIR_ATTEMPTS = 1;
+
     private final NativeToolModel model;
     private final NativeAgentToolRegistry tools;
     private final AgentExecutionControl execution;
@@ -81,6 +83,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         Set<String> repeatedObservations = new HashSet<>();
         Set<String> rejectedActions = new HashSet<>();
         int toolCalls = 0;
+        int terminalRepairAttempts = 0;
 
         for (int iteration = 1; ; iteration++) {
             if (!Instant.now().isBefore(request.scope().deadlineAt())) {
@@ -176,9 +179,18 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                     : "native model returned a nonconforming terminal status");
                     String rejection = completionRejection(
                             turn.text(), terminalRejection, observations.size());
+                    if (terminalRepairAttempts >= MAX_TERMINAL_REPAIR_ATTEMPTS) {
+                        return fallback(
+                                request,
+                                "TERMINAL_REPAIR_EXHAUSTED",
+                                iteration,
+                                toolCalls,
+                                observations);
+                    }
                     if (!rejectedCompletions.add(rejection)) {
                         return fallback(request, "COMPLETION_NO_PROGRESS", iteration, toolCalls, observations);
                     }
+                    terminalRepairAttempts++;
                     conversation.appendAssistant(turn.text(), List.of(), advertisedTools);
                     conversation.appendApplicationInstruction(
                             terminalRepairInstruction(request, terminalRejection));
@@ -729,6 +741,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                     "EXECUTION_FAILED",
                     "TOOL_ALLOWLIST_UNAVAILABLE",
                     "COMPLETION_NO_PROGRESS",
+                    "TERMINAL_REPAIR_EXHAUSTED",
                     "ACTION_NO_PROGRESS",
                     "OBSERVATION_BUDGET_EXHAUSTED",
                     "OBSERVATION_BUDGET_EXCEEDED",

@@ -459,12 +459,16 @@ public class NativeRuleAnswerAgent {
         return """
                 You are the sole answer Agent for one active immutable board-game rulebook.
                 Decide the next action yourself. Ordinary non-rule conversation uses kind CHAT and no citation.
+                Answer only the unresolved obligations in the player's request. Do not broaden into related rules that
+                are unnecessary to make the verdict correct. Prefer the smallest complete supported ruling; every
+                included claim must earn its evidence and numeric-validation cost.
                 For a rule claim, search only when needed. A search_rule_evidence result is source-bearing when its
                 excerpt directly contains enough subject, condition, exception, and applicability context for the
-                answer; cite that observed evidenceId without repeating the read. Use read_rule_pages only when the
-                search excerpt needs fuller page context, a crossed chunk boundary, a condition, an exception, a list
-                continuation, or an applicability check. Relationship results remain candidates and cannot be cited.
-                You may call mutually independent read-only tools together; choose a dependent read only after
+                answer; cite that observed evidenceId without repeating or reconfirming the read. Use read_rule_pages
+                only when the search excerpt needs fuller page context, a crossed chunk boundary, a condition, an
+                exception, a list continuation, or an applicability check. Relationship results remain candidates and
+                cannot be cited.
+                Call mutually independent read-only tools together in one decision; choose a dependent read only after
                 observing its prerequisite. Preserve supported portions when one sibling read fails and localize only
                 what remains unresolved.
                 Every terminal response must be one complete JSON object satisfying the schema below. Cite only
@@ -553,6 +557,9 @@ public class NativeRuleAnswerAgent {
             case "COMPLETION_NO_PROGRESS" -> english
                     ? "The Agent repeated the same complete response after a typed JSON or evidence-identity rejection, so correction stopped."
                     : "Agent 在收到 JSON 或证据身份校验结果后仍重复同一份完整回复，因此已停止修正。";
+            case "TERMINAL_REPAIR_EXHAUSTED" -> english
+                    ? "The replacement answer still failed the typed publication boundary, so correction stopped after one targeted repair."
+                    : "替换答案仍未通过类型化发布边界，因此一次定向修正后已停止。";
             case "ACTION_NO_PROGRESS" -> english
                     ? "The Agent repeated the same rejected tool action, so the read loop stopped without replaying it again."
                     : "Agent 重复了同一项已拒绝的工具动作，因此只读循环已停止且不会再次重放。";

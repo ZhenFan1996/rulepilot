@@ -77,7 +77,8 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
                 + "snapshot. It may support a citation directly when the excerpt contains enough subject, condition, "
                 + "exception, and applicability context. Read the exact page only when fuller page context, a crossed "
                 + "chunk boundary, a condition, an exception, a list continuation, or applicability remains unresolved. "
-                + "Stop when the obligation is covered or no independent query remains.";
+                + "Never read an exact page merely to reconfirm a complete source-bearing excerpt. Stop when the "
+                + "obligation is covered or no independent query remains.";
     }
 
     @Override

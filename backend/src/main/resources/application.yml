@@ -222,8 +222,8 @@ rulepilot:
     provider: ${ANSWER_PROVIDER:fake}
     model-provider: ${ANSWER_MODEL_PROVIDER:gemini}
     agent:
-      # Native ReAct re-sends the complete correlated observation history on each decision. A 24k envelope exhausts
-      # after search -> exact-page reads when the first terminal candidate needs schema repair.
+      # Retain headroom for genuinely multi-step rule questions. Terminal correction is independently capped at one
+      # targeted repair so malformed replacements cannot consume this entire envelope.
       max-tokens: ${ANSWER_AGENT_MAX_TOKENS:64000}
     temperature: ${ANSWER_TEMPERATURE:0.15}
     interpretation-temperature: ${ANSWER_INTERPRETATION_TEMPERATURE:0.0}

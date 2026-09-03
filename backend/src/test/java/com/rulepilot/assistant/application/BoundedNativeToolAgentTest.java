@@ -137,9 +137,13 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
-    void stopsWhenTheSameRejectedTerminalIsReturnedAgain() {
+    void stopsAfterOneTargetedTerminalRepairEvenWhenTheReplacementFailureDiffers() {
         String rejected = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Move.\"}";
-        QueueModel model = new QueueModel(finalTurn(rejected), finalTurn(rejected));
+        String differentRejected = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Move now.\"}";
+        QueueModel model = new QueueModel(
+                finalTurn(rejected),
+                finalTurn(differentRejected),
+                finalTurn("{\"kind\":\"CHAT\",\"shortVerdict\":\"must not run\"}"));
         RecordingInvocations audited = new RecordingInvocations(null);
         TerminalContract contract = TerminalContract.json(
                 "{\"type\":\"object\",\"required\":[\"kind\",\"shortVerdict\"]}",
@@ -150,11 +154,11 @@ class BoundedNativeToolAgentTest {
                 .run(request(Set.of("search_rule_evidence"), contract));
 
         assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("COMPLETION_NO_PROGRESS");
+        assertThat(result.reason()).isEqualTo("TERMINAL_REPAIR_EXHAUSTED");
         assertThat(model.requests).hasValue(2);
         assertThat(audited.operations).contains(
                 "nativeCompletionRejection|TERMINAL_FIELD_INVALID",
-                "nativeToolFallback|COMPLETION_NO_PROGRESS");
+                "nativeToolFallback|TERMINAL_REPAIR_EXHAUSTED");
     }
 
     @Test
