@@ -22,6 +22,7 @@ class DocumentVersionScopeLookupService implements DocumentVersionScopeLookup {
                         document.gameEditionId(),
                         version.status().name(),
                         document.createdBy(),
-                        document.title())));
+                        document.title(),
+                        version.checksum())));
     }
 }

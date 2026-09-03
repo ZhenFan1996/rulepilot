@@ -221,9 +221,15 @@ final class RecommendationToolCatalog {
         int maximumSelections = Math.min(
                 searchRequestedCount,
                 Math.min(properties.resultCount(), candidateIds.size()));
+        Set<Integer> detailedCandidateIds = candidateIds.stream()
+                .limit(maximumSelections)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         List<String> replyEvidenceIds = candidateIds.stream()
                 .map(state.verified::get)
-                .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).keySet().stream())
+                .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).values().stream()
+                        .filter(observation -> detailedCandidateIds.contains(game.ranking().bggId())
+                                || !"publisherDescription".equals(observation.attribute()))
+                        .map(CandidateObservation::id))
                 .distinct()
                 .toList();
         boolean searchOwnsCount = state.activeSearch != null;
@@ -278,7 +284,7 @@ final class RecommendationToolCatalog {
             Set<Integer> detailedGameIds) {
         Map<String, Object> memory = new LinkedHashMap<>();
         memory.put("observationLegend", Map.of(
-                "M", "verified BGG structured metadata or complete publisher description",
+                "M", "verified BGG structured metadata or a bounded publisher-description excerpt",
                 "T", "literal BGG taxonomy label",
                 "A", "attributed public report",
                 "R", "rulebook fact"));
@@ -354,14 +360,23 @@ final class RecommendationToolCatalog {
                 throw new IllegalStateException("recommendation observation must be a JSON object");
             }
             object.set("availableCapabilities", json.valueToTree(availableCapabilities(state)));
-            Set<Integer> currentSearchIds = state.pendingPublicationSeed == null
+            Set<Integer> detailedCandidateIds = state.pendingPublicationSeed == null
                     ? Set.of()
-                    : Set.copyOf(state.pendingPublicationSeed.candidateBggIds());
-            object.set("turnState", json.valueToTree(turnState(state, currentSearchIds)));
+                    : pendingPublicationIds(state).stream()
+                            .limit(maximumDetailedCandidates(state))
+                            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            object.set("turnState", json.valueToTree(turnState(state, detailedCandidateIds)));
             return json.writeValueAsString(object);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation observation context could not be serialized", exception);
         }
+    }
+
+    private int maximumDetailedCandidates(RecommendationAgentState state) {
+        int requestedCount = state.activeSearch == null
+                ? properties.resultCount()
+                : state.activeSearch.requestedCount();
+        return Math.min(requestedCount, properties.resultCount());
     }
 
     private void compactPriorToolState(List<Message> messages) {

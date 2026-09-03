@@ -16,7 +16,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 @Service
-public class PolicyEvidenceVerifier implements EvidenceVerifier {
+public class CitationScopeVerifier implements EvidenceVerifier {
 
     static final String NO_EVIDENCE = "NO_EVIDENCE";
     static final String VERSION_MISMATCH = "VERSION_MISMATCH";

@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDependencyDraft;
@@ -18,7 +19,7 @@ class TeachingPlanFactoryTest {
                 "Learn the actual loop.",
                 List.of(
                         new TopicDraft("setup", "Set up", "Prepare the table.", false, List.of(2, 3)),
-                        new TopicDraft("repair", "Repair", "Repair damaged systems.", true, List.of(8, 9))),
+                        new TopicDraft("repair", "Repair", "Repair damaged systems.", true, List.of(8, 9), List.of(10))),
                 List.of(new TopicDependencyDraft("setup", "repair", "Set up before play.")),
                 List.of("One external scenario sheet is unavailable"));
 
@@ -26,9 +27,18 @@ class TeachingPlanFactoryTest {
 
         assertThat(plan.sections()).extracting(section -> section.topicKey()).containsExactly("setup", "repair");
         assertThat(plan.sections().get(1).sourcePageNumbers()).containsExactly(8, 9);
+        assertThat(plan.sections().get(1).visualSourcePageNumbers()).containsExactly(10);
         assertThat(plan.wholeGameContext().topicDependencies()).singleElement();
         assertThat(plan.wholeGameContext().unresolvedTopics())
                 .containsExactly("One external scenario sheet is unavailable");
         assertThat(plan.sections()).allSatisfy(section -> assertThat(section.coverageTags()).isEmpty());
+    }
+
+    @Test
+    void rejectsVisualPagesWhenTheChapterDoesNotRecommendVisualEvidence() {
+        assertThatThrownBy(() -> new TopicDraft(
+                        "repair", "Repair", "Repair damaged systems.", false, List.of(8), List.of(9)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("teaching outline topic is invalid");
     }
 }

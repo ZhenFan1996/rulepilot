@@ -1,21 +1,28 @@
 package com.rulepilot.retrieval.domain;
 
-import java.util.Set;
+import java.util.List;
 
-public record RetrievalEvaluationSample(String id, String question, Set<String> expectedSectionTypes) {
+public record RetrievalEvaluationSample(String id, String question, List<RelevantEvidence> relevantEvidence) {
 
     public RetrievalEvaluationSample {
         if (id == null || id.isBlank() || question == null || question.isBlank()
-                || expectedSectionTypes == null
-                || expectedSectionTypes.isEmpty()
-                || expectedSectionTypes.stream().anyMatch(type -> type == null || type.isBlank())) {
+                || relevantEvidence == null
+                || relevantEvidence.isEmpty()
+                || relevantEvidence.stream().anyMatch(java.util.Objects::isNull)) {
             throw new IllegalArgumentException("retrieval evaluation sample is invalid");
         }
         id = id.strip();
         question = question.strip();
-        expectedSectionTypes = expectedSectionTypes.stream()
-                .map(String::strip)
-                .map(String::toUpperCase)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        relevantEvidence = List.copyOf(relevantEvidence);
+    }
+
+    public record RelevantEvidence(int pageNumber, List<String> requiredPhrases) {
+        public RelevantEvidence {
+            if (pageNumber < 1 || requiredPhrases == null || requiredPhrases.isEmpty()
+                    || requiredPhrases.stream().anyMatch(phrase -> phrase == null || phrase.isBlank())) {
+                throw new IllegalArgumentException("retrieval evaluation evidence target is invalid");
+            }
+            requiredPhrases = requiredPhrases.stream().map(String::strip).distinct().toList();
+        }
     }
 }

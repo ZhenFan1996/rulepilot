@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.ingestion.EmbeddingProvider;
 import com.rulepilot.ingestion.EmbeddingProvider.EmbeddingVector;
+import com.rulepilot.ingestion.EmbeddingIndexCoverage;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
 import com.rulepilot.retrieval.VectorRuleSearch;
@@ -87,6 +88,11 @@ class HybridSearchSourceAvailabilityPreparedSessionTest {
         };
         VectorRuleSearchRepository repository = new VectorRuleSearchRepository() {
             @Override
+            public EmbeddingIndexCoverage coverage(UUID version, String provider) {
+                return new EmbeddingIndexCoverage(indexed.size(), indexed.size());
+            }
+
+            @Override
             public List<RuleEvidenceHit> search(
                     UUID version, EmbeddingVector vector, String provider, int limit) {
                 return search(version, vector, provider, 0, limit);
@@ -123,7 +129,7 @@ class HybridSearchSourceAvailabilityPreparedSessionTest {
         assertThat(first.hasMore()).isTrue();
         assertThat(second.hits()).hasSize(1);
         assertThat(embeddingCalls).hasValue(2);
-        assertThat(repositoryOffsets).containsExactly(0, 1, 2, 3, 0, 1, 2, 3);
+        assertThat(repositoryOffsets).containsExactly(0, 0);
     }
 
     private RuleEvidenceHit hit(UUID versionId, String sectionType, int page) {

@@ -309,6 +309,9 @@ class TeachingPlanSectionEntity {
     @Column(name = "source_page_numbers", nullable = false, columnDefinition = "text")
     String sourcePageNumbers;
 
+    @Column(name = "visual_source_page_numbers", nullable = false, columnDefinition = "text")
+    String visualSourcePageNumbers;
+
     protected TeachingPlanSectionEntity() {}
 
     TeachingPlanSectionEntity(UUID teachingPlanId, PlannedSection section) {
@@ -325,6 +328,9 @@ class TeachingPlanSectionEntity {
         this.sourcePageNumbers = section.sourcePageNumbers().stream()
                 .map(String::valueOf)
                 .collect(java.util.stream.Collectors.joining(","));
+        this.visualSourcePageNumbers = section.visualSourcePageNumbers().stream()
+                .map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     PlannedSection toDomain() {
@@ -339,6 +345,9 @@ class TeachingPlanSectionEntity {
                 coverageTags.isBlank() ? List.of() : List.of(coverageTags.split(",")),
                 sourcePageNumbers == null || sourcePageNumbers.isBlank()
                         ? List.of()
-                        : java.util.Arrays.stream(sourcePageNumbers.split(",")).map(Integer::valueOf).toList());
+                        : java.util.Arrays.stream(sourcePageNumbers.split(",")).map(Integer::valueOf).toList(),
+                visualSourcePageNumbers == null || visualSourcePageNumbers.isBlank()
+                        ? List.of()
+                        : java.util.Arrays.stream(visualSourcePageNumbers.split(",")).map(Integer::valueOf).toList());
     }
 }

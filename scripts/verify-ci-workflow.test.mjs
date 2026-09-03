@@ -3100,6 +3100,9 @@ test('deployment keeps protected integration credentials out of packages and com
 })
 
 test('deployment isolates the recommendation startup model from shared Qwen roles', () => {
+  assert.match(deploymentCompose, /EMBEDDING_PROVIDER: \$\{EMBEDDING_PROVIDER:-qwen\}/)
+  assert.match(deploymentWorkflow, /managed_runtime_keys='[^']* EMBEDDING_PROVIDER [^']*'/)
+  assert.match(deploymentWorkflow, /'EMBEDDING_PROVIDER=qwen'/)
   assert.match(applicationConfiguration,
     /recommendation-agent:[\s\S]{0,180}?model-provider: \$\{BGG_RECOMMENDATION_MODEL_PROVIDER:qwen\}[\s\S]{0,100}?model: \$\{BGG_RECOMMENDATION_MODEL:\}/)
   assert.match(deploymentWorkflow,

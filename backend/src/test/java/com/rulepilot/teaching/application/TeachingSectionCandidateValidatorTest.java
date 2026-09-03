@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
-import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
+import com.rulepilot.assistant.application.CitationScopeVerifier;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
@@ -36,7 +36,7 @@ class TeachingSectionCandidateValidatorTest {
                 "修复系统",
                 List.of(new StepDraft("选择时机", TeachingMove.DO, naturalText, List.of(citation))));
 
-        var published = new TeachingSectionCandidateValidator(new PolicyEvidenceVerifier()).validate(
+        var published = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
                 plan(versionId), planned(), List.of(evidence), request, draft, EvidenceStatus.CITED_DRAFT);
 
         assertThat(published.title()).isEqualTo("修复系统");
@@ -63,7 +63,7 @@ class TeachingSectionCandidateValidatorTest {
                 "Turn",
                 List.of(new StepDraft("Act", TeachingMove.DO, "Use unrelated evidence.", List.of(outside))));
 
-        assertThatThrownBy(() -> new TeachingSectionCandidateValidator(new PolicyEvidenceVerifier()).validate(
+        assertThatThrownBy(() -> new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
                         plan(versionId),
                         planned(),
                         List.of(allowedEvidence, outsideEvidence),

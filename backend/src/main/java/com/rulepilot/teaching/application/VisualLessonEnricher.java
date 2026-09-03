@@ -7,7 +7,6 @@ import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionProposer;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
-import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.visualaid.VisualRegionCatalog;
@@ -15,10 +14,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -174,9 +170,12 @@ public class VisualLessonEnricher {
     static int estimatedTeachingRunModelCalls(TeachingPlan plan) {
         if (plan == null || plan.sections().isEmpty()) return 0;
         long estimated = plan.sections().stream()
-                .filter(section -> section.visualEvidenceRecommended() && !section.sourcePageNumbers().isEmpty())
+                .filter(TeachingPlan.PlannedSection::visualEvidenceRecommended)
                 .mapToLong(section -> {
-                    long pages = section.sourcePageNumbers().stream().distinct().count();
+                    List<Integer> candidatePages = section.visualSourcePageNumbers().isEmpty()
+                            ? section.sourcePageNumbers()
+                            : section.visualSourcePageNumbers();
+                    long pages = candidatePages.stream().distinct().count();
                     return Math.max(1L, (pages + DocumentPageImages.MAX_PAGES_PER_READ - 1L)
                             / DocumentPageImages.MAX_PAGES_PER_READ);
                 })
@@ -184,8 +183,8 @@ public class VisualLessonEnricher {
         if (estimated > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("teaching visual workload is too large");
         }
-        // This sizes the initial token/deadline envelope from real source-page windows. It is not a call limit:
-        // additional candidate pages and complete Agent corrections continue while durable resources remain.
+        // This sizes the initial token/deadline envelope from the Agent's bounded visual-page windows. It is not a
+        // call limit: complete Agent corrections continue while durable resources remain.
         return (int) estimated;
     }
 
@@ -241,7 +240,6 @@ public class VisualLessonEnricher {
             VisualProgressListener progress) {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
-        Map<Integer, Set<Integer>> explicitVisualStepPositions = explicitVisualStepPositions(lesson);
         Set<Integer> selectedPositions = prioritizer.positions(lesson.sections());
         List<VisualFocus> acceptedVisuals = lesson.sections().stream()
                 .flatMap(section -> section.steps().stream())
@@ -264,7 +262,7 @@ public class VisualLessonEnricher {
                     proposalToolCircuit,
                     progress,
                     acceptedVisuals,
-                    explicitVisualStepPositions.getOrDefault(section.position(), Set.of()));
+                    List.of());
             SectionResult sectionResult = sectionResult(enriched);
             sectionResults.add(sectionResult);
             currentSections.set(sectionIndex, sectionResult.section());
@@ -290,12 +288,13 @@ public class VisualLessonEnricher {
      */
     public SectionEnrichment enrichSection(
             UUID documentVersionId,
+            TeachingPlan.PlannedSection planned,
             LessonSection section,
             List<LessonSection> alreadyPublished,
             String modelConfigurationOwner,
             UUID runId,
             VisualProgressListener progress) {
-        if (documentVersionId == null || section == null || alreadyPublished == null || progress == null) {
+        if (documentVersionId == null || planned == null || section == null || alreadyPublished == null || progress == null) {
             throw new IllegalArgumentException("section visual enrichment input is invalid");
         }
         var map = understanding.understanding(documentVersionId);
@@ -316,34 +315,13 @@ public class VisualLessonEnricher {
                 sectionEnricher.beginProposalWorkflow(),
                 progress,
                 acceptedVisuals,
-                explicitVisualStepPositions(section));
+                planned.visualSourcePageNumbers());
         SectionResult reported = sectionResult(result);
         if (reported.outcome() != null) {
             progress.sectionFinished(new SectionProgress(
                     section.position(), section.title(), reported.outcome()));
         }
         return new SectionEnrichment(reported.section(), reported.outcome());
-    }
-
-    private Map<Integer, Set<Integer>> explicitVisualStepPositions(IllustratedLesson lesson) {
-        Map<Integer, Set<Integer>> positions = new LinkedHashMap<>();
-        for (LessonSection section : lesson.sections()) {
-            Set<Integer> sectionPositions = section.steps().stream()
-                    .filter(step -> step.kind() == IllustratedLesson.TeachingMove.VISUAL)
-                    .filter(step -> step.visualFoci().isEmpty())
-                    .map(LessonStep::position)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (!sectionPositions.isEmpty()) positions.put(section.position(), Set.copyOf(sectionPositions));
-        }
-        return Map.copyOf(positions);
-    }
-
-    private Set<Integer> explicitVisualStepPositions(LessonSection section) {
-        return section.steps().stream()
-                .filter(step -> step.kind() == IllustratedLesson.TeachingMove.VISUAL)
-                .filter(step -> step.visualFoci().isEmpty())
-                .map(LessonStep::position)
-                .collect(Collectors.toUnmodifiableSet());
     }
 
     private IllustratedLesson lessonWithSections(IllustratedLesson original, List<LessonSection> sections) {
@@ -395,6 +373,14 @@ public class VisualLessonEnricher {
             case REJECTED_STEP_MISMATCH -> "第 " + sectionPosition + " 节的截图没有直接对应当前步骤；仅省略配图，已校验正文保持不变";
             case REJECTED_CLAIM_CONFLICT -> "第 " + sectionPosition + " 节的截图与已验证正文冲突，已跳过截图并保留正文";
         };
+    }
+
+    static boolean isSuccessfulOutcome(Outcome outcome) {
+        return outcome == Outcome.ADDED
+                || outcome == Outcome.ADDED_WITH_CLAIM_CONFLICT
+                || outcome == Outcome.ALREADY_PRESENT
+                || outcome == Outcome.NO_CITED_CANDIDATE
+                || outcome == Outcome.MODEL_EXPLICIT_NO_REGION;
     }
 
     public record EnrichmentResult(IllustratedLesson lesson, List<SectionOutcome> outcomes) {

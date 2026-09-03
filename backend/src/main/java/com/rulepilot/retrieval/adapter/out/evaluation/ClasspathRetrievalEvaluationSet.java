@@ -1,6 +1,5 @@
 package com.rulepilot.retrieval.adapter.out.evaluation;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.retrieval.RetrievalEvaluationSet;
 import com.rulepilot.retrieval.domain.RetrievalEvaluationSample;
@@ -16,27 +15,52 @@ import org.springframework.stereotype.Component;
 public class ClasspathRetrievalEvaluationSet implements RetrievalEvaluationSet {
 
     private static final String DATASET = "evaluation/starter-game-questions.json";
+    private final String name;
+    private final String sourceSha256;
     private final List<RetrievalEvaluationSample> samples;
 
     public ClasspathRetrievalEvaluationSet() {
         ObjectMapper objectMapper = new ObjectMapper();
         try (InputStream input = new ClassPathResource(DATASET).getInputStream()) {
-            samples = List.copyOf(objectMapper.readValue(input, new TypeReference<>() {}));
+            Fixture fixture = objectMapper.readValue(input, Fixture.class);
+            name = fixture.name();
+            sourceSha256 = fixture.sourceSha256();
+            samples = List.copyOf(fixture.samples());
         } catch (IOException exception) {
             throw new IllegalStateException("cannot load retrieval evaluation set " + DATASET, exception);
         }
-        if (samples.size() != 30) {
-            throw new IllegalStateException("retrieval evaluation set must contain exactly 30 samples");
+        if (name == null || name.isBlank()
+                || sourceSha256 == null || !sourceSha256.matches("[0-9a-f]{64}")
+                || samples.isEmpty()) {
+            throw new IllegalStateException("retrieval evaluation fixture metadata is invalid");
         }
     }
 
     @Override
     public String name() {
-        return "starter-game-v1";
+        return name;
+    }
+
+    @Override
+    public String sourceSha256() {
+        return sourceSha256;
     }
 
     @Override
     public List<RetrievalEvaluationSample> samples() {
         return samples;
+    }
+
+    private record Fixture(
+            String schemaVersion,
+            String name,
+            String sourceSha256,
+            List<RetrievalEvaluationSample> samples) {
+
+        private Fixture {
+            if (!"rulepilot.retrieval-evaluation/v2".equals(schemaVersion)) {
+                throw new IllegalArgumentException("retrieval evaluation fixture schema is unsupported");
+            }
+        }
     }
 }

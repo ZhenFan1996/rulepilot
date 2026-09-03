@@ -145,7 +145,7 @@ describe('LessonView progressive reading', () => {
       .toBe('https://boardgamegeek.com/boardgame/42')
     expect(wrapper.get('img[alt="目录桌游 的 BGG 封面"]').attributes('src'))
       .toBe('https://example.test/catalog-cover.jpg')
-    expect(wrapper.text()).toContain('图中看什么')
+    expect(wrapper.text()).toContain('结合图片 · 1/1')
     expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('规则答疑')
     expect(wrapper.text()).not.toContain('答疑独立打开，不打断当前讲解')
@@ -156,7 +156,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.find('a[href^="/lesson/plan-1/questions?section="]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('4 人 ·')
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
+    expect(wrapper.get('[data-testid="lesson-visual-image"] img[alt*="主棋盘区域"]').attributes('src'))
       .toMatch(/^data:image\/jpeg;base64,/)
     expect(fetchMock.mock.calls.map(([input]) => String(input)))
       .toContain('/api/v1/document-versions/version-1/pages/1/image/crop?x=100&y=200&width=500&height=400')
@@ -840,12 +840,12 @@ describe('LessonView progressive reading', () => {
     })
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lesson-visual-image"] img[alt*="主棋盘区域"]').exists()).toBe(false)
 
     await vi.advanceTimersByTimeAsync(1_500)
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
+    expect(wrapper.get('[data-testid="lesson-visual-image"] img[alt*="主棋盘区域"]').attributes('src'))
       .toMatch(/^data:image\/jpeg;base64,/)
     expect(fetchMock.mock.calls.map(([input]) => String(input)))
       .toContain('/api/v1/document-versions/version-plan-1/pages/1/image/crop?x=100&y=200&width=500&height=400')

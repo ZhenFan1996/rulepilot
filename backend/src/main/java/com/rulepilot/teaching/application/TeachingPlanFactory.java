@@ -49,7 +49,8 @@ public class TeachingPlanFactory {
                             topic.visualEvidenceRecommended(),
                             List.of(topic.objective()),
                             List.of(),
-                            topic.sourcePageNumbers());
+                            topic.sourcePageNumbers(),
+                            topic.visualSourcePageNumbers());
                 })
                 .toList();
         return new TeachingPlan(

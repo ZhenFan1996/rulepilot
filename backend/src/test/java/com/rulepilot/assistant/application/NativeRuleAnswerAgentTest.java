@@ -409,15 +409,19 @@ class NativeRuleAnswerAgentTest {
                 if (decision == 1) {
                     assertThat(request.conversation().getFirst().content())
                             .contains(
-                                    "cite that observed evidenceId without repeating the read",
-                                    "Use read_rule_pages only when");
+                                    "only the unresolved obligations",
+                                    "without repeating or reconfirming the read",
+                                    "Call mutually independent read-only tools together in one decision",
+                                    "Use read_rule_pages",
+                                    "only when the search excerpt needs fuller page context");
                     assertThat(request.tools())
                             .filteredOn(tool -> "search_rule_evidence".equals(tool.name()))
                             .singleElement()
                             .satisfies(tool -> assertThat(tool.description())
                                     .contains(
                                             "It may support a citation directly",
-                                            "Read the exact page only when fuller page context"));
+                                            "Read the exact page only when fuller page context",
+                                            "Never read an exact page merely to reconfirm"));
                 }
                 return switch (decision) {
                     case 1 -> new ModelTurn(

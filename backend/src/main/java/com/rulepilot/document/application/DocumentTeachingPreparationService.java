@@ -53,6 +53,7 @@ class DocumentTeachingPreparationService implements DocumentTeachingPreparation 
             }
         }
         return new VersionScope(
-                version.id(), document.gameEditionId(), version.status().name(), document.createdBy(), document.title());
+                version.id(), document.gameEditionId(), version.status().name(), document.createdBy(), document.title(),
+                version.checksum());
     }
 }

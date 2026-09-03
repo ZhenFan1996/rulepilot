@@ -1,5 +1,6 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.time.Duration;
@@ -8,7 +9,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-/** A vision-only port: it may locate a cited region but can never compose lesson prose. */
+/** A vision-only port: it may select an application-owned rulebook region but can never compose lesson prose. */
 public interface VisualRegionLocator {
 
     Optional<LocatedRegion> locate(VisualLocationRequest request);
@@ -61,6 +62,7 @@ public interface VisualRegionLocator {
         TIMEOUT,
         INTERRUPTED,
         EXECUTOR_BUSY,
+        PROVIDER_INPUT_REJECTED,
         PROVIDER_FAILURE,
         CANDIDATE_PREPARATION_FAILED
     }
@@ -141,8 +143,32 @@ public interface VisualRegionLocator {
             UUID documentVersionId,
             UUID runId,
             int batchNumber,
-            boolean hasMoreCandidates) {
+            boolean hasMoreCandidates,
+            PlayerLocale outputLocale) {
         public static final int MAX_CANDIDATES_PER_BATCH = 12;
+
+        public VisualLocationRequest(
+                String sectionTitle,
+                List<Claim> claims,
+                List<Candidate> candidates,
+                List<PageImage> pages,
+                String modelConfigurationOwner,
+                UUID documentVersionId,
+                UUID runId,
+                int batchNumber,
+                boolean hasMoreCandidates) {
+            this(
+                    sectionTitle,
+                    claims,
+                    candidates,
+                    pages,
+                    modelConfigurationOwner,
+                    documentVersionId,
+                    runId,
+                    batchNumber,
+                    hasMoreCandidates,
+                    PlayerLocale.ZH_CN);
+        }
 
         public VisualLocationRequest(
                 String sectionTitle,
@@ -188,7 +214,8 @@ public interface VisualRegionLocator {
                     || pages == null || pages.isEmpty()
                     || candidates.size() > MAX_CANDIDATES_PER_BATCH
                     || pages.size() > MAX_CANDIDATES_PER_BATCH
-                    || batchNumber < 1) {
+                    || batchNumber < 1
+                    || outputLocale == null) {
                 throw new IllegalArgumentException("visual location request is invalid");
             }
             claims = List.copyOf(claims);

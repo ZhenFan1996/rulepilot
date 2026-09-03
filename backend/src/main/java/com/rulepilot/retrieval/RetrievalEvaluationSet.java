@@ -7,5 +7,7 @@ public interface RetrievalEvaluationSet {
 
     String name();
 
+    String sourceSha256();
+
     List<RetrievalEvaluationSample> samples();
 }

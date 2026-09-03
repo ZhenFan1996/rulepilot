@@ -13,10 +13,12 @@ import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -183,7 +185,9 @@ final class VisualLessonStepLocator {
                 modelConfigurationOwner,
                 runId,
                 compatibilityDeadline,
-                beginProposalWorkflow());
+                beginProposalWorkflow(),
+                List.of(),
+                List.of());
     }
 
     Result locate(
@@ -195,10 +199,34 @@ final class VisualLessonStepLocator {
             UUID runId,
             Instant compatibilityDeadline,
             ProposalToolCircuit proposalToolCircuit) {
+        return locate(
+                understanding,
+                documentVersionId,
+                section,
+                steps,
+                modelConfigurationOwner,
+                runId,
+                compatibilityDeadline,
+                proposalToolCircuit,
+                List.of(),
+                List.of());
+    }
+
+    Result locate(
+            RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            List<LessonStep> steps,
+            String modelConfigurationOwner,
+            UUID runId,
+            Instant compatibilityDeadline,
+            ProposalToolCircuit proposalToolCircuit,
+            List<VisualFocus> acceptedVisuals,
+            List<Integer> plannedVisualPages) {
         if (steps == null || steps.isEmpty()) {
             throw new IllegalArgumentException("visual lesson steps are required");
         }
-        if (proposalToolCircuit == null) {
+        if (proposalToolCircuit == null || acceptedVisuals == null || plannedVisualPages == null) {
             throw new IllegalArgumentException("visual proposal workflow is required");
         }
         Instant workflowDeadline = compatibilityDeadline == null
@@ -206,6 +234,11 @@ final class VisualLessonStepLocator {
                 : compatibilityDeadline;
         List<Integer> citedPages = steps.stream()
                 .flatMap(step -> step.sourcePages().stream())
+                .distinct()
+                .sorted()
+                .toList();
+        List<Integer> candidatePages = (plannedVisualPages.isEmpty() ? citedPages : plannedVisualPages).stream()
+                .filter(page -> page != null && page > 0)
                 .distinct()
                 .sorted()
                 .toList();
@@ -217,15 +250,15 @@ final class VisualLessonStepLocator {
         boolean stopped = false;
         int batchNumber = 1;
         for (int pageStart = 0;
-                !stopped && pageStart < citedPages.size();
+                !stopped && pageStart < candidatePages.size();
                 pageStart += DocumentPageImages.MAX_PAGES_PER_READ) {
             Boundary boundary = boundary(runId, workflowDeadline);
             if (boundary.stoppedOutcome() != null) {
                 if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
                 break;
             }
-            int pageEnd = Math.min(pageStart + DocumentPageImages.MAX_PAGES_PER_READ, citedPages.size());
-            List<Integer> pageWindow = citedPages.subList(pageStart, pageEnd);
+            int pageEnd = Math.min(pageStart + DocumentPageImages.MAX_PAGES_PER_READ, candidatePages.size());
+            List<Integer> pageWindow = candidatePages.subList(pageStart, pageEnd);
             ProposedRegions proposed = indexedRegions.configured() || proposalToolCircuit.available()
                     ? proposeRegions(
                             documentVersionId,
@@ -238,7 +271,10 @@ final class VisualLessonStepLocator {
                     understanding,
                     new LinkedHashSet<>(pageWindow),
                     terms(section, steps),
-                    proposed.byPage());
+                    proposed.byPage()).stream()
+                    .filter(candidate -> acceptedVisuals.stream()
+                            .noneMatch(existing -> cropPolicy.overlapsSubstantially(candidate, existing)))
+                    .toList();
             if (selected.isEmpty()) continue;
             candidateFound = true;
 
@@ -274,53 +310,73 @@ final class VisualLessonStepLocator {
                     if (firstRejection == null) firstRejection = VisualLessonEnricher.Outcome.NO_PAGE_IMAGE;
                     continue;
                 }
-                List<PageImage> batchPages = batch.stream()
-                        .map(VisualRegionCandidateSelector.Candidate::pageNumber)
-                        .distinct()
-                        .map(availablePages::get)
-                        .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
-                        .toList();
-                boolean hasMoreCandidates = end < selected.size() || pageEnd < citedPages.size();
-                boundary = boundary(runId, workflowDeadline);
-                if (boundary.stoppedOutcome() != null) {
-                    if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
-                    stopped = true;
-                    break;
-                }
-                VisualRegionLocator.LocateGuideResult guide;
-                try {
-                    guide = locator.locateGuideWithResult(
-                            new VisualRegionLocator.VisualLocationRequest(
-                                    section.title(),
-                                    claims,
-                                    batch,
-                                    batchPages,
-                                    modelConfigurationOwner,
-                                    runId == null ? null : documentVersionId,
-                                    runId,
-                                    batchNumber++,
-                                    hasMoreCandidates),
-                            boundary.remaining());
-                } catch (AgentExecutionStoppedException modelStopped) {
-                    throw modelStopped;
-                }
-                if (guide.regions().isEmpty()) {
-                    if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
-                    if (guide.batchAction() == BatchAction.STOP) stopped = true;
-                    if (stopped) break;
-                    continue;
-                }
-                for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
-                    VisualLessonEnricher.Outcome rejection = rejectionFor(candidate, batch, evidenceIds);
-                    if (rejection == null && !supportsExactStep(candidate, steps)) {
-                        rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
+                var pending = new ArrayDeque<CandidateBatch>();
+                pending.addLast(new CandidateBatch(batch, true));
+                while (!pending.isEmpty()) {
+                    CandidateBatch candidateBatch = pending.removeFirst();
+                    boundary = boundary(runId, workflowDeadline);
+                    if (boundary.stoppedOutcome() != null) {
+                        if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
+                        stopped = true;
+                        break;
                     }
-                    if (rejection == null) accepted.add(candidate);
-                    else if (firstRejection == null) firstRejection = rejection;
-                }
-                if (guide.batchAction() == BatchAction.STOP) {
-                    stopped = true;
-                    break;
+                    List<PageImage> batchPages = candidateBatch.candidates().stream()
+                            .map(VisualRegionCandidateSelector.Candidate::pageNumber)
+                            .distinct()
+                            .map(availablePages::get)
+                            .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
+                            .toList();
+                    boolean hasMoreCandidates = !pending.isEmpty()
+                            || end < selected.size()
+                            || pageEnd < candidatePages.size();
+                    VisualRegionLocator.LocateGuideResult guide;
+                    try {
+                        guide = locator.locateGuideWithResult(
+                                new VisualRegionLocator.VisualLocationRequest(
+                                        section.title(),
+                                        claims,
+                                        candidateBatch.candidates(),
+                                        batchPages,
+                                        modelConfigurationOwner,
+                                        runId == null ? null : documentVersionId,
+                                        runId,
+                                        batchNumber++,
+                                        hasMoreCandidates),
+                                boundary.remaining());
+                    } catch (AgentExecutionStoppedException modelStopped) {
+                        throw modelStopped;
+                    }
+                    if (guide.diagnostic() == VisualRegionLocator.Diagnostic.PROVIDER_INPUT_REJECTED) {
+                        if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
+                        if (candidateBatch.mayIsolate() && candidateBatch.candidates().size() > 1) {
+                            int split = (candidateBatch.candidates().size() + 1) / 2;
+                            pending.addFirst(new CandidateBatch(
+                                    candidateBatch.candidates().subList(split, candidateBatch.candidates().size()),
+                                    false));
+                            pending.addFirst(new CandidateBatch(
+                                    candidateBatch.candidates().subList(0, split), false));
+                        }
+                        continue;
+                    }
+                    if (guide.regions().isEmpty()) {
+                        if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
+                        if (guide.batchAction() == BatchAction.STOP) stopped = true;
+                        if (stopped) break;
+                        continue;
+                    }
+                    for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
+                        VisualLessonEnricher.Outcome rejection =
+                                rejectionFor(candidate, candidateBatch.candidates(), evidenceIds);
+                        if (rejection == null && !supportsExactStep(candidate, steps)) {
+                            rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
+                        }
+                        if (rejection == null) accepted.add(candidate);
+                        else if (firstRejection == null) firstRejection = rejection;
+                    }
+                    if (guide.batchAction() == BatchAction.STOP) {
+                        stopped = true;
+                        break;
+                    }
                 }
             }
         }
@@ -398,18 +454,26 @@ final class VisualLessonStepLocator {
             List<Integer> batch = pageNumbers.subList(
                     start, Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, pageNumbers.size()));
             try {
-                indexedRegions.find(documentVersionId, new LinkedHashSet<>(batch)).forEach(region -> proposed.merge(
-                        region.pageNumber(),
-                        List.of(new Proposal(new RulebookUnderstanding.Rectangle(
-                                region.x(), region.y(), region.width(), region.height()))),
-                        VisualLessonStepLocator::distinctProposals));
+                indexedRegions.find(documentVersionId, new LinkedHashSet<>(batch)).stream()
+                        .filter(region -> "PICTURE".equals(region.kind()))
+                        .forEach(region -> proposed.merge(
+                                region.pageNumber(),
+                                List.of(new Proposal(new RulebookUnderstanding.Rectangle(
+                                        region.x(), region.y(), region.width(), region.height()))),
+                                VisualLessonStepLocator::distinctProposals));
             } catch (RuntimeException ignored) {
                 // The optional plugin is not a publication dependency; local pixel proposals remain available.
             }
             if (!proposals.configured() || !proposalToolCircuit.available()) continue;
+            List<Integer> fallbackPages = batch.stream()
+                    .filter(pageNumber -> !proposed.containsKey(pageNumber))
+                    .toList();
+            if (fallbackPages.isEmpty()) continue;
             List<DocumentPageImages.PageImage> available;
             try {
-                available = pageImages.read(documentVersionId, new LinkedHashSet<>(batch));
+                // Docling is authoritative for pages where it found pictures. Pixel proposals are a page-local
+                // fallback, not a second candidate vocabulary mixed into a successful Docling result.
+                available = pageImages.read(documentVersionId, new LinkedHashSet<>(fallbackPages));
             } catch (RuntimeException pageReadFailure) {
                 continue;
             }
@@ -492,10 +556,20 @@ final class VisualLessonStepLocator {
             case TIMEOUT -> VisualLessonEnricher.Outcome.MODEL_TIMEOUT;
             case INTERRUPTED -> VisualLessonEnricher.Outcome.MODEL_INTERRUPTED;
             case EXECUTOR_BUSY -> VisualLessonEnricher.Outcome.MODEL_BUSY;
+            case PROVIDER_INPUT_REJECTED -> VisualLessonEnricher.Outcome.MODEL_PROVIDER_FAILURE;
             case PROVIDER_FAILURE -> VisualLessonEnricher.Outcome.MODEL_PROVIDER_FAILURE;
             case CANDIDATE_PREPARATION_FAILED -> VisualLessonEnricher.Outcome.CANDIDATE_PREPARATION_FAILED;
             case FOUND -> throw new IllegalArgumentException("found visual location cannot be rejected");
         };
+    }
+
+    private record CandidateBatch(
+            List<VisualRegionCandidateSelector.Candidate> candidates,
+            boolean mayIsolate) {
+        private CandidateBatch {
+            candidates = List.copyOf(candidates);
+            if (candidates.isEmpty()) throw new IllegalArgumentException("candidate batch cannot be empty");
+        }
     }
 
     record Result(List<VisualRegionLocator.LocatedRegion> regions, VisualLessonEnricher.Outcome rejection) {

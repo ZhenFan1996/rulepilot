@@ -44,6 +44,11 @@ public final class QwenEmbeddingProvider implements EmbeddingProvider {
     }
 
     @Override
+    public int batchSize() {
+        return properties.batchSize();
+    }
+
+    @Override
     public List<EmbeddingVector> embed(List<String> texts) {
         validateInputs(texts);
         List<EmbeddingVector> result = new ArrayList<>(texts.size());

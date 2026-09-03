@@ -49,8 +49,7 @@ class DoclingVisualLayoutExtractorTest {
         assertThat(extraction.source()).isEqualTo("docling:ibm-managed");
         assertThat(extraction.pageCount()).isEqualTo(2);
         assertThat(extraction.regions()).containsExactly(
-                new Region(1, "PICTURE", 100, 400, 400, 500),
-                new Region(2, "TABLE", 100, 300, 300, 400));
+                new Region(1, "PICTURE", 100, 400, 400, 500));
     }
 
     @Test

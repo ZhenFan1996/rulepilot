@@ -1,6 +1,7 @@
 package com.rulepilot.retrieval.adapter.out.postgres;
 
 import com.rulepilot.ingestion.EmbeddingProvider.EmbeddingVector;
+import com.rulepilot.ingestion.EmbeddingIndexCoverage;
 import com.rulepilot.retrieval.application.VectorRuleSearchRepository;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit.ContentKind;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 @Profile("!test")
@@ -19,13 +21,31 @@ public class PostgresVectorRuleSearch implements VectorRuleSearchRepository {
     private EntityManager entityManager;
 
     @Override
+    @Transactional(readOnly = true)
+    public EmbeddingIndexCoverage coverage(UUID documentVersionId, String provider) {
+        Object[] row = (Object[]) entityManager.createNativeQuery("""
+                        SELECT count(*), count(*) FILTER (
+                            WHERE embedding IS NOT NULL AND embedding_provider = :provider)
+                        FROM rule_chunk
+                        WHERE document_version_id = :versionId
+                        """)
+                .setParameter("versionId", documentVersionId)
+                .setParameter("provider", provider)
+                .getSingleResult();
+        return new EmbeddingIndexCoverage(
+                ((Number) row[0]).longValue(), ((Number) row[1]).longValue());
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
+    @Transactional(readOnly = true)
     public List<RuleEvidenceHit> search(UUID documentVersionId, EmbeddingVector query, String provider, int limit) {
         return search(documentVersionId, query, provider, 0, limit);
     }
 
     @Override
     @SuppressWarnings("unchecked")
+    @Transactional(readOnly = true)
     public List<RuleEvidenceHit> search(
             UUID documentVersionId, EmbeddingVector query, String provider, int offset, int limit) {
         List<Object[]> rows = entityManager.createNativeQuery("""

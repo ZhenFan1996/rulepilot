@@ -28,7 +28,9 @@ make dev
 ```
 
 访问 Web：<http://127.0.0.1:5173>；后端健康检查：<http://127.0.0.1:8080/actuator/health>；Grafana：
-<http://127.0.0.1:3000>。默认使用确定性 Fake Provider，不调用付费模型。真实凭证只放 `.env`，不得提交。
+<http://127.0.0.1:3000>。默认使用确定性 Fake Provider，不调用付费模型。启用真实 Provider 时，本地启动器会在
+旧 `.env` 尚未声明 `RULEPILOT_MODELS_STARTUP_ALLOWED_USERS` 的情况下，仅向已配置的本地玩家与演示管理员账号
+开放启动凭证；显式设置（包括留空）始终优先。真实凭证只放 `.env`，不得提交。
 
 载入项目自制的 CC0 演示规则书：
 

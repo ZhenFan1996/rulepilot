@@ -52,15 +52,18 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
         if (targetLanguage != PlayerLocale.EN || !available(modelConfigurationOwner)) {
             throw new IllegalStateException("lesson localization model is unavailable");
         }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.TEACHING, modelConfigurationOwner)).prompt();
-        String provider = models.providerFor(Role.TEACHING, modelConfigurationOwner);
-        if (models.usesDeepSeekNonThinkingGeneration(Role.TEACHING, modelConfigurationOwner) || "qwen".equals(provider)) {
-            OpenAiChatOptions.Builder options = OpenAiChatOptions.builder().model(models.modelNameFor(Role.TEACHING, modelConfigurationOwner));
-            if (models.usesDeepSeekNonThinkingGeneration(Role.TEACHING, modelConfigurationOwner)) {
+        RuntimeModelConfiguration.ResolvedModel selected =
+                models.resolvedModelFor(Role.TEACHING, modelConfigurationOwner);
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(selected.model()).prompt();
+        if (selected.model().getOptions() instanceof OpenAiChatOptions defaults
+                && (selected.deepSeekNonThinkingGeneration() || "qwen".equals(selected.provider()))) {
+            OpenAiChatOptions.Builder options = defaults.mutate()
+                    .model(selected.modelName())
+                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+            if (selected.deepSeekNonThinkingGeneration()) {
                 options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
-                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
             }
             prompt = prompt.options(options);
         }

@@ -12,7 +12,7 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
+import com.rulepilot.assistant.application.CitationScopeVerifier;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -132,7 +132,7 @@ class TeachingRichLessonPaidCanaryTest {
             GroundedTeachingAgent agent = new GroundedTeachingAgent(
                     corpus,
                     lessonModel,
-                    new PolicyEvidenceVerifier(),
+                    new CitationScopeVerifier(),
                     invocations,
                     visualFacts,
                     VisualRulebookCatalogerTestFixture.unavailable(corpus, invocations, visualFacts));

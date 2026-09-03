@@ -3,7 +3,6 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
-import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.time.Instant;
 import java.util.List;
@@ -45,12 +44,19 @@ final class VisualLessonSectionEnricher {
             VisualLessonStepLocator.ProposalToolCircuit proposalToolCircuit,
             VisualLessonEnricher.VisualProgressListener progress,
             List<VisualFocus> acceptedVisuals,
-            java.util.Set<Integer> explicitVisualStepPositions) {
-        if (explicitVisualStepPositions == null) {
-            throw new IllegalArgumentException("explicit visual step positions are required");
+            List<Integer> plannedVisualPages) {
+        List<LessonStep> targets = visualTargets(section);
+        if (targets.isEmpty()) {
+            boolean everyCitedStepAlreadyIllustrated = section.steps().stream()
+                    .filter(VisualLessonSectionEnricher::hasCitedEvidence)
+                    .allMatch(step -> !step.visualFoci().isEmpty());
+            boolean hasCitedStep = section.steps().stream().anyMatch(VisualLessonSectionEnricher::hasCitedEvidence);
+            return Result.rejected(
+                    section,
+                    hasCitedStep && everyCitedStepAlreadyIllustrated
+                            ? VisualLessonEnricher.Outcome.ALREADY_PRESENT
+                            : VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
         }
-        List<LessonStep> targets = visualTargets(section, explicitVisualStepPositions);
-        if (targets.isEmpty()) return Result.rejected(section, VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
         targets.forEach(step -> progress.targetStarted(target(section, step)));
         VisualLessonStepLocator.Result location = stepLocator.locate(
                 understanding,
@@ -60,7 +66,9 @@ final class VisualLessonSectionEnricher {
                 modelConfigurationOwner,
                 runId,
                 compatibilityDeadline,
-                proposalToolCircuit);
+                proposalToolCircuit,
+                acceptedVisuals,
+                plannedVisualPages);
         for (LessonStep step : targets) {
             boolean acceptedForStep = location.regions().stream().anyMatch(region ->
                     region.supportedStepPositions().isEmpty()
@@ -97,19 +105,17 @@ final class VisualLessonSectionEnricher {
                 section.position(), section.title(), step.position(), step.heading());
     }
 
-    private List<LessonStep> visualTargets(
-            LessonSection section, java.util.Set<Integer> explicitVisualStepPositions) {
-        List<LessonStep> eligible = section.steps().stream()
-                .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
-                .toList();
-        boolean hasExplicitVisualIntent = !explicitVisualStepPositions.isEmpty()
-                || eligible.stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL);
-        return eligible.stream()
-                .filter(step -> !hasExplicitVisualIntent
-                        || explicitVisualStepPositions.contains(step.position())
-                        || step.kind() == TeachingMove.VISUAL)
+    /** Every cited step is a possible visual teaching move; VISUAL marks content, not exclusive eligibility. */
+    static List<LessonStep> visualTargets(LessonSection section) {
+        return section.steps().stream()
+                .filter(VisualLessonSectionEnricher::hasCitedEvidence)
+                .filter(step -> step.visualFoci().isEmpty())
                 .sorted(java.util.Comparator.comparingInt(LessonStep::position))
                 .toList();
+    }
+
+    private static boolean hasCitedEvidence(LessonStep step) {
+        return !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty();
     }
 
     record Result(LessonSection section, VisualLessonEnricher.Outcome outcome, int addedCount) {

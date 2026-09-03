@@ -82,6 +82,64 @@ class AnswerRegressionServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void checksCuratedGroundTruthAgainstCitedExcerptsInsteadOfTreatingCitationPresenceAsSupport() {
+        UUID versionId = UUID.randomUUID();
+        StructuredRuleAnswerService answers = mock(StructuredRuleAnswerService.class);
+        when(answers.evaluateWithRun(any(), any(), any(), any())).thenReturn(new AnswerCreation(
+                UUID.randomUUID(),
+                new StructuredRuleAnswer(
+                        versionId,
+                        AnswerStatus.ANSWERED,
+                        "费用一样",
+                        "按相同费用支付",
+                        List.of(new RuleCitation(
+                                UUID.randomUUID(),
+                                versionId,
+                                "ACTIONS",
+                                "Unrelated citation",
+                                "Draw two cards at the end of the round.",
+                                17,
+                                17)),
+                        List.of(),
+                        AnswerConfidence.HIGH,
+                        false,
+                        null,
+                        null,
+                        null)));
+        AnswerRegressionSet cases = fixedCases(new AnswerRegressionCase(
+                "semantic-support",
+                "费用？",
+                null,
+                AnswerStatus.ANSWERED,
+                List.of(17),
+                List.of(List.of("相同")),
+                List.of(List.of("same cost", "相同费用")),
+                List.of(),
+                10_000));
+
+        var result = new AnswerRegressionService(answers, cases)
+                .evaluate(versionId, "admin")
+                .cases()
+                .getFirst();
+
+        assertThat(result.failures()).containsExactly("UNSUPPORTED_EVIDENCE_GROUP_1");
+    }
+
+    private AnswerRegressionSet fixedCases(AnswerRegressionCase testCase) {
+        return new AnswerRegressionSet() {
+            @Override
+            public String name() {
+                return "groundedness-v1";
+            }
+
+            @Override
+            public List<AnswerRegressionCase> cases() {
+                return List.of(testCase);
+            }
+        };
+    }
+
     private AnswerCreation creation(UUID versionId, int page) {
         return new AnswerCreation(
                 UUID.randomUUID(),

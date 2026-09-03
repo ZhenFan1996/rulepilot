@@ -126,7 +126,16 @@ public interface NativeToolModel {
             Role role,
             ToolScope scope,
             List<ConversationMessage> conversation,
-            List<ToolSpec> tools) {
+            List<ToolSpec> tools,
+            boolean jsonOutputRequired) {
+        public ModelRequest(
+                Role role,
+                ToolScope scope,
+                List<ConversationMessage> conversation,
+                List<ToolSpec> tools) {
+            this(role, scope, conversation, tools, false);
+        }
+
         public ModelRequest {
             if (role == null || scope == null || conversation == null || conversation.isEmpty()
                     || tools == null) {

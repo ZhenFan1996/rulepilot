@@ -19,7 +19,7 @@ class VisualLessonMergePolicyTest {
     private final VisualLessonMergePolicy policy = new VisualLessonMergePolicy(new VisualReaderCropPolicy());
 
     @Test
-    void attachesSeveralOwnedVisualsToOneStepWithoutChangingValidatedProse() {
+    void attachesComplementaryVisualsToOneStepWithoutChangingValidatedProse() {
         UUID evidence = UUID.randomUUID();
         LessonSection source = section(List.of(ruleStep(evidence)), List.of(), List.of());
         List<LocatedRegion> regions = List.of(
@@ -43,27 +43,27 @@ class VisualLessonMergePolicyTest {
 
         LessonStep step = merged.section().steps().getFirst();
         assertThat(merged.addedCount()).isEqualTo(3);
+        assertThat(merged.duplicateCount()).isZero();
         assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
         assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
         assertThat(step.visualFocus()).isEqualTo(step.visualFoci().getFirst());
-        assertThat(step.visualFoci()).hasSize(3)
+        assertThat(step.visualFoci())
                 .extracting(VisualFocus::label)
                 .containsExactly("行动图标", "轨道状态", "牌面示例");
-        assertThat(step.visualFoci().get(2).sourceKind()).isEqualTo(VisualSourceKind.EMBEDDED_AUTHOR_IMAGE);
     }
 
     @Test
-    void keepsAnExistingFullPageVisualAndAddsASeparateOwnedRegion() {
+    void appendsANonOverlappingDetailToAnExistingVisual() {
         UUID evidence = UUID.randomUUID();
-        VisualFocus fullPage = new VisualFocus(
+        VisualFocus overview = new VisualFocus(
                 2,
-                "完整流程图",
-                "整页是一张由箭头连接的流程图",
-                0,
-                0,
-                1_000,
-                1_000,
-                VisualSourceKind.FULL_PAGE);
+                "流程概览",
+                "三个阶段由箭头连接",
+                40,
+                40,
+                400,
+                300,
+                VisualSourceKind.PAGE_REGION);
         LessonStep existing = new LessonStep(
                 1,
                 "执行流程",
@@ -72,19 +72,21 @@ class VisualLessonMergePolicyTest {
                 List.of(2),
                 List.of(evidence),
                 List.of(),
-                fullPage,
-                List.of(fullPage));
+                overview,
+                List.of(overview));
         LessonSection source = section(List.of(existing), List.of(2), List.of(evidence));
 
         var merged = policy.mergeVisualIntoSupportedSteps(
                 source,
-                List.of(region(evidence, "阶段图标", 120, 140, 180, 120)),
-                new ArrayList<>(List.of(fullPage)));
+                List.of(region(evidence, "阶段图标", 600, 500, 180, 120)),
+                new ArrayList<>(List.of(overview)));
 
         assertThat(merged.section().steps().getFirst().text()).isEqualTo("依次执行三个阶段。");
+        assertThat(merged.addedCount()).isEqualTo(1);
+        assertThat(merged.duplicateCount()).isZero();
         assertThat(merged.section().steps().getFirst().visualFoci())
-                .extracting(VisualFocus::sourceKind)
-                .containsExactly(VisualSourceKind.FULL_PAGE, VisualSourceKind.PAGE_REGION);
+                .extracting(VisualFocus::label)
+                .containsExactly("流程概览", "阶段图标");
     }
 
     @Test
@@ -116,6 +118,37 @@ class VisualLessonMergePolicyTest {
         assertThat(merged.addedCount()).isZero();
         assertThat(merged.duplicateCount()).isEqualTo(1);
         assertThat(merged.section()).isEqualTo(source);
+    }
+
+    @Test
+    void keepsRuleCitationsOnTheirOwnPagesWhenAVisualComesFromAnotherRulebookPage() {
+        UUID evidence = UUID.randomUUID();
+        LessonStep citedStep = new LessonStep(
+                1,
+                "建立市场",
+                TeachingMove.DO,
+                "按引用规则建立市场。",
+                List.of(4),
+                List.of(evidence));
+        LessonSection source = section(List.of(citedStep), List.of(4), List.of(evidence));
+        LocatedRegion illustration = new LocatedRegion(
+                5,
+                "市场示意图",
+                "三叠牌下方各有两张蔬菜卡。",
+                100,
+                120,
+                700,
+                400,
+                List.of(evidence),
+                List.of(1));
+
+        var merged = policy.mergeVisualIntoSupportedSteps(
+                source, List.of(illustration), new ArrayList<>());
+
+        assertThat(merged.addedCount()).isEqualTo(1);
+        assertThat(merged.section().visualSourcePages()).containsExactly(4, 5);
+        assertThat(merged.section().steps().getFirst().sourcePages()).containsExactly(4);
+        assertThat(merged.section().steps().getFirst().visualFocus().pageNumber()).isEqualTo(5);
     }
 
     private LocatedRegion region(UUID evidence, String label, int x, int y, int width, int height) {

@@ -166,7 +166,6 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
         LinkedHashSet<Region> regions = new LinkedHashSet<>();
         Map<Integer, Integer> pageCounts = new HashMap<>();
         addRegions(document.path("pictures"), "PICTURE", pages, pageCounts, regions);
-        addRegions(document.path("tables"), "TABLE", pages, pageCounts, regions);
         return new Extraction("docling:ibm-managed", pages.size(), List.copyOf(regions));
     }
 

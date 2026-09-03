@@ -239,7 +239,8 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
                 .setParameter("versionId", versionId)
                 .getResultList()
                 .stream()
-                .map(page -> new DocumentProcessing.PageView(page.pageNumber, page.textContent, page.characterCount))
+                .map(page -> new DocumentProcessing.PageView(
+                        page.pageNumber, page.textContent, page.characterCount, page.imageObjectKey != null))
                 .toList();
     }
 

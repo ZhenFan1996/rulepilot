@@ -39,7 +39,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "teaching-agent-v61-local-observations";
+    static final String GENERATOR_VERSION = "teaching-agent-v67-planned-visual-pages";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;
@@ -440,6 +440,7 @@ public class GroundedTeachingAgent {
         try {
             var enriched = visualEnricher.enrichSection(
                     plan.documentVersionId(),
+                    planned,
                     section,
                     List.copyOf(alreadyPublished),
                     plan.createdBy(),
@@ -449,9 +450,7 @@ public class GroundedTeachingAgent {
                     assistantRunId,
                     ActivityType.VALIDATION,
                     "enrichTeachingSectionVisual|" + planned.position(),
-                    enriched.outcome().outcome() == VisualLessonEnricher.Outcome.ADDED
-                                    || enriched.outcome().outcome()
-                                            == VisualLessonEnricher.Outcome.ADDED_WITH_CLAIM_CONFLICT
+                    VisualLessonEnricher.isSuccessfulOutcome(enriched.outcome().outcome())
                             ? ActivityOutcome.SUCCEEDED
                             : ActivityOutcome.REJECTED,
                     enriched.outcome().summary());

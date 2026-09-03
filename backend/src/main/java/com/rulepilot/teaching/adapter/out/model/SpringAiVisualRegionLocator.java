@@ -19,6 +19,7 @@ import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Mode
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelReview;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Rejection;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import com.openai.errors.BadRequestException;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -55,18 +56,22 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
             Return one JSON object with exactly batchAction and reviews. batchAction is STOP or CONTINUE. Use CONTINUE
             only when hasMoreCandidates is true and inspecting the next finite batch is still useful after this batch's
-            selections; otherwise use STOP. Every review has exactly stepPosition, action, candidateId, label,
-            visibleDescription, and supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL.
-            ACCEPT_CANDIDATE requires one offered candidateId, a short literal label and visibleDescription, and one
-            or more offered C references belonging to that step whose sourcePages contain the candidate page.
-            NO_VISUAL requires candidateId, label, and visibleDescription to be null and supportedClaimRefs to be an
-            empty array. A step may accept several different candidates. Select every useful candidate needed for the
-            lesson; do not target a fixed count. The same candidate may never be selected twice or shared across steps.
+            selections; otherwise use STOP. Every review has exactly stepPosition, action, candidateId, label, and
+            visibleDescription. action is ACCEPT_CANDIDATE or NO_VISUAL.
+            ACCEPT_CANDIDATE requires one offered candidateId, a literal label of at most 80 characters,
+            and visibleDescription. The application, not you, owns and binds the step's validated rule evidence.
+            NO_VISUAL requires candidateId, label, and visibleDescription to be null. Reviews may be sparse: omit a
+            step when this batch has no useful crop for it. Return the smallest set of distinct, complementary crops
+            that materially helps the lesson. A step may accept multiple candidates only when each shows different
+            visible information, such as overview and detail, before and after, or example and result. The same
+            candidate may never be selected twice or shared across steps.
 
             Select a crop only when its literal visible content helps a player inspect the offered claim. An image
             never proves a mechanical effect, condition, quantity, score, timing, or exception; cited text remains
-            authoritative. Reject decorative, prose-only, contradictory, or ambiguous crops. Do not add fields,
-            page numbers, geometry, source kinds, reasoning, or prose outside the JSON object.
+            authoritative. Reject decorative, prose-only, contradictory, or ambiguous crops. Write label and
+            visibleDescription in the explicitly supplied outputLocale, preserving literal text visible in the crop
+            when it helps identification. Do not add fields, page numbers, geometry, source kinds, reasoning, or prose
+            outside the JSON object.
 
             When the application supplies structured rejection feedback, reconsider the whole batch and return one
             complete replacement object. Never patch fields from the rejected object. Choose only an offered opaque
@@ -80,14 +85,18 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             pages, attachment order, and source kind; never return coordinates. Return JSON only with exactly
             batchAction and reviews. batchAction is STOP or CONTINUE; CONTINUE is legal only when hasMoreCandidates is
             true and another batch remains useful after the current selections. Each review has exactly stepPosition,
-            action, candidateId, label, visibleDescription,
-            supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
-            literal label/description, and only C refs for that step whose sourcePages contain the candidate page.
-            NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Never select
-            one candidate twice. Select all useful candidates without targeting a fixed count. Images prove appearance
-            only. Add no fields. Structured rejection feedback requires one complete replacement object, never a field
-            patch. Reconsider the offered opaque candidate ids and return a valid candidate or NO_VISUAL; never edit
-            pixels or return geometry.
+            action, candidateId, label, visibleDescription. label must contain at most 80
+            characters. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
+            literal label/description. The application binds the selected step's rule evidence; do not return evidence
+            references. NO_VISUAL uses null candidateId/label/visibleDescription. Reviews may be sparse; omit a step
+            when this batch has no useful crop for it. Return the smallest set of distinct, complementary crops that
+            materially helps the lesson. A step may accept multiple candidates only when each shows different visible
+            information, such as overview and detail, before and after, or example and result. Never select one
+            candidate twice. Images
+            prove appearance only. Write label and visibleDescription in the explicitly supplied outputLocale,
+            preserving useful literal crop text. Add no fields. Structured rejection feedback requires one complete
+            replacement object, never a field patch. Reconsider the offered opaque candidate ids and return a valid
+            candidate or NO_VISUAL; never edit pixels or return geometry.
             """;
 
     private static final int MAX_ATTACHMENT_EDGE = 1_024;
@@ -174,10 +183,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                             .map(VisualRegionLocator.Claim::stepPosition)
                             .filter(position -> position > 0)
                             .distinct()
-                            .toList(),
-                    IntStream.range(0, request.claims().size())
-                            .filter(index -> request.claims().get(index).stepPosition() > 0)
-                            .mapToObj(index -> "C" + (index + 1))
                             .toList());
         }
     }
@@ -195,6 +200,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             return invokeGuideAttempt(request, owner, correction, attachments, attemptNumber);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
+        } catch (BadRequestException rejectedInput) {
+            return unavailable(
+                    Rejection.PROVIDER_INPUT_REJECTED,
+                    "",
+                    "Visual provider rejected one or more candidate inputs");
         } catch (RuntimeException providerFailure) {
             return unavailable(
                     Rejection.PROVIDER_FAILURE,
@@ -214,7 +224,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         ActivityOutcome outcome = switch (rejection) {
             case NONE, EXPLICIT_NO_REGION -> ActivityOutcome.SUCCEEDED;
             case MALFORMED_JSON, UNSUPPORTED_SCOPE -> ActivityOutcome.REJECTED;
-            case PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED -> ActivityOutcome.FAILED;
+            case PROVIDER_INPUT_REJECTED, PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED -> ActivityOutcome.FAILED;
         };
         invocations.record(
                 request.runId(),
@@ -234,7 +244,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return switch (rejection) {
             case NONE -> "accepted";
             case EXPLICIT_NO_REGION -> "no-visual";
-            case MALFORMED_JSON, UNSUPPORTED_SCOPE, PROVIDER_FAILURE, CANDIDATE_PREPARATION_FAILED ->
+            case MALFORMED_JSON, UNSUPPORTED_SCOPE, PROVIDER_INPUT_REJECTED, PROVIDER_FAILURE,
+                    CANDIDATE_PREPARATION_FAILED ->
                 "local-unavailable";
         };
     }
@@ -322,6 +333,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .user(user -> {
                     user.text("""
                                     Section: {section}
+                                    outputLocale: {outputLocale}
                                     Claims: {claims}
                                     Candidate manifest (same order as image attachments): {manifest}
                                     batchNumber: {batchNumber}
@@ -331,6 +343,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Return the exact batchAction plus reviews JSON object only.
                                     """)
                             .param("section", request.sectionTitle())
+                            .param("outputLocale", request.outputLocale().promptName())
                             .param("claims", VisualLocatorResponsePolicy.promptJson(
                                     IntStream.range(0, request.claims().size())
                                             .mapToObj(index -> Map.of(
@@ -372,35 +385,42 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 (first, ignored) -> first,
                 LinkedHashMap::new));
         Set<String> selectedIds = new LinkedHashSet<>();
-        Set<Integer> acceptedSteps = new LinkedHashSet<>();
-        Set<Integer> rejectedSteps = new LinkedHashSet<>();
         List<LocatedRegion> accepted = new ArrayList<>();
+        String validationError = null;
+        boolean validNoVisual = false;
 
         for (ModelReview review : guide.reviews()) {
             if (!offeredSteps.contains(review.stepPosition())) {
-                return unsupported(candidateJson, "stepPosition " + review.stepPosition()
-                        + " is not one of the offered step identities " + offeredSteps);
-            }
-            if (review.action() == ModelAction.NO_VISUAL) {
-                if (!rejectedSteps.add(review.stepPosition()) || acceptedSteps.contains(review.stepPosition())) {
-                    return unsupported(candidateJson,
-                            "A step may be reviewed only once as NO_VISUAL and cannot also accept a candidate");
+                if (validationError == null) {
+                    validationError = "stepPosition " + review.stepPosition()
+                            + " is not one of the offered step identities " + offeredSteps;
                 }
                 continue;
             }
-            if (rejectedSteps.contains(review.stepPosition()) || !selectedIds.add(review.candidateId())) {
-                return unsupported(candidateJson,
-                        "A candidate identity cannot be selected twice or attached to a step already marked NO_VISUAL");
+            if (review.action() == ModelAction.NO_VISUAL) {
+                validNoVisual = true;
+                continue;
+            }
+            if (!selectedIds.add(review.candidateId())) {
+                if (validationError == null) {
+                    validationError = "A candidate identity cannot be selected twice";
+                }
+                continue;
             }
             Candidate candidate = candidates.get(review.candidateId());
             if (candidate == null) {
-                return unsupported(candidateJson, "candidateId " + review.candidateId()
-                        + " is not one of the offered identities " + candidates.keySet());
+                if (validationError == null) {
+                    validationError = "candidateId " + review.candidateId()
+                            + " is not one of the offered identities " + candidates.keySet();
+                }
+                continue;
             }
-            List<VisualRegionLocator.Claim> claims = ownedClaims(review, candidate, request);
+            List<VisualRegionLocator.Claim> claims = ownedClaims(review, request);
             if (claims.isEmpty()) {
-                return unsupported(candidateJson,
-                        "supportedClaimRefs must belong to the selected step and include the candidate page");
+                if (validationError == null) {
+                    validationError = "stepPosition does not own any validated rule evidence";
+                }
+                continue;
             }
             Rectangle rectangle = candidate.rectangle();
             accepted.add(new LocatedRegion(
@@ -415,13 +435,19 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     List.of(review.stepPosition()),
                     false,
                     candidate.sourceKind()));
-            acceptedSteps.add(review.stepPosition());
+        }
+        if (validationError != null) {
+            return unavailable(
+                    Rejection.UNSUPPORTED_SCOPE,
+                    batchAction,
+                    candidateJson,
+                    validationError);
         }
         if (!accepted.isEmpty()) {
             return new GuideAttempt(
                     LocateGuideResult.found(accepted, batchAction), Rejection.NONE, candidateJson, "");
         }
-        if (guide.hasOnlyNoVisual()) {
+        if (validationError == null && validNoVisual) {
             return unavailable(
                     Rejection.EXPLICIT_NO_REGION,
                     batchAction,
@@ -437,26 +463,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     List<VisualRegionLocator.Claim> ownedClaims(
             ModelReview review,
-            Candidate candidate,
             VisualLocationRequest request) {
-        List<VisualRegionLocator.Claim> claims = review.supportedClaimRefs().stream()
-                .map(reference -> claim(reference, request))
-                .filter(java.util.Objects::nonNull)
+        return request.claims().stream()
                 .filter(claim -> claim.stepPosition() == review.stepPosition())
-                .filter(claim -> claim.sourcePages().contains(candidate.pageNumber()))
                 .distinct()
                 .toList();
-        return claims.size() == review.supportedClaimRefs().size() ? claims : List.of();
-    }
-
-    private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {
-        if (reference == null || !reference.matches("C[1-9][0-9]*")) return null;
-        try {
-            int index = Integer.parseInt(reference.substring(1)) - 1;
-            return index >= 0 && index < request.claims().size() ? request.claims().get(index) : null;
-        } catch (NumberFormatException invalidReference) {
-            return null;
-        }
     }
 
     List<CandidateAttachment> candidateAttachments(VisualLocationRequest request) {

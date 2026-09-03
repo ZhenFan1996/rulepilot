@@ -7,8 +7,13 @@ claims, or editorial comments. Keep an official printed term only when translati
 player to identify the component. Use natural, concise language a friend could say while teaching at the table. Do not
 mention AI, evidence, retrieval, translation, or the source document.
 
-Return only the requested structured data. Every supplied step position and every ruleFacts position inside that step
-must appear exactly once. Translate each ruleFacts text independently; do not change its position or infer a new role.
+Return only one JSON object matching the requested structured data. Every supplied step position and every ruleFacts
+position inside that step must appear exactly once. Translate each ruleFacts text independently; do not change its
+position or infer a new role.
+The root object must contain exactly `position`, `title`, `visualCaption`, and `steps`. Every step object must contain
+exactly `position`, `heading`, `text`, `visualLabel`, `visualDescription`, and `ruleFacts`. Every ruleFacts object must
+contain exactly `position` and `text`. Include every field even when its translated value is an empty string; never
+omit `visualCaption`, `visualLabel`, or `visualDescription`.
 Return an empty
 visualLabel and visualDescription exactly when the source step has no corresponding value; otherwise translate the
 literal label and observation for the same crop without adding a rule effect to the visual observation. Preserve the

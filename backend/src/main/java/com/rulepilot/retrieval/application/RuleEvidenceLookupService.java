@@ -9,9 +9,11 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Profile("!test")
+@Transactional(readOnly = true)
 class RuleEvidenceLookupService implements RuleEvidenceLookup {
 
     private final RuleEvidenceLookupRepository evidence;

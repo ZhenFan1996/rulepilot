@@ -87,8 +87,8 @@ class JpaTeachingPlanRepositoryPostgresTest {
                                 1, "observe-state", "观察状态", "识别状态。", true, false,
                                 List.of("R-alpha"), List.of("whole_game_context_v1"), List.of(2)),
                         new TeachingPlan.PlannedSection(
-                                2, "apply-change", "应用变化", "应用条件。", true, false,
-                                List.of("R-beta"), List.of("whole_game_context_v1"), List.of(3))),
+                                2, "apply-change", "应用变化", "应用条件。", true, true,
+                                List.of("R-beta"), List.of("whole_game_context_v1"), List.of(3), List.of(4))),
                 "persistence-player",
                 Instant.parse("2026-08-16T09:00:00Z"));
 

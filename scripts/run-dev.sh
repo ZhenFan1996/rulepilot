@@ -15,6 +15,15 @@ if [[ -f "$root_dir/.env" ]]; then
 fi
 set +a
 
+# Older local .env files predate account-scoped startup model access. Keep an explicitly configured
+# allow-list authoritative, but make the documented local player and demo administrator usable when
+# the setting is absent. This applies only to the local development launcher; deployment keeps its
+# own narrower operator-controlled default.
+if [[ -z "${RULEPILOT_MODELS_STARTUP_ALLOWED_USERS+x}" ]]; then
+  export RULEPILOT_MODELS_STARTUP_ALLOWED_USERS="${RULEPILOT_USER_USERNAME:-player},${RULEPILOT_ADMIN_USERNAME:-admin}"
+  echo "Local startup model access defaulted to the configured player and demo administrator accounts."
+fi
+
 backend_port=${BACKEND_PORT:-8080}
 frontend_port=${FRONTEND_PORT:-5173}
 export SERVER_PORT=${SERVER_PORT:-$backend_port}

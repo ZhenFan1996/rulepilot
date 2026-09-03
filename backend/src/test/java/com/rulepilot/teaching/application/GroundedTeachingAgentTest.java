@@ -11,7 +11,7 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
+import com.rulepilot.assistant.application.CitationScopeVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.ProviderFailureException;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -57,12 +57,12 @@ class GroundedTeachingAgentTest {
         VisualLessonEnricher visuals = mock(VisualLessonEnricher.class);
         when(visuals.supportsVisualEvidence("player")).thenReturn(true);
         when(visuals.enrichSection(
-                        eq(versionId), any(LessonSection.class), any(), eq("player"), any(), any()))
+                        eq(versionId), any(TeachingPlan.PlannedSection.class), any(LessonSection.class), any(), eq("player"), any(), any()))
                 .thenThrow(new IllegalStateException("image provider unavailable"));
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 tools,
                 model,
-                new PolicyEvidenceVerifier(),
+                new CitationScopeVerifier(),
                 invocations,
                 visualFacts,
                 VisualRulebookCatalogerTestFixture.unavailable(tools, invocations, visualFacts),
@@ -117,7 +117,7 @@ class GroundedTeachingAgentTest {
         GroundedTeachingAgent firstRun = new GroundedTeachingAgent(
                 tools,
                 interruptedModel,
-                new PolicyEvidenceVerifier(),
+                new CitationScopeVerifier(),
                 firstInvocations,
                 visualFacts,
                 VisualRulebookCatalogerTestFixture.unavailable(tools, firstInvocations, visualFacts));
@@ -139,7 +139,7 @@ class GroundedTeachingAgentTest {
         GroundedTeachingAgent resumedRun = new GroundedTeachingAgent(
                 tools,
                 resumedModel,
-                new PolicyEvidenceVerifier(),
+                new CitationScopeVerifier(),
                 resumedInvocations,
                 visualFacts,
                 VisualRulebookCatalogerTestFixture.unavailable(tools, resumedInvocations, visualFacts));

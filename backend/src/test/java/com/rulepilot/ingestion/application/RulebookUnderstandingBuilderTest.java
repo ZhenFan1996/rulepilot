@@ -39,6 +39,20 @@ class RulebookUnderstandingBuilderTest {
     }
 
     @Test
+    void doesNotTreatPunctuationOnlyLayoutFragmentsAsHeadings() {
+        var understanding = builder.build(List.of(new ExtractedPage(2, "", List.of(
+                new ExtractedTextBlock(0, "SETUP", 80, 80, 300, 40),
+                new ExtractedTextBlock(1, ":", 80, 140, 20, 20),
+                new ExtractedTextBlock(2, "—", 120, 140, 20, 20),
+                new ExtractedTextBlock(3, "Place the shared board in reach of every player.", 80, 190, 700, 45)))));
+
+        assertThat(understanding.pageBlocks()).extracting(block -> block.role())
+                .containsExactly(BlockRole.HEADING, BlockRole.BODY, BlockRole.BODY, BlockRole.BODY);
+        assertThat(understanding.pageBlocks()).extracting(block -> block.headingBlockIndex())
+                .containsExactly(null, 0, 0, 0);
+    }
+
+    @Test
     void retainsAHeadingUpToThePersistedTerminologyColumnWidth() {
         String heading = "CONFIGURATION ".repeat(8).strip();
 
