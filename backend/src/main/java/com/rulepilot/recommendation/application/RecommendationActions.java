@@ -51,6 +51,7 @@ import com.rulepilot.recommendation.application.RecommendationAgentState.Catalog
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import com.rulepilot.recommendation.application.RecommendationAgentState.TitleFilter;
 import com.rulepilot.recommendation.application.RecommendationAgentState.TitleMatch;
+import com.rulepilot.recommendation.application.RecommendationAgentState.TitleScope;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -225,18 +226,20 @@ final class RecommendationActions {
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(
                 arguments,
-                Set.of("evidence", "includeTypes", "excludeTypes", "requestedCount"));
+                Set.of("evidence", "includeTypes", "excludeTypes"));
         String evidenceId = text(arguments.path("evidence"));
         evidenceReview.requireCurrentTurnUserEvidence(evidenceId, request);
         String evidenceText = evidenceReview.evidenceText(evidenceId, request);
         int evidenceTurn = evidenceReview.evidenceTurn(evidenceId, request);
         List<BggGameType> includeTypes = gameTypes(arguments.path("includeTypes"));
         List<BggGameType> excludeTypes = gameTypes(arguments.path("excludeTypes"));
-        int requestedCount = integer(
-                arguments.path("requestedCount"),
-                1,
-                Integer.MAX_VALUE,
-                "RESULT_COUNT_OUT_OF_RANGE");
+        Integer requestedCount = arguments.has("requestedCount")
+                ? integer(
+                        arguments.path("requestedCount"),
+                        1,
+                        Integer.MAX_VALUE,
+                        "RESULT_COUNT_OUT_OF_RANGE")
+                : null;
         List<String> mechanics = arguments.has("requiredMechanics")
                 ? boundedTaxonomy(arguments.path("requiredMechanics"))
                 : List.of();
@@ -298,6 +301,7 @@ final class RecommendationActions {
                 excludeTypes,
                 catalogMechanics,
                 title,
+                List.of(),
                 requestedCount,
                 players,
                 maxMinutes,
@@ -311,6 +315,119 @@ final class RecommendationActions {
         if (title == null || title.match() != TitleMatch.EXACT) {
             unavailable.addAll(state.previouslyShownIds);
         }
+        CatalogScan scan = scanCatalog(
+                search,
+                includeTypes,
+                catalogMechanics,
+                List.of(),
+                title == null ? descriptionQuery : title.value(),
+                title == null && descriptionQuery == null ? CatalogSort.RANK : CatalogSort.RELEVANCE,
+                selectionProfile,
+                unavailable,
+                state);
+        List<String> resolvedFamilies = title != null && title.scope() == TitleScope.SERIES
+                ? canonicalGameFamilies(scan.candidates())
+                : List.of();
+        if (!resolvedFamilies.isEmpty()) {
+            state.resolveCatalogFamilies(resolvedFamilies);
+            search = state.activeSearch;
+            progress.accept(
+                    ProgressStage.SEARCHING_BGG_CATALOG,
+                    new ProgressFocus(ProgressFocusKind.CATALOG_FAMILIES, resolvedFamilies));
+            CatalogScan familyScan = scanCatalog(
+                    search,
+                    includeTypes,
+                    catalogMechanics,
+                    resolvedFamilies,
+                    null,
+                    CatalogSort.RANK,
+                    selectionProfile,
+                    unavailable,
+                    state);
+            if (!familyScan.candidates().isEmpty()) {
+                scan = familyScan.withSourceCount(Math.max(scan.sourceCount(), familyScan.sourceCount()));
+            }
+        }
+
+        CatalogObservation terminal = scan.terminal();
+        List<Game> candidates = scan.candidates();
+        state.completeCatalogSearch(scan.sourceCount(), candidates);
+        Map<String, Object> appliedContract = new LinkedHashMap<>();
+        appliedContract.put("evidence", evidenceId);
+        appliedContract.put("includeTypes", includeTypes);
+        appliedContract.put("excludeTypes", excludeTypes);
+        if (requestedCount != null) appliedContract.put("requestedCount", requestedCount);
+        if (!mechanics.isEmpty()) appliedContract.put("requiredMechanics", mechanics);
+        appliedContract.put("requiredInteraction", requiredInteraction);
+        if (title != null) {
+            appliedContract.put(
+                    "requiredTitle",
+                    Map.of("match", title.match(), "scope", title.scope(), "value", title.value()));
+            if (!resolvedFamilies.isEmpty()) appliedContract.put("resolvedFamilies", resolvedFamilies);
+        }
+        if (players != null) appliedContract.put("players", players);
+        if (maxMinutes != null) appliedContract.put("maxMinutes", maxMinutes);
+        if (complexity != null) {
+            Map<String, Object> range = new LinkedHashMap<>();
+            if (complexity.minimum() != null) range.put("minimum", complexity.minimum());
+            if (complexity.maximum() != null) range.put("maximum", complexity.maximum());
+            appliedContract.put("complexity", range);
+        }
+        if (experienceQuestion != null) appliedContract.put("experienceQuestion", experienceQuestion);
+        if (descriptionQuery != null) appliedContract.put("descriptionQuery", descriptionQuery);
+        List<Integer> verifiedIds = candidates.stream()
+                .map(game -> game.ranking().bggId())
+                .toList();
+        Map<String, Object> experienceResearch = null;
+        if (experienceQuestion != null && !verifiedIds.isEmpty()) {
+            List<Integer> researchIds = verifiedIds.stream()
+                    .limit(properties.resultCount())
+                    .toList();
+            experienceResearch = state.webResearchAvailable
+                    ? researchCandidates(researchIds, experienceQuestion, state, locale, progress)
+                    : Map.of(
+                            "status", ToolStatus.UNAVAILABLE.name(),
+                            "code", "RESEARCH_NOT_AVAILABLE",
+                            "guidance",
+                                    "No attributed experience read is available. Use verified structured facts and state any remaining experience uncertainty; do not invent it.",
+                            "researchedBggIds", List.of());
+        }
+        Map<String, Object> observation = new LinkedHashMap<>();
+        observation.put(
+                "status",
+                scan.completedPage() ? terminal.succeeded() ? "SUCCESS" : "PARTIAL" : "ERROR");
+        observation.put("code", terminal.code());
+        observation.put("appliedSearchContract", appliedContract);
+        observation.put("verifiedCandidateBggIds", verifiedIds);
+        if (experienceResearch != null) observation.put("experienceResearch", experienceResearch);
+        observation.put("canTerminateNow", !verifiedIds.isEmpty());
+        observation.put(
+                "guidance",
+                verifiedIds.isEmpty()
+                        ? "No verified candidate matched this complete current-turn search contract. Finish transparently without naming an unverified game; do not search again in this turn."
+                        : experienceResearch == null
+                                ? "These candidate IDs are verified. Decide whether the available observations are enough for recommend_games or one genuinely distinct available read would materially improve the answer."
+                                : "The catalog and the one bounded experience read have settled. Finish with recommend_games from the returned evidence, and state any experience dimension that remains unknown instead of opening another research stage.");
+        if (!verifiedIds.isEmpty()) {
+            observation.put(
+                    "terminalAction",
+                    Map.of(
+                            "name", RECOMMEND_TOOL,
+                            "verifiedCandidateBggIds", verifiedIds));
+        }
+        return preparePublication(runtime.observation(observation), state, candidates);
+    }
+
+    private CatalogScan scanCatalog(
+            CatalogSearch search,
+            List<BggGameType> includeTypes,
+            List<String> catalogMechanics,
+            List<String> families,
+            String textQuery,
+            CatalogSort sort,
+            RecommendationProfile selectionProfile,
+            Set<Integer> unavailable,
+            RecommendationAgentState state) {
         LinkedHashMap<Integer, Game> eligible = new LinkedHashMap<>();
         Set<Integer> previousPageIds = Set.of();
         CatalogObservation lastPage = null;
@@ -333,15 +450,13 @@ final class RecommendationActions {
                                 catalogMechanics,
                                 List.of(),
                                 List.of(),
-                                List.of(),
+                                families,
                                 null,
                                 null,
                                 null,
                                 null,
-                                title == null ? descriptionQuery : title.value(),
-                                title == null && descriptionQuery == null
-                                        ? CatalogSort.RANK
-                                        : CatalogSort.RELEVANCE,
+                                textQuery,
+                                sort,
                                 CATALOG_PAGE_SIZE,
                                 currentOffset));
             } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
@@ -378,71 +493,32 @@ final class RecommendationActions {
             if ((long) offset + CATALOG_PAGE_SIZE > MAX_CATALOG_OFFSET) break;
             offset += CATALOG_PAGE_SIZE;
         }
+        return new CatalogScan(
+                Objects.requireNonNull(lastPage, "catalog search must attempt one page"),
+                sourceCount,
+                List.copyOf(eligible.values()),
+                completedPage);
+    }
 
-        CatalogObservation terminal = Objects.requireNonNull(lastPage, "catalog search must attempt one page");
-        List<Game> candidates = List.copyOf(eligible.values());
-        state.completeCatalogSearch(sourceCount, candidates);
-        Map<String, Object> appliedContract = new LinkedHashMap<>();
-        appliedContract.put("evidence", evidenceId);
-        appliedContract.put("includeTypes", includeTypes);
-        appliedContract.put("excludeTypes", excludeTypes);
-        appliedContract.put("requestedCount", requestedCount);
-        if (!mechanics.isEmpty()) appliedContract.put("requiredMechanics", mechanics);
-        appliedContract.put("requiredInteraction", requiredInteraction);
-        if (title != null) {
-            appliedContract.put("requiredTitle", Map.of("match", title.match(), "value", title.value()));
-        }
-        if (players != null) appliedContract.put("players", players);
-        if (maxMinutes != null) appliedContract.put("maxMinutes", maxMinutes);
-        if (complexity != null) {
-            Map<String, Object> range = new LinkedHashMap<>();
-            if (complexity.minimum() != null) range.put("minimum", complexity.minimum());
-            if (complexity.maximum() != null) range.put("maximum", complexity.maximum());
-            appliedContract.put("complexity", range);
-        }
-        if (experienceQuestion != null) appliedContract.put("experienceQuestion", experienceQuestion);
-        if (descriptionQuery != null) appliedContract.put("descriptionQuery", descriptionQuery);
-        List<Integer> verifiedIds = candidates.stream()
-                .map(game -> game.ranking().bggId())
+    private List<String> canonicalGameFamilies(List<Game> games) {
+        if (games.isEmpty()) return List.of();
+        LinkedHashSet<String> common = new LinkedHashSet<>(gameFamilies(games.getFirst()));
+        for (Game game : games.subList(1, games.size())) common.retainAll(gameFamilies(game));
+        return List.copyOf(common);
+    }
+
+    private List<String> gameFamilies(Game game) {
+        return game.details().families().stream()
+                .filter(family -> family.startsWith("Game: "))
+                .distinct()
                 .toList();
-        Map<String, Object> experienceResearch = null;
-        if (experienceQuestion != null && !verifiedIds.isEmpty()) {
-            List<Integer> researchIds = verifiedIds.stream()
-                    .limit(properties.resultCount())
-                    .toList();
-            experienceResearch = state.webResearchAvailable
-                    ? researchCandidates(researchIds, experienceQuestion, state, locale, progress)
-                    : Map.of(
-                            "status", ToolStatus.UNAVAILABLE.name(),
-                            "code", "RESEARCH_NOT_AVAILABLE",
-                            "guidance",
-                                    "No attributed experience read is available. Use verified structured facts and state any remaining experience uncertainty; do not invent it.",
-                            "researchedBggIds", List.of());
+    }
+
+    private record CatalogScan(
+            CatalogObservation terminal, int sourceCount, List<Game> candidates, boolean completedPage) {
+        CatalogScan withSourceCount(int count) {
+            return new CatalogScan(terminal, count, candidates, completedPage);
         }
-        Map<String, Object> observation = new LinkedHashMap<>();
-        observation.put(
-                "status",
-                completedPage ? terminal.succeeded() ? "SUCCESS" : "PARTIAL" : "ERROR");
-        observation.put("code", terminal.code());
-        observation.put("appliedSearchContract", appliedContract);
-        observation.put("verifiedCandidateBggIds", verifiedIds);
-        if (experienceResearch != null) observation.put("experienceResearch", experienceResearch);
-        observation.put("canTerminateNow", !verifiedIds.isEmpty());
-        observation.put(
-                "guidance",
-                verifiedIds.isEmpty()
-                        ? "No verified candidate matched this complete current-turn search contract. Finish transparently without naming an unverified game; do not search again in this turn."
-                        : experienceResearch == null
-                                ? "These candidate IDs are verified. Decide whether the available observations are enough for recommend_games or one genuinely distinct available read would materially improve the answer."
-                                : "The catalog and the one bounded experience read have settled. Finish with recommend_games from the returned evidence, and state any experience dimension that remains unknown instead of opening another research stage.");
-        if (!verifiedIds.isEmpty()) {
-            observation.put(
-                    "terminalAction",
-                    Map.of(
-                            "name", RECOMMEND_TOOL,
-                            "verifiedCandidateBggIds", verifiedIds));
-        }
-        return preparePublication(runtime.observation(observation), state, candidates);
     }
 
     private List<String> requiredInteractionMechanics(
@@ -476,9 +552,13 @@ final class RecommendationActions {
     }
 
     private TitleFilter titleFilter(JsonNode node) {
-        requireObject(node, Set.of("match", "value"));
+        requireObject(node, Set.of("match", "scope", "value"));
         TitleMatch match = enumValue(TitleMatch.class, node.path("match"), "TITLE_MATCH_INVALID");
-        return new TitleFilter(match, text(node.path("value")));
+        TitleScope scope = enumValue(TitleScope.class, node.path("scope"), "TITLE_SCOPE_INVALID");
+        if (scope == TitleScope.SERIES && match != TitleMatch.CONTAINS) {
+            throw new InvalidAction("TITLE_SCOPE_INVALID", "A named series must use CONTAINS title matching.");
+        }
+        return new TitleFilter(match, scope, text(node.path("value")));
     }
 
     private List<BggGameType> gameTypes(JsonNode node) {
