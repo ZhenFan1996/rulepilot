@@ -10,9 +10,9 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-class PolicyEvidenceVerifierTest {
+class CitationScopeVerifierTest {
 
-    private final PolicyEvidenceVerifier verifier = new PolicyEvidenceVerifier();
+    private final CitationScopeVerifier verifier = new CitationScopeVerifier();
     private final UUID versionId = UUID.randomUUID();
     private final UUID chunkId = UUID.randomUUID();
 
@@ -35,7 +35,7 @@ class PolicyEvidenceVerifierTest {
                 List.of()));
 
         assertThat(result.status()).isEqualTo(VerificationStatus.VERSION_CONFLICT);
-        assertThat(result.issueCodes()).containsExactly(PolicyEvidenceVerifier.VERSION_MISMATCH);
+        assertThat(result.issueCodes()).containsExactly(CitationScopeVerifier.VERSION_MISMATCH);
     }
 
     @Test
@@ -49,8 +49,8 @@ class PolicyEvidenceVerifierTest {
 
         assertThat(result.status()).isEqualTo(VerificationStatus.SOURCE_CONFLICT);
         assertThat(result.issueCodes()).contains(
-                PolicyEvidenceVerifier.SOURCE_SNAPSHOT_CONFLICT,
-                PolicyEvidenceVerifier.CITATION_OUTSIDE_EVIDENCE);
+                CitationScopeVerifier.SOURCE_SNAPSHOT_CONFLICT,
+                CitationScopeVerifier.CITATION_OUTSIDE_EVIDENCE);
     }
 
     @Test
@@ -64,8 +64,8 @@ class PolicyEvidenceVerifierTest {
 
         assertThat(result.status()).isEqualTo(VerificationStatus.INSUFFICIENT_EVIDENCE);
         assertThat(result.issueCodes()).containsExactly(
-                PolicyEvidenceVerifier.CLAIM_WITHOUT_CITATION,
-                PolicyEvidenceVerifier.CITATION_OUTSIDE_EVIDENCE);
+                CitationScopeVerifier.CLAIM_WITHOUT_CITATION,
+                CitationScopeVerifier.CITATION_OUTSIDE_EVIDENCE);
     }
 
     private EvidenceSource source(UUID id, UUID version, String excerpt) {

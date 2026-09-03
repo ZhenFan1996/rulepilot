@@ -67,6 +67,8 @@ import org.slf4j.LoggerFactory;
 /** Implements the allow-listed recommendation actions over application-owned tools. */
 final class RecommendationActions {
 
+    static final int MODEL_PUBLISHER_DESCRIPTION_MAX_CODE_POINTS = 1_200;
+
     private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
     /** One storage page; larger slates are read page-by-page until exhaustion or the run deadline. */
     private static final int CATALOG_PAGE_SIZE = BoardGameRecommendationCatalog.MAX_SEARCH_PAGE_SIZE;
@@ -810,11 +812,24 @@ final class RecommendationActions {
         Map<String, List<String>> observations = gameObservations.stream()
                 .collect(java.util.stream.Collectors.toMap(
                         CandidateObservation::id,
-                        observation -> List.of(observationKindCode(observation), observation.value()),
+                        observation -> List.of(
+                                observationKindCode(observation),
+                                modelObservationValue(observation)),
                         (first, ignored) -> first,
                         LinkedHashMap::new));
         value.put("observations", observations);
         return value;
+    }
+
+    private String modelObservationValue(CandidateObservation observation) {
+        String value = observation.value();
+        if (!"publisherDescription".equals(observation.attribute())
+                || value.codePointCount(0, value.length()) <= MODEL_PUBLISHER_DESCRIPTION_MAX_CODE_POINTS) {
+            return value;
+        }
+        int retainedCodePoints = MODEL_PUBLISHER_DESCRIPTION_MAX_CODE_POINTS - 1;
+        int end = value.offsetByCodePoints(0, retainedCodePoints);
+        return value.substring(0, end).stripTrailing() + "…";
     }
 
     private String observationKindCode(CandidateObservation observation) {

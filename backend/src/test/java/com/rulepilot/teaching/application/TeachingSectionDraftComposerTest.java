@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
+import com.rulepilot.assistant.application.CitationScopeVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.CandidateRejection;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
@@ -62,7 +62,7 @@ class TeachingSectionDraftComposerTest {
                 evidenceId, versionId, "RULE", "Repair", "Spend one action to repair a system.", 8, 8);
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
                 model,
-                new PolicyEvidenceVerifier(),
+                new CitationScopeVerifier(),
                 directInvocations(),
                 VisualRulebookPageFacts.empty());
 

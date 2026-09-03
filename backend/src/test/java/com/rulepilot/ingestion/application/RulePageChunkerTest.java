@@ -109,6 +109,28 @@ class RulePageChunkerTest {
         });
     }
 
+    @Test
+    void letsTheDocumentDerivedHeadingOwnClassificationWhenBodyMentionsAnotherSection() {
+        var chunks = chunk(List.of(new ExtractedPage(10, """
+                SCORING
+                Score one point for each goal marker you completed.
+                """)));
+
+        assertThat(chunks).singleElement().satisfies(chunk ->
+                assertThat(chunk.sectionType()).isEqualTo("SCORING"));
+    }
+
+    @Test
+    void doesNotClassifyASectionFromAnEnglishKeywordEmbeddedInsideAnotherWord() {
+        var chunks = chunk(List.of(new ExtractedPage(11, """
+                PLAYER AID
+                Move the scoreboard beside the table before play.
+                """)));
+
+        assertThat(chunks).singleElement().satisfies(chunk ->
+                assertThat(chunk.sectionType()).isEqualTo("GENERAL"));
+    }
+
     private List<RuleStructureRepository.DetectedRuleChunk> chunk(List<ExtractedPage> pages) {
         return chunker.chunk(pages, new RulebookUnderstandingBuilder().build(pages));
     }

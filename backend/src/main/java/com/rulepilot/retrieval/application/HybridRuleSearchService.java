@@ -7,6 +7,7 @@ import com.rulepilot.retrieval.VectorRuleSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.LinkedHashMap;
@@ -19,7 +20,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Profile("!test")
@@ -29,7 +29,9 @@ public class HybridRuleSearchService implements HybridRuleSearch {
     static final String PHASE_DURATION_METRIC = "rulepilot.retrieval.hybrid.phase.duration";
     static final String CHANNEL_OUTCOME_METRIC = "rulepilot.retrieval.hybrid.channel";
     static final String AVAILABILITY_METRIC = "rulepilot.retrieval.hybrid.availability";
+    static final String CHANNEL_SCAN_DEPTH_METRIC = "rulepilot.retrieval.hybrid.channel.scan.depth";
     private static final int RRF_K = 60;
+    private static final int MINIMUM_FUSION_WINDOW = 64;
     private static final double CURRENT_SECTION_BOOST = 0.004;
     private final FullTextRuleSearch fullText;
     private final VectorRuleSearch vector;
@@ -48,19 +50,18 @@ public class HybridRuleSearchService implements HybridRuleSearch {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public List<HybridEvidenceHit> search(UUID documentVersionId, String query, RetrievalOptions options) {
         return searchPage(documentVersionId, query, options).hits();
     }
 
     @Override
-    @Transactional(readOnly = true)
     public SearchPage searchPage(UUID documentVersionId, String query, RetrievalOptions options) {
         if (documentVersionId == null || query == null || query.isBlank() || options == null
                 || options.limit() < 1) {
             throw new IllegalArgumentException("hybrid retrieval query and options are required");
         }
         int limit = options.limit();
+        int channelWindow = Math.max(limit, MINIMUM_FUSION_WINDOW);
         long requestedThrough = (long) options.offset() + limit;
         long acceptedLookahead = requestedThrough + 1;
         Map<UUID, Candidate> candidates = new LinkedHashMap<>();
@@ -81,20 +82,23 @@ public class HybridRuleSearchService implements HybridRuleSearch {
                     failure.getClass().getSimpleName());
         }
         VectorRuleSearch.PreparedSearch vectorQuery = preparedVector;
-        while ((long) candidates.size() < acceptedLookahead
-                && (fullTextScan.canContinue() || vectorScan.canContinue())) {
+        while (fullTextScan.canContinue() || vectorScan.canContinue()) {
             scanChannel(
                     fullTextScan,
                     documentVersionId,
-                    limit,
-                    () -> fullText.search(documentVersionId, query, fullTextScan.nextOffset(), limit),
+                    channelWindow,
+                    () -> fullText.search(documentVersionId, query, fullTextScan.nextOffset(), channelWindow),
                     hits -> addEligible(candidates, hits, true, fullTextScan.nextOffset(), options));
             scanChannel(
                     vectorScan,
                     documentVersionId,
-                    limit,
-                    () -> vectorQuery.search(vectorScan.nextOffset(), limit),
+                    channelWindow,
+                    () -> vectorQuery.search(vectorScan.nextOffset(), channelWindow),
                     hits -> addEligible(candidates, hits, false, vectorScan.nextOffset(), options));
+            if (fusionOrderIsFinal(
+                    candidates, acceptedLookahead, fullTextScan, vectorScan, options.currentSectionType())) {
+                break;
+            }
         }
         recordChannelOutcome(fullTextScan);
         recordChannelOutcome(vectorScan);
@@ -203,12 +207,20 @@ public class HybridRuleSearchService implements HybridRuleSearch {
     }
 
     private void recordChannelOutcome(ChannelScan channel) {
+        String outcome = channel.failure() == null ? "available" : "unavailable";
         Counter.builder(CHANNEL_OUTCOME_METRIC)
                 .description("Availability outcome of one hybrid retrieval channel")
                 .tag("channel", channel.name())
-                .tag("outcome", channel.failure() == null ? "available" : "unavailable")
+                .tag("outcome", outcome)
                 .register(metrics)
                 .increment();
+        DistributionSummary.builder(CHANNEL_SCAN_DEPTH_METRIC)
+                .description("Physical candidates scanned before hybrid fusion became final")
+                .baseUnit("candidates")
+                .tag("channel", channel.name())
+                .tag("outcome", outcome)
+                .register(metrics)
+                .record(channel.nextOffset());
     }
 
     private void recordAvailability(String outcome) {
@@ -243,6 +255,39 @@ public class HybridRuleSearchService implements HybridRuleSearch {
                 && withinPageScope(hit, options.allowedEvidencePages());
     }
 
+    /**
+     * Stops only when no unread identity can equal or beat the current publication boundary. A candidate that is
+     * just outside both physical windows can otherwise outrank every single-channel hit after reciprocal-rank fusion.
+     */
+    private boolean fusionOrderIsFinal(
+            Map<UUID, Candidate> candidates,
+            long acceptedLookahead,
+            ChannelScan fullTextScan,
+            ChannelScan vectorScan,
+            String currentSectionType) {
+        if ((long) candidates.size() < acceptedLookahead) return false;
+        double cutoff = candidates.values().stream()
+                .map(candidate -> candidate.result(currentSectionType).score())
+                .sorted(java.util.Comparator.reverseOrder())
+                .skip(acceptedLookahead - 1)
+                .findFirst()
+                .orElseThrow();
+        double maximumUnreadScore = contributionAtNextRank(fullTextScan)
+                + contributionAtNextRank(vectorScan)
+                + (currentSectionType == null ? 0 : CURRENT_SECTION_BOOST);
+        for (Candidate candidate : candidates.values()) {
+            maximumUnreadScore = Math.max(
+                    maximumUnreadScore,
+                    candidate.maximumPossibleScore(fullTextScan, vectorScan, currentSectionType));
+        }
+        // Continue on equality because the stable UUID tie-break can still put an unread identity above the cutoff.
+        return cutoff > maximumUnreadScore;
+    }
+
+    private static double contributionAtNextRank(ChannelScan channel) {
+        return channel.canContinue() ? 1.0 / (RRF_K + channel.nextOffset() + 1) : 0;
+    }
+
     private static final class Candidate {
         private final RuleEvidenceHit evidence;
         private Integer fullTextRank;
@@ -257,6 +302,17 @@ public class HybridRuleSearchService implements HybridRuleSearch {
             boolean boosted = currentSectionType != null && currentSectionType.equalsIgnoreCase(evidence.sectionType());
             if (boosted) score += CURRENT_SECTION_BOOST;
             return new HybridEvidenceHit(evidence, score, fullTextRank, vectorRank, boosted);
+        }
+
+        private double maximumPossibleScore(
+                ChannelScan fullTextScan, ChannelScan vectorScan, String currentSectionType) {
+            double score = contribution(fullTextRank) + contribution(vectorRank);
+            if (fullTextRank == null) score += contributionAtNextRank(fullTextScan);
+            if (vectorRank == null) score += contributionAtNextRank(vectorScan);
+            if (currentSectionType != null && currentSectionType.equalsIgnoreCase(evidence.sectionType())) {
+                score += CURRENT_SECTION_BOOST;
+            }
+            return score;
         }
 
         private double contribution(Integer rank) {

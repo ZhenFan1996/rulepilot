@@ -8,6 +8,10 @@ public interface EmbeddingProvider {
 
     int dimensions();
 
+    default int batchSize() {
+        return 32;
+    }
+
     List<EmbeddingVector> embed(List<String> texts);
 
     record EmbeddingVector(List<Float> values) {

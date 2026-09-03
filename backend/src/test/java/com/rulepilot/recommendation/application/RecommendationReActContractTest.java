@@ -740,6 +740,16 @@ class RecommendationReActContractTest {
                 .isEqualTo(new BoardGameRecommendationAgent.RecommendationShortfall(5, 3));
         assertThat(response.assistantMessage()).isEqualTo("先给你三款最有区分度的，目录里还有其他候选。");
         assertThat(response.harness().fallbackUsed()).isFalse();
+        JsonNode searchObservation = toolObservation(model.requests.getLast(), "bounded-result-search");
+        List<JsonNode> modelCandidates = new ArrayList<>();
+        searchObservation.path("turnState").path("verifiedGames").forEach(modelCandidates::add);
+        assertThat(modelCandidates).hasSize(5);
+        assertThat(modelCandidates.subList(0, 3)).allSatisfy(candidate ->
+                assertThat(candidate.path("observations").has(
+                        "B" + candidate.path("bggId").asInt() + ":publisherDescription")).isTrue());
+        assertThat(modelCandidates.subList(3, 5)).allSatisfy(candidate ->
+                assertThat(candidate.path("observations").has(
+                        "B" + candidate.path("bggId").asInt() + ":publisherDescription")).isFalse());
         JsonNode publicationSchema = new ObjectMapper().readTree(model.requests.getLast().tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                 .findFirst()
@@ -750,6 +760,56 @@ class RecommendationReActContractTest {
                         .path("maxItems")
                         .asInt())
                 .isEqualTo(3);
+        assertThat(publicationSchema.toString())
+                .doesNotContain("B954:publisherDescription", "B955:publisherDescription");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void boundsTheUntrustedPublisherDescriptionInModelContextWithoutChangingCanonicalEvidence() throws Exception {
+        String description = "narrative ".repeat(2_000);
+        RecordingCatalog catalog = new RecordingCatalog(game(
+                956,
+                "Long Chronicle",
+                BggGameType.STRATEGY,
+                2,
+                4,
+                90,
+                "3.2",
+                List.of("Storytelling"),
+                description));
+        ScriptedModel model = new ScriptedModel(
+                action(
+                        "long-description-search",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
+                action(
+                        "long-description-publication",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"playerReply\":\"这款叙事策略游戏值得先看。\",\"selections\":[{\"bggId\":956,"
+                                + "\"whyFit\":\"它有明确的叙事定位。\","
+                                + "\"internalEvidenceIds\":[\"B956:publisherDescription\"]}]}"));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "推荐一款叙事策略游戏。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        JsonNode observation = toolObservation(model.requests.getLast(), "long-description-search");
+        String excerpt = observation.path("turnState")
+                .path("verifiedGames")
+                .get(0)
+                .path("observations")
+                .path("B956:publisherDescription")
+                .get(1)
+                .asText();
+        assertThat(excerpt.codePointCount(0, excerpt.length()))
+                .isLessThanOrEqualTo(RecommendationActions.MODEL_PUBLISHER_DESCRIPTION_MAX_CODE_POINTS);
+        assertThat(excerpt).endsWith("…");
+        assertThat(response.games().getFirst().replyParts().getFirst().claim().evidence().getFirst().value())
+                .isEqualTo(description.strip());
         loop.stopBoundedCalls();
     }
 
@@ -1160,6 +1220,28 @@ class RecommendationReActContractTest {
             int maxMinutes,
             String complexity,
             List<String> mechanics) {
+        return game(
+                bggId,
+                name,
+                type,
+                minPlayers,
+                maxPlayers,
+                maxMinutes,
+                complexity,
+                mechanics,
+                "Verified fixture description for " + name + ".");
+    }
+
+    private static Game game(
+            int bggId,
+            String name,
+            BggGameType type,
+            int minPlayers,
+            int maxPlayers,
+            int maxMinutes,
+            String complexity,
+            List<String> mechanics,
+            String description) {
         return new Game(
                 new Ranking(
                         bggId,
@@ -1191,7 +1273,7 @@ class RecommendationReActContractTest {
                         List.of(),
                         List.of("Cross Game Designer"),
                         List.of("Open Shelf"),
-                        "Verified fixture description for " + name + ".",
+                        description,
                         ""));
     }
 

@@ -48,7 +48,7 @@ public class RulePageChunker {
                     .sorted(Comparator.comparingInt(PageBlock::readingOrder))
                     .toList();
             for (LocalSection section : localSections(text, page.pageNumber(), pageBlocks)) {
-                String sectionType = weakSectionType(section.content());
+                String sectionType = weakSectionType(section.heading(), section.content());
                 for (String content : split(section.content())) {
                     chunks.add(new DetectedRuleChunk(sectionType, section.heading(), content, page.pageNumber()));
                 }
@@ -219,13 +219,37 @@ public class RulePageChunker {
                 : firstLine.substring(0, MAX_HEADING_CHARACTERS).strip();
     }
 
-    private String weakSectionType(String text) {
-        String normalized = text.toLowerCase(Locale.ROOT);
+    private String weakSectionType(String heading, String text) {
+        String normalizedHeading = heading.toLowerCase(Locale.ROOT);
+        String normalizedText = text.toLowerCase(Locale.ROOT);
         return Arrays.stream(LessonRuleSectionType.values())
-                .filter(type -> type.keywords().stream().anyMatch(normalized::contains))
+                .filter(type -> type.keywords().stream().anyMatch(keyword -> containsKeyword(normalizedHeading, keyword)))
                 .map(Enum::name)
                 .findFirst()
+                .or(() -> Arrays.stream(LessonRuleSectionType.values())
+                        .filter(type -> type.keywords().stream()
+                                .anyMatch(keyword -> containsKeyword(normalizedText, keyword)))
+                        .map(Enum::name)
+                        .findFirst())
                 .orElse("GENERAL");
+    }
+
+    private boolean containsKeyword(String text, String keyword) {
+        int from = 0;
+        while (from < text.length()) {
+            int index = text.indexOf(keyword, from);
+            if (index < 0) return false;
+            int after = index + keyword.length();
+            boolean latinPhrase = keyword.codePoints().allMatch(codePoint ->
+                    Character.isLetter(codePoint) || Character.isWhitespace(codePoint) || codePoint == '-');
+            if (!latinPhrase
+                    || ((index == 0 || !Character.isLetterOrDigit(text.codePointBefore(index)))
+                            && (after == text.length() || !Character.isLetterOrDigit(text.codePointAt(after))))) {
+                return true;
+            }
+            from = after;
+        }
+        return false;
     }
 
     private record LocalSection(String heading, String content) {}

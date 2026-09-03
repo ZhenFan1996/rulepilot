@@ -42,6 +42,7 @@ public class NativeRuleAnswerAgent {
 
     static final Set<String> READ_TOOLS = Set.of(
             "search_rule_evidence",
+            "search_visual_page_facts",
             "search_rule_relationships",
             "expand_rule_evidence_context",
             "read_rule_pages",
@@ -468,6 +469,10 @@ public class NativeRuleAnswerAgent {
                 only when the search excerpt needs fuller page context, a crossed chunk boundary, a condition, an
                 exception, a list continuation, or an applicability check. Relationship results remain candidates and
                 cannot be cited.
+                Use search_visual_page_facts only to locate a visible printed label, icon, table, diagram, or board
+                location that canonical text search did not locate. Its observations have no mechanical-rule
+                authority and are never citation-bearing; use the returned page-bound handle for a dependent visual
+                read, then confirm any ruling with canonical text.
                 Call mutually independent read-only tools together in one decision; choose a dependent read only after
                 observing its prerequisite. Preserve supported portions when one sibling read fails and localize only
                 what remains unresolved.

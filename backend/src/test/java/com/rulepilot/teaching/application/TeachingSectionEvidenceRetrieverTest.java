@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
-import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
+import com.rulepilot.assistant.application.CitationScopeVerifier;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
@@ -137,7 +137,7 @@ class TeachingSectionEvidenceRetrieverTest {
         VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
         return new TeachingSectionEvidenceRetriever(
                 tools,
-                new PolicyEvidenceVerifier(),
+                new CitationScopeVerifier(),
                 invocations,
                 new TeachingVisualEvidenceResolver(
                         tools,

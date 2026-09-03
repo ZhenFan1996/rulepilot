@@ -104,6 +104,16 @@ public class AnswerRegressionService {
                     .anyMatch(content::contains);
             if (!present) failures.add("MISSING_TERM_GROUP_" + (index + 1));
         }
+        String citedEvidence = answer.citations().stream()
+                .map(RuleCitation::excerpt)
+                .collect(java.util.stream.Collectors.joining(" "))
+                .toLowerCase(Locale.ROOT);
+        for (int index = 0; index < testCase.requiredEvidenceTermGroups().size(); index++) {
+            boolean supported = testCase.requiredEvidenceTermGroups().get(index).stream()
+                    .map(term -> term.toLowerCase(Locale.ROOT))
+                    .anyMatch(citedEvidence::contains);
+            if (!supported) failures.add("UNSUPPORTED_EVIDENCE_GROUP_" + (index + 1));
+        }
         for (String forbidden : testCase.forbiddenTerms()) {
             if (content.contains(forbidden.toLowerCase(Locale.ROOT))) failures.add("FORBIDDEN_TERM");
         }

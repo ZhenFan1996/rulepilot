@@ -17,6 +17,37 @@ import org.junit.jupiter.api.Test;
 class HybridRuleSearchServiceTest {
 
     @Test
+    void keepsScanningWhenAnUnseenDualChannelCandidateCanStillWinTheFusion() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit lexicalFirst = hit(new UUID(0, 10), versionId, "ACTIONS", 1);
+        RuleEvidenceHit lexicalSecond = hit(new UUID(0, 20), versionId, "ACTIONS", 2);
+        RuleEvidenceHit vectorFirst = hit(new UUID(0, 30), versionId, "ACTIONS", 3);
+        RuleEvidenceHit vectorSecond = hit(new UUID(0, 40), versionId, "ACTIONS", 4);
+        RuleEvidenceHit sharedThird = hit(new UUID(0, 50), versionId, "ACTIONS", 5);
+        List<RuleEvidenceHit> lexical = List.of(lexicalFirst, lexicalSecond, sharedThird);
+        List<RuleEvidenceHit> semantic = List.of(vectorFirst, vectorSecond, sharedThird);
+        List<RuleEvidenceHit> all = List.of(
+                lexicalFirst, lexicalSecond, vectorFirst, vectorSecond, sharedThird);
+
+        var service = new HybridRuleSearchService(
+                fullTextPages(lexical, new ArrayList<>()),
+                vectorPages(semantic, new ArrayList<>()),
+                (version, ids) -> all.stream()
+                        .filter(candidate -> ids.contains(candidate.chunkId()))
+                        .map(candidate -> complete(candidate, "Complete page " + candidate.pageFrom()))
+                        .toList(),
+                new SimpleMeterRegistry());
+
+        var page = service.searchPage(
+                versionId, "shared governing rule", new RetrievalOptions(2, Set.of(), null));
+
+        assertThat(page.hits()).hasSize(2);
+        assertThat(page.hits().getFirst().evidence().chunkId()).isEqualTo(sharedThird.chunkId());
+        assertThat(page.hits().getFirst().fullTextRank()).isEqualTo(3);
+        assertThat(page.hits().getFirst().vectorRank()).isEqualTo(3);
+    }
+
+    @Test
     void logicalContinuationDoesNotLosePendingCandidatesFromEitherChannel() {
         UUID versionId = UUID.randomUUID();
         List<RuleEvidenceHit> lexical = List.of(
@@ -65,7 +96,7 @@ class HybridRuleSearchServiceTest {
     }
 
     @Test
-    void stopsScanningAfterTheEligibleLookaheadInsteadOfMaterializingTheCorpus() {
+    void scansInBoundedPhysicalWindowsUntilUnseenOverlapCannotChangeTheTopResults() {
         UUID versionId = UUID.randomUUID();
         List<RuleEvidenceHit> lexical = java.util.stream.IntStream.rangeClosed(1, 100)
                 .mapToObj(page -> hit(versionId, "ACTIONS", page))
@@ -90,8 +121,8 @@ class HybridRuleSearchServiceTest {
 
         assertThat(page.hits()).hasSize(2);
         assertThat(page.hasMore()).isTrue();
-        assertThat(lexicalOffsets).containsExactly(0);
-        assertThat(semanticOffsets).containsExactly(0);
+        assertThat(lexicalOffsets).containsExactly(0, 64);
+        assertThat(semanticOffsets).containsExactly(0, 64);
     }
 
     @Test
@@ -128,7 +159,7 @@ class HybridRuleSearchServiceTest {
             assertThat(hit.evidence().chunkId()).isNotEqualTo(published);
         });
         assertThat(second.hasMore()).isFalse();
-        assertThat(offsets).containsSubsequence(0, 1, 2, 3);
+        assertThat(offsets).containsExactly(0, 0);
     }
 
     @Test
@@ -162,7 +193,7 @@ class HybridRuleSearchServiceTest {
     }
 
     @Test
-    void preservesTheRequestedCandidateDepthAcrossBothRetrievalSources() {
+    void usesAReusableFusionWindowThatIsNeverSmallerThanTheRequestedCandidateDepth() {
         UUID versionId = UUID.randomUUID();
         List<RuleEvidenceHit> lexical = java.util.stream.IntStream.rangeClosed(1, 15)
                 .mapToObj(page -> hit(versionId, "ACTIONS", page))
@@ -192,11 +223,14 @@ class HybridRuleSearchServiceTest {
 
         assertThat(results).extracting(result -> result.evidence().pageFrom())
                 .containsExactlyInAnyOrderElementsOf(java.util.stream.IntStream.rangeClosed(1, 30).boxed().toList());
-        assertThat(fullTextLimit).hasValue(30);
-        assertThat(vectorLimit).hasValue(30);
+        assertThat(fullTextLimit).hasValue(64);
+        assertThat(vectorLimit).hasValue(64);
         assertThat(metrics.find(HybridRuleSearchService.PHASE_DURATION_METRIC).timers())
                 .extracting(timer -> timer.getId().getTag("phase"))
                 .containsExactlyInAnyOrder("full-text", "vector", "canonical-hydration");
+        assertThat(metrics.find(HybridRuleSearchService.CHANNEL_SCAN_DEPTH_METRIC).summaries())
+                .extracting(summary -> summary.totalAmount())
+                .containsExactlyInAnyOrder(15.0, 15.0);
     }
 
     @Test
