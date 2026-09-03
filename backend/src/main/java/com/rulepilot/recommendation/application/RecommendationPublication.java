@@ -69,10 +69,6 @@ final class RecommendationPublication {
         JsonNode root = parse(argumentsJson);
         boolean searchOwnsCount = state.activeSearch != null;
         requireObject(root, searchOwnsCount ? SEARCH_PUBLICATION_FIELDS : FOLLOW_UP_PUBLICATION_FIELDS);
-        int requestedCount = searchOwnsCount
-                ? state.activeSearch.requestedCount()
-                : positiveInteger(root.path("requestedCount"));
-
         List<Integer> currentlyRecommendable = runtime.recommendableIds(state);
         List<Integer> allowedCandidateIds = pending.candidateBggIds().stream()
                 .filter(currentlyRecommendable::contains)
@@ -81,6 +77,14 @@ final class RecommendationPublication {
                     return game != null && !observations.narrativeObservations(game, state.research).isEmpty();
                 })
                 .toList();
+        Integer explicitSearchCount = searchOwnsCount
+                ? state.activeSearch.requestedCount()
+                : null;
+        int requestedCount = searchOwnsCount
+                ? explicitSearchCount == null
+                        ? Math.min(maximumResultCount, allowedCandidateIds.size())
+                        : explicitSearchCount
+                : positiveInteger(root.path("requestedCount"));
         int maximumSelections = Math.min(
                 maximumResultCount,
                 Math.min(requestedCount, allowedCandidateIds.size()));
@@ -168,7 +172,8 @@ final class RecommendationPublication {
             }
         }
         PublicationDraft draft = new PublicationDraft(playerReply, candidates);
-        RecommendationShortfall shortfall = selectedGames.size() < requestedCount
+        RecommendationShortfall shortfall = (explicitSearchCount != null || !searchOwnsCount)
+                        && selectedGames.size() < requestedCount
                 ? new RecommendationShortfall(requestedCount, selectedGames.size())
                 : null;
         return new PreparedPublication(

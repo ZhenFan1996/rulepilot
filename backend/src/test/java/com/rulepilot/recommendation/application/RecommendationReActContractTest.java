@@ -40,6 +40,72 @@ import org.junit.jupiter.api.Test;
 class RecommendationReActContractTest {
 
     @Test
+    void namedCollectionDiscoveryDoesNotInventARequestedCount() throws Exception {
+        Game northernWorks = gameWithFamilies(
+                481, "Ironworks: Northern Mills", List.of("Game: Ironworks"));
+        Game canalWorks = gameWithFamilies(
+                482, "Ironworks: Canal District", List.of("Game: Ironworks"));
+        Game steelCity = gameWithFamilies(
+                483, "Steel City Ledger", List.of("Game: Ironworks"));
+        Game unrelated = gameWithFamilies(
+                484, "Merchant Harbors", List.of("Game: Merchant Harbors"));
+        RecordingCatalog catalog = new RecordingCatalog(northernWorks, canalWorks, steelCity, unrelated);
+        ScriptedModel model = new ScriptedModel(
+                action(
+                        "collection-search",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"includeTypes\":[],\"excludeTypes\":[],"
+                                + "\"requiredInteraction\":\"ANY\","
+                                + "\"requiredTitle\":{\"match\":\"CONTAINS\",\"scope\":\"SERIES\",\"value\":\"Ironworks\"}}"),
+                action(
+                        "collection-publication",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"playerReply\":\"目录里现有三款 Ironworks 系列作品。\","
+                                + "\"selections\":["
+                                + "{\"bggId\":481,\"whyFit\":\"支持两到四人游玩。\","
+                                + "\"internalEvidenceIds\":[\"B481:playerCount\"]},"
+                                + "{\"bggId\":482,\"whyFit\":\"同样支持两到四人游玩。\","
+                                + "\"internalEvidenceIds\":[\"B482:playerCount\"]},"
+                                + "{\"bggId\":483,\"whyFit\":\"虽未共享标题词，仍属于同一目录系列。\","
+                                + "\"internalEvidenceIds\":[\"B483:playerCount\"]}]}"));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "我想玩 Ironworks 系列，现在有哪些？"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(481, 482, 483);
+        assertThat(response.shortfall()).isNull();
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().catalogCalls()).isEqualTo(2);
+        assertThat(catalog.lastFilters.get().families()).containsExactly("Game: Ironworks");
+        assertThat(catalog.lastFilters.get().textQuery()).isNull();
+        assertThat(response.harness().actions())
+                .doesNotContain("REJECTED_ACTION:REQUIRED_ARGUMENT_MISSING", "REJECTED_UNAVAILABLE_ACTION");
+        JsonNode observation = toolObservation(model.requests.get(1), "collection-search");
+        assertThat(observation.path("appliedSearchContract").path("resolvedFamilies").get(0).asText())
+                .isEqualTo("Game: Ironworks");
+        JsonNode searchObservation = toolObservation(model.requests.getLast(), "collection-search");
+        assertThat(searchObservation.path("appliedSearchContract").has("requestedCount")).isFalse();
+        assertThat(searchObservation.path("verifiedCandidateBggIds").toString()).isEqualTo("[481,482,483]");
+        JsonNode searchSchema = new ObjectMapper().readTree(model.requests.getFirst().tools().stream()
+                .filter(tool -> BoardGameRecommendationAgent.SEARCH_TOOL.equals(tool.name()))
+                .findFirst()
+                .orElseThrow()
+                .inputSchema());
+        assertThat(searchSchema.path("properties").path("requestedCount").isObject()).isTrue();
+        assertThat(searchSchema.path("required").toString()).doesNotContain("requestedCount");
+        assertThat(searchSchema.path("properties").path("requiredTitle").path("required").toString())
+                .contains("scope");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void oneSearchContractIgnoresInheritedProfileAndPublishesModelAuthoredExplanations() throws Exception {
         Game groveRoutes = game(501, "Grove Routes", BggGameType.FAMILY, 2, 4, 45, "1.8");
         Game groveLines = game(502, "Grove Lines", BggGameType.STRATEGY, 2, 5, 55, "2.4");
@@ -53,7 +119,7 @@ class RecommendationReActContractTest {
                                 "search",
                                 BoardGameRecommendationAgent.SEARCH_TOOL,
                                 "{\"evidence\":\"U1\",\"requestedCount\":2,\"includeTypes\":[],\"excludeTypes\":[\"EXPANSION\"],"
-                                        + "\"requiredTitle\":{\"match\":\"CONTAINS\",\"value\":\"Grove\"},"
+                                        + "\"requiredTitle\":{\"match\":\"CONTAINS\",\"scope\":\"TITLE\",\"value\":\"Grove\"},"
                                         + "\"players\":2,\"maxMinutes\":60,\"complexity\":{\"minimum\":1,\"maximum\":3,\"unit\":\"BGG_WEIGHT\"},"
                                         + "\"clientTrace\":\"additive-field\"}")),
                         CompletionStatus.COMPLETE),
@@ -571,7 +637,7 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.SEARCH_TOOL,
                         "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[],"
                                 + "\"excludeTypes\":[],\"requiredInteraction\":\"ANY\","
-                                + "\"requiredTitle\":{\"match\":\"EXACT\",\"value\":\"Named Harbor\"},"
+                                + "\"requiredTitle\":{\"match\":\"EXACT\",\"scope\":\"TITLE\",\"value\":\"Named Harbor\"},"
                                 + "\"descriptionQuery\":\"quiet harbor atmosphere\"}"),
                 answer("我会保留点名游戏的身份边界，不用主题排序替代标题查找。"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -1242,6 +1308,34 @@ class RecommendationReActContractTest {
             String complexity,
             List<String> mechanics,
             String description) {
+        return game(bggId, name, type, minPlayers, maxPlayers, maxMinutes, complexity, mechanics, description, List.of());
+    }
+
+    private static Game gameWithFamilies(int bggId, String name, List<String> families) {
+        return game(
+                bggId,
+                name,
+                BggGameType.STRATEGY,
+                2,
+                4,
+                120,
+                "3.7",
+                List.of("Contract Mechanic"),
+                "Verified fixture description for " + name + ".",
+                families);
+    }
+
+    private static Game game(
+            int bggId,
+            String name,
+            BggGameType type,
+            int minPlayers,
+            int maxPlayers,
+            int maxMinutes,
+            String complexity,
+            List<String> mechanics,
+            String description,
+            List<String> families) {
         return new Game(
                 new Ranking(
                         bggId,
@@ -1270,7 +1364,7 @@ class RecommendationReActContractTest {
                         minPlayers + "-" + maxPlayers,
                         2,
                         100,
-                        List.of(),
+                        families,
                         List.of("Cross Game Designer"),
                         List.of("Open Shelf"),
                         description,

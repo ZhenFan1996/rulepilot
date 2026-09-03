@@ -105,6 +105,11 @@ final class RecommendationAgentState {
         comparison = null;
     }
 
+    synchronized void resolveCatalogFamilies(List<String> families) {
+        if (activeSearch == null) throw new IllegalStateException("active catalog search is required");
+        activeSearch = activeSearch.withResolvedFamilies(families);
+    }
+
     synchronized void completeCatalogSearch(int catalogSourceCount, List<Game> games) {
         actions.add("SEARCH_BGG_CATALOG");
         sourceCount = Math.max(sourceCount, catalogSourceCount);
@@ -153,7 +158,8 @@ final class RecommendationAgentState {
             List<BggGameType> excludeTypes,
             List<String> mechanics,
             TitleFilter title,
-            int requestedCount,
+            List<String> resolvedFamilies,
+            Integer requestedCount,
             Integer players,
             Integer maxMinutes,
             ConstraintRange<BigDecimal> complexity,
@@ -163,7 +169,8 @@ final class RecommendationAgentState {
             includeTypes = includeTypes == null ? List.of() : List.copyOf(includeTypes);
             excludeTypes = excludeTypes == null ? List.of() : List.copyOf(excludeTypes);
             mechanics = mechanics == null ? List.of() : List.copyOf(mechanics);
-            if (requestedCount < 1
+            resolvedFamilies = resolvedFamilies == null ? List.of() : List.copyOf(resolvedFamilies);
+            if (requestedCount != null && requestedCount < 1
                     || evidenceId == null
                     || evidenceId.isBlank()
                     || selectionProfile == null) {
@@ -177,14 +184,41 @@ final class RecommendationAgentState {
             if (!includeTypes.isEmpty() && includeTypes.stream().noneMatch(actualTypes::contains)) return false;
             if (excludeTypes.stream().anyMatch(actualTypes::contains)) return false;
             if (!game.details().mechanics().containsAll(mechanics)) return false;
-            return title == null || title.matches(game);
+            if (title == null) return true;
+            if (title.scope() == TitleScope.SERIES && !resolvedFamilies.isEmpty()) {
+                return game.details().families().stream().anyMatch(this::matchesResolvedFamily);
+            }
+            return title.matches(game);
+        }
+
+        CatalogSearch withResolvedFamilies(List<String> families) {
+            return new CatalogSearch(
+                    includeTypes,
+                    excludeTypes,
+                    mechanics,
+                    title,
+                    families,
+                    requestedCount,
+                    players,
+                    maxMinutes,
+                    complexity,
+                    evidenceId,
+                    selectionProfile);
+        }
+
+        private boolean matchesResolvedFamily(String family) {
+            String actual = TitleFilter.normalize(family);
+            return resolvedFamilies.stream().map(TitleFilter::normalize).anyMatch(actual::equals);
         }
     }
 
-    record TitleFilter(TitleMatch match, String value) {
+    record TitleFilter(TitleMatch match, TitleScope scope, String value) {
         TitleFilter {
-            if (match == null || normalize(value).isEmpty()) {
+            if (match == null || scope == null || normalize(value).isEmpty()) {
                 throw new IllegalArgumentException("title filter is invalid");
+            }
+            if (scope == TitleScope.SERIES && match != TitleMatch.CONTAINS) {
+                throw new IllegalArgumentException("series title filter must use CONTAINS");
             }
             value = value.strip();
         }
@@ -212,6 +246,11 @@ final class RecommendationAgentState {
     enum TitleMatch {
         EXACT,
         CONTAINS
+    }
+
+    enum TitleScope {
+        TITLE,
+        SERIES
     }
 
     record PublicationSeed(List<Integer> candidateBggIds) {
