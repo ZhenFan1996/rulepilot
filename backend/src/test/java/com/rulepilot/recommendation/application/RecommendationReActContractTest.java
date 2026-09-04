@@ -40,7 +40,7 @@ import org.junit.jupiter.api.Test;
 class RecommendationReActContractTest {
 
     @Test
-    void namedCollectionDiscoveryDoesNotInventARequestedCount() throws Exception {
+    void namedCollectionDiscoveryPublishesItsSelectedTargetCount() throws Exception {
         Game northernWorks = gameWithFamilies(
                 481, "Ironworks: Northern Mills", List.of("Game: Ironworks"));
         Game canalWorks = gameWithFamilies(
@@ -54,7 +54,7 @@ class RecommendationReActContractTest {
                 action(
                         "collection-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"includeTypes\":[],\"excludeTypes\":[],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":3,\"includeTypes\":[],\"excludeTypes\":[],"
                                 + "\"requiredInteraction\":\"ANY\","
                                 + "\"requiredTitle\":{\"match\":\"CONTAINS\",\"scope\":\"SERIES\",\"value\":\"Ironworks\"}}"),
                 action(
@@ -91,15 +91,18 @@ class RecommendationReActContractTest {
         assertThat(observation.path("appliedSearchContract").path("resolvedFamilies").get(0).asText())
                 .isEqualTo("Game: Ironworks");
         JsonNode searchObservation = toolObservation(model.requests.getLast(), "collection-search");
-        assertThat(searchObservation.path("appliedSearchContract").has("requestedCount")).isFalse();
+        assertThat(searchObservation.path("appliedSearchContract").path("publicationCount").asInt())
+                .isEqualTo(3);
         assertThat(searchObservation.path("verifiedCandidateBggIds").toString()).isEqualTo("[481,482,483]");
         JsonNode searchSchema = new ObjectMapper().readTree(model.requests.getFirst().tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.SEARCH_TOOL.equals(tool.name()))
                 .findFirst()
                 .orElseThrow()
                 .inputSchema());
-        assertThat(searchSchema.path("properties").path("requestedCount").isObject()).isTrue();
-        assertThat(searchSchema.path("required").toString()).doesNotContain("requestedCount");
+        assertThat(searchSchema.path("properties").path("publicationCount").isObject()).isTrue();
+        assertThat(searchSchema.path("properties").path("publicationCount").path("type").asText())
+                .isEqualTo("integer");
+        assertThat(searchSchema.path("required").toString()).contains("publicationCount");
         assertThat(searchSchema.path("properties").path("requiredTitle").path("required").toString())
                 .contains("scope");
         loop.stopBoundedCalls();
@@ -118,7 +121,7 @@ class RecommendationReActContractTest {
                         List.of(new ToolCall(
                                 "search",
                                 BoardGameRecommendationAgent.SEARCH_TOOL,
-                                "{\"evidence\":\"U1\",\"requestedCount\":2,\"includeTypes\":[],\"excludeTypes\":[\"EXPANSION\"],"
+                                "{\"evidence\":\"U1\",\"publicationCount\":2,\"includeTypes\":[],\"excludeTypes\":[\"EXPANSION\"],"
                                         + "\"requiredTitle\":{\"match\":\"CONTAINS\",\"scope\":\"TITLE\",\"value\":\"Grove\"},"
                                         + "\"players\":2,\"maxMinutes\":60,\"complexity\":{\"minimum\":1,\"maximum\":3,\"unit\":\"BGG_WEIGHT\"},"
                                         + "\"clientTrace\":\"additive-field\"}")),
@@ -126,7 +129,7 @@ class RecommendationReActContractTest {
                 action(
                         "publish",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":2,\"playerReply\":\"这两款都符合本轮条件；前者更轻快，后者更偏策略。\","
+                        "{\"publicationCount\":2,\"playerReply\":\"这两款都符合本轮条件；前者更轻快，后者更偏策略。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":501,\"whyFit\":\"节奏轻快，适合两人控制在一小时内完成。\","
                                 + "\"tradeoff\":\"策略纵深相对温和。\",\"internalEvidenceIds\":[\"B501:playerCount\",\"B501:durationMinutes\"]},"
@@ -207,7 +210,7 @@ class RecommendationReActContractTest {
                 .orElseThrow()
                 .inputSchema());
         assertThat(publicationSchema.toString())
-                .contains("whyFit", "Synthesize")
+                .contains("whyFit", "candidate-specific synthesis")
                 .doesNotContain("cardText");
         assertThat(publicationSchema.path("properties").path("playerReply").path("maxLength").asInt())
                 .isEqualTo(RecommendationPublication.PLAYER_REPLY_MAX_CODE_POINTS);
@@ -245,7 +248,7 @@ class RecommendationReActContractTest {
                 action(
                         "description-ranked-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":2,\"includeTypes\":[\"FAMILY\"],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":2,\"includeTypes\":[\"FAMILY\"],"
                                 + "\"excludeTypes\":[],\"requiredInteraction\":\"ANY\","
                                 + "\"descriptionQuery\":\"shelter secrets storm atmosphere\","
                                 + "\"players\":3,\"maxMinutes\":60}"),
@@ -304,12 +307,12 @@ class RecommendationReActContractTest {
                 action(
                         "typed-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[\"PARTY\"],\"excludeTypes\":[],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[\"PARTY\"],\"excludeTypes\":[],"
                                 + "\"players\":5,\"maxMinutes\":90,\"complexity\":{\"maximum\":2.5}}"),
                 action(
                         "typed-publish",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":1,\"playerReply\":\"这款符合本轮全部硬条件。\","
+                        "{\"publicationCount\":1,\"playerReply\":\"这款符合本轮全部硬条件。\","
                                 + "\"selections\":[{\"bggId\":551,"
                                 + "\"whyFit\":\"五人、九十分钟内的轻量聚会选择。\","
                                 + "\"internalEvidenceIds\":[\"B551:playerCount\",\"B551:durationMinutes\","
@@ -356,12 +359,12 @@ class RecommendationReActContractTest {
                 action(
                         "research-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":2,\"includeTypes\":[],\"excludeTypes\":[],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":2,\"includeTypes\":[],\"excludeTypes\":[],"
                                 + "\"experienceQuestion\":\"How does each game work for mixed-experience groups?\"}"),
                 action(
                         "publish-after-research",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":2,\"playerReply\":\"这两款都符合目录条件；玩家体验资料补充了取舍。\","
+                        "{\"publicationCount\":2,\"playerReply\":\"这两款都符合目录条件；玩家体验资料补充了取舍。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":561,\"whyFit\":\"适合希望时间更短的一组。\","
                                 + "\"internalEvidenceIds\":[\"B561:durationMinutes\"]},"
@@ -434,7 +437,7 @@ class RecommendationReActContractTest {
                 action(
                         "follow-up-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":2,\"playerReply\":\"三人局我会优先第一款，第二款更短。\","
+                        "{\"publicationCount\":2,\"playerReply\":\"三人局我会优先第一款，第二款更短。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":571,\"whyFit\":\"三人可玩，策略更重。\","
                                 + "\"internalEvidenceIds\":[\"B571:playerCount\",\"B571:complexity\"]},"
@@ -506,11 +509,18 @@ class RecommendationReActContractTest {
     }
 
     @Test
-    void aShownCandidateFollowUpCannotBypassTerminalEvidenceWithFreeFormText() {
+    void aShownCandidateFollowUpRejectsFreeFormTextBeforeValidatedPublication() {
         Game first = game(576, "Shown Orchard", BggGameType.STRATEGY, 2, 4, 120, "3.8");
         Game second = game(577, "Shown Foundry", BggGameType.STRATEGY, 2, 4, 90, "3.4");
-        ScriptedModel model = new ScriptedModel(answer(
-                "第一款互动一定更强，第二款则完全没有卡位。"));
+        ScriptedModel model = new ScriptedModel(
+                answer("第一款互动一定更强，第二款则完全没有卡位。"),
+                action(
+                        "corrected-publication",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"publicationCount\":2,\"playerReply\":\"现有证据只能比较复杂度和时长，互动强弱仍不确定。\","
+                                + "\"selections\":["
+                                + "{\"bggId\":576,\"whyFit\":\"复杂度更高。\",\"internalEvidenceIds\":[\"B576:complexity\"]},"
+                                + "{\"bggId\":577,\"whyFit\":\"时长更短。\",\"internalEvidenceIds\":[\"B577:durationMinutes\"]}]}"));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(first, second));
         ConversationRequest followUp = new ConversationRequest(
                 RecommendationProfile.empty(),
@@ -531,12 +541,18 @@ class RecommendationReActContractTest {
                 "player",
                 ignored -> {});
 
-        assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.assistantMessage())
                 .doesNotContain("互动一定更强", "完全没有卡位");
-        assertThat(response.harness().failureDetailCode()).isEqualTo("PUBLICATION_MISSING");
+        assertThat(response.harness().actions())
+                .contains("REJECTED_PUBLICATION:PUBLICATION_MISSING", "RECOMMEND_GAMES");
         assertThat(model.requests.getFirst().toolChoice())
                 .isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
+        assertThat(model.requests.getLast().messages().stream()
+                        .map(Message::content)
+                        .collect(java.util.stream.Collectors.joining("\n")))
+                .containsOnlyOnce("第一款互动一定更强，第二款则完全没有卡位。")
+                .contains("PUBLICATION_MISSING", "allowedActions", "allowedCandidateBggIds");
         loop.stopBoundedCalls();
     }
 
@@ -552,7 +568,7 @@ class RecommendationReActContractTest {
                 action(
                         "offline-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":2,\"playerReply\":\"离线时只能比较已核验的时长和复杂度；实际三人体验仍然未知。\","
+                        "{\"publicationCount\":2,\"playerReply\":\"离线时只能比较已核验的时长和复杂度；实际三人体验仍然未知。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":581,\"whyFit\":\"复杂度较高。\",\"internalEvidenceIds\":[\"B581:complexity\"]},"
                                 + "{\"bggId\":582,\"whyFit\":\"时间较短。\",\"internalEvidenceIds\":[\"B582:durationMinutes\"]}]}"));
@@ -602,7 +618,7 @@ class RecommendationReActContractTest {
                 action(
                         "conflict",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[\"FAMILY\"],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[\"FAMILY\"],"
                                 + "\"excludeTypes\":[\"FAMILY\"]}"),
                 answer("这个结构化条件同时包含并排除了 FAMILY；我需要你确认保留哪一边。"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -635,7 +651,7 @@ class RecommendationReActContractTest {
                 action(
                         "incompatible-description-query",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],"
                                 + "\"excludeTypes\":[],\"requiredInteraction\":\"ANY\","
                                 + "\"requiredTitle\":{\"match\":\"EXACT\",\"scope\":\"TITLE\",\"value\":\"Named Harbor\"},"
                                 + "\"descriptionQuery\":\"quiet harbor atmosphere\"}"),
@@ -666,11 +682,11 @@ class RecommendationReActContractTest {
                 action(
                         "evidence-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
                 action(
                         "foreign-evidence",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":1,\"playerReply\":\"推荐第一款。\","
+                        "{\"publicationCount\":1,\"playerReply\":\"推荐第一款。\","
                                 + "\"selections\":[{\"bggId\":701,"
                                 + "\"whyFit\":\"这张卡错误地借用了另一款游戏的证据。\","
                                 + "\"internalEvidenceIds\":[\"B702:playerCount\"]}]}"));
@@ -704,11 +720,11 @@ class RecommendationReActContractTest {
                 action(
                         "hard-boundary-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
                 action(
                         "hard-boundary-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":1,\"playerReply\":\"推荐未验证的候选。\","
+                        "{\"publicationCount\":1,\"playerReply\":\"推荐未验证的候选。\","
                                 + "\"selections\":[{\"bggId\":999,"
                                 + "\"whyFit\":\"没有可验证依据。\","
                                 + "\"internalEvidenceIds\":[\"B801:playerCount\"]}]}"));
@@ -739,11 +755,11 @@ class RecommendationReActContractTest {
                 action(
                         "mixed-boundary-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":2,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":2,\"includeTypes\":[],\"excludeTypes\":[]}"),
                 action(
                         "mixed-boundary-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":2,\"playerReply\":\"两款都推荐。\","
+                        "{\"publicationCount\":2,\"playerReply\":\"两款都推荐。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":999,\"whyFit\":\"未核验。\",\"internalEvidenceIds\":[\"B901:playerCount\"]},"
                                 + "{\"bggId\":902,\"whyFit\":\"适合想玩稍重策略的玩家。\","
@@ -781,11 +797,11 @@ class RecommendationReActContractTest {
                 action(
                         "bounded-result-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":5,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":5,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
                 action(
                         "bounded-result-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":5,\"playerReply\":\"先给你三款最有区分度的，目录里还有其他候选。\","
+                        "{\"publicationCount\":5,\"playerReply\":\"先给你三款最有区分度的，目录里还有其他候选。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":951,\"whyFit\":\"第一款策略最轻。\",\"internalEvidenceIds\":[\"B951:complexity\"]},"
                                 + "{\"bggId\":952,\"whyFit\":\"第二款处于中间。\",\"internalEvidenceIds\":[\"B952:complexity\"]},"
@@ -848,7 +864,7 @@ class RecommendationReActContractTest {
                 action(
                         "long-description-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
                 action(
                         "long-description-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -890,11 +906,11 @@ class RecommendationReActContractTest {
                 action(
                         "one-result-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U2\",\"requestedCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U2\",\"publicationCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
                 action(
                         "expanded-terminal-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":3,\"playerReply\":\"这里擅自扩成了三款。\","
+                        "{\"publicationCount\":3,\"playerReply\":\"这里擅自扩成了三款。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":971,\"whyFit\":\"第一款。\",\"internalEvidenceIds\":[\"B971:complexity\"]},"
                                 + "{\"bggId\":972,\"whyFit\":\"第二款。\",\"internalEvidenceIds\":[\"B972:complexity\"]},"
@@ -925,7 +941,7 @@ class RecommendationReActContractTest {
         assertThat(response.shortfall()).isNull();
         assertThat(response.assistantMessage()).doesNotContain("擅自扩成了三款");
         JsonNode observation = toolObservation(model.requests.getLast(), "one-result-search");
-        assertThat(observation.path("appliedSearchContract").path("requestedCount").asInt())
+        assertThat(observation.path("appliedSearchContract").path("publicationCount").asInt())
                 .isEqualTo(1);
         assertThat(observation.path("turnState").path("verifiedGames").findValuesAsText("bggId"))
                 .containsExactly("971", "972", "973");
@@ -934,7 +950,7 @@ class RecommendationReActContractTest {
                 .findFirst()
                 .orElseThrow()
                 .inputSchema());
-        assertThat(publicationSchema.path("properties").has("requestedCount")).isFalse();
+        assertThat(publicationSchema.path("properties").has("publicationCount")).isFalse();
         assertThat(publicationSchema.path("properties").path("selections").path("maxItems").asInt())
                 .isEqualTo(1);
         loop.stopBoundedCalls();
@@ -948,7 +964,7 @@ class RecommendationReActContractTest {
                 action(
                         "encoded-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[]}"),
                 action(
                         "encoded-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -981,7 +997,7 @@ class RecommendationReActContractTest {
                 action(
                         "decoy-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[]}"),
                 action(
                         "decoy-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -1008,7 +1024,7 @@ class RecommendationReActContractTest {
         ScriptedModel model = new ScriptedModel(action(
                 "shown-follow-up",
                 BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                "{\"requestedCount\":1,\"playerReply\":\"我先只讨论已经展示的候选。\","
+                "{\"publicationCount\":1,\"playerReply\":\"我先只讨论已经展示的候选。\","
                         + "\"selections\":[{\"bggId\":981,\"whyFit\":\"适合二到四人。\","
                         + "\"internalEvidenceIds\":[\"B981:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(shown, unpublished));
@@ -1057,7 +1073,7 @@ class RecommendationReActContractTest {
                 action(
                         "empty-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":3,\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":3,\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[],"
                                 + "\"players\":4,\"maxMinutes\":90}"),
                 answer("目录里没有，但你们可以试试未经核验的 Ghost Harbor。"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -1090,13 +1106,13 @@ class RecommendationReActContractTest {
                 action(
                         "mechanic-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[],"
                                 + "\"requiredMechanics\":[\"Worker Placement\"],\"players\":3,"
                                 + "\"complexity\":{\"minimum\":3}}"),
                 action(
                         "mechanic-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":1,\"playerReply\":\"这款符合你们想玩的方向。\","
+                        "{\"publicationCount\":1,\"playerReply\":\"这款符合你们想玩的方向。\","
                                 + "\"selections\":[{\"bggId\":1001,"
                                 + "\"whyFit\":\"三人可玩且属于工人放置机制。\","
                                 + "\"internalEvidenceIds\":[\"B1001:playerCount\",\"B1001:mechanics\"]}]}"));
@@ -1150,12 +1166,12 @@ class RecommendationReActContractTest {
                 action(
                         "cooperative-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedCount\":1,\"includeTypes\":[],\"excludeTypes\":[],"
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[],"
                                 + "\"requiredInteraction\":\"COOPERATIVE\",\"players\":2,\"maxMinutes\":90}"),
                 action(
                         "cooperative-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedCount\":1,\"playerReply\":\"这款是核验过的双人纯合作游戏。\","
+                        "{\"publicationCount\":1,\"playerReply\":\"这款是核验过的双人纯合作游戏。\","
                                 + "\"selections\":[{\"bggId\":1012,"
                                 + "\"whyFit\":\"两个人共同对抗系统，并能在九十分钟内结束。\","
                                 + "\"internalEvidenceIds\":[\"B1012:playerCount\",\"B1012:durationMinutes\",\"B1012:mechanics\"]}]}"));

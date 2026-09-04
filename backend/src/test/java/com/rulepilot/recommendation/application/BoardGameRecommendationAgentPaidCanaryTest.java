@@ -164,7 +164,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .argumentsJson());
             assertThat(openingSearch.path("requiredMechanics").toString())
                     .isEqualTo("[\"Worker Placement\"]");
-            int openingRequestedCount = openingSearch.path("requestedCount").asInt();
+            int openingRequestedCount = openingSearch.path("publicationCount").asInt();
             assertThat(openingRequestedCount).isGreaterThanOrEqualTo(opening.response().games().size());
             if (openingRequestedCount > opening.response().games().size()) {
                 assertThat(opening.response().shortfall())
@@ -197,7 +197,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .toolCalls(BoardGameRecommendationAgent.SEARCH_TOOL, "worker-replacement")
                     .getFirst()
                     .argumentsJson());
-            assertThat(replacementSearch.path("requestedCount").asInt()).isEqualTo(1);
+            assertThat(replacementSearch.path("publicationCount").asInt()).isEqualTo(1);
             assertThat(replacementSearch.path("experienceQuestion").asText()).isNotBlank();
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL, "worker-replacement"))
                     .isEmpty();
@@ -286,7 +286,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .toolCalls(BoardGameRecommendationAgent.SEARCH_TOOL)
                     .getFirst()
                     .argumentsJson());
-            assertThat(search.path("requestedCount").asInt())
+            assertThat(search.path("publicationCount").asInt())
                     .isGreaterThanOrEqualTo(response.games().size());
             assertThat(search.path("experienceQuestion").asText()).isNotBlank();
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL))
@@ -377,11 +377,51 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             String baseUrl,
             String modelName,
             Capture capture) {
-        ChatModel chatModel = new ChatModelFactory(ObservationRegistry.NOOP, RECOMMENDATION_TIMEOUT)
-                .create(provider, apiKey, baseUrl, modelName);
+        String publicationModelName = System.getenv("RULEPILOT_RECOMMENDATION_CANARY_PUBLICATION_MODEL");
+        publicationModelName = publicationModelName == null || publicationModelName.isBlank()
+                ? modelName
+                : publicationModelName.strip();
+        capture.publicationModel = publicationModelName;
+        ChatModelFactory factory = new ChatModelFactory(ObservationRegistry.NOOP, RECOMMENDATION_TIMEOUT);
+        BoardGameRecommendationModel delegate = modelDelegate(
+                provider,
+                modelName,
+                publicationModelName,
+                factory.create(provider, apiKey, baseUrl, modelName));
+        String selectedPublicationModelName = publicationModelName;
+        return new BoardGameRecommendationModel() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Turn next(BoardGameRecommendationModel.Request request) {
+                boolean publicationTurn = request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
+                        && request.tools().size() == 1;
+                String selectedModel = publicationTurn ? selectedPublicationModelName : modelName;
+                long started = System.nanoTime();
+                int callIndex = capture.begin("react", selectedModel, request);
+                try {
+                    Turn result = delegate.next(request);
+                    capture.complete(callIndex, result, elapsed(started));
+                    return result;
+                } catch (RuntimeException | Error failure) {
+                    capture.fail(callIndex, failure, elapsed(started));
+                    throw failure;
+                }
+            }
+        };
+    }
+
+    private BoardGameRecommendationModel modelDelegate(
+            String provider,
+            String modelName,
+            String publicationModelName,
+            ChatModel chatModel) {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         var resolvedModel = new RuntimeModelConfiguration.ResolvedModel(
-                chatModel, provider, modelName, "deepseek".equals(provider));
+                chatModel, provider, modelName, "deepseek".equals(provider), true);
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
                 .thenReturn(resolvedModel);
         when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
@@ -392,29 +432,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 .thenReturn("deepseek".equals(provider));
         double temperature = Double.parseDouble(
                 environment("RULEPILOT_RECOMMENDATION_CANARY_TEMPERATURE", "0.0"));
-        BoardGameRecommendationModel delegate =
-                new SpringAiBoardGameRecommendationModel(configuration, temperature);
-        return new BoardGameRecommendationModel() {
-            @Override
-            public boolean configured() {
-                return true;
-            }
-
-            @Override
-            public Turn next(BoardGameRecommendationModel.Request request) {
-                long started = System.nanoTime();
-                int callIndex = capture.begin("react", request);
-                try {
-                    Turn result = delegate.next(request);
-                    capture.complete(callIndex, result, elapsed(started));
-                    return result;
-                } catch (RuntimeException | Error failure) {
-                    capture.fail(callIndex, failure, elapsed(started));
-                    throw failure;
-                }
-            }
-
-        };
+        return new SpringAiBoardGameRecommendationModel(
+                configuration,
+                temperature,
+                publicationModelName,
+                Duration.parse(environment("RULEPILOT_RECOMMENDATION_CANARY_HEDGE_DELAY", "PT8S")));
     }
 
     private BoardGameRecommendationWebResearch configuredResearchThatMustNotRun() {
@@ -505,6 +527,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         report.put("generatedAt", Instant.now().toString());
         report.put("provider", capture.provider);
         report.put("model", capture.model);
+        report.put("publicationModel", capture.publicationModel);
         report.put("temperature", Double.parseDouble(
                 environment("RULEPILOT_RECOMMENDATION_CANARY_TEMPERATURE", "0.0")));
         report.put("rawModelCalls", capture.calls);
@@ -657,6 +680,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private static final class Capture {
         private final String provider;
         private final String model;
+        private String publicationModel;
         private final List<Map<String, Object>> calls = new ArrayList<>();
         private final List<CapturedToolCall> toolCalls = new ArrayList<>();
         private String currentTurn = "unlabeled";
@@ -670,11 +694,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             currentTurn = label;
         }
 
-        private synchronized int begin(String operation, BoardGameRecommendationModel.Request request) {
+        private synchronized int begin(
+                String operation,
+                String modelName,
+                BoardGameRecommendationModel.Request request) {
             Map<String, Object> call = new LinkedHashMap<>();
             call.put("ordinal", calls.size() + 1);
             call.put("turn", currentTurn);
             call.put("operation", operation);
+            call.put("model", modelName);
             call.put("status", "STARTED");
             call.put("messageCharacters", request.messages().stream()
                     .mapToInt(message -> message.content().codePointCount(0, message.content().length()))

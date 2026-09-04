@@ -15,6 +15,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -175,6 +176,119 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+    }
+
+    @Test
+    void selectsTheExactQwenFunctionWhenOneRequiredActionRemains() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen-test");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                "tool_calls",
+                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        adapter.next(request(
+                List.of(new ToolSpec(
+                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getToolChoice()).isEqualTo(Map.of(
+                "type", "function",
+                "function", Map.of("name", "recommend_games")));
+        assertThat(options.getParallelToolCalls()).isFalse();
+    }
+
+    @Test
+    void usesTheConfiguredPublicationModelForTheStartupQwenTerminalAction() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "qwen", "qwen3.7-plus", false, true));
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build());
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                "tool_calls",
+                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
+        var adapter = new SpringAiBoardGameRecommendationModel(
+                configuration, 0.0, "qwen3.7-flash");
+
+        adapter.next(request(
+                List.of(new ToolSpec(
+                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("qwen3.7-flash");
+        assertThat(options.getToolChoice()).isEqualTo(Map.of(
+                "type", "function",
+                "function", Map.of("name", "recommend_games")));
+    }
+
+    @Test
+    void keepsAPersonalQwenSelectionOnItsOwnersModel() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "qwen", "personal-qwen");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                "tool_calls",
+                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
+        var adapter = new SpringAiBoardGameRecommendationModel(
+                configuration, 0.0, "qwen3.6-flash");
+
+        adapter.next(request(
+                List.of(new ToolSpec(
+                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("personal-qwen");
+    }
+
+    @Test
+    void hedgesASlowStartupQwenCallAndUsesTheFirstCompletedResponse() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "qwen", "qwen3.7-plus", false, true));
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build());
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var releasePrimary = new java.util.concurrent.CountDownLatch(1);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() == 1) {
+                releasePrimary.await();
+            }
+            return response(
+                    "tool_calls",
+                    new AssistantMessage.ToolCall(
+                            "publish-1", "function", "recommend_games", "{}"));
+        });
+        var adapter = new SpringAiBoardGameRecommendationModel(
+                configuration, 0.0, "", java.time.Duration.ofMillis(5));
+
+        var turn = adapter.next(request(
+                List.of(new ToolSpec(
+                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        assertThat(turn.toolCalls()).extracting(call -> call.name()).containsExactly("recommend_games");
+        assertThat(calls).hasValue(2);
+        releasePrimary.countDown();
+        adapter.stopHedgedCalls();
     }
 
     @Test

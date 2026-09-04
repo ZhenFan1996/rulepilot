@@ -361,7 +361,7 @@ async function runCandidateBoundaryParser(contract, payload, overrides = {}) {
       RULEPILOT_EXPECTED_RELEASE_ID: `${'a'.repeat(40)}-101-2`,
       RULEPILOT_EXPECTED_COMMIT_SHA: 'a'.repeat(40),
       RULEPILOT_EXPECTED_PROVIDER: 'qwen',
-      RULEPILOT_EXPECTED_MODEL: 'qwen3.8-flash',
+      RULEPILOT_EXPECTED_MODEL: 'qwen3.7-plus',
       RULEPILOT_EXPECTED_BGG_ID: '1',
       ...overrides,
     },
@@ -478,7 +478,7 @@ function mergeProductionReport(target, overrides) {
 function productionRecommendationRawReport(overrides = {}) {
   const testedSha = 'a'.repeat(40)
   const activeReleaseId = `${testedSha}-101-1`
-  const model = { provider: 'qwen', model: 'qwen3.8-flash' }
+  const model = { provider: 'qwen', model: 'qwen3.7-plus' }
   const report = {
     reportSchemaVersion: 2,
     generatedAt: '2026-08-29T00:00:00.000Z',
@@ -572,7 +572,7 @@ function productionRecommendationSanitizerEnvironment(root) {
     RULEPILOT_RECOMMENDATION_MAXIMUM_COMPLEXITY: '2.5',
     RULEPILOT_RECOMMENDATION_EXPECTED_GAME_TYPE: 'party',
     RULEPILOT_RECOMMENDATION_EXPECTED_PROVIDER: 'qwen',
-    RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: 'qwen3.8-flash',
+    RULEPILOT_RECOMMENDATION_EXPECTED_MODEL: 'qwen3.7-plus',
   }
 }
 
@@ -753,7 +753,7 @@ async function createReleaseGuardFixture() {
     '      if [[ -n "${RULEPILOT_TEST_MODEL_BODY+x}" ]]; then',
     '        printf "%s\\n" "$RULEPILOT_TEST_MODEL_BODY" > "$body_path"',
     '      else',
-    '        printf "{\\"recommendationModel\\":{\\"provider\\":\\"qwen\\",\\"model\\":\\"qwen3.8-flash\\"}}\\n" > "$body_path"',
+    '        printf "{\\"recommendationModel\\":{\\"provider\\":\\"qwen\\",\\"model\\":\\"qwen3.7-plus\\"}}\\n" > "$body_path"',
     '      fi',
     '      ;;',
     '    */api/auth/csrf)',
@@ -1193,7 +1193,7 @@ test('production recommendation sanitizer emits a safe fallback without a valid 
         code: 'missing_or_invalid_raw_report',
       })
       assert.equal(sanitized.deployment.testedSha, 'a'.repeat(40))
-      assert.equal(sanitized.model.expected.model, 'qwen3.8-flash')
+      assert.equal(sanitized.model.expected.model, 'qwen3.7-plus')
       assert.equal(sanitized.rawModelOutputCaptured, false)
       assert.doesNotMatch(sanitizedText, /player-secret-marker|deployment-secret-marker/)
       await assert.rejects(
@@ -2727,7 +2727,7 @@ test('release guard commit keeps the candidate environment and removes the secre
         'RULEPILOT_USER_USERNAME=player',
         'RULEPILOT_USER_PASSWORD=player-secret-marker',
         'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen',
-        'BGG_RECOMMENDATION_MODEL=qwen3.8-flash',
+        'BGG_RECOMMENDATION_MODEL=qwen3.7-plus',
         '',
       ].join('\n'),
     )
@@ -2744,7 +2744,7 @@ test('release guard commit keeps the candidate environment and removes the secre
         'RULEPILOT_USER_USERNAME=player',
         'RULEPILOT_USER_PASSWORD=player-secret-marker',
         'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen',
-        'BGG_RECOMMENDATION_MODEL=qwen3.8-flash',
+        'BGG_RECOMMENDATION_MODEL=qwen3.7-plus',
         '',
       ].join('\n'),
     )
@@ -2837,7 +2837,7 @@ test('candidate publication failures preserve exact rollback eligibility', async
           'RULEPILOT_USER_USERNAME=player',
           'RULEPILOT_USER_PASSWORD=player-secret-marker',
           'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen',
-          `BGG_RECOMMENDATION_MODEL=${scenario.candidateModel ?? 'qwen3.8-flash'}`,
+          `BGG_RECOMMENDATION_MODEL=${scenario.candidateModel ?? 'qwen3.7-plus'}`,
           '',
         ].join('\n'),
         { mode: 0o600 },
@@ -3122,20 +3122,30 @@ test('deployment isolates the recommendation startup model from shared Qwen role
   assert.match(deploymentWorkflow,
     /managed_runtime_keys='[^']* BGG_RECOMMENDATION_MODEL [^']*'/)
   assert.match(deploymentWorkflow,
+    /managed_runtime_keys='[^']* BGG_RECOMMENDATION_PUBLICATION_MODEL [^']*'/)
+  assert.match(deploymentWorkflow,
+    /managed_runtime_keys='[^']* BGG_RECOMMENDATION_HEDGE_DELAY [^']*'/)
+  assert.match(deploymentWorkflow,
     /managed_runtime_keys='[^']* BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS [^']*'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen'/)
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL=qwen3\.8-flash'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL=qwen3\.7-plus'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_PUBLICATION_MODEL=qwen3\.7-flash'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_HEDGE_DELAY=PT6S'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS=2000'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT5S'/)
   assert.match(deploymentWorkflow, /'WEB_SEARCH_MODEL=qwen3\.8-flash'/)
   assert.match(deploymentCompose,
     /BGG_RECOMMENDATION_MODEL: \$\{BGG_RECOMMENDATION_MODEL:-\}/)
+  assert.match(deploymentCompose,
+    /BGG_RECOMMENDATION_PUBLICATION_MODEL: \$\{BGG_RECOMMENDATION_PUBLICATION_MODEL:-\}/)
+  assert.match(deploymentCompose,
+    /BGG_RECOMMENDATION_HEDGE_DELAY: \$\{BGG_RECOMMENDATION_HEDGE_DELAY:-PT0S\}/)
   assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'QWEN_MODEL=qwen3\.7-plus'/)
   assert.doesNotMatch(deploymentWorkflow, /'QWEN_MODEL=qwen3\.8-flash'/)
   assert.match(applicationConfiguration,
-    /recommendation-agent:[\s\S]{0,600}?timeout: \$\{AGENT_TIMEOUT:PT2M\}/)
+    /recommendation-agent:[\s\S]{0,800}?timeout: \$\{AGENT_TIMEOUT:PT2M\}/)
   assert.match(deploymentWorkflow, /managed_runtime_keys='[^']* AGENT_TIMEOUT [^']*'/)
   assert.match(deploymentWorkflow, /'AGENT_TIMEOUT=PT2M'/)
   assert.match(deploymentCompose, /AGENT_TIMEOUT: \$\{AGENT_TIMEOUT:-PT2M\}/)
@@ -3177,7 +3187,7 @@ test('candidate publication parser executes exact positive and negative contract
   const releaseSha = 'a'.repeat(40)
   await runCandidateBoundaryParser('release', JSON.stringify({ releaseId, commitSha: releaseSha }))
   await runCandidateBoundaryParser('model', JSON.stringify({
-    recommendationModel: { provider: 'qwen', model: 'qwen3.8-flash' },
+    recommendationModel: { provider: 'qwen', model: 'qwen3.7-plus' },
   }))
   await runCandidateBoundaryParser('csrf', JSON.stringify({
     token: 'csrf-token',
@@ -3295,7 +3305,7 @@ test('deployment classifies independent public observation without invoking a pa
     'production availability must perform exactly the six bounded HTTPS GET probes',
   )
   assert.match(deploymentWorkflow,
-    /\.recommendationModel\.provider == "qwen"[\s\S]*?\.recommendationModel\.model == "qwen3\.8-flash"/)
+    /\.recommendationModel\.provider == "qwen"[\s\S]*?\.recommendationModel\.model == "qwen3\.7-plus"/)
   assert.match(deploymentWorkflow,
     /verify_public_once\(\)[\s\S]*?\/api\/public\/release[\s\S]*?\.commitSha == \$deploy_sha[\s\S]*?\.releaseId == \$deploy_release_id[\s\S]*?tolower\(directives\[index_value\]\) == "no-store"/)
   assert.match(publicAvailability, /\[\[ -s "\$home_body" \]\]/)
@@ -3348,7 +3358,7 @@ test('release guard owns the exact candidate publication boundary before commit'
   assert.doesNotMatch(boundary,
     /read_environment_value BGG_RECOMMENDATION_MODEL_(?:PROVIDER|MODEL)/)
   assert.match(productionReleaseGuard,
-    /readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen[\s\S]*?readonly EXPECTED_RECOMMENDATION_MODEL=qwen3\.8-flash/)
+    /readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen[\s\S]*?readonly EXPECTED_RECOMMENDATION_MODEL=qwen3\.7-plus/)
   assert.match(boundary,
     /RULEPILOT_EXPECTED_PROVIDER=\$EXPECTED_RECOMMENDATION_PROVIDER[\s\S]*?RULEPILOT_EXPECTED_MODEL=\$EXPECTED_RECOMMENDATION_MODEL/)
   assert.match(boundary,
