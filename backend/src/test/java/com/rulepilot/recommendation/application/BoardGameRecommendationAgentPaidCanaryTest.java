@@ -67,12 +67,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
         String prefix = provider.toUpperCase(Locale.ROOT);
-        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        String modelName = canaryModel(prefix);
+        Capture capture = new Capture(provider, modelName);
         BoardGameRecommendationModel model = model(
                 provider,
                 environment(prefix + "_API_KEY", null),
                 environment(prefix + "_BASE_URL", null),
-                environment(prefix + "_MODEL", null),
+                modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
@@ -121,12 +122,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
         String prefix = provider.toUpperCase(Locale.ROOT);
-        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        String modelName = canaryModel(prefix);
+        Capture capture = new Capture(provider, modelName);
         BoardGameRecommendationModel model = model(
                 provider,
                 environment(prefix + "_API_KEY", null),
                 environment(prefix + "_BASE_URL", null),
-                environment(prefix + "_MODEL", null),
+                modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
@@ -248,12 +250,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
         String prefix = provider.toUpperCase(Locale.ROOT);
-        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        String modelName = canaryModel(prefix);
+        Capture capture = new Capture(provider, modelName);
         BoardGameRecommendationModel model = model(
                 provider,
                 environment(prefix + "_API_KEY", null),
                 environment(prefix + "_BASE_URL", null),
-                environment(prefix + "_MODEL", null),
+                modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
@@ -306,12 +309,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
         String prefix = provider.toUpperCase(Locale.ROOT);
-        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        String modelName = canaryModel(prefix);
+        Capture capture = new Capture(provider, modelName);
         BoardGameRecommendationModel model = model(
                 provider,
                 environment(prefix + "_API_KEY", null),
                 environment(prefix + "_BASE_URL", null),
-                environment(prefix + "_MODEL", null),
+                modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
@@ -551,6 +555,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             return defaultValue;
         }
         return value.strip();
+    }
+
+    private String canaryModel(String providerPrefix) {
+        String candidate = System.getenv("RULEPILOT_RECOMMENDATION_CANARY_MODEL");
+        return candidate == null || candidate.isBlank()
+                ? environment(providerPrefix + "_MODEL", null)
+                : candidate.strip();
     }
 
     private static long elapsed(long startedAt) {

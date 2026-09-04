@@ -61,7 +61,7 @@ on:
         description: Effective recommendation model required for this canary
         required: true
         type: string
-        default: 'qwen3.7-plus'
+        default: 'qwen3.8-flash'
 
 permissions:
   contents: read
@@ -491,6 +491,8 @@ jobs:
                 is_finite_number and . == floor and . >= $minimum and . <= $maximum;
               def is_integer_or_null($minimum; $maximum):
                 . == null or is_integer($minimum; $maximum);
+              def is_elapsed_array:
+                type == "array" and all(.[]; is_integer(0; 120000));
               def is_boolean_or_null:
                 . == null or type == "boolean";
               def is_sha256:
@@ -580,6 +582,8 @@ jobs:
                   and (.naturalReply.noExternalWork | is_boolean_or_null)
                   and (.naturalReply.persistedMatched | is_boolean_or_null)
                   and (.naturalReply.domMatched | is_boolean_or_null)
+                  and (.naturalReply.agentElapsedMs | is_integer_or_null(0; 120000))
+                  and (.naturalReply.modelCallElapsedMs | is_elapsed_array)
                   and (.naturalReply.failure | is_failure_or_null)
                   and (.recommendation | type) == "object"
                   and (.recommendation.promptSha256 | is_sha256)
@@ -604,6 +608,8 @@ jobs:
                   and (.recommendation.publicationErrors | is_safe_text_array(64))
                   and (.recommendation.persistedMatched | is_boolean_or_null)
                   and (.recommendation.domMatched | is_boolean_or_null)
+                  and (.recommendation.agentElapsedMs | is_integer_or_null(0; 120000))
+                  and (.recommendation.modelCallElapsedMs | is_elapsed_array)
                   and (.recommendation.failure | is_failure_or_null)
                   and (.handoff | type) == "object"
                   and (.handoff.selectedBggId | is_integer_or_null(1; 1000000000))
@@ -679,6 +685,8 @@ jobs:
                   and $raw.naturalReply.noExternalWork == true
                   and $raw.naturalReply.persistedMatched == true
                   and $raw.naturalReply.domMatched == true
+                  and ($raw.naturalReply.agentElapsedMs | is_integer(0; 120000))
+                  and ($raw.naturalReply.modelCallElapsedMs | is_elapsed_array)
                   and $raw.naturalReply.failure == null
                   and $raw.recommendation.requestedCardCount == $requestedCardCount
                   and $raw.recommendation.expectedPlayerCount == $expectedPlayerCount
@@ -699,6 +707,8 @@ jobs:
                   and ($raw.recommendation.publicationErrors | length) == 0
                   and $raw.recommendation.persistedMatched == true
                   and $raw.recommendation.domMatched == true
+                  and ($raw.recommendation.agentElapsedMs | is_integer(0; 120000))
+                  and ($raw.recommendation.modelCallElapsedMs | is_elapsed_array)
                   and $raw.recommendation.failure == null
                   and accepted_handoff(
                     $raw.handoff;
@@ -739,6 +749,8 @@ jobs:
                     noExternalWork: null,
                     persistedMatched: null,
                     domMatched: null,
+                    agentElapsedMs: null,
+                    modelCallElapsedMs: [],
                     failure: null
                   },
                   recommendation: {
@@ -756,6 +768,8 @@ jobs:
                     publicationErrors: [],
                     persistedMatched: null,
                     domMatched: null,
+                    agentElapsedMs: null,
+                    modelCallElapsedMs: [],
                     failure: null
                   },
                   handoff: {
@@ -828,6 +842,8 @@ jobs:
                       noExternalWork: .naturalReply.noExternalWork,
                       persistedMatched: .naturalReply.persistedMatched,
                       domMatched: .naturalReply.domMatched,
+                      agentElapsedMs: .naturalReply.agentElapsedMs,
+                      modelCallElapsedMs: .naturalReply.modelCallElapsedMs,
                       failure: .naturalReply.failure
                     },
                     recommendation: {
@@ -847,6 +863,8 @@ jobs:
                       publicationErrors: .recommendation.publicationErrors,
                       persistedMatched: .recommendation.persistedMatched,
                       domMatched: .recommendation.domMatched,
+                      agentElapsedMs: .recommendation.agentElapsedMs,
+                      modelCallElapsedMs: .recommendation.modelCallElapsedMs,
                       failure: .recommendation.failure
                     },
                     handoff: {

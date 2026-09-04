@@ -59,6 +59,7 @@ interface RecommendationResult {
   }
   shortfall?: { requestedCount: number, availableCount: number } | null
   completedWork?: string[], catalogCalls?: number, webResearchCalls?: number
+  modelCallElapsedMs?: number[], agentElapsedMs?: number
   failureBoundary?: string | null, failureReason?: string | null
   games: RecommendationGame[]
 }
@@ -110,6 +111,7 @@ interface ProductionReport {
     promptSha256: string, requestMatched: boolean, outcome: RecommendationOutcome | null
     assistantMessageSha256: string | null
     noExternalWork: boolean | null, persistedMatched: boolean | null, domMatched: boolean | null
+    agentElapsedMs: number | null, modelCallElapsedMs: number[]
     failure: FailureEvidence | null
   }
   recommendation: {
@@ -122,6 +124,7 @@ interface ProductionReport {
     }>
     shortfallCount: number | null, publicationErrors: string[]
     persistedMatched: boolean | null, domMatched: boolean | null
+    agentElapsedMs: number | null, modelCallElapsedMs: number[]
     failure: FailureEvidence | null
   }
   handoff: {
@@ -205,14 +208,14 @@ function initialReport(): ProductionReport {
     naturalReply: {
       promptSha256: sha256(NATURAL_PROMPT), requestMatched: false, outcome: null,
       assistantMessageSha256: null, noExternalWork: null, persistedMatched: null,
-      domMatched: null, failure: null,
+      domMatched: null, agentElapsedMs: null, modelCallElapsedMs: [], failure: null,
     },
     recommendation: {
       promptSha256: sha256(selectionPrompt), requestedCardCount: null, expectedPlayerCount: null,
       maximumDurationMinutes: null, maximumComplexity: null, expectedGameType: null,
       requestMatched: false, outcome: null, assistantMessageSha256: null, cards: [],
       shortfallCount: null, publicationErrors: [], persistedMatched: null, domMatched: null,
-      failure: null,
+      agentElapsedMs: null, modelCallElapsedMs: [], failure: null,
     },
     handoff: {
       selectedBggId: null, actionClicked: false, importResponseStatus: null,
@@ -976,6 +979,8 @@ test('production publishes natural and grounded recommendation replies before th
     const natural = naturalTurn.terminal.result
     report.naturalReply.outcome = natural.outcome
     report.naturalReply.assistantMessageSha256 = sha256(natural.assistantMessage)
+    report.naturalReply.agentElapsedMs = natural.agentElapsedMs ?? null
+    report.naturalReply.modelCallElapsedMs = natural.modelCallElapsedMs ?? []
     report.naturalReply.noExternalWork = natural.catalogCalls === 0
       && natural.webResearchCalls === 0 && natural.games.length === 0
     if (natural.outcome !== 'conversation') {
@@ -1003,6 +1008,8 @@ test('production publishes natural and grounded recommendation replies before th
     const recommendation = recommendationTurn.terminal.result
     report.recommendation.outcome = recommendation.outcome
     report.recommendation.assistantMessageSha256 = sha256(recommendation.assistantMessage)
+    report.recommendation.agentElapsedMs = recommendation.agentElapsedMs ?? null
+    report.recommendation.modelCallElapsedMs = recommendation.modelCallElapsedMs ?? []
     report.recommendation.cards = recommendation.games.map(entry => ({
       bggId: entry.game.bggId,
       nameSha256: sha256(entry.game.name),

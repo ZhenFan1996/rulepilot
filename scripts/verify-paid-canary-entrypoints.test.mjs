@@ -29,6 +29,10 @@ const scriptContents = Object.fromEntries(
 const recommendation = scriptContents['scripts/run-recommendation-paid-canary.sh']
 const teachingPage = scriptContents['scripts/run-gstone-visual-page-canary.sh']
 const historicalTeaching = scriptContents['scripts/run-real-teaching-agent.sh']
+const recommendationCanaryTest = readFileSync(path.join(
+  root,
+  'backend/src/test/java/com/rulepilot/recommendation/application/BoardGameRecommendationAgentPaidCanaryTest.java',
+), 'utf8')
 
 function withoutPaidAuthorization() {
   const environment = { ...process.env }
@@ -99,6 +103,9 @@ test('recommendation canary executes greeting, follow-up, playful, and descripti
   assert.match(recommendation, /keepsAnExplicitCooperativeRequestInsideTheTypedPlayModeBoundary/)
   assert.doesNotMatch(recommendation, /RULEPILOT_RECOMMENDATION_CANARY_SCENARIO/)
   assert.doesNotMatch(recommendation, /sanitized diagnostics/)
+  assert.match(recommendationCanaryTest, /RULEPILOT_RECOMMENDATION_CANARY_MODEL/)
+  assert.match(recommendationCanaryTest,
+    /canaryModel\(prefix\)[\s\S]*?new Capture\(provider, modelName\)[\s\S]*?modelName,/)
 })
 
 test('the teaching page canary stays on the single real image-page contract', () => {
