@@ -15,6 +15,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
@@ -22,6 +25,8 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Out
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressStage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationPart;
 import com.rulepilot.recommendation.application.BoardGameRecommendationProperties;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -38,6 +43,61 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 class BggRecommendationAgentStreamControllerTest {
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamsAGroundedRecommendationCardBeforeTheTerminalResult() throws Exception {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+        Game game = new Game(
+                new Ranking(
+                        451,
+                        "First Signal",
+                        2024,
+                        10,
+                        new BigDecimal("7.1"),
+                        new BigDecimal("7.4"),
+                        1000,
+                        List.of(BggGameType.STRATEGY)),
+                null);
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<RecommendationPart> parts = invocation.getArgument(5);
+                    parts.accept(new RecommendationPart(
+                            new RecommendedGame(game, List.of(), List.of()),
+                            List.of()));
+                    return new ConversationResponse(
+                            Outcome.RECOMMENDATIONS,
+                            DecisionMode.MODEL_ASSISTED,
+                            "第一款已经核对。",
+                            RecommendationProfile.empty(),
+                            null,
+                            1,
+                            1,
+                            List.of(new RecommendedGame(game, List.of(), List.of())));
+                });
+        var controller = controller(agent, presentation, new SyncTaskExecutor());
+        var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
+                        .principal(() -> "player")
+                        .queryParam("locale", "zh-CN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("{\"profile\":null,\"message\":\"推荐一款\"}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        String stream = mockMvc.perform(asyncDispatch(pending))
+                .andReturn()
+                .getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+        assertThat(stream)
+                .contains("event:recommendation_part", "\"bggId\":451", "event:result")
+                .containsSubsequence("event:recommendation_part", "event:result");
+    }
 
     @Test
     void keepsAFiveSecondTransportGraceBeyondTheConfiguredAgentBudget() {
@@ -57,7 +117,7 @@ class BggRecommendationAgentStreamControllerTest {
                 () -> "player");
 
         assertThat(emitter.getTimeout()).isEqualTo(125_000L);
-        verify(agent, never()).converse(any(), any(), any(), any(), any());
+        verify(agent, never()).converse(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -82,7 +142,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("event:progress")
                 .contains("understanding_request")
                 .contains("\"elapsedMs\":0");
-        verify(agent, never()).converse(any(), any(), any(), any(), any());
+        verify(agent, never()).converse(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -90,7 +150,7 @@ class BggRecommendationAgentStreamControllerTest {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         String accepted = "😀".repeat(1_500) + "  A\n中";
-        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any())).thenAnswer(invocation -> {
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any(), any())).thenAnswer(invocation -> {
             var command = invocation.getArgument(0, BoardGameRecommendationAgent.ConversationRequest.class);
             assertThat(command.message()).isEqualTo(accepted);
             Consumer<String> answerPart = invocation.getArgument(4);
@@ -129,7 +189,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("event:answer_part", "{\"text\":\"完整\"}", "{\"text\":\"完整收到。\"}")
                 .contains("event:result", "完整收到。")
                 .containsSubsequence("event:answer_part", "event:result");
-        verify(agent).converse(any(), eq("zh-CN"), eq("player"), any(), any());
+        verify(agent).converse(any(), eq("zh-CN"), eq("player"), any(), any(), any());
     }
 
     @Test
@@ -139,7 +199,7 @@ class BggRecommendationAgentStreamControllerTest {
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
-        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any())).thenAnswer(invocation -> {
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any(), any(), any())).thenAnswer(invocation -> {
             Consumer<ProgressUpdate> progress = invocation.getArgument(3);
             progress.accept(new ProgressUpdate(
                     ProgressStage.UNDERSTANDING_REQUEST,

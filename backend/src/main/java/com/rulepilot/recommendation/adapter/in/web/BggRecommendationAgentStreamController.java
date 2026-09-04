@@ -117,7 +117,8 @@ public class BggRecommendationAgentStreamController {
                                     locale,
                                     modelConfigurationOwner,
                                     update -> sendAgentProgress(emitter, open, update),
-                                    text -> sendAnswerPart(emitter, open, text)),
+                                    text -> sendAnswerPart(emitter, open, text),
+                                    part -> sendRecommendationPart(emitter, open, part, locale)),
                             presentation)
                     : BggRecommendationAgentController.present(
                             agent.converse(
@@ -125,7 +126,8 @@ public class BggRecommendationAgentStreamController {
                                     locale,
                                     modelConfigurationOwner,
                                     update -> sendAgentProgress(emitter, open, update),
-                                    text -> sendAnswerPart(emitter, open, text)),
+                                    text -> sendAnswerPart(emitter, open, text),
+                                    part -> sendRecommendationPart(emitter, open, part, locale)),
                             locale,
                             presentation);
             if (!open.get()) return;
@@ -187,6 +189,22 @@ public class BggRecommendationAgentStreamController {
         } catch (IOException | RuntimeException exception) {
             open.set(false);
             LOGGER.debug("Recommendation answer stream disconnected before completion");
+        }
+    }
+
+    private void sendRecommendationPart(
+            SseEmitter emitter,
+            AtomicBoolean open,
+            BoardGameRecommendationAgent.RecommendationPart part,
+            String locale) {
+        if (!open.get()) return;
+        try {
+            emitter.send(SseEmitter.event()
+                    .name("recommendation_part")
+                    .data(BggRecommendationAgentController.present(part, locale, presentation)));
+        } catch (IOException | RuntimeException exception) {
+            open.set(false);
+            LOGGER.debug("Recommendation content stream disconnected before completion");
         }
     }
 

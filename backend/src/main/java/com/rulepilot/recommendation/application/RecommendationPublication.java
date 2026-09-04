@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /** The single structure, candidate, evidence-ownership, and publication boundary for recommendation prose. */
 final class RecommendationPublication {
@@ -180,6 +181,164 @@ final class RecommendationPublication {
                 new Permit(requestedCount, selectedGames, shortfall),
                 draft,
                 List.copyOf(localizedFailures));
+    }
+
+    Consumer<String> previewPublisher(
+            RecommendationAgentState state,
+            String locale,
+            Consumer<BoardGameRecommendationAgent.RecommendationPart> listener) {
+        Objects.requireNonNull(listener, "recommendation part listener is required");
+        return new PreviewPublisher(state, locale, listener)::accept;
+    }
+
+    private BoardGameRecommendationAgent.RecommendationPart previewCandidate(
+            RecommendationAgentState state,
+            String locale,
+            String selectionJson) {
+        try {
+            JsonNode selection = parse(selectionJson);
+            requireObject(selection, SELECTION_REQUIRED_FIELDS);
+            int bggId = positiveInteger(selection.path("bggId"));
+            PublicationSeed pending = Objects.requireNonNull(
+                    state.pendingPublicationSeed, "pending recommendation publication is required");
+            Game game = validatedCandidate(state, pending, runtime.recommendableIds(state), bggId);
+            Map<String, CandidateObservation> availableEvidence =
+                    observations.narrativeObservations(game, state.research);
+            String whyFit = null;
+            String tradeoff = null;
+            List<String> evidenceIds = List.of();
+            try {
+                whyFit = playerText(selection.path("whyFit"), WHY_FIT_MAX_CODE_POINTS);
+                evidenceIds = evidenceIds(
+                        selection.path("internalEvidenceIds"), 1, availableEvidence.keySet());
+                if (selection.has("tradeoff")) {
+                    tradeoff = playerText(selection.path("tradeoff"), TRADEOFF_MAX_CODE_POINTS);
+                }
+            } catch (InvalidPublication ignored) {
+                // The final publication keeps a valid candidate while localizing optional narrative failure.
+                whyFit = null;
+                tradeoff = null;
+                evidenceIds = List.of();
+            }
+            RecommendedGame preview = projectModelReply(
+                    game,
+                    new CandidateReplyDraft(bggId, whyFit, tradeoff, evidenceIds),
+                    state,
+                    locale);
+            Set<String> publishedEvidenceIds = new LinkedHashSet<>();
+            java.util.stream.Stream.concat(
+                            preview.claims().stream(),
+                            preview.replyParts().stream().map(RecommendationReplyPart::claim))
+                    .flatMap(claim -> claim.evidence().stream())
+                    .map(CandidateObservation::id)
+                    .forEach(publishedEvidenceIds::add);
+            return new BoardGameRecommendationAgent.RecommendationPart(
+                    preview,
+                    runtime.responseSources(state, List.of(preview), publishedEvidenceIds));
+        } catch (InvalidPublication | IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private final class PreviewPublisher {
+        private final RecommendationAgentState state;
+        private final String locale;
+        private final Consumer<BoardGameRecommendationAgent.RecommendationPart> listener;
+        private final Set<Integer> emittedIds = new LinkedHashSet<>();
+        private int inspectedObjects;
+
+        private PreviewPublisher(
+                RecommendationAgentState state,
+                String locale,
+                Consumer<BoardGameRecommendationAgent.RecommendationPart> listener) {
+            this.state = state;
+            this.locale = locale;
+            this.listener = listener;
+        }
+
+        private void accept(String accumulatedArguments) {
+            List<String> complete = completeSelectionObjects(accumulatedArguments);
+            int limit = previewLimit(state, accumulatedArguments);
+            for (int index = inspectedObjects; index < complete.size(); index++) {
+                inspectedObjects++;
+                if (emittedIds.size() >= limit) continue;
+                BoardGameRecommendationAgent.RecommendationPart part =
+                        previewCandidate(state, locale, complete.get(index));
+                if (part == null || !emittedIds.add(part.game().game().ranking().bggId())) continue;
+                listener.accept(part);
+            }
+        }
+    }
+
+    private int previewLimit(RecommendationAgentState state, String accumulatedArguments) {
+        int requested;
+        if (state.activeSearch != null) {
+            requested = state.activeSearch.requestedCount() == null
+                    ? maximumResultCount
+                    : state.activeSearch.requestedCount();
+        } else {
+            requested = completedPositiveIntegerField(accumulatedArguments, "publicationCount");
+        }
+        return Math.min(maximumResultCount, Math.max(0, requested));
+    }
+
+    private int completedPositiveIntegerField(String json, String field) {
+        int fieldIndex = json == null ? -1 : json.indexOf('"' + field + '"');
+        if (fieldIndex < 0) return 0;
+        int colon = json.indexOf(':', fieldIndex + field.length() + 2);
+        if (colon < 0) return 0;
+        int cursor = colon + 1;
+        while (cursor < json.length() && Character.isWhitespace(json.charAt(cursor))) cursor++;
+        int start = cursor;
+        while (cursor < json.length() && Character.isDigit(json.charAt(cursor))) cursor++;
+        if (cursor == start || cursor == json.length()) return 0;
+        try {
+            return Integer.parseInt(json.substring(start, cursor));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    static List<String> completeSelectionObjects(String json) {
+        if (json == null || json.isEmpty()) return List.of();
+        int field = json.indexOf("\"selections\"");
+        if (field < 0) return List.of();
+        int array = json.indexOf('[', field + 12);
+        if (array < 0) return List.of();
+        List<String> objects = new ArrayList<>();
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        int start = -1;
+        for (int index = array + 1; index < json.length(); index++) {
+            char character = json.charAt(index);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (character == '\\') {
+                    escaped = true;
+                } else if (character == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (character == '"') {
+                inString = true;
+            } else if (character == '{') {
+                if (depth == 0) start = index;
+                depth++;
+            } else if (character == '}') {
+                if (depth == 0) return List.copyOf(objects);
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    objects.add(json.substring(start, index + 1));
+                    start = -1;
+                }
+            } else if (character == ']' && depth == 0) {
+                break;
+            }
+        }
+        return List.copyOf(objects);
     }
 
     ConversationResponse publish(

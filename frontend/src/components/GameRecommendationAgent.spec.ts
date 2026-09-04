@@ -177,6 +177,47 @@ describe('GameRecommendationAgent', () => {
     expect(evidence.attributes('rel')).toContain('noopener')
   })
 
+  it('shows validated recommendation cards as they arrive before the terminal result', async () => {
+    const encoder = new TextEncoder()
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const entry = { game, fitClaims: [], replyParts: [] }
+    const result: RecommendationAgentResponse = {
+      outcome: 'recommendations', responseLocale: 'zh-CN', assistantMessage: '先看这款。',
+      profile, clarification: null, sourceCount: 1, candidatesEvaluated: 1, games: [entry],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller },
+      }), { headers: { 'Content-Type': 'text/event-stream' } })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('推荐一款自然主题游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(streamController).not.toBeNull()
+
+    streamController!.enqueue(encoder.encode(
+      `event: recommendation_part\ndata: ${JSON.stringify({ game: entry, researchSources: [] })}\n\n`,
+    ))
+    await flushPromises()
+
+    const pending = wrapper.get('[data-testid="pending-recommendation-parts"]')
+    expect(pending.text()).toContain('已核对的选择')
+    expect(pending.get('[data-testid="recommendation-game-title"]').text()).toBe('展翅翱翔')
+    expect(wrapper.find('[data-testid="assistant-recommendation-turn"]').exists()).toBe(false)
+
+    streamController!.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify(result)}\n\n`))
+    streamController!.close()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-recommendation-parts"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="assistant-recommendation-turn"]').text()).toContain('先看这款。')
+  })
+
   it('keeps a failed request visible and lets the player retry it', async () => {
     const request = '想找四个人玩的合作游戏'
     const recoveredReply = '这次已经接上，我会从四人合作游戏继续找。'

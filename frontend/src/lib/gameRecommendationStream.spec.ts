@@ -68,6 +68,38 @@ describe('streamGameRecommendation', () => {
     expect(result).toMatchObject(payload)
   })
 
+  it('publishes each validated recommendation part before the terminal result', async () => {
+    const game = {
+      bggId: 451, name: 'First Signal', originalName: 'First Signal', nameLocalized: false,
+      publicationYear: 2024, overallRank: 10, geekRating: 7.1, averageRating: 7.4,
+      usersRated: 1000, thumbnailUrl: '', minPlayers: 2, maxPlayers: 4,
+      playingTimeMinutes: 60, averageWeight: 2.2, categories: [], mechanics: [],
+      bggUrl: 'https://boardgamegeek.com/boardgame/451',
+    }
+    const part = { game: { game, fitClaims: [], replyParts: [] }, researchSources: [] }
+    const payload = {
+      outcome: 'recommendations', assistantMessage: '第一款已经核对。', profile: emptyProfile,
+      clarification: null, sourceCount: 1, candidatesEvaluated: 1, games: [part.game],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: recommendation_part\ndata: ${JSON.stringify(part)}\n\n`
+      + `event: result\ndata: ${JSON.stringify(payload)}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )))
+    const streamed: number[] = []
+
+    const result = await streamGameRecommendation(
+      '/stream',
+      { method: 'POST' },
+      () => undefined,
+      () => undefined,
+      value => streamed.push(value.game.game.bggId),
+    )
+
+    expect(streamed).toEqual([451])
+    expect(result.games[0]?.game.bggId).toBe(451)
+  })
+
   it('publishes the terminal result without waiting for the proxy to close the SSE connection', async () => {
     const encoder = new TextEncoder()
     const payload = {

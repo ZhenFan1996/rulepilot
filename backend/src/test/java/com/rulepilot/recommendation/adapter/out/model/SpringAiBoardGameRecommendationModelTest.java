@@ -4,18 +4,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.IncrementalToolCallChatModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -26,8 +30,106 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import reactor.core.publisher.Flux;
 
 class SpringAiBoardGameRecommendationModelTest {
+
+    @Test
+    void publishesRawProviderArgumentDeltasWithoutWaitingForTheCompletedToolCall() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        StreamingChatModel chatModel = mock(StreamingChatModel.class);
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
+                .model("qwen3.7-plus")
+                .build());
+        when(chatModel.supportsIncrementalToolCallChunks()).thenReturn(true);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "qwen", "qwen3.7-plus", false, false, true));
+        when(chatModel.streamToolCallChunks(any(Prompt.class))).thenReturn(Flux.just(
+                chunk("call-1", "recommend_games", "{\"selections\":[{", ""),
+                chunk("", "", "\"bggId\":1}]", ""),
+                chunk("", "", ",\"playerReply\":\"好了\"}", "tool_calls")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0, "qwen-turbo");
+        List<String> accumulated = new ArrayList<>();
+
+        var turn = adapter.nextStreaming(
+                request(
+                        List.of(new ToolSpec(
+                                "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                        ToolChoice.REQUIRED),
+                null,
+                accumulated::add);
+
+        assertThat(accumulated).containsExactly(
+                "{\"selections\":[{",
+                "{\"selections\":[{\"bggId\":1}]",
+                "{\"selections\":[{\"bggId\":1}],\"playerReply\":\"好了\"}");
+        assertThat(turn.toolCalls()).containsExactly(new ToolCall(
+                "call-1",
+                "recommend_games",
+                "{\"selections\":[{\"bggId\":1}],\"playerReply\":\"好了\"}"));
+        assertThat(turn.completionStatus()).isEqualTo(CompletionStatus.COMPLETE);
+        verify(chatModel).streamToolCallChunks(any(Prompt.class));
+        verify(chatModel, never()).stream(any(Prompt.class));
+        verify(chatModel, never()).call(any(Prompt.class));
+    }
+
+    @Test
+    void streamsAndReassemblesRequiredQwenActionArgumentsWithBlankContinuationIdentity() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen3.7-plus");
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "qwen", "qwen3.7-plus", false, false, true));
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
+                response(
+                        null,
+                        new AssistantMessage.ToolCall(
+                                "call-1", "function", "recommend_games", "{\"selections\":[{")),
+                response(
+                        null,
+                        new AssistantMessage.ToolCall(
+                                "", "function", "", "\"bggId\":1}]")),
+                response(
+                        "tool_calls",
+                        new AssistantMessage.ToolCall(
+                                "", "function", "", ",\"playerReply\":\"好了\"}"))));
+        var adapter = new SpringAiBoardGameRecommendationModel(
+                configuration, 0.0, "qwen-turbo");
+        List<String> accumulated = new ArrayList<>();
+
+        var turn = adapter.nextStreaming(
+                request(
+                        List.of(new ToolSpec(
+                                "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                        ToolChoice.REQUIRED),
+                null,
+                accumulated::add);
+
+        assertThat(accumulated).containsExactly(
+                "{\"selections\":[{",
+                "{\"selections\":[{\"bggId\":1}]",
+                "{\"selections\":[{\"bggId\":1}],\"playerReply\":\"好了\"}");
+        assertThat(turn.toolCalls()).containsExactly(new ToolCall(
+                "call-1",
+                "recommend_games",
+                "{\"selections\":[{\"bggId\":1}],\"playerReply\":\"好了\"}"));
+        assertThat(turn.completionStatus()).isEqualTo(CompletionStatus.COMPLETE);
+        verify(chatModel).stream(any(Prompt.class));
+        verify(chatModel, never()).call(any(Prompt.class));
+    }
+
+    private IncrementalToolCallChatModel.Chunk chunk(
+            String id, String name, String arguments, String finishReason) {
+        return new IncrementalToolCallChatModel.Chunk(
+                "",
+                List.of(new IncrementalToolCallChatModel.ToolCallDelta(id, name, arguments)),
+                finishReason,
+                0,
+                0);
+    }
+
+    private interface StreamingChatModel extends ChatModel, IncrementalToolCallChatModel {}
 
     @Test
     void letsGeminiChooseAnActionOrFinishNaturally() {

@@ -97,6 +97,22 @@ public class RecommendationConversationCoordinator {
             String ownerUsername,
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener) {
+        return converse(
+                turn,
+                requestedLocale,
+                ownerUsername,
+                progressListener,
+                answerPartListener,
+                null);
+    }
+
+    public TurnResult converse(
+            SessionTurn turn,
+            String requestedLocale,
+            String ownerUsername,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<BoardGameRecommendationAgent.RecommendationPart> recommendationPartListener) {
         Objects.requireNonNull(turn, "recommendation session turn is required");
         Objects.requireNonNull(turn.clientTurnId(), "clientTurnId is required for a persisted turn");
         ConversationRequest validatedRequest = agent.validatedConversationRequest(turn.request());
@@ -147,7 +163,7 @@ public class RecommendationConversationCoordinator {
                 }
                 settledState.set(value);
             };
-            response = answerPartListener == null
+            response = answerPartListener == null && recommendationPartListener == null
                     ? agent.conversePersisted(
                             effectiveRequest,
                             locale,
@@ -160,6 +176,7 @@ public class RecommendationConversationCoordinator {
                             owner,
                             progressListener,
                             answerPartListener,
+                            recommendationPartListener,
                             checkpointListener);
             ConversationState nextState = nextState(
                     settledState.get(),

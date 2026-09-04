@@ -42,6 +42,7 @@ class QuotaAwareChatModelTest {
 
         assertThat(quotaAware.getOptions()).isSameAs(options);
         assertThat(quotaAware.getDefaultOptions()).isSameAs(options);
+        assertThat(quotaAware.supportsIncrementalToolCallChunks()).isFalse();
     }
 
     @Test

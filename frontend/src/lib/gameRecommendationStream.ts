@@ -1,5 +1,6 @@
 import type {
   RecommendationAgentResponse,
+  RecommendationPart,
   RecommendationProgressFocus,
   RecommendationProgressUpdate,
 } from '@/components/gameRecommendationTypes'
@@ -25,6 +26,7 @@ export async function streamGameRecommendation(
   init: RequestInit,
   onProgress: (update: RecommendationProgressUpdate) => void,
   onAnswerPart: (text: string) => void = () => undefined,
+  onRecommendationPart: (part: RecommendationPart) => void = () => undefined,
 ) {
   const response = await fetch(url, init)
   if (!response.ok) throw new RecommendationRequestError(response.status)
@@ -46,6 +48,9 @@ export async function streamGameRecommendation(
     } else if (event.event === 'answer_part') {
       const text = parseAnswerPart(JSON.parse(event.data) as unknown)
       if (text !== null) onAnswerPart(text)
+    } else if (event.event === 'recommendation_part') {
+      const part = parseRecommendationPart(JSON.parse(event.data) as unknown)
+      if (part !== null) onRecommendationPart(part)
     } else if (event.event === 'result') {
       result = JSON.parse(event.data) as RecommendationAgentResponse
     } else if (event.event === 'error') {
@@ -77,6 +82,22 @@ export async function streamGameRecommendation(
   }
   if (!result) throw new Error('recommendation stream ended without a result')
   return result
+}
+
+function parseRecommendationPart(value: unknown): RecommendationPart | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const game = candidate.game
+  if (!game || typeof game !== 'object' || Array.isArray(game)) return null
+  const recommended = game as Record<string, unknown>
+  const catalogGame = recommended.game
+  if (!catalogGame || typeof catalogGame !== 'object' || Array.isArray(catalogGame)) return null
+  const identity = catalogGame as Record<string, unknown>
+  if (!Number.isSafeInteger(identity.bggId) || (identity.bggId as number) <= 0) return null
+  if (typeof identity.name !== 'string' || !identity.name.trim()) return null
+  if (!Array.isArray(recommended.fitClaims) || !Array.isArray(recommended.replyParts)) return null
+  if (!Array.isArray(candidate.researchSources)) return null
+  return value as RecommendationPart
 }
 
 function parseAnswerPart(value: unknown): string | null {

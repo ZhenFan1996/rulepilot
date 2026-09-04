@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.google.genai.ApiClient;
 import com.google.genai.Client;
 import com.sun.net.httpserver.HttpServer;
+import com.rulepilot.modelconfig.IncrementalToolCallChatModel;
 import io.micrometer.observation.ObservationRegistry;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -15,8 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
-import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.retry.RetryTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -60,7 +61,7 @@ class ChatModelFactoryTest {
     void disablesProviderSdkRetriesSoTheApplicationOwnsEveryModelAttempt() {
         ChatModelFactory factory = new ChatModelFactory(ObservationRegistry.NOOP, Duration.ofSeconds(30));
 
-        OpenAiChatModel model = (OpenAiChatModel) factory.create(
+        ChatModel model = factory.create(
                 "qwen",
                 "test-api-key",
                 "https://provider.example/v1",
@@ -72,6 +73,7 @@ class ChatModelFactoryTest {
             assertThat(options.getBaseUrl()).isEqualTo("https://provider.example/v1");
             assertThat(options.getModel()).isEqualTo("qwen-test-model");
         });
+        assertThat(model).isInstanceOf(IncrementalToolCallChatModel.class);
     }
 
     @ParameterizedTest
@@ -117,7 +119,7 @@ class ChatModelFactoryTest {
         });
         server.start();
         ChatModelFactory factory = new ChatModelFactory(ObservationRegistry.NOOP, Duration.ofSeconds(5));
-        OpenAiChatModel model = (OpenAiChatModel) factory.create(
+        ChatModel model = factory.create(
                 "compatible",
                 "test-api-key",
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
@@ -126,7 +128,9 @@ class ChatModelFactoryTest {
         try {
             assertThatThrownBy(() -> {
                         if (streaming) {
-                            model.stream(new Prompt("hello")).blockLast();
+                            ((IncrementalToolCallChatModel) model)
+                                    .streamToolCallChunks(new Prompt("hello", model.getOptions()))
+                                    .blockLast();
                         } else {
                             model.call(new Prompt("hello"));
                         }

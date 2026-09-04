@@ -27,7 +27,7 @@ public class BoardGameRecommendationAgent {
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String RECOMMEND_TOOL = "recommend_games";
     static final String COMPARE_TOOL = "compare_candidates";
-    static final String PROMPT_VERSION = "recommendation-agent-v100-concise-publication";
+    static final String PROMPT_VERSION = "recommendation-agent-v101-streamed-publication";
 
     private final RecommendationReActLoop loop;
 
@@ -88,12 +88,29 @@ public class BoardGameRecommendationAgent {
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener) {
+        return converse(
+                input,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {});
+    }
+
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<RecommendationPart> recommendationPartListener) {
         return loop.converse(
                 input,
                 requestedLocale,
                 modelConfigurationOwner,
                 progressListener,
-                answerPartListener);
+                answerPartListener,
+                recommendationPartListener);
     }
 
     ConversationRequest validatedConversationRequest(ConversationRequest input) {
@@ -133,13 +150,39 @@ public class BoardGameRecommendationAgent {
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
+        return conversePersisted(
+                validatedRequestWithServerMemory,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {},
+                checkpointListener);
+    }
+
+    ConversationResponse conversePersisted(
+            ConversationRequest validatedRequestWithServerMemory,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<RecommendationPart> recommendationPartListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
         return loop.converseValidated(
                 validatedRequestWithServerMemory,
                 requestedLocale,
                 modelConfigurationOwner,
                 progressListener,
                 answerPartListener,
+                recommendationPartListener,
                 checkpointListener);
+    }
+
+    public record RecommendationPart(RecommendedGame game, List<ResearchSource> researchSources) {
+        public RecommendationPart {
+            Objects.requireNonNull(game, "streamed recommendation game is required");
+            researchSources = researchSources == null ? List.of() : List.copyOf(researchSources);
+        }
     }
 
     record TurnCheckpoint(RecommendationProfile profile, List<Game> verifiedGames) {

@@ -40,6 +40,45 @@ import org.junit.jupiter.api.Test;
 class RecommendationReActContractTest {
 
     @Test
+    void streamsEachCompleteGroundedCandidateBeforeTheTerminalResponseAndOmitsInvalidOnes() {
+        Game first = game(451, "First Signal", BggGameType.STRATEGY, 2, 4, 60, "2.2");
+        Game second = game(452, "Second Signal", BggGameType.STRATEGY, 2, 4, 75, "2.5");
+        RecordingCatalog catalog = new RecordingCatalog(first, second);
+        ScriptedModel model = new ScriptedModel(
+                action(
+                        "stream-search",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"publicationCount\":2,\"includeTypes\":[],\"excludeTypes\":[],\"requiredInteraction\":\"ANY\"}"),
+                action(
+                        "stream-publication",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"playerReply\":\"这两款都通过了核对。\",\"selections\":["
+                                + "{\"bggId\":451,\"whyFit\":\"第一款支持两到四人。\",\"internalEvidenceIds\":[\"B451:playerCount\"]},"
+                                + "{\"bggId\":999,\"whyFit\":\"不能显示。\",\"internalEvidenceIds\":[\"B451:playerCount\"]},"
+                                + "{\"bggId\":452,\"whyFit\":\"第二款也支持两到四人。\",\"internalEvidenceIds\":[\"B452:playerCount\"]}]}"));
+        RecommendationReActLoop loop = loop(model, catalog);
+        List<Integer> streamed = new ArrayList<>();
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "推荐两款两到四人的策略游戏。"),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                ignored -> {},
+                part -> streamed.add(part.game().game().ranking().bggId()));
+
+        assertThat(streamed).containsExactly(451, 452);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(451, 452);
+        assertThat(RecommendationPublication.completeSelectionObjects(
+                        "{\"selections\":[{\"bggId\":1,\"whyFit\":\"含有 } 和 \\\"引号\\\"\"},"
+                                + "{\"bggId\":2"))
+                .containsExactly("{\"bggId\":1,\"whyFit\":\"含有 } 和 \\\"引号\\\"\"}");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void namedCollectionDiscoveryPublishesItsSelectedTargetCount() throws Exception {
         Game northernWorks = gameWithFamilies(
                 481, "Ironworks: Northern Mills", List.of("Game: Ironworks"));
@@ -1423,6 +1462,22 @@ class RecommendationReActContractTest {
         @Override
         public Turn next(Request request, String ownerUsername) {
             return next(request);
+        }
+
+        @Override
+        public Turn nextStreaming(
+                Request request,
+                String ownerUsername,
+                java.util.function.Consumer<String> accumulatedArgumentsListener) {
+            Turn turn = next(request);
+            if (turn.toolCalls().size() != 1) return turn;
+            String arguments = turn.toolCalls().getFirst().argumentsJson();
+            StringBuilder accumulated = new StringBuilder();
+            arguments.codePoints().forEach(codePoint -> {
+                accumulated.appendCodePoint(codePoint);
+                accumulatedArgumentsListener.accept(accumulated.toString());
+            });
+            return turn;
         }
     }
 

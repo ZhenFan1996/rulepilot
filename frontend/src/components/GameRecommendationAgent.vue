@@ -22,6 +22,8 @@ import type {
   RecommendationProgressUpdate,
   RecommendationProgressStage,
   RecommendationProfile,
+  RecommendedGame,
+  ResearchSource,
   RecommendationServerSession,
 } from '@/components/gameRecommendationTypes'
 import { useModalFocus } from '@/composables/useModalFocus'
@@ -51,6 +53,7 @@ const copy = {
     source: '可核对的 BGG 资料 · 从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     researchSources: '资料来源',
     recommendationJudgment: '我的选择与取舍',
+    streamingChoices: '已核对的选择',
     shortfall: '本轮已核对 · {available} / {requested} 款',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
     toolTrail: '本轮查找与核对', toolUnderstand: '理解你的条件', toolCatalog: '浏览 BGG 目录候选',
@@ -75,6 +78,7 @@ const copy = {
     source: 'Verifiable BGG details · Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     researchSources: 'Sources',
     recommendationJudgment: 'My choice and tradeoffs',
+    streamingChoices: 'Verified choices',
     shortfall: 'Verified this turn · {available} / {requested}',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
     toolTrail: 'Search and checks this turn', toolUnderstand: 'Understand your preferences', toolCatalog: 'Browse BGG catalog candidates',
@@ -264,6 +268,8 @@ const failureReason = ref<RecommendationFailureReason | null>(null)
 const failureDetailCode = ref<string | null>(null)
 const failedAssistantMessage = ref('')
 const pendingAssistantPreview = ref('')
+const pendingRecommendationGames = ref<RecommendedGame[]>([])
+const pendingRecommendationSources = ref<ResearchSource[]>([])
 const activeTurnLocale = ref<AppLocale | null>(null)
 const failedTurnLocale = ref<AppLocale | null>(null)
 const loginGateVisible = ref(false)
@@ -616,6 +622,8 @@ async function csrfToken() {
 function beginLoading() {
   if (loadingClock) clearInterval(loadingClock)
   pendingAssistantPreview.value = ''
+  pendingRecommendationGames.value = []
+  pendingRecommendationSources.value = []
   loadingStage.value = 'requesting'
   reportedLoadingStages.value = []
   latestRecommendationProgress.value = null
@@ -630,6 +638,8 @@ function endLoading() {
   loadingClock = null
   activeRequest = null
   pendingAssistantPreview.value = ''
+  pendingRecommendationGames.value = []
+  pendingRecommendationSources.value = []
   loading.value = false
 }
 
@@ -751,6 +761,20 @@ async function submitPendingTurn(
     }, text => {
       if (disposed || cancellationGeneration !== turnCancellationGeneration) return
       pendingAssistantPreview.value = text
+    }, part => {
+      if (disposed || cancellationGeneration !== turnCancellationGeneration) return
+      const index = pendingRecommendationGames.value.findIndex(
+        existing => existing.game.bggId === part.game.game.bggId,
+      )
+      pendingRecommendationGames.value = index < 0
+        ? [...pendingRecommendationGames.value, part.game]
+        : pendingRecommendationGames.value.map((existing, position) => position === index ? part.game : existing)
+      pendingRecommendationSources.value = [
+        ...new Map(
+          [...pendingRecommendationSources.value, ...part.researchSources]
+            .map(source => [`${source.index}:${source.url}`, source]),
+        ).values(),
+      ]
     })
     if (serverResponse.clientTurnId && serverResponse.clientTurnId !== pending.clientTurnId) {
       throw new Error('recommendation response belongs to another client turn')
@@ -1648,6 +1672,14 @@ onBeforeUnmount(() => {
                   <SafeMarkdown :source="pendingAssistantPreview" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
                 </article>
               </div>
+              <article v-if="loading && pendingRecommendationGames.length" data-conversation-message data-has-recommendations="true" data-testid="pending-recommendation-parts" class="min-w-0 w-full">
+                <span class="mb-1.5 block pl-1 text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ translated(activeTurnLocale ?? locale, 'streamingChoices') }}</span>
+                <div class="rounded-2xl border border-copper/20 bg-canvas/45 p-3 sm:p-4">
+                  <TransitionGroup tag="div" name="tile" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                    <RecommendationGameCard v-for="entry in pendingRecommendationGames" :key="entry.game.bggId" :entry="entry" :sources="pendingRecommendationSources" :loading="true" :response-locale="activeTurnLocale ?? locale" />
+                  </TransitionGroup>
+                </div>
+              </article>
               <div v-if="failed && visibleFailedAssistantMessage" data-testid="recommendation-failed-assistant-reply" class="flex min-w-0 justify-start">
                 <SafeMarkdown :source="visibleFailedAssistantMessage" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
               </div>
