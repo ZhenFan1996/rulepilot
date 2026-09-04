@@ -132,6 +132,19 @@ public class BggRecommendationAgentController {
                 result.replayed());
     }
 
+    static RecommendationPartResponse present(
+            BoardGameRecommendationAgent.RecommendationPart part,
+            String locale,
+            BggRecommendationPresentation presentation) {
+        Game game = part.game().game();
+        List<String> categories = game.details() == null ? List.of() : game.details().categories();
+        List<String> mechanics = game.details() == null ? List.of() : game.details().mechanics();
+        LocalizedTaxonomy taxonomy = presentation.localizeTaxonomy(categories, mechanics, locale);
+        return new RecommendationPartResponse(
+                RecommendedGameResponse.from(part.game(), taxonomy, locale, presentation),
+                part.researchSources().stream().map(ResearchSourceResponse::from).toList());
+    }
+
     static RecommendationConversationResponse present(
             ConversationResponse response,
             String locale,
@@ -565,6 +578,10 @@ public class BggRecommendationAgentController {
             return new ResearchSourceResponse(source.index(), source.title(), source.url(), source.domain());
         }
     }
+
+    record RecommendationPartResponse(
+            RecommendedGameResponse game,
+            List<ResearchSourceResponse> researchSources) {}
 
     record RecommendedGameResponse(
             CatalogGameResponse game,

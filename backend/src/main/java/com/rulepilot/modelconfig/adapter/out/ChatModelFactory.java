@@ -89,7 +89,8 @@ public class ChatModelFactory {
         String resolvedModel = required(model, "model name");
         com.openai.core.ClientOptions syncOptions = openAiClientOptions(resolvedApiKey, resolvedBaseUrl);
         com.openai.core.ClientOptions asyncOptions = openAiClientOptions(resolvedApiKey, resolvedBaseUrl);
-        return OpenAiChatModel.builder()
+        OpenAIClientAsyncImpl asyncClient = new OpenAIClientAsyncImpl(asyncOptions);
+        OpenAiChatModel chatModel = OpenAiChatModel.builder()
                 .options(OpenAiChatOptions.builder()
                         .apiKey(resolvedApiKey)
                         .baseUrl(resolvedBaseUrl)
@@ -98,9 +99,10 @@ public class ChatModelFactory {
                         .maxRetries(0)
                         .build())
                 .openAiClient(new OpenAIClientImpl(syncOptions))
-                .openAiClientAsync(new OpenAIClientAsyncImpl(asyncOptions))
+                .openAiClientAsync(asyncClient)
                 .observationRegistry(observations)
                 .build();
+        return new IncrementalOpenAiChatModel(chatModel, asyncClient);
     }
 
     private com.openai.core.ClientOptions openAiClientOptions(String apiKey, String baseUrl) {

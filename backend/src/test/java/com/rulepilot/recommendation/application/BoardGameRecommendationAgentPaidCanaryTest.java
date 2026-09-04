@@ -267,6 +267,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 properties,
                 json);
         long started = System.nanoTime();
+        AtomicLong firstRecommendationPartMs = new AtomicLong(-1);
         capture.beginTurn("playful-party");
 
         try {
@@ -274,7 +275,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     new ConversationRequest(
                             RecommendationProfile.empty(),
                             "今晚四个人刚加完班，脑容量只够一杯奶茶，但又不想各玩各的；想找一款能互相吐槽、最好一小时内收掉的，输了也能笑，来点什么？"),
-                    "zh-CN");
+                    "zh-CN",
+                    null,
+                    ignored -> {},
+                    ignored -> {},
+                    part -> {
+                        long observed = elapsed(started);
+                        firstRecommendationPartMs.compareAndSet(-1, observed);
+                        capture.firstRecommendationPart(observed);
+                    });
             long totalMs = elapsed(started);
 
             assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
@@ -292,6 +301,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL))
                     .isEmpty();
             assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+            assertThat(firstRecommendationPartMs.get()).isBetween(0L, totalMs - 1);
             assertThat(totalMs).isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
             writeArtifact("playful-party", capture, response, totalMs, null);
         } catch (Throwable failure) {
@@ -404,6 +414,34 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 int callIndex = capture.begin("react", selectedModel, request);
                 try {
                     Turn result = delegate.next(request);
+                    capture.complete(callIndex, result, elapsed(started));
+                    return result;
+                } catch (RuntimeException | Error failure) {
+                    capture.fail(callIndex, failure, elapsed(started));
+                    throw failure;
+                }
+            }
+
+            @Override
+            public Turn nextStreaming(
+                    BoardGameRecommendationModel.Request request,
+                    String ownerUsername,
+                    java.util.function.Consumer<String> accumulatedArgumentsListener) {
+                String selectedModel = request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
+                                && request.tools().size() == 1
+                        ? selectedPublicationModelName
+                        : modelName;
+                long started = System.nanoTime();
+                int callIndex = capture.begin("react_stream", selectedModel, request);
+                AtomicLong firstOutputMs = new AtomicLong(-1);
+                try {
+                    Turn result = delegate.nextStreaming(request, null, arguments -> {
+                        long observed = elapsed(started);
+                        if (firstOutputMs.compareAndSet(-1, observed)) {
+                            capture.firstStreamOutput(callIndex, observed);
+                        }
+                        accumulatedArgumentsListener.accept(arguments);
+                    });
                     capture.complete(callIndex, result, elapsed(started));
                     return result;
                 } catch (RuntimeException | Error failure) {
@@ -531,6 +569,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         report.put("temperature", Double.parseDouble(
                 environment("RULEPILOT_RECOMMENDATION_CANARY_TEMPERATURE", "0.0")));
         report.put("rawModelCalls", capture.calls);
+        if (capture.firstRecommendationPartMs >= 0) {
+            report.put("firstRecommendationPartMs", capture.firstRecommendationPartMs);
+        }
         report.put("latencyMs", latencyMs);
         report.put("failure", failure == null ? "" : failure);
         return report;
@@ -684,6 +725,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private final List<Map<String, Object>> calls = new ArrayList<>();
         private final List<CapturedToolCall> toolCalls = new ArrayList<>();
         private String currentTurn = "unlabeled";
+        private long firstRecommendationPartMs = -1;
 
         private Capture(String provider, String model) {
             this.provider = provider;
@@ -733,6 +775,16 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             calls.set(callIndex, Map.copyOf(call));
             String turnLabel = String.valueOf(call.get("turn"));
             turn.toolCalls().forEach(tool -> toolCalls.add(new CapturedToolCall(turnLabel, tool)));
+        }
+
+        private synchronized void firstStreamOutput(int callIndex, long latencyMs) {
+            Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
+            call.put("firstStreamOutputMs", latencyMs);
+            calls.set(callIndex, Map.copyOf(call));
+        }
+
+        private synchronized void firstRecommendationPart(long latencyMs) {
+            if (firstRecommendationPartMs < 0) firstRecommendationPartMs = latencyMs;
         }
 
         private synchronized void fail(int callIndex, Throwable failure, long latencyMs) {

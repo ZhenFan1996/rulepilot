@@ -152,12 +152,29 @@ final class RecommendationReActLoop {
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener) {
+        return converse(
+                input,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {});
+    }
+
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<BoardGameRecommendationAgent.RecommendationPart> recommendationPartListener) {
         return converseValidated(
                 validate(input),
                 requestedLocale,
                 modelConfigurationOwner,
                 progressListener,
                 answerPartListener,
+                recommendationPartListener,
                 ignored -> {});
     }
 
@@ -197,6 +214,24 @@ final class RecommendationReActLoop {
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
+        return converseValidated(
+                request,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {},
+                checkpointListener);
+    }
+
+    ConversationResponse converseValidated(
+            ConversationRequest request,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<BoardGameRecommendationAgent.RecommendationPart> recommendationPartListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
         Observation workflow = Observation.createNotStarted("rulepilot.recommendation.workflow", observations)
                 .contextualName("recommendation-react");
         return workflow.observe(() -> {
@@ -207,6 +242,7 @@ final class RecommendationReActLoop {
                         modelConfigurationOwner,
                         progressListener,
                         answerPartListener,
+                        recommendationPartListener,
                         checkpointListener);
                 workflow.lowCardinalityKeyValue(
                         "outcome", response.outcome().name().toLowerCase(Locale.ROOT));
@@ -224,6 +260,7 @@ final class RecommendationReActLoop {
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener,
+            Consumer<BoardGameRecommendationAgent.RecommendationPart> recommendationPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         long startedAt = System.nanoTime();
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
@@ -240,6 +277,7 @@ final class RecommendationReActLoop {
                     state,
                     progress,
                     answerPartListener,
+                    recommendationPartListener,
                     checkpointListener);
         } catch (RuntimeException | Error failure) {
             progress.abort(failure);
@@ -253,6 +291,7 @@ final class RecommendationReActLoop {
             RecommendationAgentState state,
             ProgressTracker progress,
             Consumer<String> answerPartListener,
+            Consumer<BoardGameRecommendationAgent.RecommendationPart> recommendationPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
         progress.start(ProgressStage.UNDERSTANDING_REQUEST, ProgressAction.UNDERSTAND_REQUEST);
         progress.complete();
@@ -295,7 +334,22 @@ final class RecommendationReActLoop {
                         state.pendingPublicationSeed == null
                                 ? ToolChoice.AUTO
                                 : ToolChoice.REQUIRED);
-                turn = withinDeadline(state, () -> model.next(modelRequest, state.modelConfigurationOwner));
+                Consumer<String> publicationStream = state.pendingPublicationSeed == null
+                        || currentActions.size() != 1
+                        || !RECOMMEND_TOOL.equals(currentActions.getFirst().name())
+                        ? null
+                        : publication.previewPublisher(
+                                state,
+                                locale,
+                                recommendationPartListener);
+                turn = withinDeadline(
+                        state,
+                        () -> publicationStream == null
+                                ? model.next(modelRequest, state.modelConfigurationOwner)
+                                : model.nextStreaming(
+                                        modelRequest,
+                                        state.modelConfigurationOwner,
+                                        publicationStream));
             } catch (RunDeadlineExceeded exception) {
                 state.recordModelCallElapsed(modelCallStartedAt);
                 decisionObservation.stop(

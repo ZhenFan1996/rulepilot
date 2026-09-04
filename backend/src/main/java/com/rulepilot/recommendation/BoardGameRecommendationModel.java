@@ -1,6 +1,7 @@
 package com.rulepilot.recommendation;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /** Provider-neutral generation port for conversational replies and native recommendation actions. */
 public interface BoardGameRecommendationModel {
@@ -16,6 +17,22 @@ public interface BoardGameRecommendationModel {
 
     default Turn next(Request request, String ownerUsername) {
         return next(request);
+    }
+
+    /**
+     * Streams the accumulated arguments of one required terminal action while retaining the complete
+     * provider-neutral turn as the commit input. Implementations that cannot stream remain correct, but
+     * expose the complete arguments only after the call finishes.
+     */
+    default Turn nextStreaming(
+            Request request,
+            String ownerUsername,
+            Consumer<String> accumulatedArgumentsListener) {
+        Turn turn = next(request, ownerUsername);
+        if (turn.toolCalls().size() == 1) {
+            accumulatedArgumentsListener.accept(turn.toolCalls().getFirst().argumentsJson());
+        }
+        return turn;
     }
 
     record ToolSpec(String name, String description, String inputSchema) {

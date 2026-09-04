@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import com.rulepilot.modelconfig.IncrementalToolCallChatModel;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -13,7 +14,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
-public final class QuotaAwareChatModel implements ChatModel {
+public final class QuotaAwareChatModel implements ChatModel, IncrementalToolCallChatModel {
 
     private final ChatModel delegate;
     private final ModelAccountQuota quota;
@@ -82,6 +83,42 @@ public final class QuotaAwareChatModel implements ChatModel {
                     if (usage != null && usage.getCompletionTokens() != null) {
                         reportedCompletionTokens.set(usage.getCompletionTokens());
                     }
+                })
+                .doOnComplete(() -> settleStream(
+                        reservation,
+                        finished,
+                        reportedPromptTokens.get() >= 0
+                                ? reportedPromptTokens.get()
+                                : estimateTokens(promptCharacters(prompt)),
+                        reportedCompletionTokens.get() >= 0
+                                ? reportedCompletionTokens.get()
+                                : estimateTokens(completionCharacters.get())))
+                .doOnError(ignored -> releaseStream(reservation, finished, "PROVIDER_FAILED"))
+                .doOnCancel(() -> releaseStream(reservation, finished, "CANCELLED"));
+    }
+
+    @Override
+    public boolean supportsIncrementalToolCallChunks() {
+        return delegate instanceof IncrementalToolCallChatModel streaming
+                && streaming.supportsIncrementalToolCallChunks();
+    }
+
+    @Override
+    public Flux<Chunk> streamToolCallChunks(Prompt prompt) {
+        if (!(delegate instanceof IncrementalToolCallChatModel streaming)) {
+            return Flux.error(new IllegalStateException("selected model does not expose incremental tool-call chunks"));
+        }
+        ModelAccountQuota.Reservation reservation = reserve();
+        AtomicBoolean finished = new AtomicBoolean();
+        AtomicLong reportedPromptTokens = new AtomicLong(-1);
+        AtomicLong reportedCompletionTokens = new AtomicLong(-1);
+        AtomicLong completionCharacters = new AtomicLong();
+        return streaming.streamToolCallChunks(prompt)
+                .doOnNext(chunk -> {
+                    if (chunk.promptTokens() > 0) reportedPromptTokens.set(chunk.promptTokens());
+                    if (chunk.completionTokens() > 0) reportedCompletionTokens.set(chunk.completionTokens());
+                    completionCharacters.addAndGet(chunk.text().length());
+                    chunk.toolCalls().forEach(call -> completionCharacters.addAndGet(call.arguments().length()));
                 })
                 .doOnComplete(() -> settleStream(
                         reservation,

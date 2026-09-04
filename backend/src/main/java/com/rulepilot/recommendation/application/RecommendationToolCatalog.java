@@ -255,11 +255,9 @@ final class RecommendationToolCatalog {
                 RECOMMEND_TOOL,
                 "Publish the final concise response from verified candidates. This call permits at most "
                         + maximumSelections
-                        + " selection(s). Do not reinterpret a current search count. Briefly frame the choices in playerReply; give each selected game one focused whyFit, plus a tradeoff only when supported. Synthesize cited observations instead of repeating them.",
+                        + " selection(s). Do not reinterpret a current search count. Generate selections in their supplied order so each complete verified card can be shown while the response continues. Briefly frame the choices in playerReply; give each selected game one focused whyFit, plus a tradeoff only when supported. Synthesize cited observations instead of repeating them.",
                 "{\"type\":\"object\",\"properties\":{" + publicationCountProperty
-                        + "\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":"
-                        + RecommendationPublication.PLAYER_REPLY_MAX_CODE_POINTS
-                        + "},\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
+                        + "\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
                         + maximumSelections
                         + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":"
                         + candidateIds
@@ -269,7 +267,9 @@ final class RecommendationToolCatalog {
                         + RecommendationPublication.TRADEOFF_MAX_CODE_POINTS
                         + "},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(replyEvidenceIds)
-                        + "}}},\"required\":[\"bggId\",\"whyFit\",\"internalEvidenceIds\"]}}},\"required\":"
+                        + "}}},\"required\":[\"bggId\",\"whyFit\",\"internalEvidenceIds\"]}},\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":"
+                        + RecommendationPublication.PLAYER_REPLY_MAX_CODE_POINTS
+                        + "}},\"required\":"
                         + requiredFields
                         + "}");
     }
