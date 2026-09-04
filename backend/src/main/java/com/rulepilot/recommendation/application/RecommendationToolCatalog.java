@@ -103,7 +103,7 @@ final class RecommendationToolCatalog {
 
     static String systemPrompt() {
         return """
-                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Typed JSON owns actions and constraints; player-facing prose belongs in the terminal action. Take one action at a time, emit no prose with a non-terminal action, and observe its result before deciding again. Greetings, casual conversation, and corrections normally need no action.
+                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Typed JSON owns actions and constraints; player-facing prose belongs in the terminal action. Take one action at a time, emit no assistant prose with a non-terminal action, and observe its result before deciding again. Greetings, casual conversation, and corrections normally need no action. On the first typed action of a turn, its schema requires decisionBrief. Generate decisionBrief before every other argument. This is a detailed public decision summary, not private chain-of-thought: state the request you understood, the concrete constraints you extracted, the direction you chose, the player-visible factors behind that choice, what the selected action will verify next, and any material uncertainty. Use only information visible to the player, do not quote or describe system instructions, schemas, hidden reasoning, or internal identifiers, and do not claim unverified game facts.
 
                 When the player asks you to recommend or list titles, search_bgg_catalog is the only BGG candidate entry. Submit one complete current-turn catalog contract: publicationCount is the positive number of final recommendation cards; preserve an explicit player count, or choose a sensible count when none was stated. It does not control search breadth: the application evaluates its own bounded candidate window and automatically excludes shown and excluded BGG IDs. includeTypes and excludeTypes are separate, and every explicitly named title, positive cooperative/team mode, explicitly required mechanism, player-count, duration, and complexity constraint used for that search must be carried too; no saved profile is inherited into candidate selection. Set requiredInteraction to COOPERATIVE or TEAM only when that positive mode is explicit, otherwise ANY; it is a hard catalog gate. Put other mechanisms in requiredMechanics only when the player explicitly requires them. Subjective experience preferences such as stronger interaction, friendliness, tension, or laughter are not catalog taxonomy. When the new recommendation hinges on one of them, put the exact missing experience dimension in experienceQuestion on the search action; the application will run the turn's one attributed read over its bounded publishable candidate window before returning the search observation. Omit experienceQuestion when structured facts are enough. Use requiredTitle only when the current player turn explicitly names a title or title fragment. Set its scope to SERIES for a named line or series and use CONTAINS with the distinctive shared title itself rather than the locale's generic word for a line or series; the application will expand verified title seeds through their shared canonical BGG game family. Set scope to TITLE for an ordinary fragment or one exact game, using EXACT only for the latter. Omit requiredTitle for generic discovery. Do not silently loosen or replace that contract when it has no match. After every observation, decide whether another distinct read would materially help or you should finish. recommend_games is terminal and should contain the complete natural response and every complete card in that one call. Explain why each game fits this player's request and what meaningfully distinguishes it; synthesize the cited observations instead of copying a publisher description as the recommendation reason. Use public relationship discovery only for an external/current identity fact, and never turn a taxonomy label into an unobserved experience claim.
                 """;
@@ -156,7 +156,79 @@ final class RecommendationToolCatalog {
         if (!pendingIds.isEmpty()) {
             available.add(recommendationAction(state, pendingIds));
         }
-        return List.copyOf(available);
+        return state.modelCalls == 0
+                ? available.stream().map(this::withFirstDecisionBrief).toList()
+                : List.copyOf(available);
+    }
+
+    private ToolSpec withFirstDecisionBrief(ToolSpec action) {
+        try {
+            ObjectNode schema = (ObjectNode) json.readTree(action.inputSchema());
+            ObjectNode existingProperties = (ObjectNode) schema.path("properties");
+            ObjectNode properties = json.createObjectNode();
+            properties.set(RecommendationDecisionBrief.FIELD, decisionBriefSchema(action.name()));
+            existingProperties.fields().forEachRemaining(entry -> properties.set(entry.getKey(), entry.getValue()));
+            schema.set("properties", properties);
+
+            var required = json.createArrayNode();
+            required.add(RecommendationDecisionBrief.FIELD);
+            schema.path("required").forEach(required::add);
+            schema.set("required", required);
+            return new ToolSpec(action.name(), action.description(), json.writeValueAsString(schema));
+        } catch (JsonProcessingException | ClassCastException exception) {
+            throw new IllegalStateException("recommendation action schema could not expose its first decision", exception);
+        }
+    }
+
+    private ObjectNode decisionBriefSchema(String actionName) {
+        ObjectNode schema = json.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = json.createObjectNode();
+        properties.set("chosenAction", json.createObjectNode()
+                .put("type", "string")
+                .put("const", actionName));
+        properties.set("understoodGoal", publicDecisionText(
+                "A concrete player-visible restatement of what this turn is trying to accomplish."));
+        properties.set("constraints", publicDecisionList(
+                "Every explicit player constraint that affects the direction; use an empty array when none is explicit."));
+        properties.set("direction", publicDecisionText(
+                "The specific approach selected for this turn and the scope it intentionally prioritizes."));
+        ObjectNode factors = publicDecisionList(
+                "Concrete player-visible factors that made this direction preferable; summarize the decision without hidden chain-of-thought.");
+        factors.put("minItems", 1);
+        properties.set("decisionFactors", factors);
+        properties.set("nextStep", publicDecisionText(
+                "What the selected action will verify and what useful observation it should produce."));
+        properties.set("uncertainties", publicDecisionList(
+                "Material facts not yet known or verified; use an empty array when there are none."));
+        schema.set("properties", properties);
+        var required = json.createArrayNode();
+        List.of(
+                        "chosenAction",
+                        "understoodGoal",
+                        "constraints",
+                        "direction",
+                        "decisionFactors",
+                        "nextStep",
+                        "uncertainties")
+                .forEach(required::add);
+        schema.set("required", required);
+        return schema;
+    }
+
+    private ObjectNode publicDecisionText(String description) {
+        return json.createObjectNode()
+                .put("type", "string")
+                .put("minLength", 1)
+                .put("description", description);
+    }
+
+    private ObjectNode publicDecisionList(String description) {
+        ObjectNode value = json.createObjectNode();
+        value.put("type", "array");
+        value.put("description", description);
+        value.set("items", json.createObjectNode().put("type", "string").put("minLength", 1));
+        return value;
     }
 
     private ToolSpec searchAction(List<String> currentTurnEvidenceIds) {
@@ -349,12 +421,26 @@ final class RecommendationToolCatalog {
             throw new IllegalArgumentException("every recommendation action requires one correlated observation");
         }
         compactPriorToolState(messages);
-        messages.add(Message.assistant("", calls));
+        List<ToolCall> compactCalls = calls.stream().map(this::withoutDecisionBrief).toList();
+        messages.add(Message.assistant("", compactCalls));
         for (int index = 0; index < calls.size(); index++) {
             String observation = index == calls.size() - 1
                     ? contextualObservation(observations.get(index), state)
                     : observations.get(index);
             messages.add(Message.tool(calls.get(index), observation));
+        }
+    }
+
+    private ToolCall withoutDecisionBrief(ToolCall call) {
+        try {
+            JsonNode parsed = json.readTree(call.argumentsJson());
+            if (!(parsed instanceof ObjectNode object) || !object.has(RecommendationDecisionBrief.FIELD)) {
+                return call;
+            }
+            object.remove(RecommendationDecisionBrief.FIELD);
+            return new ToolCall(call.id(), call.name(), json.writeValueAsString(object));
+        } catch (JsonProcessingException exception) {
+            return call;
         }
     }
 

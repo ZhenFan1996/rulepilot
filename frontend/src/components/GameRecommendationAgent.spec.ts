@@ -218,6 +218,48 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="assistant-recommendation-turn"]').text()).toContain('先看这款。')
   })
 
+  it('shows the first model decision brief while the selected action is still running', async () => {
+    const encoder = new TextEncoder()
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const result: RecommendationAgentResponse = {
+      outcome: 'conversation', responseLocale: 'zh-CN', assistantMessage: '目录核对完成。',
+      profile, clarification: null, sourceCount: 1, candidatesEvaluated: 0, games: [],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller },
+      }), { headers: { 'Content-Type': 'text/event-stream' } })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('四个人想玩一小时内的轻松互动游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(streamController).not.toBeNull()
+
+    const brief = '**我对这次请求的判断**\n\n为四个人找一小时内的轻松互动游戏。\n\n'
+      + '**我准备优先走的方向**\n\n先核对人数和时长，再检查互动体验。'
+    streamController!.enqueue(encoder.encode(
+      `event: answer_part\ndata: ${JSON.stringify({ text: brief })}\n\n`,
+    ))
+    await flushPromises()
+
+    const pending = wrapper.get('[data-testid="pending-assistant-preview"]')
+    expect(pending.text()).toContain('我对这次请求的判断')
+    expect(pending.text()).toContain('先核对人数和时长，再检查互动体验')
+    expect(wrapper.find('[data-testid="assistant-conversation-turn"]').exists()).toBe(false)
+
+    streamController!.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify(result)}\n\n`))
+    streamController!.close()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-assistant-preview"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="assistant-conversation-turn"]').text()).toContain('目录核对完成')
+  })
+
   it('keeps a failed request visible and lets the player retry it', async () => {
     const request = '想找四个人玩的合作游戏'
     const recoveredReply = '这次已经接上，我会从四人合作游戏继续找。'

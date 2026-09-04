@@ -40,6 +40,78 @@ import org.junit.jupiter.api.Test;
 class RecommendationReActContractTest {
 
     @Test
+    void streamsTheDetailedFirstModelDecisionBeforeRunningItsChosenAction() throws Exception {
+        Game game = game(449, "Open Direction", BggGameType.PARTY, 3, 6, 45, "1.6");
+        RecordingCatalog catalog = new RecordingCatalog(game);
+        ScriptedModel model = new ScriptedModel(
+                action(
+                        "first-decision",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"decisionBrief\":{"
+                                + "\"chosenAction\":\"search_bgg_catalog\","
+                                + "\"understoodGoal\":\"为四位疲惫玩家找一款一小时内、互动感强的游戏。\","
+                                + "\"constraints\":[\"四人\",\"最多一小时\",\"适合轻松互相吐槽\"],"
+                                + "\"direction\":\"先用人数和时长做硬筛选，再用聚会属性缩小范围。\","
+                                + "\"decisionFactors\":[\"人数和时长会直接淘汰不合适的游戏\",\"轻松互动是这次选择的主要体验目标\"],"
+                                + "\"nextStep\":\"查询 BGG 目录并核对候选的人数、时长与类型。\","
+                                + "\"uncertainties\":[\"实际吐槽感仍需由有出处的游玩资料确认\"]},"
+                                + "\"evidence\":\"U1\",\"publicationCount\":1,"
+                                + "\"includeTypes\":[\"PARTY\"],\"excludeTypes\":[],"
+                                + "\"requiredInteraction\":\"ANY\",\"players\":4,\"maxMinutes\":60}"),
+                action(
+                        "first-decision-publication",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"playerReply\":\"这款符合硬条件。\",\"selections\":[{"
+                                + "\"bggId\":449,\"whyFit\":\"支持四人并可在一小时内完成。\","
+                                + "\"internalEvidenceIds\":[\"B449:playerCount\",\"B449:durationMinutes\"]}]}"));
+        RecommendationReActLoop loop = loop(model, catalog);
+        List<String> streamed = new ArrayList<>();
+        List<String> timeline = new ArrayList<>();
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "四个人想玩一小时内、能轻松互相吐槽的游戏。"),
+                "zh-CN",
+                "player",
+                update -> {
+                    if (update.action() == BoardGameRecommendationAgent.ProgressAction.SEARCH_BGG_CATALOG
+                            && update.phase() == BoardGameRecommendationAgent.ProgressPhase.STARTED) {
+                        timeline.add("search-started");
+                    }
+                },
+                brief -> {
+                    streamed.add(brief);
+                    timeline.add("decision-brief");
+                },
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(streamed).singleElement().satisfies(brief -> assertThat(brief)
+                .contains(
+                        "**我对这次请求的判断**",
+                        "四位疲惫玩家",
+                        "**我准备优先走的方向**",
+                        "先用人数和时长做硬筛选",
+                        "**影响这个选择的因素**",
+                        "**下一步会核对什么**",
+                        "实际吐槽感仍需"));
+        assertThat(timeline).containsSubsequence("decision-brief", "search-started");
+        JsonNode firstSchema = new ObjectMapper().readTree(model.requests.getFirst().tools().stream()
+                .filter(tool -> BoardGameRecommendationAgent.SEARCH_TOOL.equals(tool.name()))
+                .findFirst()
+                .orElseThrow()
+                .inputSchema());
+        assertThat(firstSchema.path("properties").fieldNames().next()).isEqualTo("decisionBrief");
+        assertThat(firstSchema.path("required").get(0).asText()).isEqualTo("decisionBrief");
+        assertThat(model.requests.get(1).messages().stream()
+                        .flatMap(message -> message.toolCalls().stream())
+                        .map(ToolCall::argumentsJson))
+                .noneMatch(arguments -> arguments.contains("decisionBrief"));
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void streamsEachCompleteGroundedCandidateBeforeTheTerminalResponseAndOmitsInvalidOnes() {
         Game first = game(451, "First Signal", BggGameType.STRATEGY, 2, 4, 60, "2.2");
         Game second = game(452, "Second Signal", BggGameType.STRATEGY, 2, 4, 75, "2.5");
