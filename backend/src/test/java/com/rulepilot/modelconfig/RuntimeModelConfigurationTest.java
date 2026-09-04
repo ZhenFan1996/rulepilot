@@ -254,12 +254,23 @@ class RuntimeModelConfigurationTest {
                 .isEqualTo("qwen-platform");
         assertThat(configuration.snapshot("platform-user").recommendationModel())
                 .isEqualTo(new RuntimeModelConfiguration.EffectiveModel("qwen", "qwen-platform"));
+        assertThat(configuration.resolvedModelFor(
+                                RuntimeModelConfiguration.Role.RECOMMENDATION, "platform-user"))
+                .satisfies(resolved -> {
+                    assertThat(resolved.startupDefault()).isFalse();
+                    assertThat(resolved.platformManaged()).isTrue();
+                });
         assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "alice"))
                 .isSameAs(personalQwen);
         assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "alice"))
                 .isEqualTo("qwen-personal");
         assertThat(configuration.snapshot("alice").recommendationModel())
                 .isEqualTo(new RuntimeModelConfiguration.EffectiveModel("qwen", "qwen-personal"));
+        assertThat(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "alice"))
+                .satisfies(resolved -> {
+                    assertThat(resolved.startupDefault()).isFalse();
+                    assertThat(resolved.platformManaged()).isFalse();
+                });
     }
 
     @Test

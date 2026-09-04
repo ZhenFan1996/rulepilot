@@ -145,7 +145,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             RuntimeModelConfiguration.ResolvedModel selected,
             String effectiveModelName) {
         if (hedgeDelay.isZero()
-                || !selected.startupDefault()
+                || !selected.platformManaged()
                 || !"qwen".equals(selected.provider())
                 || !selected.modelName().equals(effectiveModelName)) {
             return model.call(prompt);
