@@ -75,6 +75,42 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
+    void streamsTheFirstAutoActionAndStillReassemblesEveryReturnedAction() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        StreamingChatModel chatModel = mock(StreamingChatModel.class);
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
+                .model("qwen3.7-plus")
+                .build());
+        when(chatModel.supportsIncrementalToolCallChunks()).thenReturn(true);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "qwen", "qwen3.7-plus", false, false, true));
+        when(chatModel.streamToolCallChunks(any(Prompt.class))).thenReturn(Flux.just(
+                chunk(0, "search", "search_bgg", "{\"decisionBrief\":{", ""),
+                chunk(1, "research", "research_fit", "{\"bggIds\":[1]}", ""),
+                chunk(0, "", "", "\"chosenAction\":\"search_bgg\"}}", "tool_calls")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0, "");
+        List<String> accumulated = new ArrayList<>();
+
+        var turn = adapter.nextStreaming(
+                request(List.of(
+                        new ToolSpec("search_bgg", "Search", "{\"type\":\"object\"}"),
+                        new ToolSpec("research_fit", "Research", "{\"type\":\"object\"}")),
+                        ToolChoice.AUTO),
+                null,
+                accumulated::add);
+
+        assertThat(accumulated).containsExactly(
+                "{\"decisionBrief\":{",
+                "{\"decisionBrief\":{\"chosenAction\":\"search_bgg\"}}");
+        assertThat(turn.toolCalls()).containsExactly(
+                new ToolCall("search", "search_bgg", "{\"decisionBrief\":{\"chosenAction\":\"search_bgg\"}}"),
+                new ToolCall("research", "research_fit", "{\"bggIds\":[1]}"));
+        verify(chatModel).streamToolCallChunks(any(Prompt.class));
+        verify(chatModel, never()).call(any(Prompt.class));
+    }
+
+    @Test
     void streamsAndReassemblesRequiredQwenActionArgumentsWithBlankContinuationIdentity() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "qwen", "qwen3.7-plus");
@@ -121,9 +157,14 @@ class SpringAiBoardGameRecommendationModelTest {
 
     private IncrementalToolCallChatModel.Chunk chunk(
             String id, String name, String arguments, String finishReason) {
+        return chunk(0, id, name, arguments, finishReason);
+    }
+
+    private IncrementalToolCallChatModel.Chunk chunk(
+            int index, String id, String name, String arguments, String finishReason) {
         return new IncrementalToolCallChatModel.Chunk(
                 "",
-                List.of(new IncrementalToolCallChatModel.ToolCallDelta(id, name, arguments)),
+                List.of(new IncrementalToolCallChatModel.ToolCallDelta(index, id, name, arguments)),
                 finishReason,
                 0,
                 0);

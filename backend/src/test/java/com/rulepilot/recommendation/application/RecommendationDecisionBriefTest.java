@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class RecommendationDecisionBriefTest {
@@ -32,6 +35,42 @@ class RecommendationDecisionBriefTest {
 
         assertThat(json.readTree(compact.argumentsJson()).has("decisionBrief")).isFalse();
         assertThat(json.readTree(compact.argumentsJson()).path("publicationCount").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void publishesGrowingPlayerSafeSnapshotsAsTheProviderArgumentsArrive() {
+        String arguments = validBrief("search_bgg_catalog");
+        List<String> snapshots = new ArrayList<>();
+        var publisher = decisions.streamingPublisher(
+                "zh-CN", Set.of("search_bgg_catalog"), snapshots::add);
+        StringBuilder accumulated = new StringBuilder();
+
+        arguments.codePoints().forEach(codePoint -> {
+            accumulated.appendCodePoint(codePoint);
+            publisher.accept(accumulated.toString());
+        });
+        publisher.finish(call("search_bgg_catalog", arguments));
+
+        assertThat(snapshots).hasSizeGreaterThan(20);
+        assertThat(snapshots.getFirst())
+                .contains("我对这次请求的判断")
+                .doesNotContain("下一步会核对什么");
+        assertThat(snapshots.getLast())
+                .contains("找适合四人的游戏", "先核对目录硬条件", "核对人数和时长");
+        assertThat(snapshots)
+                .extracting(String::length)
+                .isSortedAccordingTo(Integer::compareTo);
+    }
+
+    @Test
+    void doesNotPublishAStreamForAnActionOutsideTheOfferedSchema() {
+        List<String> snapshots = new ArrayList<>();
+        var publisher = decisions.streamingPublisher(
+                "zh-CN", Set.of("research_game_fit"), snapshots::add);
+
+        publisher.accept(validBrief("search_bgg_catalog"));
+
+        assertThat(snapshots).isEmpty();
     }
 
     private ToolCall call(String name, String arguments) {

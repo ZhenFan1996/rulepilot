@@ -240,15 +240,25 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
     expect(streamController).not.toBeNull()
 
-    const brief = '**我对这次请求的判断**\n\n为四个人找一小时内的轻松互动游戏。\n\n'
-      + '**我准备优先走的方向**\n\n先核对人数和时长，再检查互动体验。'
+    const earlyBrief = '**我对这次请求的判断**\n\n为四个人找一小时内的轻松互动游戏。'
     streamController!.enqueue(encoder.encode(
-      `event: answer_part\ndata: ${JSON.stringify({ text: brief })}\n\n`,
+      `event: answer_part\ndata: ${JSON.stringify({ text: earlyBrief })}\n\n`,
     ))
     await flushPromises()
 
-    const pending = wrapper.get('[data-testid="pending-assistant-preview"]')
+    let pending = wrapper.get('[data-testid="pending-assistant-preview"]')
     expect(pending.text()).toContain('我对这次请求的判断')
+    expect(pending.text()).not.toContain('先核对人数和时长，再检查互动体验')
+    expect(wrapper.get('[data-testid="recommendation-live-work"]').text()).toContain('正在形成的判断')
+    expect(wrapper.get('[data-testid="recommendation-elapsed"]').text()).toContain('已用 0 秒')
+
+    const fullBrief = `${earlyBrief}\n\n**我准备优先走的方向**\n\n先核对人数和时长，再检查互动体验。`
+    streamController!.enqueue(encoder.encode(
+      `event: answer_part\ndata: ${JSON.stringify({ text: fullBrief })}\n\n`,
+    ))
+    await flushPromises()
+
+    pending = wrapper.get('[data-testid="pending-assistant-preview"]')
     expect(pending.text()).toContain('先核对人数和时长，再检查互动体验')
     expect(wrapper.find('[data-testid="assistant-conversation-turn"]').exists()).toBe(false)
 

@@ -67,6 +67,8 @@ const copy = {
     loginRequired: '推荐需要登录；你写的条件已保留在这个浏览器会话中。登录后回来检查一下，再发送。',
     login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
     resetFailed: '服务器没有确认删除，当前对话仍然保留。请重试。',
+    liveDraft: '正在形成的判断', liveDraftHint: '内容会随着模型返回继续写入，还不是最终推荐。',
+    elapsed: '已用 {value} 秒', workLog: '这轮进度',
   },
   en: {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
@@ -92,6 +94,8 @@ const copy = {
     loginRequired: 'Sign in to use recommendations. Your draft is saved in this browser session; review it and send after you return.',
     login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
     resetFailed: 'The server did not confirm deletion, so this conversation is still intact. Try again.',
+    liveDraft: 'Decision taking shape', liveDraftHint: 'This note grows as the model responds; it is not the final recommendation yet.',
+    elapsed: '{value}s elapsed', workLog: 'Progress this turn',
   },
 } as const
 
@@ -412,9 +416,14 @@ const loadingWorkTitle = computed(() => translated(
 
 const loadingMessage = computed(() => {
   const turnLocale = activeTurnLocale.value ?? locale.value
-  const message = loadingCopy[turnLocale][publicLoadingStage.value]
-  return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
+  return loadingCopy[turnLocale][publicLoadingStage.value]
 })
+
+const loadingElapsedLabel = computed(() => translated(
+  activeTurnLocale.value ?? locale.value,
+  'elapsed',
+  { value: loadingElapsedSeconds.value },
+))
 
 function progressStepLabel(update: RecommendationProgressUpdate) {
   const turnLocale = activeTurnLocale.value ?? locale.value
@@ -1602,13 +1611,13 @@ onBeforeUnmount(() => {
   <section class="py-7 sm:py-9" aria-labelledby="recommendation-agent-title">
     <div class="tabletop-panel player-board tabletop-felt overflow-hidden p-1">
       <div class="grid gap-px overflow-hidden rounded-[1.15rem] bg-white/10 lg:grid-cols-[minmax(14rem,0.46fr)_minmax(38rem,1.54fr)]">
-        <div class="bg-felt-deep px-5 py-6 sm:px-7 sm:py-8">
-          <p class="text-xs font-bold uppercase tracking-[0.16em] text-[#e8bd6a]">{{ t('eyebrow') }}</p>
+        <div class="recommendation-table-side bg-felt-deep px-5 py-6 sm:px-7 sm:py-8">
+          <p class="font-display text-sm italic text-[#e8bd6a]">{{ t('eyebrow') }}</p>
           <h2 id="recommendation-agent-title" class="mt-2 max-w-xl font-display text-4xl font-semibold leading-none tracking-tight text-white sm:text-5xl">{{ t('title') }}</h2>
           <p class="recommendation-intro-copy mt-4 max-w-xl text-sm leading-7">{{ t('description') }}</p>
-          <div v-if="profileLabels.length" class="mt-6"><p class="recommendation-profile-label text-xs font-bold uppercase tracking-[0.12em]">{{ t('profile') }}</p><ul class="mt-2 flex flex-wrap gap-2"><li v-for="label in profileLabels" :key="label" class="recommendation-profile-chip rounded-md border border-white/15 bg-white/7 px-2.5 py-1.5 text-xs font-semibold">{{ label }}</li></ul></div>
+          <div v-if="profileLabels.length" class="mt-6"><p class="recommendation-profile-label text-xs font-semibold">{{ t('profile') }}</p><ul class="mt-2 flex flex-wrap gap-2"><li v-for="label in profileLabels" :key="label" class="recommendation-profile-chip border-l border-white/25 px-2.5 py-1 text-xs font-semibold">{{ label }}</li></ul></div>
           <details v-if="response?.userModel?.summary" class="mt-5 rounded-xl border border-white/10 bg-black/10 p-4">
-            <summary class="cursor-pointer text-xs font-bold uppercase tracking-[0.1em] text-[#e8bd6a]">{{ responseT(response, 'understanding') }}</summary>
+            <summary class="cursor-pointer text-xs font-semibold text-[#e8bd6a]">{{ responseT(response, 'understanding') }}</summary>
             <p class="recommendation-understanding-copy mt-3 text-sm leading-6">{{ response.userModel.summary }}</p>
             <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence, response.responseLocale) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ responseT(response, 'basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
@@ -1624,7 +1633,7 @@ onBeforeUnmount(() => {
           </ul>
         </div>
 
-        <div data-testid="recommendation-chat-workspace" class="min-w-0 bg-paper text-ink">
+        <div data-testid="recommendation-chat-workspace" class="recommendation-paper min-w-0 bg-paper text-ink">
           <nav v-if="answerWorkspaceReady" data-testid="agent-role-switcher" class="flex gap-2 border-b border-ink/8 px-4 py-3 sm:px-6" :aria-label="t('roleLabel')">
             <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'recommendation' ? 'bg-felt text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'recommendation'" @click="switchToRecommendations">{{ t('recommendationRole') }}</button>
             <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'rule-qa' ? 'bg-indigo text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'rule-qa'" @click="switchToQuestions()">{{ t('answerRole') }}</button>
@@ -1638,7 +1647,7 @@ onBeforeUnmount(() => {
               <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
                 <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
-                  <span v-if="message.response?.games.length" class="mb-1.5 block pl-1 text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ responseT(message.response, 'recommendationJudgment') }}</span>
+                  <span v-if="message.response?.games.length" class="mb-1.5 block pl-1 font-display text-sm italic text-copper">{{ responseT(message.response, 'recommendationJudgment') }}</span>
                   <SafeMarkdown
                     :source="message.text"
                     :data-testid="message.response?.games.length ? 'assistant-recommendation-message' : undefined"
@@ -1667,13 +1676,41 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
               </div>
-              <div v-if="loading && pendingAssistantPreview" data-conversation-message data-has-recommendations="false" class="flex min-w-0 justify-start">
-                <article data-testid="pending-assistant-preview" class="min-w-0 w-full">
-                  <SafeMarkdown :source="pendingAssistantPreview" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
+              <section v-if="loading" data-testid="recommendation-live-work" class="recommendation-live-work relative min-w-0 overflow-hidden border-y border-ink/10 py-4 pl-5 pr-2 sm:pl-7 sm:pr-4" role="status" aria-live="polite">
+                <div class="flex min-w-0 items-start justify-between gap-4">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="recommendation-live-signal size-2 shrink-0 rounded-full bg-copper" aria-hidden="true" />
+                      <strong data-testid="player-work-status" class="text-sm font-semibold text-ink/78">{{ loadingWorkTitle }}</strong>
+                    </div>
+                    <p class="mt-1 pl-4 text-xs leading-5 text-ink/50">{{ loadingMessage }}</p>
+                  </div>
+                  <time data-testid="recommendation-elapsed" class="shrink-0 font-mono text-[0.6875rem] tabular-nums text-ink/48">{{ loadingElapsedLabel }}</time>
+                </div>
+
+                <article v-if="pendingAssistantPreview" data-conversation-message data-has-recommendations="false" data-testid="pending-assistant-preview" class="recommendation-live-draft mt-4 min-w-0 border-t border-ink/8 pt-4">
+                  <div class="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <span class="font-display text-sm italic text-copper">{{ translated(activeTurnLocale ?? locale, 'liveDraft') }}</span>
+                    <span class="text-[0.6875rem] leading-4 text-ink/42">{{ translated(activeTurnLocale ?? locale, 'liveDraftHint') }}</span>
+                  </div>
+                  <SafeMarkdown :source="pendingAssistantPreview" class="recommendation-live-copy text-sm leading-6 text-ink/76" />
+                  <span class="recommendation-writing-cursor mt-1 inline-block h-4 w-px bg-copper" aria-hidden="true" />
                 </article>
-              </div>
+
+                <div v-if="reportedLoadingSteps.length" class="mt-4 border-t border-ink/8 pt-3">
+                  <p class="text-[0.6875rem] font-semibold text-ink/45">{{ translated(activeTurnLocale ?? locale, 'workLog') }}</p>
+                  <ol data-testid="recommendation-progress-steps" class="mt-2 grid gap-1.5 text-xs leading-5">
+                    <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.update.stage}-${step.update.phase}-${step.update.action}-${step.update.focus?.kind}-${step.update.focus?.values.join('|')}-${step.update.elapsedMs}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/72' : step.update.phase === 'failed' ? 'text-red-700' : step.update.phase === 'retrying' ? 'text-amber-700' : 'text-ink/48'">
+                      <span aria-hidden="true" class="mt-px w-3 shrink-0 text-center">{{ step.icon }}</span>
+                      <span>{{ step.label }}</span>
+                    </li>
+                  </ol>
+                </div>
+                <p v-if="recommendationEvidenceSummary" data-testid="recommendation-evidence-summary" class="mt-3 border-l border-copper/35 pl-3 text-xs leading-5 text-ink/55">{{ recommendationEvidenceSummary }}</p>
+                <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-3 border-l-2 border-amber-500/55 bg-amber-50/55 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
+              </section>
               <article v-if="loading && pendingRecommendationGames.length" data-conversation-message data-has-recommendations="true" data-testid="pending-recommendation-parts" class="min-w-0 w-full">
-                <span class="mb-1.5 block pl-1 text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ translated(activeTurnLocale ?? locale, 'streamingChoices') }}</span>
+                <span class="mb-1.5 block pl-1 font-display text-sm italic text-copper">{{ translated(activeTurnLocale ?? locale, 'streamingChoices') }}</span>
                 <div class="rounded-2xl border border-copper/20 bg-canvas/45 p-3 sm:p-4">
                   <TransitionGroup tag="div" name="tile" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
                     <RecommendationGameCard v-for="entry in pendingRecommendationGames" :key="entry.game.bggId" :entry="entry" :sources="pendingRecommendationSources" :loading="true" :response-locale="activeTurnLocale ?? locale" />
@@ -1702,21 +1739,6 @@ onBeforeUnmount(() => {
                   <RouterLink v-if="statusForJourney(game)?.plan?.id" data-testid="player-journey-all-work-link" :to="{ path: '/work', query: { started: statusForJourney(game)?.plan?.id } }" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-ink/55 underline sm:flex-1 sm:border-l sm:border-t-0">{{ t('journeyAllWork') }}</RouterLink>
                 </div>
               </article>
-              <div v-if="loading" class="flex items-start gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-ink/55" role="status">
-                <span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span>
-                <div class="min-w-0 flex-1">
-                  <strong data-testid="player-work-status" class="block text-sm font-semibold text-ink/70">{{ loadingWorkTitle }}</strong>
-                  <span class="mt-0.5 block text-xs">{{ loadingMessage }}</span>
-                  <ol v-if="reportedLoadingSteps.length" data-testid="recommendation-progress-steps" class="mt-3 grid gap-1.5 text-xs leading-5">
-                    <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.update.stage}-${step.update.phase}-${step.update.action}-${step.update.focus?.kind}-${step.update.focus?.values.join('|')}-${step.update.elapsedMs}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/70' : step.update.phase === 'failed' ? 'text-red-700' : step.update.phase === 'retrying' ? 'text-amber-700' : 'text-ink/50'">
-                      <span aria-hidden="true" class="mt-px w-3 shrink-0 text-center">{{ step.icon }}</span>
-                      <span>{{ step.label }}</span>
-                    </li>
-                  </ol>
-                  <p v-if="recommendationEvidenceSummary" data-testid="recommendation-evidence-summary" class="mt-2 rounded-lg bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ recommendationEvidenceSummary }}</p>
-                  <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
-                </div>
-              </div>
             </div>
             <div v-if="clarification?.options.length && !loading && !failed" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert">
@@ -1812,6 +1834,55 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.recommendation-table-side {
+  background-image:
+    radial-gradient(circle at 18% 12%, rgb(255 255 255 / 5%), transparent 28%),
+    linear-gradient(145deg, rgb(255 255 255 / 2%), transparent 45%);
+}
+
+.recommendation-paper {
+  background-image:
+    linear-gradient(90deg, rgb(148 98 55 / 4%) 1px, transparent 1px),
+    linear-gradient(rgb(148 98 55 / 2.5%) 1px, transparent 1px);
+  background-size: 2rem 2rem;
+}
+
+.recommendation-live-work {
+  background: linear-gradient(105deg, color-mix(in srgb, var(--color-canvas) 82%, transparent), color-mix(in srgb, var(--color-paper) 55%, transparent));
+}
+
+.recommendation-live-work::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--color-copper), color-mix(in srgb, var(--color-copper) 18%, transparent));
+  content: '';
+}
+
+.recommendation-live-signal {
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-copper) 40%, transparent);
+  animation: recommendation-signal 1.8s ease-out infinite;
+}
+
+.recommendation-writing-cursor {
+  animation: recommendation-cursor 0.9s steps(1, end) infinite;
+}
+
+@keyframes recommendation-signal {
+  55%, 100% { box-shadow: 0 0 0 0.45rem transparent; }
+}
+
+@keyframes recommendation-cursor {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recommendation-live-signal,
+  .recommendation-writing-cursor {
+    animation: none;
+  }
+}
+
 .recommendation-intro-copy {
   color: color-mix(in srgb, white 62%, transparent);
 }

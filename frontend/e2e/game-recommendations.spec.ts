@@ -690,6 +690,39 @@ test('restores the server conversation and unsent draft after sign-in and browse
   await expect(page.getByLabel('聊聊你想玩的游戏')).toHaveValue('这句草稿尚未发送')
 })
 
+test('keeps the recommendation workspace visibly alive while the server is still working', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockPublicDiscovery(page, true)
+  let releaseResponse!: () => void
+  const responseGate = new Promise<void>(resolve => { releaseResponse = resolve })
+  await page.route('**/api/v1/bgg/recommendation-agent/stream?*', async route => {
+    await responseGate
+    await route.fulfill({
+      contentType: 'text/event-stream',
+      body: `event: result\ndata: ${JSON.stringify({
+        outcome: 'conversation', mode: 'model_assisted', responseLocale: 'zh-CN',
+        assistantMessage: '已经接着你的条件继续处理。',
+        profile: { playerCount: null, durationMinutes: null, complexity: null, type: 'all', interaction: 'any' },
+        clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+      })}\n\n`,
+    })
+  })
+
+  await page.goto('/discover')
+  await page.getByLabel('聊聊你想玩的游戏').fill('四个人，想玩一小时内的轻松互动游戏')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+
+  const liveWork = page.getByTestId('recommendation-live-work')
+  await expect(liveWork).toBeVisible()
+  await expect(page.getByTestId('player-work-status')).toContainText('正在回复')
+  await expect(page.getByTestId('recommendation-elapsed')).toContainText('已用 1 秒', { timeout: 3_000 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+
+  releaseResponse()
+  await expect(page.getByText('已经接着你的条件继续处理。')).toBeVisible()
+  await expect(liveWork).toHaveCount(0)
+})
+
 test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockPublicDiscovery(page)

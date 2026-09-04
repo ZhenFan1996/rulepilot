@@ -75,6 +75,7 @@ final class IncrementalOpenAiChatModel implements ChatModel, IncrementalToolCall
                     choice.delta().toolCalls().orElse(java.util.List.of())) {
                 var function = call.function().orElse(null);
                 toolCalls.add(new ToolCallDelta(
+                        Math.toIntExact(call.index()),
                         call.id().orElse(""),
                         function == null ? "" : function.name().orElse(""),
                         function == null ? "" : function.arguments().orElse("")));
