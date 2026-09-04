@@ -226,20 +226,22 @@ final class RecommendationActions {
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         requireObject(
                 arguments,
-                Set.of("evidence", "includeTypes", "excludeTypes"));
+                Set.of(
+                        "evidence",
+                        "publicationCount",
+                        "includeTypes",
+                        "excludeTypes"));
         String evidenceId = text(arguments.path("evidence"));
         evidenceReview.requireCurrentTurnUserEvidence(evidenceId, request);
         String evidenceText = evidenceReview.evidenceText(evidenceId, request);
         int evidenceTurn = evidenceReview.evidenceTurn(evidenceId, request);
         List<BggGameType> includeTypes = gameTypes(arguments.path("includeTypes"));
         List<BggGameType> excludeTypes = gameTypes(arguments.path("excludeTypes"));
-        Integer requestedCount = arguments.has("requestedCount")
-                ? integer(
-                        arguments.path("requestedCount"),
-                        1,
-                        Integer.MAX_VALUE,
-                        "RESULT_COUNT_OUT_OF_RANGE")
-                : null;
+        Integer requestedCount = integer(
+                arguments.path("publicationCount"),
+                1,
+                Integer.MAX_VALUE,
+                "RESULT_COUNT_OUT_OF_RANGE");
         List<String> mechanics = arguments.has("requiredMechanics")
                 ? boundedTaxonomy(arguments.path("requiredMechanics"))
                 : List.of();
@@ -356,7 +358,7 @@ final class RecommendationActions {
         appliedContract.put("evidence", evidenceId);
         appliedContract.put("includeTypes", includeTypes);
         appliedContract.put("excludeTypes", excludeTypes);
-        if (requestedCount != null) appliedContract.put("requestedCount", requestedCount);
+        if (requestedCount != null) appliedContract.put("publicationCount", requestedCount);
         if (!mechanics.isEmpty()) appliedContract.put("requiredMechanics", mechanics);
         appliedContract.put("requiredInteraction", requiredInteraction);
         if (title != null) {

@@ -7,9 +7,17 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
+import jakarta.annotation.PreDestroy;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -38,20 +46,50 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationModel.class);
     private final RuntimeModelConfiguration models;
     private final double temperature;
+    private final String publicationModel;
+    private final Duration hedgeDelay;
+    private final ExecutorService hedgedCalls;
 
     public SpringAiBoardGameRecommendationModel(RuntimeModelConfiguration models) {
-        this(models, 0.0);
+        this(models, 0.0, "", Duration.ZERO);
+    }
+
+    public SpringAiBoardGameRecommendationModel(
+            RuntimeModelConfiguration models,
+            @Value("${rulepilot.bgg.recommendation-agent.temperature:0.0}") double temperature) {
+        this(models, temperature, "", Duration.ZERO);
+    }
+
+    public SpringAiBoardGameRecommendationModel(
+            RuntimeModelConfiguration models,
+            double temperature,
+            String publicationModel) {
+        this(models, temperature, publicationModel, Duration.ZERO);
     }
 
     @Autowired
     public SpringAiBoardGameRecommendationModel(
             RuntimeModelConfiguration models,
-            @Value("${rulepilot.bgg.recommendation-agent.temperature:0.0}") double temperature) {
+            @Value("${rulepilot.bgg.recommendation-agent.temperature:0.0}") double temperature,
+            @Value("${rulepilot.bgg.recommendation-agent.publication-model:}") String publicationModel,
+            @Value("${rulepilot.bgg.recommendation-agent.hedge-delay:PT0S}") Duration hedgeDelay) {
         if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
             throw new IllegalArgumentException("recommendation model temperature must be between 0 and 2");
         }
         this.models = models;
         this.temperature = temperature;
+        this.publicationModel = publicationModel == null ? "" : publicationModel.strip();
+        if (hedgeDelay == null || hedgeDelay.isNegative()) {
+            throw new IllegalArgumentException("recommendation hedge delay must not be negative");
+        }
+        this.hedgeDelay = hedgeDelay;
+        this.hedgedCalls = Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("recommendation-model-hedge-", 0).factory());
+    }
+
+    @PreDestroy
+    void stopHedgedCalls() {
+        hedgedCalls.shutdownNow();
     }
 
     @Override
@@ -78,12 +116,14 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             Request request, double requestTemperature, String operation, String ownerUsername) {
         RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
         ChatModel model = selected.model();
+        String effectiveModelName = effectiveModelName(selected, request);
         long startedAt = System.nanoTime();
-        ChatResponse response = model.call(new Prompt(
+        Prompt prompt = new Prompt(
                 request.messages().stream().map(this::message).toList(),
-                requestOptions(selected, request)
+                requestOptions(selected, request, effectiveModelName)
                         .temperature(requestTemperature)
-                        .build()));
+                        .build());
+        ChatResponse response = invokeModel(model, prompt, selected, effectiveModelName);
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
             throw new IllegalStateException("recommendation model returned no result");
         }
@@ -94,13 +134,69 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 requestTemperature,
                 operation,
                 selected,
+                effectiveModelName,
                 -1);
         return turn(response);
     }
 
+    private ChatResponse invokeModel(
+            ChatModel model,
+            Prompt prompt,
+            RuntimeModelConfiguration.ResolvedModel selected,
+            String effectiveModelName) {
+        if (hedgeDelay.isZero()
+                || !selected.startupDefault()
+                || !"qwen".equals(selected.provider())
+                || !selected.modelName().equals(effectiveModelName)) {
+            return model.call(prompt);
+        }
+        ExecutorCompletionService<ChatResponse> completion =
+                new ExecutorCompletionService<>(hedgedCalls);
+        Future<ChatResponse> primary = completion.submit(() -> model.call(prompt));
+        Future<ChatResponse> hedge = null;
+        try {
+            Future<ChatResponse> early = completion.poll(hedgeDelay.toMillis(), TimeUnit.MILLISECONDS);
+            if (early != null) return completedResponse(early);
+            hedge = completion.submit(() -> model.call(prompt));
+            ExecutionException firstFailure = null;
+            for (int remaining = 2; remaining > 0; remaining--) {
+                try {
+                    return completedResponse(completion.take());
+                } catch (ExecutionException failure) {
+                    if (firstFailure != null) throw firstFailure;
+                    firstFailure = failure;
+                }
+            }
+            throw firstFailure == null
+                    ? new IllegalStateException("hedged recommendation call returned no result")
+                    : modelFailure(firstFailure);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("recommendation model call was interrupted", interrupted);
+        } catch (ExecutionException failure) {
+            throw modelFailure(failure);
+        } finally {
+            primary.cancel(true);
+            if (hedge != null) hedge.cancel(true);
+        }
+    }
+
+    private ChatResponse completedResponse(Future<ChatResponse> completed)
+            throws InterruptedException, ExecutionException {
+        return completed.get();
+    }
+
+    private RuntimeException modelFailure(ExecutionException failure) {
+        Throwable cause = failure.getCause();
+        return cause instanceof RuntimeException runtime
+                ? runtime
+                : new IllegalStateException("recommendation model call failed", cause);
+    }
+
     private ToolCallingChatOptions.Builder<?> requestOptions(
             RuntimeModelConfiguration.ResolvedModel selected,
-            Request request) {
+            Request request,
+            String effectiveModelName) {
         ChatModel model = selected.model();
         List<ToolCallback> callbacks = request.tools().stream()
                 .map(DefinitionOnlyToolCallback::new)
@@ -114,6 +210,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             } else if ("qwen".equals(selected.provider())) {
                 builder.extraBody(Map.of("enable_thinking", false));
             }
+            if (!effectiveModelName.equals(selected.modelName())) builder.model(effectiveModelName);
             builder.toolChoice(openAiToolChoice(request, selected.provider()));
             if ("qwen".equals(selected.provider())) {
                 builder.parallelToolCalls(request.toolChoice() == ToolChoice.AUTO);
@@ -139,7 +236,27 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         return options;
     }
 
+    private String effectiveModelName(
+            RuntimeModelConfiguration.ResolvedModel selected,
+            Request request) {
+        boolean exactPublication = request.toolChoice() == ToolChoice.REQUIRED
+                && request.tools().size() == 1;
+        return exactPublication
+                        && selected.startupDefault()
+                        && "qwen".equals(selected.provider())
+                        && !publicationModel.isBlank()
+                ? publicationModel
+                : selected.modelName();
+    }
+
     private Object openAiToolChoice(Request request, String provider) {
+        if (request.toolChoice() == ToolChoice.REQUIRED
+                && "qwen".equals(provider)
+                && request.tools().size() == 1) {
+            return Map.of(
+                    "type", "function",
+                    "function", Map.of("name", request.tools().getFirst().name()));
+        }
         return request.toolChoice() == ToolChoice.REQUIRED && !"qwen".equals(provider)
                 ? "required"
                 : "auto";
@@ -182,6 +299,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             double requestTemperature,
             String operation,
             RuntimeModelConfiguration.ResolvedModel selected,
+            String effectiveModelName,
             long firstTextMs) {
         int inputCharacters = request.messages().stream()
                         .mapToInt(message -> message.content().length())
@@ -203,7 +321,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, firstTextMs={}, inputCharacters={}, assistantTextCharacters={}, toolArgumentCharacters={}, promptTokens={}, completionTokens={}",
                 operation,
                 selected.provider(),
-                selected.modelName(),
+                effectiveModelName,
                 requestTemperature,
                 elapsedMs,
                 firstTextMs,

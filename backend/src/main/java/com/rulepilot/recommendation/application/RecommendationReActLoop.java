@@ -273,6 +273,7 @@ final class RecommendationReActLoop {
                 Message.user(input)));
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
         Set<String> rejectedIncompatibleActionSets = new LinkedHashSet<>();
+        Set<String> rejectedFreeFormPublications = new LinkedHashSet<>();
         int stateEpoch = 0;
         while (true) {
             progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.OBSERVE_AND_DECIDE);
@@ -349,9 +350,30 @@ final class RecommendationReActLoop {
                                 "PUBLICATION_INVALID:PUBLICATION_CANDIDATE_MISSING");
                     }
                     decisionObservation.stop("rejected", false, null);
-                    progress.fail();
-                    state.actions.add("PUBLICATION_FAILED:PUBLICATION_MISSING");
-                    return unavailable(state, locale, "PUBLICATION_INVALID:PUBLICATION_MISSING");
+                    state.actions.add("REJECTED_PUBLICATION:PUBLICATION_MISSING");
+                    if (!rejectedFreeFormPublications.add(turn.text())) {
+                        progress.fail();
+                        state.actions.add("NO_PROGRESS:REPEATED_INVALID_PUBLICATION");
+                        return unavailable(
+                                state,
+                                locale,
+                                "NO_PROGRESS:REPEATED_INVALID_PUBLICATION");
+                    }
+                    progress.retry();
+                    messages.add(Message.assistant(turn.text(), List.of()));
+                    messages.add(Message.user(observation(Map.of(
+                            "validationError",
+                                    Map.of(
+                                            "code", "PUBLICATION_MISSING",
+                                            "message", "Verified candidates may be published only through a currently available typed action."),
+                            "allowedActions",
+                                    currentActions.stream()
+                                            .map(action -> Map.of(
+                                                    "name", action.name(),
+                                                    "inputSchema", action.inputSchema()))
+                                            .toList(),
+                            "allowedCandidateBggIds", recommendableIds(state)))));
+                    continue;
                 }
                 decisionObservation.stop("completed", false, null);
                 progress.complete();

@@ -34,7 +34,7 @@ final class RecommendationPublication {
 
     private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("playerReply", "selections");
     private static final Set<String> FOLLOW_UP_PUBLICATION_FIELDS =
-            Set.of("requestedCount", "playerReply", "selections");
+            Set.of("publicationCount", "playerReply", "selections");
     private static final Set<String> SELECTION_REQUIRED_FIELDS = Set.of("bggId");
 
     private final BoardGameRecommendationSelector selector;
@@ -84,7 +84,7 @@ final class RecommendationPublication {
                 ? explicitSearchCount == null
                         ? Math.min(maximumResultCount, allowedCandidateIds.size())
                         : explicitSearchCount
-                : positiveInteger(root.path("requestedCount"));
+                : positiveInteger(root.path("publicationCount"));
         int maximumSelections = Math.min(
                 maximumResultCount,
                 Math.min(requestedCount, allowedCandidateIds.size()));

@@ -103,9 +103,9 @@ final class RecommendationToolCatalog {
 
     static String systemPrompt() {
         return """
-                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Use a typed action only when its observation is genuinely needed; greetings, casual conversation, and corrections normally need no action. A follow-up about shown games must use recommend_games whenever that terminal action is offered; cite restored observations and do not bypass its evidence boundary with free-form text. When subjective experience is not represented there, use one attributed read or say what remains unknown instead of filling the gap from memory. Never repeat a catalog search just because an earlier turn contained recommendations. Submit at most one typed action in a model turn and observe it before deciding what happens next; never submit a conditional future action together with its prerequisite. On a non-terminal action turn, emit only the tool call and no player-facing prose. Typed JSON owns actions and constraints, while all player-facing prose is authored by you inside the terminal action. Stay within every action schema's length and item bounds; write concise table-ready prose that distinguishes choices instead of repeating observed metadata.
+                You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Typed JSON owns actions and constraints; player-facing prose belongs in the terminal action. Take one action at a time, emit no prose with a non-terminal action, and observe its result before deciding again. Greetings, casual conversation, and corrections normally need no action.
 
-                When the player asks you to recommend or list titles, search_bgg_catalog is the only BGG candidate entry. Submit one complete current-turn catalog contract: requestedCount is optional and must appear only when the player explicitly asks for a number of new titles; omit it when the player asks which titles are available, so the verified matches determine the count. includeTypes and excludeTypes are separate, and every explicitly named title, positive cooperative/team mode, explicitly required mechanism, player-count, duration, and complexity constraint used for that search must be carried too; no saved profile is inherited into candidate selection. Set requiredInteraction to COOPERATIVE or TEAM only when that positive mode is explicit, otherwise ANY; it is a hard catalog gate. Put other mechanisms in requiredMechanics only when the player explicitly requires them. Subjective experience preferences such as stronger interaction, friendliness, tension, or laughter are not catalog taxonomy. When the new recommendation already hinges on one of them, put the exact missing experience dimension in experienceQuestion on the search action; the application will run at most one attributed read over its bounded publishable candidate window before returning the search observation. Omit experienceQuestion when structured facts are enough. If a genuinely new subjective gap becomes apparent only after seeing candidates, you may instead use the one available research_game_fit read; never repeat experience research already completed by the search. Use requiredTitle only when the current player turn explicitly names a title or title fragment. Set its scope to SERIES for a named line or series and use CONTAINS with the distinctive shared title itself rather than the locale's generic word for a line or series; the application will expand verified title seeds through their shared canonical BGG game family. Set scope to TITLE for an ordinary fragment or one exact game, using EXACT only for the latter. Omit requiredTitle for generic discovery. Do not silently loosen or replace that contract when it has no match. After every observation, decide whether another distinct read would materially help or you should finish. recommend_games is terminal and should contain the complete natural response and every complete card in that one call; an explicit search count owns the requested selection count, while an omitted count uses the verified publishable matches. Explain why each game fits this player's request and what meaningfully distinguishes it; synthesize the cited observations instead of copying a publisher description as the recommendation reason. Use public relationship discovery only for an external/current identity fact, and never turn a taxonomy label into an unobserved experience claim.
+                When the player asks you to recommend or list titles, search_bgg_catalog is the only BGG candidate entry. Submit one complete current-turn catalog contract: publicationCount is the positive number of final recommendation cards; preserve an explicit player count, or choose a sensible count when none was stated. It does not control search breadth: the application evaluates its own bounded candidate window and automatically excludes shown and excluded BGG IDs. includeTypes and excludeTypes are separate, and every explicitly named title, positive cooperative/team mode, explicitly required mechanism, player-count, duration, and complexity constraint used for that search must be carried too; no saved profile is inherited into candidate selection. Set requiredInteraction to COOPERATIVE or TEAM only when that positive mode is explicit, otherwise ANY; it is a hard catalog gate. Put other mechanisms in requiredMechanics only when the player explicitly requires them. Subjective experience preferences such as stronger interaction, friendliness, tension, or laughter are not catalog taxonomy. When the new recommendation hinges on one of them, put the exact missing experience dimension in experienceQuestion on the search action; the application will run the turn's one attributed read over its bounded publishable candidate window before returning the search observation. Omit experienceQuestion when structured facts are enough. Use requiredTitle only when the current player turn explicitly names a title or title fragment. Set its scope to SERIES for a named line or series and use CONTAINS with the distinctive shared title itself rather than the locale's generic word for a line or series; the application will expand verified title seeds through their shared canonical BGG game family. Set scope to TITLE for an ordinary fragment or one exact game, using EXACT only for the latter. Omit requiredTitle for generic discovery. Do not silently loosen or replace that contract when it has no match. After every observation, decide whether another distinct read would materially help or you should finish. recommend_games is terminal and should contain the complete natural response and every complete card in that one call. Explain why each game fits this player's request and what meaningfully distinguishes it; synthesize the cited observations instead of copying a publisher description as the recommendation reason. Use public relationship discovery only for an external/current identity fact, and never turn a taxonomy label into an unobserved experience claim.
                 """;
     }
 
@@ -131,6 +131,12 @@ final class RecommendationToolCatalog {
             List<String> ignoredCurrentEvidenceIds) {
         List<ToolSpec> available = actions.stream()
                 .filter(action -> state.activeSearch == null || !SEARCH_TOOL.equals(action.name()))
+                .filter(action -> !state.actions.contains("RESEARCH_GAME_FIT")
+                        || !SEARCH_TOOL.equals(action.name()))
+                .filter(action -> state.pendingPublicationSeed == null || !DISCOVER_TOOL.equals(action.name()))
+                .filter(action -> state.activeSearch == null
+                        || state.pendingPublicationSeed == null
+                        || !RESEARCH_TOOL.equals(action.name()))
                 .filter(action -> state.webResearchAvailable
                         || !DISCOVER_TOOL.equals(action.name()) && !RESEARCH_TOOL.equals(action.name()))
                 .filter(action -> !state.verifiedForAgent().isEmpty() || !RESEARCH_TOOL.equals(action.name()))
@@ -160,11 +166,11 @@ final class RecommendationToolCatalog {
         String complexity = "{\"type\":\"object\",\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5},\"maximum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5}}}";
         return new ToolSpec(
                 SEARCH_TOOL,
-                "Search and verify BGG candidates from the one complete current-turn contract. requestedCount is optional and appears only when the player explicitly asks for that many new titles; omit it for an open named-title or series inventory. includeTypes and excludeTypes are separate and may be empty; requiredInteraction is COOPERATIVE or TEAM only for an explicit positive play mode and otherwise ANY; requiredMechanics contains other literal BGG mechanism labels explicitly required by the player; requiredTitle is optional and must be omitted unless the current player turn names a title or distinctive shared title fragment. Its scope is SERIES for a named line or series, which uses CONTAINS and expands title seeds through their shared canonical BGG game family; its scope is TITLE for an ordinary fragment or one exact game. Exclude the locale's generic line-or-series wrapper from the value; use EXACT only for one exact game. For generic discovery, descriptionQuery optionally carries concise English theme or experience concepts explicitly requested by the player; it ranks matching BGG descriptions ahead of the ordinary catalog fallback without weakening hard filters, and must be omitted for a named-title lookup. experienceQuestion is optional and replaces a later research decision: set it only when this new recommendation hinges on a subjective experience dimension absent from structured BGG facts.",
+                "Search and verify BGG candidates from one complete current-turn contract. publicationCount is the positive number of final recommendation cards: preserve an explicit player count, or choose a sensible count when none was stated. It does not control search breadth; the application evaluates its own bounded candidate window and automatically excludes shown and excluded BGG IDs. includeTypes and excludeTypes are separate and may be empty; requiredInteraction is COOPERATIVE or TEAM only for an explicit positive play mode and otherwise ANY; requiredMechanics contains other literal BGG mechanism labels explicitly required by the player; requiredTitle is optional and must be omitted unless the current player turn names a title or distinctive shared title fragment. Its scope is SERIES for a named line or series, which uses CONTAINS and expands title seeds through their shared canonical BGG game family; its scope is TITLE for an ordinary fragment or one exact game. Exclude the locale's generic line-or-series wrapper from the value; use EXACT only for one exact game. For generic discovery, descriptionQuery optionally carries concise English theme or experience concepts explicitly requested by the player; it ranks matching BGG descriptions ahead of the ordinary catalog fallback without weakening hard filters, and must be omitted for a named-title lookup. experienceQuestion is optional and replaces a later research decision: set it only when this new recommendation hinges on a subjective experience dimension absent from structured BGG facts.",
                 "{\"type\":\"object\",\"properties\":{"
                         + "\"evidence\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(currentTurnEvidenceIds)
-                        + "},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1"
+                        + "},\"publicationCount\":{\"type\":\"integer\",\"minimum\":1"
                         + "},\"includeTypes\":"
                         + typeArray
                         + ",\"excludeTypes\":"
@@ -177,7 +183,7 @@ final class RecommendationToolCatalog {
                         + "\"experienceQuestion\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":500},"
                         + "\"players\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},\"maxMinutes\":{\"type\":\"integer\",\"minimum\":5,\"maximum\":1440},\"complexity\":"
                         + complexity
-                        + "},\"required\":[\"evidence\",\"includeTypes\",\"excludeTypes\",\"requiredInteraction\"]}");
+                        + "},\"required\":[\"evidence\",\"publicationCount\",\"includeTypes\",\"excludeTypes\",\"requiredInteraction\"]}");
     }
 
     List<Integer> recommendableIds(RecommendationAgentState state) {
@@ -233,27 +239,27 @@ final class RecommendationToolCatalog {
                 .distinct()
                 .toList();
         boolean searchOwnsCount = state.activeSearch != null;
-        String requestedCountProperty = searchOwnsCount
+        String publicationCountProperty = searchOwnsCount
                 ? ""
-                : "\"requestedCount\":{\"type\":\"integer\",\"minimum\":1},";
+                : "\"publicationCount\":{\"type\":\"integer\",\"minimum\":1},";
         String requiredFields = searchOwnsCount
                 ? "[\"playerReply\",\"selections\"]"
-                : "[\"requestedCount\",\"playerReply\",\"selections\"]";
+                : "[\"publicationCount\",\"playerReply\",\"selections\"]";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Terminal publication for verified candidates when you decide the request is answered. This call permits at most "
+                "Publish the final concise response from verified candidates. This call permits at most "
                         + maximumSelections
-                        + " selection(s); choose within that bound instead of describing extras. For a current search, do not reinterpret its requestedCount here. playerReply is the substantive natural response that frames the selection logic and important tradeoffs; it is not a heading or card lead. Each whyFit is candidate-specific synthesis of the player's request and cited observations, never copied publisher-description copy.",
-                "{\"type\":\"object\",\"properties\":{" + requestedCountProperty
+                        + " selection(s). Do not reinterpret a current search count. Briefly frame the choices in playerReply; give each selected game one focused whyFit, plus a tradeoff only when supported. Synthesize cited observations instead of repeating them.",
+                "{\"type\":\"object\",\"properties\":{" + publicationCountProperty
                         + "\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":"
                         + RecommendationPublication.PLAYER_REPLY_MAX_CODE_POINTS
                         + "},\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
                         + maximumSelections
                         + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":"
                         + candidateIds
-                        + "},\"whyFit\":{\"type\":\"string\",\"description\":\"A complete, natural explanation of why this specific candidate fits the player's stated request and how its observed characteristics shape the experience. Synthesize; do not copy or lightly paraphrase publisherDescription.\",\"minLength\":1,\"maxLength\":"
+                        + "},\"whyFit\":{\"type\":\"string\",\"description\":\"A concise, candidate-specific synthesis of the player's request and cited observations.\",\"minLength\":1,\"maxLength\":"
                         + RecommendationPublication.WHY_FIT_MAX_CODE_POINTS
-                        + "},\"tradeoff\":{\"type\":\"string\",\"description\":\"An important candidate-specific limitation or uncertainty when one matters; omit it when there is no supported tradeoff.\",\"minLength\":1,\"maxLength\":"
+                        + "},\"tradeoff\":{\"type\":\"string\",\"description\":\"A concise supported limitation or uncertainty; omit when none matters.\",\"minLength\":1,\"maxLength\":"
                         + RecommendationPublication.TRADEOFF_MAX_CODE_POINTS
                         + "},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(replyEvidenceIds)
@@ -299,12 +305,6 @@ final class RecommendationToolCatalog {
                         game,
                         detailedGameIds.contains(game.ranking().bggId())))
                 .toList());
-        memory.put("recommendableBggIds", recommendableIds(state));
-        if (state.pendingPublicationSeed != null) {
-            memory.put("pendingRecommendation", Map.of(
-                    "verifiedCandidateBggIds", pendingPublicationIds(state),
-                    "terminalAction", RECOMMEND_TOOL));
-        }
         putIfNotEmpty(memory, "publicContextEvidence", state.publicContextEvidence.values().stream()
                 .map(actionExecutor::publicContextObservation)
                 .toList());
@@ -322,7 +322,6 @@ final class RecommendationToolCatalog {
                                 .toList()))
                 .toList());
         putIfNotEmpty(memory, "researchSources", actionExecutor.sourceObservations(state.research.sources()));
-        memory.put("actionsTaken", List.copyOf(state.actions));
         if (!state.webResearchAvailable && !state.webResearchFailureCode.isBlank()) {
             memory.put("webResearchFailureCode", state.webResearchFailureCode);
         }

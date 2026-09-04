@@ -229,7 +229,8 @@ public class RuntimeModelConfiguration {
                 selected,
                 configured.id(),
                 configured.modelName(),
-                deepSeekNonThinking);
+                deepSeekNonThinking,
+                configured.startupDefault());
     }
 
     private ConfiguredProvider configured(Role role, State current) {
@@ -848,7 +849,16 @@ public class RuntimeModelConfiguration {
             ChatModel model,
             String provider,
             String modelName,
-            boolean deepSeekNonThinkingGeneration) {}
+            boolean deepSeekNonThinkingGeneration,
+            boolean startupDefault) {
+        public ResolvedModel(
+                ChatModel model,
+                String provider,
+                String modelName,
+                boolean deepSeekNonThinkingGeneration) {
+            this(model, provider, modelName, deepSeekNonThinkingGeneration, false);
+        }
+    }
 
     public record Assignments(String teaching, String visual, String answer, String critic, String recommendation) {
         String forRole(Role role) {

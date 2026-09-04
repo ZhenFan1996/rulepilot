@@ -508,6 +508,8 @@ function productionRecommendationRawReport(overrides = {}) {
       noExternalWork: true,
       persistedMatched: true,
       domMatched: true,
+      agentElapsedMs: 1_200,
+      modelCallElapsedMs: [1_150],
       failure: null,
     },
     recommendation: {
@@ -530,6 +532,8 @@ function productionRecommendationRawReport(overrides = {}) {
       publicationErrors: [],
       persistedMatched: true,
       domMatched: true,
+      agentElapsedMs: 3_400,
+      modelCallElapsedMs: [900, 2_300],
       failure: null,
     },
     handoff: {
@@ -979,7 +983,11 @@ test('production recommendation keeps only the deployed user-visible journey con
   assert.match(productionRecommendationSanitizer,
     /naturalReply:[\s\S]*?noExternalWork:[\s\S]*?persistedMatched:[\s\S]*?domMatched:/)
   assert.match(productionRecommendationSanitizer,
+    /naturalReply:[\s\S]*?agentElapsedMs:[\s\S]*?modelCallElapsedMs:/)
+  assert.match(productionRecommendationSanitizer,
     /recommendation:[\s\S]*?publicationErrors:[\s\S]*?cards:/)
+  assert.match(productionRecommendationSanitizer,
+    /recommendation:[\s\S]*?agentElapsedMs:[\s\S]*?modelCallElapsedMs:/)
   assert.match(productionRecommendationSanitizer,
     /accepted_handoff[\s\S]*?editionBelongsToGame == true[\s\S]*?blockedMutationPaths \| length/)
   const handoffAcceptance = productionRecommendationSanitizer.match(
@@ -993,7 +1001,7 @@ test('production recommendation keeps only the deployed user-visible journey con
   assert.match(productionRecommendationSanitizer,
     /mv "\$temporary_report" "\$sanitized_report"[\s\S]*?rm -f "\$raw_report"/)
   assert.doesNotMatch(productionRecommendationSanitizer,
-    /progress|sse|slo|elapsed|modelCalls|catalogCalls|webResearchCalls|characterCount|contentDigest|handoffFreshness|handoffRestored|handoffDiscoveryCandidate/i)
+    /progress|sse|slo|modelCalls|catalogCalls|webResearchCalls|characterCount|contentDigest|handoffFreshness|handoffRestored|handoffDiscoveryCandidate/i)
 
   assert.match(productionRecommendationSpec, /reportSchemaVersion: 2/)
   assert.match(productionRecommendationSpec, /rawModelOutputCaptured: false/)
@@ -1005,6 +1013,8 @@ test('production recommendation keeps only the deployed user-visible journey con
     /naturalReply: \{[\s\S]*?noExternalWork:[\s\S]*?persistedMatched:[\s\S]*?domMatched:/)
   assert.match(productionRecommendationSpec,
     /recommendation: \{[\s\S]*?publicationErrors: string\[\][\s\S]*?cards:/)
+  assert.match(productionRecommendationSpec,
+    /recommendation: \{[\s\S]*?agentElapsedMs: number \| null[\s\S]*?modelCallElapsedMs: number\[\]/)
   assert.match(productionRecommendationSpec,
     /handoff: \{[\s\S]*?editionBelongsToGame:[\s\S]*?blockedMutationPaths: string\[\]/)
 })
@@ -1032,7 +1042,11 @@ test('production recommendation sanitizer publishes a nested allowlisted success
     })
     assert.equal(sanitized.model.stable, true)
     assert.equal(sanitized.naturalReply.noExternalWork, true)
+    assert.equal(sanitized.naturalReply.agentElapsedMs, 1_200)
+    assert.deepEqual(sanitized.naturalReply.modelCallElapsedMs, [1_150])
     assert.equal(sanitized.recommendation.cards.length, 3)
+    assert.equal(sanitized.recommendation.agentElapsedMs, 3_400)
+    assert.deepEqual(sanitized.recommendation.modelCallElapsedMs, [900, 2_300])
     assert.deepEqual(sanitized.recommendation.publicationErrors, [])
     assert.equal(sanitized.handoff.terminal, 'SOURCE_REVIEW')
     assert.equal(sanitized.handoff.editionBelongsToGame, true)
@@ -3108,20 +3122,30 @@ test('deployment isolates the recommendation startup model from shared Qwen role
   assert.match(deploymentWorkflow,
     /managed_runtime_keys='[^']* BGG_RECOMMENDATION_MODEL [^']*'/)
   assert.match(deploymentWorkflow,
+    /managed_runtime_keys='[^']* BGG_RECOMMENDATION_PUBLICATION_MODEL [^']*'/)
+  assert.match(deploymentWorkflow,
+    /managed_runtime_keys='[^']* BGG_RECOMMENDATION_HEDGE_DELAY [^']*'/)
+  assert.match(deploymentWorkflow,
     /managed_runtime_keys='[^']* BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS [^']*'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL=qwen3\.7-plus'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_PUBLICATION_MODEL=qwen3\.7-flash'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_HEDGE_DELAY=PT6S'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS=2000'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT5S'/)
   assert.match(deploymentWorkflow, /'WEB_SEARCH_MODEL=qwen3\.8-flash'/)
   assert.match(deploymentCompose,
     /BGG_RECOMMENDATION_MODEL: \$\{BGG_RECOMMENDATION_MODEL:-\}/)
+  assert.match(deploymentCompose,
+    /BGG_RECOMMENDATION_PUBLICATION_MODEL: \$\{BGG_RECOMMENDATION_PUBLICATION_MODEL:-\}/)
+  assert.match(deploymentCompose,
+    /BGG_RECOMMENDATION_HEDGE_DELAY: \$\{BGG_RECOMMENDATION_HEDGE_DELAY:-PT0S\}/)
   assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'QWEN_MODEL=qwen3\.7-plus'/)
   assert.doesNotMatch(deploymentWorkflow, /'QWEN_MODEL=qwen3\.8-flash'/)
   assert.match(applicationConfiguration,
-    /recommendation-agent:[\s\S]{0,600}?timeout: \$\{AGENT_TIMEOUT:PT2M\}/)
+    /recommendation-agent:[\s\S]{0,800}?timeout: \$\{AGENT_TIMEOUT:PT2M\}/)
   assert.match(deploymentWorkflow, /managed_runtime_keys='[^']* AGENT_TIMEOUT [^']*'/)
   assert.match(deploymentWorkflow, /'AGENT_TIMEOUT=PT2M'/)
   assert.match(deploymentCompose, /AGENT_TIMEOUT: \$\{AGENT_TIMEOUT:-PT2M\}/)
