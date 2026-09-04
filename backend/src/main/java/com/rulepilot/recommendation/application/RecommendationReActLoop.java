@@ -86,6 +86,7 @@ final class RecommendationReActLoop {
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions actionExecutor;
     private final RecommendationPublication publication;
+    private final RecommendationDecisionBrief decisionBrief;
     private final RecommendationToolCatalog toolCatalog;
     private final RecommendationReadBatchExecutor readBatchExecutor;
     private final ObservationRegistry observations;
@@ -124,6 +125,7 @@ final class RecommendationReActLoop {
                 this,
                 properties,
                 json);
+        decisionBrief = new RecommendationDecisionBrief(json);
         toolCatalog = new RecommendationToolCatalog(selector, properties, json, evidenceReview, actionExecutor);
         readBatchExecutor = new RecommendationReadBatchExecutor(actionExecutor, this, boundedCalls, json);
     }
@@ -436,6 +438,9 @@ final class RecommendationReActLoop {
                 return publishNaturalResponse(state, locale, turn.text(), progress);
             }
             List<ToolCall> calls = turn.toolCalls();
+            if (state.modelCalls == 1 && calls.size() == 1 && answerPartListener != null) {
+                decisionBrief.render(calls.getFirst(), locale).ifPresent(answerPartListener);
+            }
             if (calls.size() > 1) {
                 RecommendationReadBatchExecutor.Compatibility compatibility =
                         readBatchExecutor.compatibility(calls, currentActions);
@@ -568,7 +573,8 @@ final class RecommendationReActLoop {
             ProgressTracker progress,
             Consumer<TurnCheckpoint> checkpointListener) {
         state.actionCalls++;
-        String fingerprint = actionFingerprint(call);
+        ToolCall executionCall = decisionBrief.withoutBrief(call);
+        String fingerprint = actionFingerprint(executionCall);
         RecommendationActions.ActionOutcome outcome;
         OperationObservation actionObservation = startOperation(
                 "typed_action", observedAction(call.name()));
@@ -592,7 +598,7 @@ final class RecommendationReActLoop {
         } else {
             try {
                 outcome = actionExecutor.execute(
-                        call,
+                        executionCall,
                         state,
                         request,
                         locale,
@@ -680,7 +686,7 @@ final class RecommendationReActLoop {
     }
 
     String actionFingerprint(ToolCall call) {
-        return readBatchExecutor.fingerprint(call);
+        return readBatchExecutor.fingerprint(decisionBrief.withoutBrief(call));
     }
 
     private ConversationResponse publishValidatedResponse(
