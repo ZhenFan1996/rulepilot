@@ -230,7 +230,8 @@ public class RuntimeModelConfiguration {
                 configured.id(),
                 configured.modelName(),
                 deepSeekNonThinking,
-                configured.startupDefault());
+                configured.startupDefault(),
+                configured.credentialSource() == ModelAccountQuota.CredentialSource.PLATFORM);
     }
 
     private ConfiguredProvider configured(Role role, State current) {
@@ -850,13 +851,23 @@ public class RuntimeModelConfiguration {
             String provider,
             String modelName,
             boolean deepSeekNonThinkingGeneration,
-            boolean startupDefault) {
+            boolean startupDefault,
+            boolean platformManaged) {
+        public ResolvedModel(
+                ChatModel model,
+                String provider,
+                String modelName,
+                boolean deepSeekNonThinkingGeneration,
+                boolean startupDefault) {
+            this(model, provider, modelName, deepSeekNonThinkingGeneration, startupDefault, startupDefault);
+        }
+
         public ResolvedModel(
                 ChatModel model,
                 String provider,
                 String modelName,
                 boolean deepSeekNonThinkingGeneration) {
-            this(model, provider, modelName, deepSeekNonThinkingGeneration, false);
+            this(model, provider, modelName, deepSeekNonThinkingGeneration, false, false);
         }
     }
 

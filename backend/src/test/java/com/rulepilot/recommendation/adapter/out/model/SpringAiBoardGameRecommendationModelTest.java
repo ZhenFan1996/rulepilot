@@ -255,12 +255,12 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void hedgesASlowStartupQwenCallAndUsesTheFirstCompletedResponse() {
+    void hedgesASlowPersistedPlatformQwenCallAndUsesTheFirstCompletedResponse() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
                 .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
-                        chatModel, "qwen", "qwen3.7-plus", false, true));
+                        chatModel, "qwen", "qwen3.7-plus", false, false, true));
         when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
                 .apiKey("test-key")
                 .baseUrl("https://provider.example/v1")
@@ -288,6 +288,39 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(turn.toolCalls()).extracting(call -> call.name()).containsExactly("recommend_games");
         assertThat(calls).hasValue(2);
         releasePrimary.countDown();
+        adapter.stopHedgedCalls();
+    }
+
+    @Test
+    void doesNotHedgeASlowPersonalQwenCall() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
+                        chatModel, "qwen", "personal-qwen", false, false, false));
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("personal-qwen")
+                .build());
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            calls.incrementAndGet();
+            Thread.sleep(20);
+            return response(
+                    "tool_calls",
+                    new AssistantMessage.ToolCall(
+                            "publish-1", "function", "recommend_games", "{}"));
+        });
+        var adapter = new SpringAiBoardGameRecommendationModel(
+                configuration, 0.0, "", java.time.Duration.ofMillis(1));
+
+        adapter.next(request(
+                List.of(new ToolSpec(
+                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
+                ToolChoice.REQUIRED));
+
+        assertThat(calls).hasValue(1);
         adapter.stopHedgedCalls();
     }
 
