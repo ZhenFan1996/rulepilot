@@ -336,6 +336,13 @@ final class RecommendationReActLoop {
                         state.pendingPublicationSeed == null
                                 ? ToolChoice.AUTO
                                 : ToolChoice.REQUIRED);
+                RecommendationDecisionBrief.StreamingPublisher decisionStream =
+                        state.modelCalls == 1 && answerPartListener != null
+                                ? decisionBrief.streamingPublisher(
+                                        locale,
+                                        currentActions.stream().map(ToolSpec::name).collect(java.util.stream.Collectors.toSet()),
+                                        answerPartListener)
+                                : null;
                 Consumer<String> publicationStream = state.pendingPublicationSeed == null
                         || currentActions.size() != 1
                         || !RECOMMEND_TOOL.equals(currentActions.getFirst().name())
@@ -344,14 +351,22 @@ final class RecommendationReActLoop {
                                 state,
                                 locale,
                                 recommendationPartListener);
+                Consumer<String> argumentStream = decisionStream == null
+                        ? publicationStream
+                        : publicationStream == null
+                                ? decisionStream
+                                : decisionStream.andThen(publicationStream);
                 turn = withinDeadline(
                         state,
-                        () -> publicationStream == null
+                        () -> argumentStream == null
                                 ? model.next(modelRequest, state.modelConfigurationOwner)
                                 : model.nextStreaming(
                                         modelRequest,
                                         state.modelConfigurationOwner,
-                                        publicationStream));
+                                        argumentStream));
+                if (decisionStream != null && turn.toolCalls().size() == 1) {
+                    decisionStream.finish(turn.toolCalls().getFirst());
+                }
             } catch (RunDeadlineExceeded exception) {
                 state.recordModelCallElapsed(modelCallStartedAt);
                 decisionObservation.stop(
@@ -438,9 +453,6 @@ final class RecommendationReActLoop {
                 return publishNaturalResponse(state, locale, turn.text(), progress);
             }
             List<ToolCall> calls = turn.toolCalls();
-            if (state.modelCalls == 1 && calls.size() == 1 && answerPartListener != null) {
-                decisionBrief.render(calls.getFirst(), locale).ifPresent(answerPartListener);
-            }
             if (calls.size() > 1) {
                 RecommendationReadBatchExecutor.Compatibility compatibility =
                         readBatchExecutor.compatibility(calls, currentActions);

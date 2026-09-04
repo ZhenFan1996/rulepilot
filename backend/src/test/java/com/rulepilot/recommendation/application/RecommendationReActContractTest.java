@@ -87,7 +87,11 @@ class RecommendationReActContractTest {
                 ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(streamed).singleElement().satisfies(brief -> assertThat(brief)
+        assertThat(streamed).hasSizeGreaterThan(20);
+        assertThat(streamed.getFirst())
+                .contains("**我对这次请求的判断**")
+                .doesNotContain("**下一步会核对什么**");
+        assertThat(streamed.getLast()).satisfies(brief -> assertThat(brief)
                 .contains(
                         "**我对这次请求的判断**",
                         "四位疲惫玩家",
@@ -96,6 +100,9 @@ class RecommendationReActContractTest {
                         "**影响这个选择的因素**",
                         "**下一步会核对什么**",
                         "实际吐槽感仍需"));
+        assertThat(streamed)
+                .extracting(String::length)
+                .isSortedAccordingTo(Integer::compareTo);
         assertThat(timeline).containsSubsequence("decision-brief", "search-started");
         JsonNode firstSchema = new ObjectMapper().readTree(model.requests.getFirst().tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.SEARCH_TOOL.equals(tool.name()))

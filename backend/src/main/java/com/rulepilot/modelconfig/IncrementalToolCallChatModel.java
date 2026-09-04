@@ -26,8 +26,13 @@ public interface IncrementalToolCallChatModel {
         }
     }
 
-    record ToolCallDelta(String id, String name, String arguments) {
+    record ToolCallDelta(int index, String id, String name, String arguments) {
+        public ToolCallDelta(String id, String name, String arguments) {
+            this(0, id, name, arguments);
+        }
+
         public ToolCallDelta {
+            if (index < 0) throw new IllegalArgumentException("tool-call delta index must be non-negative");
             id = id == null ? "" : id;
             name = name == null ? "" : name;
             arguments = arguments == null ? "" : arguments;

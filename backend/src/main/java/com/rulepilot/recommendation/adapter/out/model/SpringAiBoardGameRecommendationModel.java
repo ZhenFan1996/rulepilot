@@ -10,6 +10,8 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -121,10 +123,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             Request request,
             String ownerUsername,
             Consumer<String> accumulatedArgumentsListener) {
-        if (request.toolChoice() != ToolChoice.REQUIRED || request.tools().size() != 1) {
-            return BoardGameRecommendationModel.super.nextStreaming(
-                    request, ownerUsername, accumulatedArgumentsListener);
-        }
         RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
         String effectiveModelName = effectiveModelName(selected, request);
         Prompt prompt = new Prompt(
@@ -140,7 +138,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         AtomicReference<BoardGameRecommendationModel.CompletionStatus> completion =
                 new AtomicReference<>(BoardGameRecommendationModel.CompletionStatus.UNKNOWN);
         StringBuilder text = new StringBuilder();
-        StreamingToolCall toolCall = new StreamingToolCall();
+        Map<Integer, StreamingToolCall> toolCalls = new LinkedHashMap<>();
 
         if (selected.model() instanceof IncrementalToolCallChatModel rawStream
                 && rawStream.supportsIncrementalToolCallChunks()) {
@@ -148,60 +146,64 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 if (chunk.promptTokens() > 0) promptTokens.set(chunk.promptTokens());
                 if (chunk.completionTokens() > 0) completionTokens.set(chunk.completionTokens());
                 if (!chunk.text().isEmpty()) {
-                        firstOutputAt.compareAndSet(0, System.nanoTime());
-                        text.append(chunk.text());
+                    firstOutputAt.compareAndSet(0, System.nanoTime());
+                    text.append(chunk.text());
                 }
                 for (IncrementalToolCallChatModel.ToolCallDelta call : chunk.toolCalls()) {
-                        firstOutputAt.compareAndSet(0, System.nanoTime());
-                        if (!call.id().isBlank()) toolCall.id = call.id();
-                        if (!call.name().isBlank()) toolCall.name = call.name();
-                        if (!call.arguments().isEmpty()) {
-                                toolCall.mergeArguments(call.arguments());
-                                accumulatedArgumentsListener.accept(toolCall.arguments.toString());
+                    firstOutputAt.compareAndSet(0, System.nanoTime());
+                    StreamingToolCall toolCall = toolCalls.computeIfAbsent(
+                            call.index(), ignored -> new StreamingToolCall());
+                    if (!call.id().isBlank()) toolCall.id = call.id();
+                    if (!call.name().isBlank()) toolCall.name = call.name();
+                    if (!call.arguments().isEmpty()) {
+                        toolCall.mergeArguments(call.arguments());
+                        if (call.index() == 0) {
+                            accumulatedArgumentsListener.accept(toolCall.arguments.toString());
                         }
+                    }
                 }
                 if (!chunk.finishReason().isBlank()) {
-                        BoardGameRecommendationModel.CompletionStatus observed =
-                                completionStatus(chunk.finishReason());
-                        if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) {
-                            completion.set(observed);
-                        }
+                    BoardGameRecommendationModel.CompletionStatus observed =
+                            completionStatus(chunk.finishReason());
+                    if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) {
+                        completion.set(observed);
+                    }
                 }
             }).blockLast();
         } else {
             selected.model().stream(prompt).doOnNext(response -> {
-            lastResponse.set(response);
-            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
-                return;
-            }
-            AssistantMessage output = response.getResult().getOutput();
-            String textChunk = output.getText();
-            if (textChunk != null && !textChunk.isEmpty()) {
-                firstOutputAt.compareAndSet(0, System.nanoTime());
-                text.append(textChunk);
-            }
-            for (AssistantMessage.ToolCall chunk : output.getToolCalls()) {
-                firstOutputAt.compareAndSet(0, System.nanoTime());
-                if (chunk.id() != null && !chunk.id().isBlank()) toolCall.id = chunk.id();
-                if (chunk.name() != null && !chunk.name().isBlank()) toolCall.name = chunk.name();
-                if (chunk.arguments() != null && !chunk.arguments().isEmpty()) {
-                    toolCall.mergeArguments(chunk.arguments());
-                    accumulatedArgumentsListener.accept(toolCall.arguments.toString());
+                lastResponse.set(response);
+                if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+                    return;
                 }
-            }
-            String finishReason = response.getResult().getMetadata() == null
-                    ? null
-                    : response.getResult().getMetadata().getFinishReason();
-            BoardGameRecommendationModel.CompletionStatus observed = completionStatus(finishReason);
-            if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) completion.set(observed);
+                AssistantMessage output = response.getResult().getOutput();
+                String textChunk = output.getText();
+                if (textChunk != null && !textChunk.isEmpty()) {
+                    firstOutputAt.compareAndSet(0, System.nanoTime());
+                    text.append(textChunk);
+                }
+                for (int index = 0; index < output.getToolCalls().size(); index++) {
+                    AssistantMessage.ToolCall chunk = output.getToolCalls().get(index);
+                    firstOutputAt.compareAndSet(0, System.nanoTime());
+                    StreamingToolCall toolCall = toolCalls.computeIfAbsent(
+                            index, ignored -> new StreamingToolCall());
+                    if (chunk.id() != null && !chunk.id().isBlank()) toolCall.id = chunk.id();
+                    if (chunk.name() != null && !chunk.name().isBlank()) toolCall.name = chunk.name();
+                    if (chunk.arguments() != null && !chunk.arguments().isEmpty()) {
+                        toolCall.mergeArguments(chunk.arguments());
+                        if (index == 0) accumulatedArgumentsListener.accept(toolCall.arguments.toString());
+                    }
+                }
+                String finishReason = response.getResult().getMetadata() == null
+                        ? null
+                        : response.getResult().getMetadata().getFinishReason();
+                BoardGameRecommendationModel.CompletionStatus observed = completionStatus(finishReason);
+                if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) completion.set(observed);
             }).blockLast();
         }
 
         ChatResponse response = lastResponse.get();
-        if (toolCall.arguments.isEmpty()) {
-            throw new IllegalStateException("recommendation model returned no streamed terminal action");
-        }
-        ToolCall completed = toolCall.finish(request.tools().getFirst().name());
+        List<ToolCall> completed = completedToolCalls(request, toolCalls);
         long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
         long firstOutputMs = firstOutputAt.get() == 0 ? -1 : (firstOutputAt.get() - startedAt) / 1_000_000;
         if (response == null) {
@@ -214,7 +216,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                     effectiveModelName,
                     firstOutputMs,
                     text.length(),
-                    toolCall.arguments.length(),
+                    toolCalls.values().stream().mapToInt(call -> call.arguments.length()).sum(),
                     promptTokens.get(),
                     completionTokens.get());
         } else {
@@ -233,10 +235,25 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         }
         return new Turn(
                 text.toString(),
-                List.of(completed),
+                completed,
                 completion.get(),
                 tokenCount(promptTokens.get()),
                 tokenCount(completionTokens.get()));
+    }
+
+    private List<ToolCall> completedToolCalls(
+            Request request,
+            Map<Integer, StreamingToolCall> streamed) {
+        if (streamed.isEmpty()) return List.of();
+        List<ToolCall> completed = new ArrayList<>(streamed.size());
+        streamed.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> completed.add(entry.getValue().finish(
+                        request.toolChoice() == ToolChoice.REQUIRED && request.tools().size() == 1
+                                ? request.tools().getFirst().name()
+                                : null,
+                        entry.getKey())));
+        return List.copyOf(completed);
     }
 
     private Turn invoke(
@@ -540,14 +557,22 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         private String name;
         private final StringBuilder arguments = new StringBuilder();
 
-        private ToolCall finish(String requiredName) {
+        private ToolCall finish(String requiredName, int index) {
             String completedName = name == null || name.isBlank() ? requiredName : name;
-            if (!requiredName.equals(completedName)) {
+            if (completedName == null || completedName.isBlank()) {
+                throw new BoardGameRecommendationModel.ProtocolFailure(
+                        "STREAMED_ACTION_NAME_MISSING", null);
+            }
+            if (requiredName != null && !requiredName.equals(completedName)) {
                 throw new BoardGameRecommendationModel.ProtocolFailure(
                         "STREAMED_ACTION_NAME_MISMATCH", null);
             }
+            if (arguments.isEmpty()) {
+                throw new BoardGameRecommendationModel.ProtocolFailure(
+                        "STREAMED_ACTION_ARGUMENTS_MISSING", null);
+            }
             return new ToolCall(
-                    id == null || id.isBlank() ? "streamed-terminal-action" : id,
+                    id == null || id.isBlank() ? "streamed-action-" + index : id,
                     completedName,
                     arguments.toString());
         }

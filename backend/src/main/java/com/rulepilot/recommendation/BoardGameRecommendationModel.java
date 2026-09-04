@@ -20,9 +20,9 @@ public interface BoardGameRecommendationModel {
     }
 
     /**
-     * Streams the accumulated arguments of one required terminal action while retaining the complete
-     * provider-neutral turn as the commit input. Implementations that cannot stream remain correct, but
-     * expose the complete arguments only after the call finishes.
+     * Streams the accumulated arguments of the first action while retaining the complete
+     * provider-neutral turn as the only commit input. Implementations that cannot stream remain correct,
+     * but expose the complete arguments only after the call finishes.
      */
     default Turn nextStreaming(
             Request request,
