@@ -3130,7 +3130,7 @@ test('deployment isolates the recommendation startup model from shared Qwen role
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL=qwen3\.7-plus'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_PUBLICATION_MODEL=qwen3\.7-plus'/)
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_HEDGE_DELAY=PT6S'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_HEDGE_DELAY=PT2S'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS=2000'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT5S'/)
   assert.match(deploymentWorkflow, /'WEB_SEARCH_MODEL=qwen3\.8-flash'/)
