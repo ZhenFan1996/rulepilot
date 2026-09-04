@@ -242,7 +242,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         boolean exactPublication = request.toolChoice() == ToolChoice.REQUIRED
                 && request.tools().size() == 1;
         return exactPublication
-                        && selected.startupDefault()
+                        && selected.platformManaged()
                         && "qwen".equals(selected.provider())
                         && !publicationModel.isBlank()
                 ? publicationModel

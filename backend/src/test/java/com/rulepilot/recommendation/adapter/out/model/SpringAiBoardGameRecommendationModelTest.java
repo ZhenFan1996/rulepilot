@@ -202,12 +202,12 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void usesTheConfiguredPublicationModelForTheStartupQwenTerminalAction() {
+    void usesTheConfiguredPublicationModelForAPersistedPlatformQwenTerminalAction() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
                 .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
-                        chatModel, "qwen", "qwen3.7-plus", false, true));
+                        chatModel, "qwen", "qwen3.7-plus", false, false, true));
         when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
                 .apiKey("test-key")
                 .baseUrl("https://provider.example/v1")
