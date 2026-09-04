@@ -825,13 +825,10 @@ class RecommendationReActContractTest {
         JsonNode searchObservation = toolObservation(model.requests.getLast(), "bounded-result-search");
         List<JsonNode> modelCandidates = new ArrayList<>();
         searchObservation.path("turnState").path("verifiedGames").forEach(modelCandidates::add);
-        assertThat(modelCandidates).hasSize(5);
-        assertThat(modelCandidates.subList(0, 3)).allSatisfy(candidate ->
+        assertThat(modelCandidates).hasSize(3);
+        assertThat(modelCandidates).allSatisfy(candidate ->
                 assertThat(candidate.path("observations").has(
                         "B" + candidate.path("bggId").asInt() + ":publisherDescription")).isTrue());
-        assertThat(modelCandidates.subList(3, 5)).allSatisfy(candidate ->
-                assertThat(candidate.path("observations").has(
-                        "B" + candidate.path("bggId").asInt() + ":publisherDescription")).isFalse());
         JsonNode publicationSchema = new ObjectMapper().readTree(model.requests.getLast().tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                 .findFirst()
@@ -842,8 +839,16 @@ class RecommendationReActContractTest {
                         .path("maxItems")
                         .asInt())
                 .isEqualTo(3);
+        assertThat(publicationSchema.path("properties")
+                        .path("selections")
+                        .path("items")
+                        .path("properties")
+                        .path("bggId")
+                        .path("enum")
+                        .toString())
+                .isEqualTo("[951,952,953]");
         assertThat(publicationSchema.toString())
-                .doesNotContain("B954:publisherDescription", "B955:publisherDescription");
+                .doesNotContain("954", "955", "B954:publisherDescription", "B955:publisherDescription");
         loop.stopBoundedCalls();
     }
 
@@ -944,7 +949,7 @@ class RecommendationReActContractTest {
         assertThat(observation.path("appliedSearchContract").path("publicationCount").asInt())
                 .isEqualTo(1);
         assertThat(observation.path("turnState").path("verifiedGames").findValuesAsText("bggId"))
-                .containsExactly("971", "972", "973");
+                .containsExactly("971");
         JsonNode publicationSchema = new ObjectMapper().readTree(model.requests.getLast().tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                 .findFirst()
