@@ -210,12 +210,18 @@ final class RecommendationToolCatalog {
     private List<Integer> pendingPublicationIds(RecommendationAgentState state) {
         if (state.pendingPublicationSeed == null) return List.of();
         LinkedHashSet<Integer> eligible = new LinkedHashSet<>(recommendableIds(state));
-        return state.pendingPublicationSeed.candidateBggIds().stream()
+        List<Integer> candidates = state.pendingPublicationSeed.candidateBggIds().stream()
                 .filter(eligible::contains)
                 .filter(id -> !actionExecutor.narrativeObservations(
                                 state.verified.get(id), state.research)
                         .isEmpty())
                 .toList();
+        if (state.activeSearch == null) return candidates;
+        int requestedCount = requestedCount(state.activeSearch, candidates.size());
+        int publicationCount = Math.min(requestedCount, properties.resultCount());
+        // The catalog search already owns ranking and hard eligibility. The terminal model writes and cites the
+        // resulting slate; reopening the wider scan here duplicates selection work and enlarges its evidence surface.
+        return candidates.stream().limit(publicationCount).toList();
     }
 
     private ToolSpec recommendationAction(RecommendationAgentState state, List<Integer> candidateIds) {
@@ -296,7 +302,7 @@ final class RecommendationToolCatalog {
                 "R", "rulebook fact"));
         List<Game> contextGames = state.activeSearch == null || state.pendingPublicationSeed == null
                 ? state.verifiedForAgent()
-                : state.pendingPublicationSeed.candidateBggIds().stream()
+                : pendingPublicationIds(state).stream()
                         .map(state.verified::get)
                         .filter(Objects::nonNull)
                         .toList();
