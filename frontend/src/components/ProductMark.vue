@@ -20,18 +20,18 @@ import TabletopGlyph from '@/components/TabletopGlyph.vue'
 
 .product-mark__seal {
   display: grid;
-  width: 2rem;
-  height: 2rem;
+  width: 2.3rem;
+  height: 2.3rem;
   place-items: center;
-  border-radius: 0.5rem;
-  color: var(--color-indigo);
-  background: color-mix(in srgb, var(--color-indigo) 9%, var(--color-paper));
+  border-radius: 0.6rem 0.6rem 0.9rem 0.6rem;
+  color: #ffffff;
+  background: var(--color-felt);
 }
 
 .product-mark__name {
   font-family: var(--font-display);
   font-size: 1.08rem;
-  font-weight: 650;
+  font-weight: 750;
   letter-spacing: -0.018em;
 }
 </style>

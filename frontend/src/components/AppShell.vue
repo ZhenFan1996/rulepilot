@@ -164,87 +164,52 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-64">
-    <aside class="drawer-shelf app-fixed-top fixed bottom-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-ink/10 bg-paper px-4 py-5 text-ink lg:flex">
-      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="relative mx-2 rounded-xl focus-visible:outline-offset-4">
+  <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pt-20">
+    <aside class="drawer-shelf desktop-masthead app-fixed-top fixed inset-x-0 z-30 hidden h-20 items-center gap-6 border-b border-ink/10 bg-paper px-6 text-ink lg:flex">
+      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="shrink-0 rounded-lg focus-visible:outline-offset-4">
         <ProductMark />
       </RouterLink>
-
-      <nav class="relative mt-7 stack-y-s" :aria-label="t('shell.primaryNav')">
-        <RouterLink
-          v-for="item in navigation"
-          :key="item.name"
-          :to="item.path"
+      <nav class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" :aria-label="t('shell.primaryNav')">
+        <RouterLink v-for="item in navigation" :key="item.name" :to="item.path"
           :data-testid="item.name === 'work-status' ? 'work-status-navigation-link' : undefined"
-          class="drawer-link group flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
-          :class="currentNavigationName === item.name ? 'border-transparent bg-indigo/10 text-indigo drawer-link-active' : 'border-transparent text-ink/65 hover:bg-ink/5 hover:text-ink'"
-        >
-          <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" :class="currentNavigationName === item.name ? 'text-copper' : 'text-ink/65 group-hover:text-ink'" />
-          <span class="min-w-0 flex-1">{{ t(item.labelKey) }}</span>
-          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-navigation-active" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-on-accent">{{ backgroundActiveCount }}</span>
-          <span v-else-if="item.name === 'work-status' && backgroundFinishedCount" data-testid="work-status-navigation-finished" class="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+          class="drawer-link relative flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap px-3 text-sm font-semibold transition-colors"
+          :class="currentNavigationName === item.name ? 'text-indigo drawer-link-active' : 'text-muted hover:bg-ink/5 hover:text-ink'">
+          <span>{{ t(item.labelKey) }}</span>
+          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-navigation-active" class="grid min-w-5 place-items-center rounded-full bg-copper px-1 text-xs text-on-accent">{{ backgroundActiveCount }}</span>
+          <span v-else-if="item.name === 'work-status' && backgroundFinishedCount" data-testid="work-status-navigation-finished" class="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
         </RouterLink>
-        <RouterLink
-          v-if="isAdmin"
-          :to="{ name: 'admin-models' }"
-          class="drawer-link flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
-          :class="currentNavigationName === 'admin-models' ? 'border-transparent bg-indigo/10 text-indigo' : 'border-transparent text-ink/65 hover:bg-ink/5 hover:text-ink'"
-        >
-          <TabletopGlyph name="players" :size="19" class="shrink-0" />
-          <span>{{ t('nav.adminModels') }}</span>
-        </RouterLink>
-        <RouterLink
-          v-if="isAdmin"
-          :to="{ name: 'agent-audit' }"
-          class="drawer-link flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
-          :class="currentNavigationName === 'agent-audit' ? 'border-transparent bg-indigo/10 text-indigo' : 'border-transparent text-ink/65 hover:bg-ink/5 hover:text-ink'"
-        >
-          <TabletopGlyph name="rulebook" :size="19" class="shrink-0" />
-          <span>{{ t('nav.agentAudit') }}</span>
-        </RouterLink>
+        <RouterLink v-if="isAdmin" :to="{ name: 'admin-models' }" class="drawer-link flex min-h-11 shrink-0 items-center px-3 text-sm text-muted">{{ t('nav.adminModels') }}</RouterLink>
+        <RouterLink v-if="isAdmin" :to="{ name: 'agent-audit' }" class="drawer-link flex min-h-11 shrink-0 items-center px-3 text-sm text-muted">{{ t('nav.agentAudit') }}</RouterLink>
       </nav>
-
-      <div v-if="username && !immersive" id="background-work-desktop-trigger" class="relative mt-auto border-t border-ink/10 pt-4">
-        <button
-          type="button"
-          data-testid="background-work-trigger-desktop"
-          class="flex min-h-11 w-full items-center gap-3 rounded-xl border border-ink/10 bg-canvas px-3 text-sm font-semibold text-ink/65 transition hover:border-indigo/30 hover:bg-ink/5 hover:text-ink"
-          :aria-label="t('shell.backgroundWork')"
-          aria-haspopup="dialog"
-          @click="openBackgroundWork"
-        >
-          <span class="grid size-8 shrink-0 place-items-center rounded-full bg-indigo/10 text-indigo" aria-hidden="true"><TabletopGlyph name="cards" :size="17" /></span>
-          <span class="min-w-0 flex-1 text-left">{{ t('shell.backgroundWork') }}</span>
-          <span v-if="backgroundActiveCount" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-on-accent">{{ backgroundActiveCount }}</span>
-          <span v-else-if="backgroundFinishedCount" class="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
-        </button>
-      </div>
-
-      <div class="relative border-t border-ink/10 pt-4" :class="username && !immersive ? 'mt-3' : 'mt-auto'">
-        <RouterLink v-if="username" :to="{ name: 'account' }" class="mb-2 flex min-h-11 items-center gap-3 rounded-xl bg-canvas px-3 text-sm font-semibold hover:bg-ink/5">
-          <span class="grid h-7 w-7 place-items-center rounded-full bg-copper text-xs text-on-accent">{{ username.slice(0, 1).toUpperCase() }}</span>
-          <span class="truncate">{{ username }}</span>
-        </RouterLink>
-        <div class="mb-2 px-1"><LanguageSwitcher /></div>
-        <button class="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-ink/65 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" @click="toggleTheme">
-          <span>{{ isDark ? t('shell.theme.light') : t('shell.theme.dark') }}</span>
+      <div class="flex shrink-0 items-center gap-2">
+        <div v-if="username && !immersive" id="background-work-desktop-trigger">
+          <button type="button" data-testid="background-work-trigger-desktop" class="relative grid size-11 place-items-center rounded-lg text-indigo hover:bg-indigo/8"
+            :aria-label="t('shell.backgroundWork')" aria-haspopup="dialog" @click="openBackgroundWork">
+            <TabletopGlyph name="cards" :size="20" />
+            <span v-if="backgroundActiveCount" class="absolute -right-0.5 top-0 grid min-w-4 place-items-center rounded-full bg-copper px-1 text-[0.65rem] text-on-accent">{{ backgroundActiveCount }}</span>
+            <span v-else-if="backgroundFinishedCount" class="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+          </button>
+        </div>
+        <LanguageSwitcher />
+        <button type="button" class="grid size-11 place-items-center rounded-lg text-lg text-muted hover:bg-ink/5" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" :aria-pressed="isDark" @click="toggleTheme">
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
         </button>
-        <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-ink/65 hover:bg-ink/5 hover:text-ink" @click="logout">{{ t('shell.signOut') }}</button>
-        <RouterLink v-else-if="!loginActionOwned" :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-ink/65 hover:bg-ink/5 hover:text-ink">{{ t('shell.signIn') }}</RouterLink>
+        <RouterLink v-if="username" :to="{ name: 'account' }" class="grid size-9 place-items-center rounded-full bg-felt text-sm font-semibold text-white" :aria-label="username">{{ username.slice(0, 1).toUpperCase() }}</RouterLink>
+        <button v-if="username" class="min-h-11 whitespace-nowrap rounded-lg px-2 text-xs text-muted hover:text-ink" @click="logout">{{ t('shell.signOut') }}</button>
+        <RouterLink v-else-if="!loginActionOwned" :to="loginTarget" class="inline-flex min-h-11 items-center whitespace-nowrap rounded-lg bg-felt px-4 text-sm font-semibold text-white">{{ t('shell.signIn') }}</RouterLink>
       </div>
     </aside>
 
     <header class="mobile-app-header app-sticky-top sticky z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-3 backdrop-blur lg:hidden">
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')"><ProductMark /></RouterLink>
       <div class="flex min-w-0 items-center gap-1.5">
-        <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[480px]:hidden">{{ username }}</RouterLink>
+        <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-muted max-[480px]:hidden">{{ username }}</RouterLink>
         <RouterLink v-else-if="!loginActionOwned" :to="loginTarget" class="inline-flex min-h-11 items-center rounded-lg px-2 text-sm font-semibold text-indigo">{{ t('shell.signIn') }}</RouterLink>
         <button
           v-if="username && !immersive"
           type="button"
           data-testid="background-work-trigger-mobile"
-          class="relative grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/10 bg-canvas/65 text-ink/62 transition hover:border-copper/35 hover:text-ink"
+          class="relative grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/10 bg-canvas/65 text-muted transition hover:border-copper/35 hover:text-ink"
           :aria-label="t('shell.backgroundWork')"
           aria-haspopup="dialog"
           @click="openBackgroundWork"
@@ -254,7 +219,7 @@ onBeforeUnmount(() => {
           <span v-else-if="backgroundFinishedCount" class="absolute right-1 top-1 size-2 rounded-full bg-emerald-500" aria-hidden="true" />
         </button>
         <LanguageSwitcher />
-        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-lg text-ink/60 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" :aria-pressed="isDark" @click="toggleTheme">
+        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-lg text-muted hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" :aria-pressed="isDark" @click="toggleTheme">
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
         </button>
       </div>
@@ -265,10 +230,10 @@ onBeforeUnmount(() => {
         <div class="mx-auto flex max-w-7xl items-start gap-3">
           <div class="min-w-0 flex-1">
             <p class="font-semibold">{{ t('shell.loginReminder.title') }}</p>
-            <p class="mt-1 text-sm leading-6 text-ink/60">{{ t('shell.loginReminder.description') }}</p>
+            <p class="mt-1 text-sm leading-6 text-muted">{{ t('shell.loginReminder.description') }}</p>
             <RouterLink :to="loginTarget" class="mt-2 inline-flex min-h-11 items-center font-semibold text-indigo">{{ t('shell.loginReminder.action') }} →</RouterLink>
           </div>
-          <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-ink/45 hover:bg-ink/5 hover:text-ink" :aria-label="t('shell.loginReminder.dismiss')" @click="loginReminderVisible = false">×</button>
+          <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-muted hover:bg-ink/5 hover:text-ink" :aria-label="t('shell.loginReminder.dismiss')" @click="loginReminderVisible = false">×</button>
         </div>
       </aside>
       <slot :username="username" />
@@ -308,7 +273,7 @@ onBeforeUnmount(() => {
         :to="item.path"
         :data-testid="item.name === 'work-status' ? 'work-status-mobile-navigation-link' : undefined"
         class="flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1.5 text-center text-[0.65rem] font-semibold"
-        :class="currentNavigationName === item.name ? 'bg-felt text-white' : 'text-ink/55'"
+        :class="currentNavigationName === item.name ? 'bg-felt text-white' : 'text-muted'"
       >
         <span class="relative">
           <TabletopGlyph :name="item.icon" :size="18" />
@@ -320,3 +285,9 @@ onBeforeUnmount(() => {
     </nav>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 359px) {
+  .mobile-app-header :deep(.product-mark__name) { display: none; }
+}
+</style>

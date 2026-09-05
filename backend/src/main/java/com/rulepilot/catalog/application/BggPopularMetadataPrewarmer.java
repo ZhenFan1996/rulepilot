@@ -14,7 +14,6 @@ import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -39,6 +38,7 @@ class BggPopularMetadataPrewarmer {
 
     private final BggRankedCatalogRepository rankedCatalog;
     private final BoardGameGeekCatalog bgg;
+    private final BggMetadataCache cache;
     private final BggMetadataLocalizationService localization;
     private final BggPopularMetadataPrewarmProgress progress;
     private final BggCatalogCoverPrewarmProgress coverProgress;
@@ -49,7 +49,6 @@ class BggPopularMetadataPrewarmer {
     private final boolean enabled;
     private final int targetGameCount;
     private final int metadataCohortSize;
-    private final int translationCohortSize;
     private final Duration leaseDuration;
     private final AtomicBoolean running = new AtomicBoolean();
 
@@ -57,6 +56,7 @@ class BggPopularMetadataPrewarmer {
     BggPopularMetadataPrewarmer(
             BggRankedCatalogRepository rankedCatalog,
             BoardGameGeekCatalog bgg,
+            BggMetadataCache cache,
             BggMetadataLocalizationService localization,
             BggPopularMetadataPrewarmProgress progress,
             BggCatalogCoverPrewarmProgress coverProgress,
@@ -66,11 +66,11 @@ class BggPopularMetadataPrewarmer {
             @Value("${rulepilot.bgg.cache.prewarm.enabled:true}") boolean enabled,
             @Value("${rulepilot.bgg.cache.prewarm.game-count:10000}") int targetGameCount,
             @Value("${rulepilot.bgg.cache.prewarm.cohort-size:500}") int metadataCohortSize,
-            @Value("${rulepilot.bgg.cache.prewarm.translation-cohort-size:60}") int translationCohortSize,
             @Value("${rulepilot.bgg.cache.prewarm.lease-duration:PT30M}") Duration leaseDuration) {
         this(
                 rankedCatalog,
                 bgg,
+                cache,
                 localization,
                 progress,
                 coverProgress,
@@ -81,13 +81,13 @@ class BggPopularMetadataPrewarmer {
                 enabled,
                 targetGameCount,
                 metadataCohortSize,
-                translationCohortSize,
                 leaseDuration);
     }
 
     BggPopularMetadataPrewarmer(
             BggRankedCatalogRepository rankedCatalog,
             BoardGameGeekCatalog bgg,
+            BggMetadataCache cache,
             BggMetadataLocalizationService localization,
             BggPopularMetadataPrewarmProgress progress,
             BggCatalogCoverPrewarmProgress coverProgress,
@@ -98,11 +98,11 @@ class BggPopularMetadataPrewarmer {
             boolean enabled,
             int targetGameCount,
             int metadataCohortSize,
-            int translationCohortSize,
             Duration leaseDuration) {
-        checkedConfiguration(targetGameCount, metadataCohortSize, translationCohortSize, leaseDuration);
+        checkedConfiguration(targetGameCount, metadataCohortSize, leaseDuration);
         this.rankedCatalog = rankedCatalog;
         this.bgg = bgg;
+        this.cache = cache;
         this.localization = localization;
         this.progress = progress;
         this.coverProgress = coverProgress;
@@ -113,7 +113,6 @@ class BggPopularMetadataPrewarmer {
         this.enabled = enabled;
         this.targetGameCount = targetGameCount;
         this.metadataCohortSize = metadataCohortSize;
-        this.translationCohortSize = translationCohortSize;
         this.leaseDuration = leaseDuration;
     }
 
@@ -142,55 +141,84 @@ class BggPopularMetadataPrewarmer {
 
     void prewarm() {
         BggRankedCatalog.Snapshot snapshot = rankedCatalog.findSnapshot().orElse(null);
-        if (snapshot == null || snapshot.gameCount() == 0) return;
-        int target = Math.min(targetGameCount, snapshot.gameCount());
+        int target = snapshot == null ? 0 : Math.min(targetGameCount, snapshot.gameCount());
+        String snapshotIdentity = snapshot == null ? "0".repeat(64) : snapshot.sha256();
         Cohort cohort = progress.claim(
-                        snapshot.sha256(),
+                        snapshotIdentity,
                         target,
                         metadataCohortSize,
-                        translationCohortSize,
                         clock.instant(),
                         leaseDuration)
                 .orElse(null);
-        if (cohort != null) prewarmMetadata(cohort, target);
+        if (cohort != null) prewarmMetadata(cohort, target, clock.instant().plus(leaseDuration));
         try {
-            prewarmCovers(snapshot.sha256(), target);
+            if (target > 0) prewarmCovers(snapshotIdentity, target);
         } catch (RuntimeException exception) {
             LOGGER.warn("BGG catalog cover prewarm could not be claimed");
         }
     }
 
-    private void prewarmMetadata(Cohort cohort, int target) {
-        boolean hotTranslationsReady = translateHotGames();
-        int metadataNext = hydrate(cohort.metadataStart(), cohort.metadataEnd());
-        int translationNext = hotTranslationsReady
-                ? translate(cohort.translationStart(), cohort.translationEnd())
-                : cohort.translationStart();
+    private void prewarmMetadata(Cohort cohort, int target, java.time.Instant deadline) {
+        boolean canTranslate = translateHotGames(deadline);
+        int metadataNext = clock.instant().isBefore(deadline)
+                ? hydrate(cohort.metadataStart(), cohort.metadataEnd()) : cohort.metadataStart();
+        if (canTranslate) {
+            try {
+                translateCachedSources(deadline);
+            } catch (RuntimeException exception) {
+                LOGGER.warn("BGG translation source refresh unavailable; completed metadata remains usable");
+            }
+        }
         try {
-            progress.complete(cohort, metadataNext, translationNext, clock.instant());
-            LOGGER.info(
-                    "BGG popular metadata prewarm advanced details to {} / {} and translations to {} / {}",
-                    metadataNext,
-                    target,
-                    translationNext,
-                    target);
+            progress.complete(cohort, metadataNext, clock.instant());
+            LOGGER.info("BGG metadata prewarm advanced details to {} / {}", metadataNext, target);
         } catch (RuntimeException exception) {
-            LOGGER.warn("BGG popular metadata prewarm progress could not be persisted; the lease will be retried");
+            LOGGER.warn("BGG metadata prewarm progress could not be persisted; the lease will be retried");
         }
     }
 
-    private boolean translateHotGames() {
+    private void translateCachedSources(java.time.Instant deadline) {
+        int afterBggId = 0;
+        int ready = 0;
+        int deferred = 0;
+        while (clock.instant().isBefore(deadline) && !Thread.currentThread().isInterrupted()) {
+            var sources = cache.translationSources(afterBggId, metadataCohortSize, clock.instant());
+            if (sources.isEmpty()) break;
+            for (var source : sources) {
+                if (!clock.instant().isBefore(deadline)) return;
+                PrewarmResult result = localization.prewarm(source);
+                if (result.status() == com.rulepilot.catalog.BggMetadataTranslation.PrewarmStatus.READY) ready++;
+                else deferred++;
+                if (sharedTranslationCapacityUnavailable(result)) {
+                    LOGGER.info("BGG translation refresh paused: ready={}, deferred={}, status={}", ready, deferred, result.status());
+                    return;
+                }
+                afterBggId = source.bggId();
+            }
+        }
+        LOGGER.info("BGG translation source refresh complete: ready={}, deferred={}", ready, deferred);
+    }
+
+    private boolean sharedTranslationCapacityUnavailable(PrewarmResult result) {
+        return switch (result.status()) {
+            case RETRY_NOT_CONFIGURED, RETRY_PROVIDER_BUSY, RETRY_HOURLY_BUDGET -> true;
+            default -> false;
+        };
+    }
+
+    private boolean translateHotGames(java.time.Instant deadline) {
         try {
             for (DiscoveryGame game : bgg.hotGameDetails()) {
+                if (!clock.instant().isBefore(deadline) || Thread.currentThread().isInterrupted()) return false;
                 PrewarmResult result = localization.prewarm(game);
-                if (!result.advanceCursor()) {
+                if (sharedTranslationCapacityUnavailable(result)) {
                     LOGGER.info("BGG hot game translation paused for game {} with status {}",
                             game.bggId(), result.status());
                     return false;
                 }
             }
         } catch (RuntimeException exception) {
-            LOGGER.warn("BGG hot game metadata unavailable; ranked prewarm will continue");
+            LOGGER.warn("BGG hot game metadata unavailable; cached-source refresh will continue");
         }
         return true;
     }
@@ -270,44 +298,6 @@ class BggPopularMetadataPrewarmer {
 
     private record CoverWarmup(int bggId, Variant variant) {}
 
-    private int translate(int start, int end) {
-        int next = start;
-        while (next < end) {
-            List<Integer> ids = rankedIds(next, Math.min(BGG_BATCH_SIZE, end - next));
-            if (ids.isEmpty()) return next;
-            Map<Integer, DiscoveryGame> details;
-            try {
-                details = bgg.gameDetails(ids).stream().collect(java.util.stream.Collectors.toMap(
-                        DiscoveryGame::bggId,
-                        game -> game,
-                        (first, ignored) -> first,
-                        java.util.LinkedHashMap::new));
-            } catch (RuntimeException exception) {
-                LOGGER.warn("BGG popular metadata translation paused while reading ranked offset {}", next);
-                return next;
-            }
-            for (Integer id : ids) {
-                DiscoveryGame game = details.get(id);
-                if (game != null) {
-                    PrewarmResult result = localization.prewarm(game);
-                    if (!result.advanceCursor()) {
-                        LOGGER.warn(
-                                "BGG popular metadata translation paused at ranked offset {} with status {}",
-                                next,
-                                result.status());
-                        return next;
-                    }
-                    if (result.status()
-                            == com.rulepilot.catalog.BggMetadataTranslation.PrewarmStatus.SKIPPED_INVALID_SOURCE) {
-                        LOGGER.info("BGG popular metadata translation skipped invalid source at ranked offset {}", next);
-                    }
-                }
-                next++;
-            }
-        }
-        return next;
-    }
-
     private List<Integer> rankedIds(int offset, int limit) {
         return rankedCatalog.findRankedRange(offset, limit).stream()
                 .map(BggRankedCatalog.RankedGame::bggId)
@@ -319,16 +309,12 @@ class BggPopularMetadataPrewarmer {
     private void checkedConfiguration(
             int targetGameCount,
             int metadataCohortSize,
-            int translationCohortSize,
             Duration leaseDuration) {
         if (targetGameCount < 0 || targetGameCount > MAX_TARGET_COUNT) {
             throw new IllegalArgumentException("BGG prewarm game count must be between 0 and 10000");
         }
         if (metadataCohortSize < 1 || metadataCohortSize > MAX_COHORT_SIZE) {
             throw new IllegalArgumentException("BGG metadata prewarm cohort must be between 1 and 500 games");
-        }
-        if (translationCohortSize < 1 || translationCohortSize > MAX_COHORT_SIZE) {
-            throw new IllegalArgumentException("BGG translation prewarm cohort must be between 1 and 500 games");
         }
         if (leaseDuration == null
                 || leaseDuration.compareTo(Duration.ofMinutes(5)) < 0

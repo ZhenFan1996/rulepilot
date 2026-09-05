@@ -57,6 +57,24 @@ class PostgresBggMetadataCacheTest {
     }
 
     @Test
+    void scansAllCurrentSourceIdentitiesAndPrefersTheDetailPageSource() {
+        Instant now = Instant.parse("2026-09-05T08:00:00Z");
+        repository.putDiscoveryGames(List.of(discovery(41, "Discovery"), discovery(90001, "Outside ranking")), window(now));
+        repository.putGame(details(41, "Detail source"), window(now));
+        repository.putDiscoveryGames(List.of(discovery(99, "Expired")),
+                new CacheWindow(now.minusSeconds(30), now.minusSeconds(20), now.minusSeconds(10)));
+
+        var first = repository.translationSources(0, 1, now);
+        assertThat(first).singleElement().satisfies(source -> {
+            assertThat(source.bggId()).isEqualTo(41);
+            assertThat(source.gameName()).isEqualTo("Detail source");
+        });
+        assertThat(repository.translationSources(41, 10, now)).singleElement()
+                .satisfies(source -> assertThat(source.bggId()).isEqualTo(90001));
+        assertThat(repository.translationSources(90001, 10, now)).isEmpty();
+    }
+
+    @Test
     void persistsTypedMetadataAcrossRepositoryInstances() {
         Instant cachedAt = Instant.parse("2026-08-07T08:00:00Z");
         CacheWindow window = window(cachedAt);

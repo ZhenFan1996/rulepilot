@@ -454,20 +454,20 @@ onBeforeUnmount(() => {
       <div class="max-w-3xl">
         <p class="text-sm font-medium text-copper">{{ t('models.eyebrow') }}</p>
         <h1 ref="pageHeading" tabindex="-1" class="mt-3 font-display text-4xl font-semibold tracking-tight outline-none">{{ t('models.title') }}</h1>
-        <p class="mt-4 leading-7 text-ink/55">{{ t('models.description') }}</p>
+        <p class="mt-4 leading-7 text-muted">{{ t('models.description') }}</p>
       </div>
 
-      <div v-if="loading" class="mt-10 rounded-3xl border border-ink/10 bg-paper p-8 text-ink/55">{{ t('models.loading') }}</div>
+      <div v-if="loading" class="mt-10 rounded-3xl border border-ink/10 bg-paper p-8 text-muted">{{ t('models.loading') }}</div>
       <div v-else-if="!snapshot" class="mt-10 rounded-3xl border border-red-200 bg-red-50 p-6 text-red-800" role="alert">
         <p>{{ errorMessage || t('models.unavailable') }}</p>
         <button class="mt-4 rounded-xl border border-red-300 px-4 py-2 font-semibold" @click="loadConfiguration">{{ t('models.retry') }}</button>
       </div>
 
       <template v-else>
-        <div class="mt-8 border-l-2 border-copper/60 pl-4 text-sm leading-6 text-ink/60">
+        <div class="mt-8 border-l-2 border-copper/60 pl-4 text-sm leading-6 text-muted">
           {{ t('models.temporary') }}
         </div>
-        <div v-if="snapshot.managedStartupAccess" class="mt-4 rounded-lg bg-indigo/5 px-4 py-3 text-sm leading-6 text-ink/65" role="status">
+        <div v-if="snapshot.managedStartupAccess" class="mt-4 rounded-lg bg-indigo/5 px-4 py-3 text-sm leading-6 text-muted" role="status">
           {{ t('models.managedStartupAccess') }}
         </div>
 
@@ -489,7 +489,7 @@ onBeforeUnmount(() => {
                 :aria-selected="selectedProvider === item.id"
                 :disabled="hasPendingMutation"
                 class="rounded-lg border px-4 py-2 text-sm font-semibold transition-colors"
-                :class="selectedProvider === item.id ? 'border-ink bg-ink text-canvas' : 'border-ink/10 bg-canvas text-ink/60 hover:border-ink/30'"
+                :class="selectedProvider === item.id ? 'border-ink bg-ink text-canvas' : 'border-ink/10 bg-canvas text-muted hover:border-ink/30'"
                 @click="selectProvider(item.id)"
               >
                 {{ providerLabel(item.id) }}
@@ -502,17 +502,17 @@ onBeforeUnmount(() => {
               <div class="flex items-start justify-between gap-4">
                 <div>
                   <h2 class="font-display text-2xl font-semibold">{{ providerLabel(selectedProvider) }}</h2>
-                  <p class="mt-1 text-sm text-ink/50">{{ provider?.configured ? t('models.connectedHint') : t('models.disconnectedHint') }}</p>
+                  <p class="mt-1 text-sm text-muted">{{ provider?.configured ? t('models.connectedHint') : t('models.disconnectedHint') }}</p>
                 </div>
                 <div class="flex flex-wrap justify-end gap-2">
                   <span v-if="providerDraftDirty(selectedProvider)" class="rounded-md bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">{{ draftCopy.unsaved }}</span>
-                  <span class="rounded-md px-2.5 py-1 text-xs font-semibold" :class="provider?.configured ? 'bg-emerald-100 text-emerald-800' : 'bg-ink/5 text-ink/45'">
+                  <span class="rounded-md px-2.5 py-1 text-xs font-semibold" :class="provider?.configured ? 'bg-emerald-100 text-emerald-800' : 'bg-ink/5 text-muted'">
                     {{ provider?.configured ? t('models.configured') : t('models.notConfigured') }}
                   </span>
                 </div>
               </div>
 
-              <p v-if="qwenSelected" class="rounded-lg bg-indigo/5 px-4 py-3 text-sm leading-6 text-ink/65">
+              <p v-if="qwenSelected" class="rounded-lg bg-indigo/5 px-4 py-3 text-sm leading-6 text-muted">
                 {{ t('models.qwenHint') }}
               </p>
 
@@ -534,7 +534,7 @@ onBeforeUnmount(() => {
 
               <label class="flex min-h-11 items-start gap-3 rounded-lg border border-ink/10 bg-canvas px-4 py-3 text-sm">
                 <input :checked="currentDraft.visionCapable" :disabled="hasPendingMutation" type="checkbox" class="mt-1 size-4 accent-indigo disabled:opacity-50" @change="setCurrentDraft('visionCapable', ($event.target as HTMLInputElement).checked)">
-                <span><strong class="block">{{ t('models.vision.title') }}</strong><span class="mt-1 block font-normal leading-5 text-ink/45">{{ t('models.vision.description') }}</span></span>
+                <span><strong class="block">{{ t('models.vision.title') }}</strong><span class="mt-1 block font-normal leading-5 text-muted">{{ t('models.vision.description') }}</span></span>
               </label>
 
               <div class="flex flex-col gap-3 sm:flex-row">
@@ -545,12 +545,12 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="rounded-xl border border-ink/10 bg-paper p-5 sm:p-7">
-            <p class="text-xs font-medium text-ink/40">{{ t('models.uses') }}</p>
+            <p class="text-xs font-medium text-muted">{{ t('models.uses') }}</p>
             <div class="mt-2 flex items-start justify-between gap-3">
               <h2 class="font-display text-2xl font-semibold">{{ t('models.assignmentTitle') }}</h2>
               <span v-if="assignmentsDirty" class="rounded-md bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">{{ draftCopy.unsaved }}</span>
             </div>
-            <p class="mt-3 text-sm leading-6 text-ink/55">{{ t('models.assignmentDescription') }}</p>
+            <p class="mt-3 text-sm leading-6 text-muted">{{ t('models.assignmentDescription') }}</p>
             <p v-if="!visualProvider" class="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
               {{ t('models.noVisual') }}
             </p>
@@ -562,7 +562,7 @@ onBeforeUnmount(() => {
                   <option value="fake">{{ role[0] === 'visual' ? t('models.noVisualOption') : t('models.fakeOption') }}</option>
                   <option v-for="item in role[0] === 'visual' ? configuredVisualProviders : configuredProviders" :key="item.id" :value="item.id">{{ providerLabel(item.id) }}</option>
                 </select>
-                <span v-if="role[0] === 'visual'" class="mt-1.5 block font-normal leading-5 text-ink/40">{{ t('models.visualRoleHint') }}</span>
+                <span v-if="role[0] === 'visual'" class="mt-1.5 block font-normal leading-5 text-muted">{{ t('models.visualRoleHint') }}</span>
               </label>
 
               <button :disabled="hasPendingMutation || !assignmentsDirty" class="min-h-11 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-on-accent disabled:opacity-50">{{ savingAssignments ? t('models.applying') : t('models.saveUses') }}</button>

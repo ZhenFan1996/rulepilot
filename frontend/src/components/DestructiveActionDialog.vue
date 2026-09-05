@@ -65,7 +65,7 @@ function requestConfirm() {
       >
         <div class="min-w-0">
           <h2 :id="titleId" class="font-display text-2xl font-semibold text-red-700">{{ title }}</h2>
-          <p :id="descriptionId" class="mt-2 text-sm leading-6 text-ink/60">{{ description }}</p>
+          <p :id="descriptionId" class="mt-2 text-sm leading-6 text-muted">{{ description }}</p>
         </div>
 
         <p v-if="error" class="mt-5 rounded-xl bg-red-50 px-4 py-3 text-sm leading-6 text-red-800" role="alert">

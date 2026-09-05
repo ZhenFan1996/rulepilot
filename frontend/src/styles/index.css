@@ -4,22 +4,22 @@
 
 @theme {
   --font-sans: "PingFang SC", "Hiragino Sans GB", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-sans);
-  --color-canvas: #f3f5f8;
+  --font-display: "Avenir Next", "PingFang SC", "Microsoft YaHei", var(--font-sans);
+  --color-canvas: #f2f4f1;
   --color-paper: #ffffff;
-  --color-ink: #222c3b;
-  --color-ink-panel: #233b56;
+  --color-ink: #243b35;
+  --color-ink-panel: #163c33;
   --color-panel-text: #f4f7fb;
-  --color-copper: #285a91;
+  --color-copper: #25604f;
   --color-on-accent: #ffffff;
-  --color-copper-dark: #204975;
-  --color-indigo: #285a91;
-  --color-felt: #285a91;
-  --color-gold: #a8792b;
-  --color-clay: #8d5b42;
-  --color-felt-deep: #233b56;
-  --color-muted: #626e7d;
-  --color-border: #d9dfe7;
+  --color-copper-dark: #194a3c;
+  --color-indigo: #25604f;
+  --color-felt: #25604f;
+  --color-gold: #9b6b13;
+  --color-clay: #906351;
+  --color-felt-deep: #163c33;
+  --color-muted: #63736b;
+  --color-border: #d9e0d9;
 }
 
 :root {
@@ -28,46 +28,46 @@
   font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  background: #f3f5f8;
+  background: #f2f4f1;
 }
 
 :root.dark {
   color-scheme: dark;
-  --color-canvas: #171e28;
-  --color-paper: #202a37;
-  --color-ink: #e6edf5;
-  --color-ink-panel: #172b40;
-  --color-panel-text: #e6edf5;
-  --color-copper: #91bae9;
-  --color-on-accent: #172b40;
-  --color-copper-dark: #aacbf0;
-  --color-indigo: #91bae9;
-  --color-felt: #355f8b;
-  --color-gold: #d3ac62;
-  --color-clay: #d58268;
-  --color-felt-deep: #20374f;
-  --color-muted: #a6b3c3;
-  --color-border: #354456;
+  --color-canvas: #172823;
+  --color-paper: #20362e;
+  --color-ink: #e8efe9;
+  --color-ink-panel: #122d24;
+  --color-panel-text: #e8efe9;
+  --color-copper: #a5cfb5;
+  --color-on-accent: #122d24;
+  --color-copper-dark: #c0dec9;
+  --color-indigo: #a5cfb5;
+  --color-felt: #376953;
+  --color-gold: #e4bc69;
+  --color-clay: #d6a08a;
+  --color-felt-deep: #173e30;
+  --color-muted: #a8bcb0;
+  --color-border: #3a5246;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     color-scheme: dark;
-    --color-canvas: #171e28;
-    --color-paper: #202a37;
-    --color-ink: #e6edf5;
-    --color-ink-panel: #172b40;
-    --color-panel-text: #e6edf5;
-    --color-copper: #91bae9;
-    --color-on-accent: #172b40;
-    --color-copper-dark: #aacbf0;
-    --color-indigo: #91bae9;
-    --color-felt: #355f8b;
-    --color-gold: #d3ac62;
-    --color-clay: #d58268;
-    --color-felt-deep: #20374f;
-    --color-muted: #a6b3c3;
-    --color-border: #354456;
+    --color-canvas: #172823;
+    --color-paper: #20362e;
+    --color-ink: #e8efe9;
+    --color-ink-panel: #122d24;
+    --color-panel-text: #e8efe9;
+    --color-copper: #a5cfb5;
+    --color-on-accent: #122d24;
+    --color-copper-dark: #c0dec9;
+    --color-indigo: #a5cfb5;
+    --color-felt: #376953;
+    --color-gold: #e4bc69;
+    --color-clay: #d6a08a;
+    --color-felt-deep: #173e30;
+    --color-muted: #a8bcb0;
+    --color-border: #3a5246;
   }
 }
 
@@ -115,7 +115,7 @@ body {
 
 ::selection {
   color: #ffffff;
-  background: #285a91;
+  background: #25604f;
 }
 
 :focus-visible {
@@ -169,12 +169,6 @@ button {
   background: var(--color-paper);
 }
 
-.tabletop-app {
-  background-image:
-    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--color-ink) 5%, transparent) 0 0.65px, transparent 0.8px),
-    linear-gradient(115deg, color-mix(in srgb, var(--color-paper) 24%, transparent), transparent 38%);
-  background-size: 16px 16px, 100% 100%;
-}
 
 .tabletop-page {
   width: min(100%, 86rem);
@@ -205,7 +199,7 @@ button {
 
 .tabletop-lede {
   max-width: 42rem;
-  color: color-mix(in srgb, var(--color-ink) 60%, transparent);
+  color: var(--color-muted);
   font-size: 0.97rem;
   line-height: 1.78;
 }
@@ -240,9 +234,10 @@ button {
 
 .drawer-link {
   position: relative;
-  border: 1px solid transparent;
-  border-radius: 0.5rem;
+  border-bottom: 2px solid transparent;
 }
+
+.drawer-link-active { border-bottom-color: var(--color-indigo); }
 
 .mobile-navigation {
   box-shadow: 0 -8px 28px -22px color-mix(in srgb, var(--color-ink-panel) 65%, transparent);
@@ -269,7 +264,7 @@ button {
   border-radius: 1rem;
   color: var(--color-ink);
   background: color-mix(in srgb, var(--color-paper) 97%, transparent);
-  box-shadow: 0 18px 42px -24px color-mix(in srgb, var(--color-ink-panel) 70%, transparent);
+  box-shadow: 0 4px 16px rgb(20 45 31 / 8%);
   text-align: left;
   backdrop-filter: blur(12px);
   transition: border-color 140ms ease;

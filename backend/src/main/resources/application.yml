@@ -297,7 +297,6 @@ rulepilot:
         enabled: ${BGG_CACHE_PREWARM_ENABLED:true}
         game-count: ${BGG_CACHE_PREWARM_GAME_COUNT:10000}
         cohort-size: ${BGG_CACHE_PREWARM_COHORT_SIZE:500}
-        translation-cohort-size: ${BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE:60}
         initial-delay: ${BGG_CACHE_PREWARM_INITIAL_DELAY:PT5M}
         resume-delay: ${BGG_CACHE_PREWARM_RESUME_DELAY:PT1H}
         lease-duration: ${BGG_CACHE_PREWARM_LEASE_DURATION:PT30M}

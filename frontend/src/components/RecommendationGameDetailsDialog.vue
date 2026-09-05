@@ -227,7 +227,7 @@ onBeforeUnmount(() => {
     <section ref="dialog" tabindex="-1" class="mx-auto w-full max-w-6xl overflow-y-auto rounded-3xl border border-gold/25 bg-canvas shadow-2xl outline-none sm:max-h-[calc(100vh-3rem)]" role="dialog" aria-modal="true" :aria-label="copy.dialog">
       <header class="app-sticky-top sticky z-10 flex items-start justify-between border-b border-ink/10 bg-paper/95 px-5 py-4 backdrop-blur sm:px-7">
         <div><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 font-display text-2xl font-semibold">{{ details?.name ?? game.name }}</h2></div>
-        <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
+        <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-muted hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
       </header>
 
       <div class="grid items-start gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(15rem,21rem)_minmax(0,1fr)] lg:gap-8">
@@ -239,28 +239,28 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="min-w-0">
-          <div v-if="loading" data-testid="recommendation-details-loading" class="grid min-h-80 place-items-center text-sm text-ink/50" role="status">{{ copy.loading }}</div>
+          <div v-if="loading" data-testid="recommendation-details-loading" class="grid min-h-80 place-items-center text-sm text-muted" role="status">{{ copy.loading }}</div>
           <div v-else-if="error" class="grid min-h-80 place-items-center text-center" role="alert"><div><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></div></div>
           <template v-else-if="details">
             <p v-if="details.officialNameLocalized" class="text-sm font-semibold text-copper">{{ details.originalName }}</p>
-            <p class="mt-1 text-sm text-ink/45">{{ details.publicationYear ?? copy.unknownYear }}</p>
+            <p class="mt-1 text-sm text-muted">{{ details.publicationYear ?? copy.unknownYear }}</p>
             <ul v-if="stats.length" class="mt-4 flex flex-wrap gap-2"><li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-9 px-3 text-sm">{{ stat }}</li></ul>
             <p v-if="translating" class="mt-5 text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
             <p v-else-if="details.descriptionTranslated" class="mt-5 text-xs font-semibold text-copper">{{ copy.translated }}</p>
             <p v-if="details.description" class="mt-2 max-h-72 overflow-y-auto whitespace-pre-line pr-2 text-sm leading-7 text-ink/68">{{ details.description }}</p>
             <dl class="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
-              <div v-if="details.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ details.designers.join('、') }}</dd></div>
-              <div v-if="details.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ details.publishers.join('、') }}</dd></div>
-              <div v-if="details.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}</dt><dd class="mt-1 leading-6">{{ details.mechanics.join('、') }}</dd></div>
-              <div v-if="details.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}</dt><dd class="mt-1 leading-6">{{ details.categories.join('、') }}</dd></div>
-              <div v-if="details.families.length"><dt class="font-semibold text-ink/45">{{ copy.families }}</dt><dd class="mt-1 leading-6">{{ details.families.join('、') }}</dd></div>
-              <div v-if="details.bestWith || details.recommendedWith"><dt class="font-semibold text-ink/45">{{ copy.communityFit }}</dt><dd class="mt-1 leading-6">{{ [details.bestWith, details.recommendedWith].filter(Boolean).join(' · ') }}</dd></div>
+              <div v-if="details.designers.length"><dt class="font-semibold text-muted">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ details.designers.join('、') }}</dd></div>
+              <div v-if="details.publishers.length"><dt class="font-semibold text-muted">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ details.publishers.join('、') }}</dd></div>
+              <div v-if="details.mechanics.length"><dt class="font-semibold text-muted">{{ copy.mechanics }}</dt><dd class="mt-1 leading-6">{{ details.mechanics.join('、') }}</dd></div>
+              <div v-if="details.categories.length"><dt class="font-semibold text-muted">{{ copy.categories }}</dt><dd class="mt-1 leading-6">{{ details.categories.join('、') }}</dd></div>
+              <div v-if="details.families.length"><dt class="font-semibold text-muted">{{ copy.families }}</dt><dd class="mt-1 leading-6">{{ details.families.join('、') }}</dd></div>
+              <div v-if="details.bestWith || details.recommendedWith"><dt class="font-semibold text-muted">{{ copy.communityFit }}</dt><dd class="mt-1 leading-6">{{ [details.bestWith, details.recommendedWith].filter(Boolean).join(' · ') }}</dd></div>
             </dl>
             <div v-if="details.editionImages.length" class="mt-6 border-t border-ink/10 pt-5">
               <h3 class="font-display text-xl font-semibold">{{ copy.editions }}</h3>
-              <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" loading="lazy" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-ink/55">{{ edition.name }}</p></li></ul>
+              <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" loading="lazy" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-muted">{{ edition.name }}</p></li></ul>
             </div>
-            <p class="mt-6 rounded-xl bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/50">{{ copy.evidence }}</p>
+            <p class="mt-6 rounded-xl bg-indigo/5 px-4 py-3 text-xs leading-5 text-muted">{{ copy.evidence }}</p>
           </template>
         </div>
       </div>

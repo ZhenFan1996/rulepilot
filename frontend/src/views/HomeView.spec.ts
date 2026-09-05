@@ -91,7 +91,7 @@ describe('HomeView', () => {
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
 
     resolveSession(Response.json({ username: ' player ', roles: ['USER'] }))
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Welcome back, player'))
+    await vi.waitFor(() => expect(wrapper.find('a[aria-label="player"]').exists()).toBe(true))
   })
 
   it('aborts the shell session request when Home unmounts', async () => {

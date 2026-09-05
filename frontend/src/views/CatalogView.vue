@@ -256,7 +256,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
         <RouterLink :to="{ name: 'catalog' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← {{ t('catalog.back') }}</RouterLink>
         <p class="mt-5 text-sm font-medium text-copper">{{ t('catalog.eyebrow') }}</p>
         <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">{{ t('catalog.title') }}</h1>
-        <p class="mt-4 max-w-xl leading-7 text-ink/55">{{ t('catalog.description') }}</p>
+        <p class="mt-4 max-w-xl leading-7 text-muted">{{ t('catalog.description') }}</p>
 
         <form class="tabletop-panel player-board mt-8 p-5" @submit.prevent="createGame">
           <h2 class="font-display text-xl font-semibold">{{ t('catalog.manual.title') }}</h2>
@@ -277,7 +277,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
             </a>
           </div>
 
-          <div v-if="bggConfigured === false" class="mt-4 rounded-lg bg-copper/8 p-4 text-sm leading-6 text-ink/65">
+          <div v-if="bggConfigured === false" class="mt-4 rounded-lg bg-copper/8 p-4 text-sm leading-6 text-muted">
             {{ t('catalog.bgg.unavailable') }}
           </div>
 
@@ -287,13 +287,13 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
           </form>
 
           <p v-if="bggError" class="mt-4 text-sm text-red-700" role="alert">{{ bggError }}</p>
-          <p v-if="!bggSearching && bggQuery && bggResults.length === 0 && !bggError" class="mt-4 text-sm text-ink/45">{{ t('catalog.bgg.noResults') }}</p>
+          <p v-if="!bggSearching && bggQuery && bggResults.length === 0 && !bggError" class="mt-4 text-sm text-muted">{{ t('catalog.bgg.noResults') }}</p>
 
           <ul v-if="bggResults.length" class="mt-4 max-h-72 stack-y-sm overflow-y-auto pr-1">
             <li v-for="result in bggResults" :key="result.bggId" class="flex items-center justify-between gap-3 rounded-lg border border-ink/8 bg-canvas p-3">
               <div class="min-w-0">
                 <a :href="result.bggUrl" target="_blank" rel="noopener noreferrer" class="block truncate font-semibold hover:text-indigo">{{ result.name }}</a>
-                <p class="mt-1 text-xs text-ink/45">{{ result.publicationYear ?? t('catalog.unknownYear') }} · BGG #{{ result.bggId }}</p>
+                <p class="mt-1 text-xs text-muted">{{ result.publicationYear ?? t('catalog.unknownYear') }} · BGG #{{ result.bggId }}</p>
               </div>
               <button type="button" :disabled="bggImportingId !== null" class="shrink-0 rounded-xl border border-indigo/20 px-3 py-2 text-sm font-semibold text-indigo disabled:opacity-40" @click="importBggGame(result)">
                 {{ bggImportingId === result.bggId ? t('catalog.bgg.importing') : t('catalog.bgg.import') }}
@@ -306,14 +306,14 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
               <img v-if="importedBgg.thumbnailUrl" :src="importedBgg.thumbnailUrl" :alt="t('catalog.bgg.thumbnailAlt', { game: importedBgg.game.name })" class="h-24 w-24 rounded-xl object-cover" referrerpolicy="no-referrer">
               <div>
                 <h3 class="font-display text-lg font-semibold">{{ importedBgg.game.name }}</h3>
-                <p class="mt-2 text-xs text-ink/50">
+                <p class="mt-2 text-xs text-muted">
                   {{ t('catalog.bgg.stats', { min: importedBgg.minPlayers ?? '?', max: importedBgg.maxPlayers ?? '?', minutes: importedBgg.playingTimeMinutes ?? '?', age: importedBgg.minimumAge ?? '?' }) }}
                 </p>
                 <a :href="importedBgg.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-indigo">{{ t('catalog.bgg.view') }} ↗</a>
               </div>
             </div>
-            <p v-if="importedBgg.description" class="mt-4 whitespace-pre-line text-sm leading-6 text-ink/60">{{ importedBgg.description }}</p>
-            <p class="mt-3 text-xs text-ink/40">{{ t('catalog.bgg.attribution') }}</p>
+            <p v-if="importedBgg.description" class="mt-4 whitespace-pre-line text-sm leading-6 text-muted">{{ importedBgg.description }}</p>
+            <p class="mt-3 text-xs text-muted">{{ t('catalog.bgg.attribution') }}</p>
             <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-on-accent">{{ t('catalog.upload') }}</RouterLink>
           </article>
         </section>
@@ -323,8 +323,8 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
       </section>
 
       <section class="stack-y-2xl">
-        <div v-if="loading" class="rounded-xl border border-ink/10 bg-paper p-8 text-ink/50">{{ t('catalog.loading') }}</div>
-        <div v-else-if="games.length === 0" class="rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">{{ t('catalog.empty') }}</div>
+        <div v-if="loading" class="rounded-xl border border-ink/10 bg-paper p-8 text-muted">{{ t('catalog.loading') }}</div>
+        <div v-else-if="games.length === 0" class="rounded-xl border border-dashed border-ink/20 p-8 text-center text-muted">{{ t('catalog.empty') }}</div>
         <template v-else>
           <label class="block text-sm font-semibold">
             {{ t('catalog.currentGame') }}
@@ -340,14 +340,14 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
                 <div>
                   <p class="text-xs font-semibold text-copper">BoardGameGeek</p>
                   <h2 class="mt-2 font-display text-2xl font-semibold">{{ selectedGame.game.name }}</h2>
-                  <p class="mt-2 text-sm text-ink/55">
+                  <p class="mt-2 text-sm text-muted">
                     {{ t('catalog.bgg.stats', { min: selectedGame.bggMetadata.minPlayers ?? '?', max: selectedGame.bggMetadata.maxPlayers ?? '?', minutes: selectedGame.bggMetadata.playingTimeMinutes ?? '?', age: selectedGame.bggMetadata.minimumAge ?? '?' }) }}
                   </p>
                   <a :href="selectedGame.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block text-sm font-semibold text-copper">{{ t('catalog.bgg.viewOriginal') }} ↗</a>
                 </div>
               </div>
-              <p v-if="selectedGame.bggMetadata.description" class="mt-4 whitespace-pre-line text-sm leading-6 text-ink/60">{{ selectedGame.bggMetadata.description }}</p>
-              <p class="mt-3 text-xs text-ink/40">{{ t('catalog.bgg.attribution') }}</p>
+              <p v-if="selectedGame.bggMetadata.description" class="mt-4 whitespace-pre-line text-sm leading-6 text-muted">{{ selectedGame.bggMetadata.description }}</p>
+              <p class="mt-3 text-xs text-muted">{{ t('catalog.bgg.attribution') }}</p>
             </article>
 
             <form class="tabletop-panel player-board p-5" @submit.prevent="createEdition">
@@ -360,7 +360,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
                 </div>
                 <button :disabled="saving" class="w-full rounded-lg bg-ink px-5 py-3 font-semibold text-canvas disabled:opacity-50">{{ t('catalog.edition.save') }}</button>
               </div>
-              <ul class="mt-5 divide-y divide-ink/10 text-sm text-ink/60">
+              <ul class="mt-5 divide-y divide-ink/10 text-sm text-muted">
                 <li v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center justify-between gap-3 py-2">
                   <span>{{ edition.name }} · {{ playerFacingLanguageName(edition.language, locale) }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></span>
                   <RouterLink :to="{ name: 'teach', query: { editionId: edition.id } }" class="shrink-0 font-semibold text-indigo">{{ t('catalog.upload') }}</RouterLink>
@@ -373,14 +373,14 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
               <input v-model="expansionName" required maxlength="120" :placeholder="t('catalog.expansion.name')" class="mt-5 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
               <fieldset class="mt-4 stack-y-sm">
                 <legend class="text-sm font-semibold">{{ t('catalog.expansion.compatible') }}</legend>
-                <label v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center gap-2 text-sm text-ink/65">
+                <label v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center gap-2 text-sm text-muted">
                   <input v-model="compatibleEditionIds" type="checkbox" :value="edition.id">
                   {{ edition.name }} · {{ playerFacingLanguageName(edition.language, locale) }}
                 </label>
-                <p v-if="selectedGame.editions.length === 0" class="text-sm text-ink/45">{{ t('catalog.expansion.needEdition') }}</p>
+                <p v-if="selectedGame.editions.length === 0" class="text-sm text-muted">{{ t('catalog.expansion.needEdition') }}</p>
               </fieldset>
               <button :disabled="saving || compatibleEditionIds.length === 0" class="mt-5 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-on-accent disabled:opacity-40">{{ t('catalog.expansion.save') }}</button>
-              <ul class="mt-5 stack-y-sm text-sm text-ink/60">
+              <ul class="mt-5 stack-y-sm text-sm text-muted">
                 <li v-for="expansion in selectedGame.expansions" :key="expansion.id">{{ expansion.name }} · {{ t('catalog.expansion.compatibleCount', { count: expansion.compatibleEditionIds.length }) }}</li>
               </ul>
             </form>

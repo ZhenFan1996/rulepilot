@@ -114,7 +114,7 @@ onBeforeUnmount(() => {
     <section class="w-full max-w-md border border-ink/10 bg-paper p-7 sm:p-9">
       <div class="flex items-center justify-between gap-4"><RouterLink :to="{ name: 'home' }" aria-label="RulePilot"><ProductMark /></RouterLink><LanguageSwitcher /></div>
       <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">{{ t('auth.login.title') }}</h1>
-      <p class="mt-3 leading-7 text-ink/55">{{ t('auth.login.description') }}</p>
+      <p class="mt-3 leading-7 text-muted">{{ t('auth.login.description') }}</p>
       <p v-if="returnPath" data-testid="auth-return-context" class="mt-3 rounded-lg bg-indigo/7 px-4 py-3 text-sm leading-6 text-indigo">
         {{ t('auth.login.return') }}
       </p>
@@ -136,7 +136,7 @@ onBeforeUnmount(() => {
         </button>
       </form>
 
-      <p class="mt-7 border-t border-ink/10 pt-6 text-center text-sm text-ink/55">
+      <p class="mt-7 border-t border-ink/10 pt-6 text-center text-sm text-muted">
         {{ t('auth.login.first') }}
         <RouterLink replace :to="registerTarget" class="font-semibold text-indigo">{{ t('auth.login.create') }}</RouterLink>
       </p>

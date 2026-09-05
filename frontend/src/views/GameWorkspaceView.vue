@@ -678,14 +678,14 @@ onBeforeUnmount(() => {
               <span v-if="details.averageRating" class="rounded-full bg-canvas px-3 py-1.5">{{ copy.rating }} {{ details.averageRating.toFixed(1) }}</span>
               <span v-if="details.averageWeight" class="rounded-full bg-canvas px-3 py-1.5">{{ copy.weight }} {{ details.averageWeight.toFixed(1) }} / 5</span>
             </div>
-            <p v-if="details?.description" class="mt-5 whitespace-pre-line leading-7 text-ink/65">{{ details.description }}</p>
+            <p v-if="details?.description" class="mt-5 whitespace-pre-line leading-7 text-muted">{{ details.description }}</p>
             <dl v-if="details" class="mt-5 grid gap-3 text-sm sm:grid-cols-2">
-              <div v-if="details.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd>{{ details.designers.join('、') }}</dd></div>
-              <div v-if="details.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd>{{ details.publishers.join('、') }}</dd></div>
-              <div v-if="details.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}</dt><dd>{{ details.mechanics.join('、') }}</dd></div>
-              <div v-if="details.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}</dt><dd>{{ details.categories.join('、') }}</dd></div>
+              <div v-if="details.designers.length"><dt class="font-semibold text-muted">{{ copy.designers }}</dt><dd>{{ details.designers.join('、') }}</dd></div>
+              <div v-if="details.publishers.length"><dt class="font-semibold text-muted">{{ copy.publishers }}</dt><dd>{{ details.publishers.join('、') }}</dd></div>
+              <div v-if="details.mechanics.length"><dt class="font-semibold text-muted">{{ copy.mechanics }}</dt><dd>{{ details.mechanics.join('、') }}</dd></div>
+              <div v-if="details.categories.length"><dt class="font-semibold text-muted">{{ copy.categories }}</dt><dd>{{ details.categories.join('、') }}</dd></div>
             </dl>
-            <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidence }}</p>
+            <p class="mt-5 text-xs leading-5 text-muted">{{ copy.evidence }}</p>
             <a v-if="details?.bggUrl || game.bggMetadata?.bggUrl" :href="details?.bggUrl || game.bggMetadata?.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block text-sm font-semibold text-indigo">{{ copy.bgg }} ↗</a>
           </div>
         </section>
@@ -697,7 +697,7 @@ onBeforeUnmount(() => {
           <div class="mt-5 stack-y-xl">
             <article v-for="edition in game.editions" :key="edition.id" class="tabletop-panel player-board p-5 sm:p-6">
               <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div><h3 class="font-display text-2xl font-semibold">{{ edition.name }}</h3><p class="mt-1 text-sm text-ink/45">{{ playerFacingLanguageName(edition.language, locale) }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></p></div>
+                <div><h3 class="font-display text-2xl font-semibold">{{ edition.name }}</h3><p class="mt-1 text-sm text-muted">{{ playerFacingLanguageName(edition.language, locale) }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></p></div>
                 <RouterLink :to="{ name: 'teach', query: { editionId: edition.id, onboarding: 'selected-game' } }" class="inline-flex min-h-11 items-center justify-center rounded-xl bg-copper px-5 text-sm font-semibold text-on-accent">{{ copy.addRulebook }}</RouterLink>
               </div>
 
@@ -705,21 +705,21 @@ onBeforeUnmount(() => {
                 <li v-for="job in editionImports(edition.id)" :key="job.id" class="rounded-xl border border-copper/20 bg-copper/5 p-4">
                   <p class="font-semibold">{{ job.rulebookTitle }}</p>
                   <PlayerWorkStatusText :status="importWorkStatus(job)" class="mt-1 text-sm font-semibold text-copper" />
-                  <p class="mt-1 text-xs leading-5 text-ink/55">{{ importStage(job) }}</p>
-                  <p v-if="importGuideStage(job)" class="mt-1 text-xs leading-5 text-ink/55">
+                  <p class="mt-1 text-xs leading-5 text-muted">{{ importStage(job) }}</p>
+                  <p v-if="importGuideStage(job)" class="mt-1 text-xs leading-5 text-muted">
                     {{ importGuideStage(job) }}
                     <RouterLink v-if="importGuideFailed(job)" :to="{ name: 'lessons' }" class="ml-2 font-semibold text-red-800 underline decoration-red-300 underline-offset-2">{{ copy.recoverGuide }}</RouterLink>
                   </p>
                 </li>
               </ul>
 
-              <p v-if="editionDocuments(edition.id).length === 0 && editionImports(edition.id).length === 0" class="mt-5 rounded-xl bg-canvas px-4 py-5 text-sm text-ink/55">{{ copy.editionEmpty }}</p>
+              <p v-if="editionDocuments(edition.id).length === 0 && editionImports(edition.id).length === 0" class="mt-5 rounded-xl bg-canvas px-4 py-5 text-sm text-muted">{{ copy.editionEmpty }}</p>
               <ul v-else-if="editionDocuments(edition.id).length" class="mt-5 stack-y-md">
                 <li v-for="document in editionDocuments(edition.id)" :key="document.document.id" class="rounded-xl border border-ink/10 bg-canvas p-4">
                   <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p class="font-semibold">{{ document.document.title }}</p>
-                      <PlayerWorkStatusText :status="documentWorkStatus(document.latestVersion.status)" class="mt-1 text-xs font-semibold text-ink/55" />
+                      <PlayerWorkStatusText :status="documentWorkStatus(document.latestVersion.status)" class="mt-1 text-xs font-semibold text-muted" />
                     </div>
                     <div class="flex flex-wrap gap-2">
                       <template v-if="documentPlans(document)[0]">

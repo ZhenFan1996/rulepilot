@@ -15,7 +15,7 @@ const { t } = useLocale()
         <div class="min-w-0 flex-1 p-8 sm:p-12 lg:p-16">
           <p class="tabletop-kicker">404 · {{ t('notFound.eyebrow') }}</p>
           <h1 id="not-found-title" class="tabletop-title">{{ t('notFound.title') }}</h1>
-          <p class="mt-5 max-w-2xl text-base leading-8 text-ink/65 sm:text-lg">{{ t('notFound.description') }}</p>
+          <p class="mt-5 max-w-2xl text-base leading-8 text-muted sm:text-lg">{{ t('notFound.description') }}</p>
           <div class="mt-8 flex flex-col gap-3 sm:flex-row">
             <RouterLink :to="{ name: 'home' }" class="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-copper px-6 font-semibold text-on-accent transition hover:bg-copper-dark">
               {{ t('notFound.home') }}

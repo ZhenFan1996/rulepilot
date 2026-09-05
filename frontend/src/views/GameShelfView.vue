@@ -343,11 +343,11 @@ onBeforeUnmount(() => {
         <div>
           <p class="text-sm font-semibold text-copper">{{ t('shelf.collection') }}</p>
           <h2 class="mt-1 font-display text-3xl font-semibold tracking-tight">{{ t('shelf.playing') }}</h2>
-          <p class="mt-2 text-sm leading-6 text-ink/55">{{ t('shelf.summary', { games: shelf.length, rulebooks: documents.length, guides: readyLessons }) }}</p>
+          <p class="mt-2 text-sm leading-6 text-muted">{{ t('shelf.summary', { games: shelf.length, rulebooks: documents.length, guides: readyLessons }) }}</p>
         </div>
         <label class="relative block w-full lg:w-72">
           <span class="sr-only">{{ t('shelf.searchLabel') }}</span>
-          <TabletopGlyph name="compass" :size="18" class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/45" />
+          <TabletopGlyph name="compass" :size="18" class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted" />
           <input v-model="search" type="search" :placeholder="t('shelf.searchPlaceholder')" class="min-h-11 w-full rounded-xl border border-ink/12 bg-paper py-3 pl-11 pr-4 text-sm outline-none transition placeholder:text-ink/40 focus:border-indigo focus:ring-2 focus:ring-indigo/15">
         </label>
       </section>
@@ -370,7 +370,7 @@ onBeforeUnmount(() => {
       <section v-else-if="shelf.length === 0" class="mt-7 overflow-hidden rounded-[1.75rem] border border-dashed border-ink/25 bg-paper px-6 py-12 text-center sm:px-10">
         <div class="mx-auto grid size-16 place-items-center rounded-2xl bg-copper/10 text-copper"><TabletopGlyph name="rulebook" :size="32" /></div>
         <h2 class="mt-5 font-display text-3xl font-semibold">{{ t('shelf.empty.title') }}</h2>
-        <p class="mx-auto mt-3 max-w-md leading-7 text-ink/60">{{ t('shelf.empty.description') }}</p>
+        <p class="mx-auto mt-3 max-w-md leading-7 text-muted">{{ t('shelf.empty.description') }}</p>
         <RouterLink :to="{ name: 'teach' }" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-on-accent transition hover:bg-copper-dark">
           <TabletopGlyph name="plus" :size="18" /> {{ t('shelf.empty.action') }}
         </RouterLink>
@@ -383,14 +383,14 @@ onBeforeUnmount(() => {
       <section v-else class="mt-7 rounded-[1.5rem] border border-ink/10 bg-paper p-8 text-center">
         <TabletopGlyph name="compass" :size="30" class="mx-auto text-indigo" />
         <h2 class="mt-4 font-display text-2xl font-semibold">{{ t('shelf.noResults.title') }}</h2>
-        <p class="mt-2 text-sm text-ink/55">{{ t('shelf.noResults.description') }}</p>
+        <p class="mt-2 text-sm text-muted">{{ t('shelf.noResults.description') }}</p>
         <button type="button" class="mt-4 min-h-11 text-sm font-bold text-indigo" @click="search = ''">{{ t('shelf.noResults.action') }}</button>
       </section>
 
       <aside class="mt-10 flex flex-col gap-4 rounded-[1.5rem] border border-ink/10 bg-paper p-5 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex items-center gap-3">
           <span class="grid size-11 place-items-center rounded-xl bg-indigo/10 text-indigo"><TabletopGlyph name="cards" :size="23" /></span>
-          <div><h2 class="font-semibold">{{ t('shelf.manage.title') }}</h2><p class="mt-1 text-sm text-ink/55">{{ t('shelf.manage.description') }}</p></div>
+          <div><h2 class="font-semibold">{{ t('shelf.manage.title') }}</h2><p class="mt-1 text-sm text-muted">{{ t('shelf.manage.description') }}</p></div>
         </div>
         <RouterLink :to="{ name: 'catalog-manage' }" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-ink/12 px-4 text-sm font-bold text-ink/75 transition hover:border-indigo hover:text-indigo">
           {{ t('shelf.manage.action') }} <TabletopGlyph name="arrow" :size="17" />

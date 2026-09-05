@@ -167,7 +167,7 @@ function stepKindLabel(kind: string) {
         data-testid="mobile-chapter-link"
         :href="`#${chapterId(section.position)}`"
         class="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold transition focus:outline-none focus:ring-4 focus:ring-indigo/15"
-        :class="section.position === activePosition ? 'bg-ink-panel text-panel-text elevation-sm' : 'text-ink/65 hover:bg-paper hover:text-indigo'"
+        :class="section.position === activePosition ? 'bg-ink-panel text-panel-text elevation-sm' : 'text-muted hover:bg-paper hover:text-indigo'"
         :aria-current="section.position === activePosition ? 'location' : undefined"
         @click="activateChapter(section.position)"
       >
@@ -180,10 +180,9 @@ function stepKindLabel(kind: string) {
       <nav class="tabletop-panel player-board bg-paper/75 p-3 backdrop-blur">
         <div class="flex items-end justify-between gap-3 border-b border-ink/10 px-2 pb-3 pt-1">
           <div>
-            <p class="text-xs font-bold uppercase tracking-[0.14em] text-copper">{{ t('lesson.sidebar.directory') }}</p>
             <p class="mt-1 text-sm font-semibold text-ink">{{ t('lesson.reader.chapterDirectory') }}</p>
           </div>
-          <span class="shrink-0 text-xs font-semibold text-ink/45">{{ activeChapterNumber }} / {{ sections.length }}</span>
+          <span class="shrink-0 text-xs font-semibold text-muted">{{ activeChapterNumber }} / {{ sections.length }}</span>
         </div>
         <ol class="mt-3 stack-y-s">
           <li v-for="section in sections" :key="section.position">
@@ -191,7 +190,7 @@ function stepKindLabel(kind: string) {
               :href="`#${chapterId(section.position)}`"
               data-testid="desktop-chapter-link"
               class="group flex min-h-14 w-full items-start gap-3 rounded-2xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-4 focus:ring-indigo/15"
-              :class="section.position === activePosition ? 'bg-ink-panel text-panel-text elevation-sm' : 'text-ink/65 hover:bg-canvas hover:text-ink'"
+              :class="section.position === activePosition ? 'bg-ink-panel text-panel-text elevation-sm' : 'text-muted hover:bg-canvas hover:text-ink'"
               :aria-current="section.position === activePosition ? 'location' : undefined"
               @click="activateChapter(section.position)"
             >
@@ -213,12 +212,12 @@ function stepKindLabel(kind: string) {
       >
         <div class="mb-4 lg:mb-0">
           <div class="hex-token size-14 text-copper elevation-sm"><span class="font-display text-xl font-bold">{{ section.position }}</span></div>
-          <p class="mt-2 text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('public.chapter', { position: section.position }) }}</p>
+          <p class="mt-2 text-xs font-semibold text-copper">{{ t('public.chapter', { position: section.position }) }}</p>
         </div>
 
         <div class="min-w-0">
           <h2 class="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{{ section.title }}</h2>
-          <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-ink/60">{{ section.visualCaption }}</p>
+          <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-muted">{{ section.visualCaption }}</p>
 
           <ol class="mt-7 grid gap-4">
             <li
@@ -241,7 +240,7 @@ function stepKindLabel(kind: string) {
                   >
                     <div class="flex flex-wrap items-center gap-2">
                       <h3 class="font-display text-xl font-semibold sm:text-2xl">{{ step.heading }}</h3>
-                      <span class="rounded-full border border-ink/10 bg-canvas/70 px-2.5 py-1 text-[11px] font-bold tracking-[0.08em] text-ink/45">{{ stepKindLabel(step.kind) }}</span>
+                      <span class="rounded-full border border-ink/10 bg-canvas/70 px-2.5 py-1 text-[11px] font-bold tracking-[0.08em] text-muted">{{ stepKindLabel(step.kind) }}</span>
                     </div>
                     <div
                       class="mt-4"
@@ -284,7 +283,7 @@ function stepKindLabel(kind: string) {
                         <p class="text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
                         <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
 
-                        <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-ink/50 transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
+                        <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-muted transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
                       </div>
                     </div>
                   </div>

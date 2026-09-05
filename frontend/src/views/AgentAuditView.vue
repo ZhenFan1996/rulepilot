@@ -53,7 +53,7 @@ watch(() => route.query.runId, (value) => {
         <header class="max-w-3xl">
           <p class="text-xs font-semibold uppercase tracking-[0.14em] text-copper">{{ t('agentAudit.eyebrow') }}</p>
           <h1 class="mt-2 font-display text-4xl font-semibold">{{ t('agentAudit.title') }}</h1>
-          <p class="mt-4 leading-7 text-ink/60">{{ t('agentAudit.description') }}</p>
+          <p class="mt-4 leading-7 text-muted">{{ t('agentAudit.description') }}</p>
           <p class="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ t('agentAudit.boundary') }}</p>
         </header>
 
@@ -63,33 +63,33 @@ watch(() => route.query.runId, (value) => {
         </form>
 
         <p v-if="error" class="mt-5 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ error }}</p>
-        <p v-else-if="!audit && !loading" class="mt-8 rounded-3xl border border-dashed border-ink/15 p-8 text-center text-ink/50">{{ t('agentAudit.empty') }}</p>
+        <p v-else-if="!audit && !loading" class="mt-8 rounded-3xl border border-dashed border-ink/15 p-8 text-center text-muted">{{ t('agentAudit.empty') }}</p>
 
         <template v-if="audit">
           <section class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Run summary">
-            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.state') }}</p><p class="mt-1 font-semibold">{{ audit.run.state }}</p></div>
-            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.owner') }}</p><p class="mt-1 font-semibold">{{ audit.run.ownerUsername }}</p></div>
-            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.tools') }}</p><p class="mt-1 font-semibold">{{ audit.budget.usedToolCalls }}</p></div>
-            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.models') }}</p><p class="mt-1 font-semibold">{{ audit.budget.usedModelCalls }}</p></div>
+            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-muted">{{ t('agentAudit.state') }}</p><p class="mt-1 font-semibold">{{ audit.run.state }}</p></div>
+            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-muted">{{ t('agentAudit.owner') }}</p><p class="mt-1 font-semibold">{{ audit.run.ownerUsername }}</p></div>
+            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-muted">{{ t('agentAudit.tools') }}</p><p class="mt-1 font-semibold">{{ audit.budget.usedToolCalls }}</p></div>
+            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-muted">{{ t('agentAudit.models') }}</p><p class="mt-1 font-semibold">{{ audit.budget.usedModelCalls }}</p></div>
             <div class="rounded-2xl bg-paper p-4">
-              <p class="text-xs text-ink/45">{{ t(audit.budget.tokenLimitEnforced ? 'agentAudit.tokensHard' : 'agentAudit.tokensObserved') }}</p>
+              <p class="text-xs text-muted">{{ t(audit.budget.tokenLimitEnforced ? 'agentAudit.tokensHard' : 'agentAudit.tokensObserved') }}</p>
               <p v-if="audit.budget.tokenLimitEnforced" class="mt-1 font-semibold">{{ audit.budget.usedTokens }} / {{ audit.budget.maxTokens }}</p>
               <template v-else>
                 <p class="mt-1 font-semibold">{{ t('agentAudit.tokensObservedValue', { used: audit.budget.usedTokens, threshold: audit.budget.maxTokens }) }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('agentAudit.tokensObservedHint') }}</p>
+                <p class="mt-1 text-xs leading-5 text-muted">{{ t('agentAudit.tokensObservedHint') }}</p>
               </template>
             </div>
-            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-ink/45">{{ t('agentAudit.deadline') }}</p><p class="mt-1 font-semibold">{{ audit.budget.deadlineAt }}</p></div>
+            <div class="rounded-2xl bg-paper p-4"><p class="text-xs text-muted">{{ t('agentAudit.deadline') }}</p><p class="mt-1 font-semibold">{{ audit.budget.deadlineAt }}</p></div>
           </section>
 
           <section class="mt-8" aria-labelledby="audit-activities-title">
             <h2 id="audit-activities-title" class="font-display text-2xl font-semibold">{{ t('agentAudit.activities') }}</h2>
-            <ol class="mt-4 stack-y-md"><li v-for="activity in audit.activities" :key="activity.sequence" class="rounded-2xl border border-ink/10 bg-paper p-4"><div class="flex flex-wrap items-center gap-2 text-xs font-semibold"><span class="rounded-full bg-indigo/8 px-2 py-1 text-indigo">{{ activity.type }}</span><span class="rounded-full bg-ink/6 px-2 py-1">{{ activity.outcome }}</span><span class="text-ink/45">#{{ activity.sequence }} · {{ activity.latencyMs }} ms</span></div><p class="mt-3 break-all font-mono text-sm">{{ activity.operation }}</p><p class="mt-2 text-sm leading-6 text-ink/65">{{ activity.summary }}</p><p class="mt-2 text-xs text-ink/40">tokens {{ activity.estimatedInputTokens }} → {{ activity.estimatedOutputTokens }}</p></li></ol>
+            <ol class="mt-4 stack-y-md"><li v-for="activity in audit.activities" :key="activity.sequence" class="rounded-2xl border border-ink/10 bg-paper p-4"><div class="flex flex-wrap items-center gap-2 text-xs font-semibold"><span class="rounded-full bg-indigo/8 px-2 py-1 text-indigo">{{ activity.type }}</span><span class="rounded-full bg-ink/6 px-2 py-1">{{ activity.outcome }}</span><span class="text-muted">#{{ activity.sequence }} · {{ activity.latencyMs }} ms</span></div><p class="mt-3 break-all font-mono text-sm">{{ activity.operation }}</p><p class="mt-2 text-sm leading-6 text-muted">{{ activity.summary }}</p><p class="mt-2 text-xs text-muted">tokens {{ activity.estimatedInputTokens }} → {{ activity.estimatedOutputTokens }}</p></li></ol>
           </section>
 
           <section class="mt-8" aria-labelledby="audit-steps-title">
             <h2 id="audit-steps-title" class="font-display text-2xl font-semibold">{{ t('agentAudit.steps') }}</h2>
-            <ol class="mt-4 stack-y-sm text-sm"><li v-for="step in audit.steps" :key="step.sequence" class="rounded-xl bg-paper px-4 py-3"><span class="font-mono text-xs text-ink/45">#{{ step.sequence }}</span> <span class="font-semibold">{{ step.fromState }} → {{ step.toState }}</span><p class="mt-1 text-ink/60">{{ step.summary }}</p></li></ol>
+            <ol class="mt-4 stack-y-sm text-sm"><li v-for="step in audit.steps" :key="step.sequence" class="rounded-xl bg-paper px-4 py-3"><span class="font-mono text-xs text-muted">#{{ step.sequence }}</span> <span class="font-semibold">{{ step.fromState }} → {{ step.toState }}</span><p class="mt-1 text-muted">{{ step.summary }}</p></li></ol>
           </section>
         </template>
       </div>

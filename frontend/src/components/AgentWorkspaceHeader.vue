@@ -12,9 +12,9 @@ withDefaults(defineProps<{
   <header class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
     <div class="flex min-w-0 items-start gap-4">
       <div class="min-w-0">
-        <p class="text-sm text-ink/60">{{ eyebrow }}</p>
+        <p class="text-sm text-muted">{{ eyebrow }}</p>
         <h2 class="mt-1 text-2xl font-semibold tracking-tight">{{ title }}</h2>
-        <p class="mt-2 max-w-2xl text-sm leading-6 text-ink/60">{{ description }}</p>
+        <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">{{ description }}</p>
       </div>
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">

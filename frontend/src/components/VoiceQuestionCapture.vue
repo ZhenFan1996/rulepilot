@@ -157,7 +157,7 @@ onUnmounted(() => recognition?.abort())
       {{ interimText || t('voice.listening') }}
     </p>
     <p v-else-if="errorMessage" class="max-w-md text-xs leading-5 text-red-700" role="alert">{{ errorMessage }}</p>
-    <p v-else class="max-w-md text-xs leading-5 text-ink/45">
+    <p v-else class="max-w-md text-xs leading-5 text-muted">
       {{ t('voice.privacy') }}
     </p>
   </div>

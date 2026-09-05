@@ -1625,13 +1625,13 @@ onBeforeUnmount(() => {
 
         <div data-testid="recommendation-chat-workspace" class="recommendation-paper min-w-0 bg-paper text-ink">
           <nav v-if="answerWorkspaceReady" data-testid="agent-role-switcher" class="flex gap-2 border-b border-ink/8 px-4 py-3 sm:px-6" :aria-label="t('roleLabel')">
-            <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'recommendation' ? 'bg-felt text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'recommendation'" @click="switchToRecommendations">{{ t('recommendationRole') }}</button>
-            <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'rule-qa' ? 'bg-indigo text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'rule-qa'" @click="switchToQuestions()">{{ t('answerRole') }}</button>
+            <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'recommendation' ? 'bg-felt text-white' : 'border border-ink/12 text-muted'" :aria-pressed="conversationRole === 'recommendation'" @click="switchToRecommendations">{{ t('recommendationRole') }}</button>
+            <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'rule-qa' ? 'bg-indigo text-white' : 'border border-ink/12 text-muted'" :aria-pressed="conversationRole === 'rule-qa'" @click="switchToQuestions()">{{ t('answerRole') }}</button>
           </nav>
 
           <div v-show="conversationRole === 'recommendation'">
             <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[76vh] min-h-80 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[38rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[54rem]">
-              <div v-if="messages.length === 0 && !loading && !failed" data-testid="recommendation-empty-state" class="rounded-2xl border border-ink/8 bg-canvas px-4 py-4 text-sm leading-6 text-ink/65">
+              <div v-if="messages.length === 0 && !loading && !failed" data-testid="recommendation-empty-state" class="rounded-2xl border border-ink/8 bg-canvas px-4 py-4 text-sm leading-6 text-muted">
                 <p>{{ t('initial') }}</p>
               </div>
               <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
@@ -1643,7 +1643,7 @@ onBeforeUnmount(() => {
                     :data-testid="message.response?.games.length ? 'assistant-recommendation-message' : undefined"
                     class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72"
                   />
-                  <p v-else-if="message.response?.games.length" role="status" data-testid="recommendation-explanation-unavailable" class="text-sm leading-6 text-ink/60">{{ responseT(message.response, 'explanationUnavailable') }}</p>
+                  <p v-else-if="message.response?.games.length" role="status" data-testid="recommendation-explanation-unavailable" class="text-sm leading-6 text-muted">{{ responseT(message.response, 'explanationUnavailable') }}</p>
 
                   <div v-if="message.response?.games.length" class="mt-4">
                     <p v-if="message.response.shortfall" class="mb-2 inline-flex rounded-full border border-copper/25 bg-copper/5 px-2.5 py-1 text-[0.6875rem] font-semibold text-copper">{{ responseT(message.response, 'shortfall', { available: message.response.shortfall.availableCount, requested: message.response.shortfall.requestedCount }) }}</p>
@@ -1653,8 +1653,8 @@ onBeforeUnmount(() => {
                     <button v-if="message.response === response" type="button" :disabled="loading" class="mt-2 min-h-11 text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40" @click="moreGames(message.response)">{{ responseT(message.response, 'more') }}</button>
                   </div>
 
-                  <details v-if="message.response && (message.response.games.length || message.response.researchSources?.length || toolLabelsFor(message.response).length)" data-testid="recommendation-verification-details" class="mt-3 rounded-xl border border-ink/8 px-4 text-xs leading-5 text-ink/55">
-                    <summary class="min-h-11 cursor-pointer py-3 font-semibold text-ink/60">{{ responseT(message.response, 'verificationDetails') }}</summary>
+                  <details v-if="message.response && (message.response.games.length || message.response.researchSources?.length || toolLabelsFor(message.response).length)" data-testid="recommendation-verification-details" class="mt-3 rounded-xl border border-ink/8 px-4 text-xs leading-5 text-muted">
+                    <summary class="min-h-11 cursor-pointer py-3 font-semibold text-muted">{{ responseT(message.response, 'verificationDetails') }}</summary>
                     <div class="space-y-3 pb-4">
                       <p v-if="message.response.games.length" class="recommendation-source-summary">{{ responseT(message.response, 'source', { count: message.response.candidatesEvaluated }) }}</p>
                       <div v-if="message.response.games.length || message.response.researchSources?.length" data-testid="recommendation-research-sources" class="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -1670,7 +1670,7 @@ onBeforeUnmount(() => {
                         <h3 class="font-semibold">{{ responseT(message.response, 'previousExplanation') }}</h3>
                         <template v-for="entry in message.response.games" :key="entry.game.bggId">
                           <section v-if="entry.replyParts?.length" data-testid="recommendation-previous-explanation" class="space-y-2">
-                            <h4 class="font-semibold text-ink/65">{{ entry.game.name }}</h4>
+                            <h4 class="font-semibold text-muted">{{ entry.game.name }}</h4>
                             <div v-for="(part, index) in entry.replyParts" :key="index">
                               <SafeMarkdown :source="part.text" class="text-sm leading-6" />
                               <span v-if="part.publisherDescriptionGrounded" class="text-[0.6875rem] text-indigo">{{ responseT(message.response, 'publisherDescriptionGrounded') }}</span>
@@ -1689,7 +1689,7 @@ onBeforeUnmount(() => {
                       <span class="recommendation-live-signal size-2 shrink-0 rounded-full bg-copper" aria-hidden="true" />
                       <strong data-testid="player-work-status" class="text-sm font-semibold text-ink/78">{{ loadingWorkTitle }}</strong>
                     </div>
-                    <p class="mt-1 pl-4 text-xs leading-5 text-ink/50">{{ loadingMessage }}</p>
+                    <p class="mt-1 pl-4 text-xs leading-5 text-muted">{{ loadingMessage }}</p>
                   </div>
                   <time data-testid="recommendation-elapsed" class="shrink-0 font-mono text-[0.6875rem] tabular-nums text-ink/48">{{ loadingElapsedLabel }}</time>
                 </div>
@@ -1704,7 +1704,7 @@ onBeforeUnmount(() => {
                 </article>
 
                 <div v-if="reportedLoadingSteps.length" class="mt-4 border-t border-ink/8 pt-3">
-                  <p class="text-[0.6875rem] font-semibold text-ink/45">{{ translated(activeTurnLocale ?? locale, 'workLog') }}</p>
+                  <p class="text-[0.6875rem] font-semibold text-muted">{{ translated(activeTurnLocale ?? locale, 'workLog') }}</p>
                   <ol data-testid="recommendation-progress-steps" class="mt-2 grid gap-1.5 text-xs leading-5">
                     <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.update.stage}-${step.update.phase}-${step.update.action}-${step.update.focus?.kind}-${step.update.focus?.values.join('|')}-${step.update.elapsedMs}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/72' : step.update.phase === 'failed' ? 'text-red-700' : step.update.phase === 'retrying' ? 'text-amber-700' : 'text-ink/48'">
                       <span aria-hidden="true" class="mt-px w-3 shrink-0 text-center">{{ step.icon }}</span>
@@ -1712,7 +1712,7 @@ onBeforeUnmount(() => {
                     </li>
                   </ol>
                 </div>
-                <p v-if="recommendationEvidenceSummary" data-testid="recommendation-evidence-summary" class="mt-3 border-l border-copper/35 pl-3 text-xs leading-5 text-ink/55">{{ recommendationEvidenceSummary }}</p>
+                <p v-if="recommendationEvidenceSummary" data-testid="recommendation-evidence-summary" class="mt-3 border-l border-copper/35 pl-3 text-xs leading-5 text-muted">{{ recommendationEvidenceSummary }}</p>
                 <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-3 border-l-2 border-amber-500/55 bg-amber-50/55 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
               </section>
               <article v-if="loading && pendingRecommendationGames.length" data-conversation-message data-has-recommendations="true" data-testid="pending-recommendation-parts" class="min-w-0 w-full">
@@ -1733,8 +1733,8 @@ onBeforeUnmount(() => {
                   <span class="min-w-0 flex-1">
                     <span class="block text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ t('journeyStatusLabel') }} · {{ game.name }}</span>
                     <span class="mt-1 block text-sm font-semibold leading-5 text-ink">{{ journeyText(game, statusForJourney(game)) }}</span>
-                    <span v-if="statusForJourney(game)?.projection.progress !== null && statusForJourney(game)?.projection.progress !== undefined" class="mt-1 block text-xs text-ink/45">{{ statusForJourney(game)?.projection.progress }}% · {{ t('journeyProgress') }}</span>
-                    <span v-else-if="statusForJourney(game)" class="mt-1 block text-xs text-ink/45">{{ t('journeyProgress') }}</span>
+                    <span v-if="statusForJourney(game)?.projection.progress !== null && statusForJourney(game)?.projection.progress !== undefined" class="mt-1 block text-xs text-muted">{{ statusForJourney(game)?.projection.progress }}% · {{ t('journeyProgress') }}</span>
+                    <span v-else-if="statusForJourney(game)" class="mt-1 block text-xs text-muted">{{ t('journeyProgress') }}</span>
                   </span>
                   <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(statusForJourney(game)?.projection.canReadLesson && statusForJourney(game)?.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
                 </button>
@@ -1742,7 +1742,7 @@ onBeforeUnmount(() => {
                   <button data-testid="player-journey-progress-button" type="button" class="inline-flex min-h-11 w-full items-center justify-center px-3 text-sm font-semibold text-indigo underline sm:flex-1" @click="openJourneyProgressCard(game, $event.currentTarget)">{{ t('journeyProgress') }}</button>
                   <button v-if="statusForJourney(game)?.projection.canReadRulebook && statusForJourney(game)?.importJob?.documentVersionId" type="button" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-indigo underline sm:flex-1 sm:border-l sm:border-t-0" @click="openJourneyRulebookCard(game, statusForJourney(game)!)">{{ t('journeyReadRulebook') }}</button>
                   <button v-if="statusForJourney(game)?.projection.canReadLesson && statusForJourney(game)?.plan?.id" type="button" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-indigo underline sm:flex-1 sm:border-l sm:border-t-0" @click="openJourneyLessonCard(game, statusForJourney(game)!)">{{ t('journeyRead') }}</button>
-                  <RouterLink v-if="statusForJourney(game)?.plan?.id" data-testid="player-journey-all-work-link" :to="{ path: '/work', query: { started: statusForJourney(game)?.plan?.id } }" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-ink/55 underline sm:flex-1 sm:border-l sm:border-t-0">{{ t('journeyAllWork') }}</RouterLink>
+                  <RouterLink v-if="statusForJourney(game)?.plan?.id" data-testid="player-journey-all-work-link" :to="{ path: '/work', query: { started: statusForJourney(game)?.plan?.id } }" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-muted underline sm:flex-1 sm:border-l sm:border-t-0">{{ t('journeyAllWork') }}</RouterLink>
                 </div>
               </article>
             </div>

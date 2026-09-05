@@ -80,10 +80,16 @@ public class BggMetadataLocalizationService {
         }
         Request request = new Request(
                 game.bggId(), game.name(), description, game.categories(), game.mechanics());
+        return prewarm(request);
+    }
+
+    public PrewarmResult prewarm(Request source) {
+        Request request = new Request(source.bggId(), source.gameName(), normalizedDescription(source.description()),
+                source.categories(), source.mechanics());
         try {
             return translations.prewarm(request);
         } catch (RuntimeException exception) {
-            LOGGER.warn("BGG metadata translation prewarm paused at bggId={}", game.bggId());
+            LOGGER.warn("BGG metadata translation prewarm paused at bggId={}", request.bggId());
             return new PrewarmResult(PrewarmStatus.RETRY_PROVIDER_UNAVAILABLE);
         }
     }

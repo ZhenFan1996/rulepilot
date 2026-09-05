@@ -22,6 +22,12 @@ public interface BggMetadataCache {
 
     void putGame(GameDetails game, CacheWindow window);
 
+    /** Keyset scan of all usable source identities, including games outside the ranked prewarm range. */
+    default List<com.rulepilot.catalog.BggMetadataTranslation.Request> translationSources(
+            int afterBggId, int pageSize, Instant now) {
+        return List.of();
+    }
+
     CleanupResult prune(Instant now, int maximumEntries, long maximumBytes);
 
     record Cached<T>(T value, Instant freshUntil, Instant staleUntil) {

@@ -68,7 +68,7 @@ onBeforeUnmount(() => {
     <span class="mr-2.5 size-2.5 shrink-0 rounded-full border-2 border-current" :class="offline ? 'text-amber-800' : 'text-emerald-800'" aria-hidden="true" />
     <p class="min-w-0 text-xs leading-5 sm:flex sm:items-baseline sm:gap-2 sm:text-sm">
       <strong class="block font-bold">{{ title }}</strong>
-      <span class="block text-ink/65">{{ detail }}</span>
+      <span class="block text-muted">{{ detail }}</span>
     </p>
   </div>
 </template>

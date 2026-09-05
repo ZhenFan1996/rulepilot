@@ -108,6 +108,37 @@ public class PostgresBggMetadataCache implements BggMetadataCache {
     }
 
     @Override
+    public List<com.rulepilot.catalog.BggMetadataTranslation.Request> translationSources(
+            int afterBggId, int pageSize, Instant now) {
+        if (afterBggId < 0 || pageSize < 1 || now == null) {
+            throw new IllegalArgumentException("BGG translation source scan requires a valid page");
+        }
+        return jdbc.query("""
+                SELECT DISTINCT ON (bgg_id) bgg_id, payload::text AS payload
+                FROM bgg_metadata_cache
+                WHERE cache_kind IN ('GAME', 'DISCOVERY')
+                  AND bgg_id > :afterBggId AND stale_until > :now
+                ORDER BY bgg_id, cache_kind DESC
+                LIMIT :pageSize
+                """, new MapSqlParameterSource()
+                        .addValue("afterBggId", afterBggId)
+                        .addValue("pageSize", pageSize)
+                        .addValue("now", Timestamp.from(now)),
+                (result, row) -> {
+                    try {
+                        var source = json.readTree(result.getString("payload"));
+                        return new com.rulepilot.catalog.BggMetadataTranslation.Request(
+                                result.getInt("bgg_id"), source.path("name").asText(),
+                                source.path("description").asText(),
+                                json.convertValue(source.path("categories"), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {}),
+                                json.convertValue(source.path("mechanics"), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {}));
+                    } catch (JsonProcessingException exception) {
+                        throw new IllegalStateException("BGG translation source is unreadable", exception);
+                    }
+                });
+    }
+
+    @Override
     @Transactional
     public CleanupResult prune(Instant now, int maximumEntries, long maximumBytes) {
         if (maximumEntries < 1 || maximumBytes < 1024) {

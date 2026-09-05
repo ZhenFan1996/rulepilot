@@ -49,8 +49,8 @@ const workStatus = computed(() => guideWorkStatus(
             aria-live="polite"
             aria-atomic="true"
           />
-          <p class="mt-1 text-xs leading-5 text-ink/60">{{ statusUnknown ? t('lesson.generation.statusUnknown') : statusText }}</p>
-          <p class="mt-1 text-xs leading-5 text-ink/55">{{ t('lesson.generation.inProgress', { count: availableSectionCount }) }}</p>
+          <p class="mt-1 text-xs leading-5 text-muted">{{ statusUnknown ? t('lesson.generation.statusUnknown') : statusText }}</p>
+          <p class="mt-1 text-xs leading-5 text-muted">{{ t('lesson.generation.inProgress', { count: availableSectionCount }) }}</p>
         </div>
         <span v-if="!statusUnknown" class="shrink-0 font-mono text-sm font-semibold text-indigo" :aria-label="t('lesson.generation.elapsed')">{{ elapsed }}</span>
       </div>
@@ -58,12 +58,12 @@ const workStatus = computed(() => guideWorkStatus(
         <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="totalSectionCount" :aria-valuenow="processedChapterCount" :aria-label="t('lesson.generation.progressAria', { processed: processedChapterCount, total: totalSectionCount })">
           <div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: progressWidth }" />
         </div>
-        <div class="mt-2 text-xs text-ink/55">
+        <div class="mt-2 text-xs text-muted">
           <span>{{ t('lesson.generation.processed', { processed: processedChapterCount, total: totalSectionCount, supported: supportedChapterCount }) }}</span>
         </div>
-        <p class="mt-2 text-xs leading-5 text-ink/50">{{ remainingTime }} {{ t('lesson.generation.progressHint') }}</p>
+        <p class="mt-2 text-xs leading-5 text-muted">{{ remainingTime }} {{ t('lesson.generation.progressHint') }}</p>
         <ol v-if="activities.length" class="mt-3 grid gap-1.5 border-t border-indigo/10 pt-3 sm:grid-cols-3" :aria-label="t('lesson.generation.activitiesAria')">
-          <li v-for="activity in activities" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
+          <li v-for="activity in activities" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-muted">
             <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
             <span>{{ activity.text }}</span>
           </li>

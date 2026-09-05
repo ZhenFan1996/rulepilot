@@ -172,7 +172,6 @@ test('keeps available chapters and the answer workspace usable while the mobile 
   await page.goto('/lesson/plan-1/questions')
   await expect(page.getByRole('heading', { name: '向《Catalog Game》规则书提问' })).toBeVisible()
   await expect(page.getByText('桌游资料由 BoardGameGeek 提供')).toBeVisible()
-  await expect(page.locator('#lesson-question-panel .tabletop-panel.player-board')).toBeVisible()
   await expect(page.getByRole('textbox', { name: '向规则书提问' })).toBeVisible()
   await page.getByRole('textbox', { name: '向规则书提问' }).fill('灯塔牌放在哪里，这张效果牌会改变设置吗？')
   await page.getByRole('button', { name: '提交问题' }).click()

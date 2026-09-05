@@ -34,19 +34,19 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
             String snapshotSha256,
             int targetCount,
             int metadataCohortSize,
-            int translationCohortSize,
             Instant claimedAt,
             Duration leaseDuration) {
         checkedClaim(
                 snapshotSha256,
                 targetCount,
                 metadataCohortSize,
-                translationCohortSize,
                 claimedAt,
                 leaseDuration);
         MapSqlParameterSource state = new MapSqlParameterSource()
                 .addValue("snapshotSha256", snapshotSha256)
                 .addValue("claimedAt", Timestamp.from(claimedAt));
+        // The deployed non-null translation cursor is inert rollback data. Remove it when
+        // releases using the ranked translation protocol leave the rollback set.
         jdbc.update(
                 """
                 INSERT INTO bgg_metadata_prewarm_state (
@@ -60,6 +60,8 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
                     lease_until = NULL,
                     updated_at = EXCLUDED.updated_at
                 WHERE bgg_metadata_prewarm_state.snapshot_sha256 <> EXCLUDED.snapshot_sha256
+                  AND (bgg_metadata_prewarm_state.lease_until IS NULL
+                       OR bgg_metadata_prewarm_state.lease_until <= :claimedAt)
                 """,
                 state);
 
@@ -76,39 +78,33 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
                         WHERE singleton
                           AND snapshot_sha256 = :snapshotSha256
                           AND (lease_until IS NULL OR lease_until <= :claimedAt)
-                        RETURNING metadata_next_offset, translation_next_offset
+                        RETURNING metadata_next_offset
                         """,
                         claim,
                         (result, row) -> {
                             int metadataStart = result.getInt("metadata_next_offset");
-                            int translationStart = result.getInt("translation_next_offset");
                             return new Cohort(
                                     leaseId,
                                     snapshotSha256,
                                     metadataStart,
-                                    Math.max(metadataStart, Math.min(targetCount, metadataStart + metadataCohortSize)),
-                                    translationStart,
-                                    Math.max(translationStart, Math.min(targetCount, translationStart + translationCohortSize)));
+                                    Math.max(metadataStart, Math.min(targetCount, metadataStart + metadataCohortSize)));
                         })
                 .stream()
                 .findFirst();
     }
 
     @Override
-    public void complete(Cohort cohort, int metadataNextOffset, int translationNextOffset, Instant completedAt) {
+    public void complete(Cohort cohort, int metadataNextOffset, Instant completedAt) {
         if (cohort == null
                 || completedAt == null
                 || metadataNextOffset < cohort.metadataStart()
-                || metadataNextOffset > cohort.metadataEnd()
-                || translationNextOffset < cohort.translationStart()
-                || translationNextOffset > cohort.translationEnd()) {
+                || metadataNextOffset > cohort.metadataEnd()) {
             throw new IllegalArgumentException("BGG prewarm completion is outside its claimed cohort");
         }
         jdbc.update(
                 """
                 UPDATE bgg_metadata_prewarm_state
                 SET metadata_next_offset = GREATEST(metadata_next_offset, :metadataNextOffset),
-                    translation_next_offset = GREATEST(translation_next_offset, :translationNextOffset),
                     lease_id = NULL,
                     lease_until = NULL,
                     updated_at = :completedAt
@@ -118,7 +114,6 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
                         .addValue("snapshotSha256", cohort.snapshotSha256())
                         .addValue("leaseId", cohort.leaseId())
                         .addValue("metadataNextOffset", metadataNextOffset)
-                        .addValue("translationNextOffset", translationNextOffset)
                         .addValue("completedAt", Timestamp.from(completedAt)));
     }
 
@@ -126,18 +121,15 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
             String snapshotSha256,
             int targetCount,
             int metadataCohortSize,
-            int translationCohortSize,
             Instant claimedAt,
             Duration leaseDuration) {
         if (snapshotSha256 == null || !SHA256.matcher(snapshotSha256).matches()) {
             throw new IllegalArgumentException("BGG prewarm requires a lowercase snapshot SHA-256 digest");
         }
-        if (targetCount < 1
+        if (targetCount < 0
                 || targetCount > MAX_TARGET_COUNT
                 || metadataCohortSize < 1
-                || metadataCohortSize > MAX_COHORT_SIZE
-                || translationCohortSize < 1
-                || translationCohortSize > MAX_COHORT_SIZE) {
+                || metadataCohortSize > MAX_COHORT_SIZE) {
             throw new IllegalArgumentException("BGG prewarm target and cohort sizes are invalid");
         }
         if (claimedAt == null

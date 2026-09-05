@@ -28,7 +28,8 @@ test('keeps rulebook and game discovery actions reachable alongside BGG games', 
   await expect(page.locator('a[href="/discover"]:visible').first()).toBeVisible()
   await expect(page.getByRole('heading', { name: 'BGG 热门桌游' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '再看看这几款' })).toBeVisible()
-  await expect(page.locator('.home-game-grid > li')).toHaveCount(4)
+  await expect(page.locator('.home-game-grid a[href="/discover/9000"]')).toBeVisible()
+  await expect(page.getByRole('link', { name: '家庭游戏', exact: true })).toHaveAttribute('href', '/discover/catalog?type=family')
   await expect(page.locator('.home-random__games > li')).toHaveCount(3)
   const randomLinks = page.locator('.home-random__games a')
   const initialRandomHrefs = await randomLinks.evaluateAll(links => links.map(link => link.getAttribute('href')))
@@ -113,7 +114,7 @@ test('keeps the signed-in root journey stable across a history round trip', asyn
   await page.goto('/')
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByText('player，欢迎回来')).toBeVisible()
+  await expect(page.locator('a[aria-label="player"]:visible')).toBeVisible()
   await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(0)
 
   const discover = page.locator('a[href="/discover"]:visible').first()

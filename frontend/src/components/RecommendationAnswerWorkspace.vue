@@ -412,13 +412,13 @@ onBeforeUnmount(() => {
         <div class="min-w-0">
           <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ copy.eyebrow }}</p>
           <h3 class="mt-1 font-display text-xl font-semibold">{{ copy.title }}</h3>
-          <p class="mt-1 max-w-2xl text-xs leading-5 text-ink/50">{{ copy.description }}</p>
+          <p class="mt-1 max-w-2xl text-xs leading-5 text-muted">{{ copy.description }}</p>
         </div>
         <span v-if="session" class="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">{{ copy.ready }}</span>
       </div>
     </header>
 
-    <p v-if="initializing" class="mt-5 rounded-xl bg-canvas p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
+    <p v-if="initializing" class="mt-5 rounded-xl bg-canvas p-8 text-center text-sm text-muted" role="status">{{ copy.loading }}</p>
     <section v-else-if="initializationError || !session" class="mt-5 rounded-xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-800" role="alert">
       <p>{{ initializationError || copy.error }}</p>
       <button type="button" class="mt-3 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="loadWorkspace()">{{ copy.retry }}</button>

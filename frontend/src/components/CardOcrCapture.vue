@@ -166,7 +166,7 @@ onUnmounted(() => {
         <div>
           <p class="text-xs font-semibold text-copper">{{ t('cardOcr.eyebrow') }}</p>
           <h3 id="card-ocr-title" class="mt-2 font-display text-3xl font-semibold">{{ t('cardOcr.title') }}</h3>
-          <p class="mt-2 text-sm leading-6 text-ink/60">{{ t('cardOcr.description') }}</p>
+          <p class="mt-2 text-sm leading-6 text-muted">{{ t('cardOcr.description') }}</p>
         </div>
         <button data-modal-initial-focus class="grid size-11 shrink-0 place-items-center rounded-full border border-ink/15 text-xl" :disabled="recognizing" :aria-label="t('cardOcr.close')" @click="close">×</button>
       </div>
@@ -217,7 +217,7 @@ onUnmounted(() => {
           >
             {{ recognizing ? t('cardOcr.recognizing') : t('cardOcr.recognize') }}
           </button>
-          <p class="mt-3 text-xs leading-5 text-ink/45">{{ t('cardOcr.downloadHint') }}</p>
+          <p class="mt-3 text-xs leading-5 text-muted">{{ t('cardOcr.downloadHint') }}</p>
         </div>
       </div>
 
@@ -232,7 +232,7 @@ onUnmounted(() => {
           class="mt-2 w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10"
         />
         <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p class="text-xs text-ink/45">{{ t('cardOcr.reviewHint', { count: recognizedText.length }) }}</p>
+          <p class="text-xs text-muted">{{ t('cardOcr.reviewHint', { count: recognizedText.length }) }}</p>
           <button type="button" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="!canUseText" @click="useRecognizedText">{{ t('cardOcr.useText') }}</button>
         </div>
       </div>

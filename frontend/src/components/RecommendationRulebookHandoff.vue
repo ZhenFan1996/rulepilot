@@ -1662,9 +1662,9 @@ onBeforeUnmount(() => {
       <div class="min-w-0 flex-1">
         <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ copy.eyebrow }}</p>
         <h3 class="mt-1 font-display text-xl font-semibold">{{ copy.title }}</h3>
-        <p v-if="game.nameLocalized" class="mt-1 text-xs text-ink/45">{{ game.originalName }}</p>
+        <p v-if="game.nameLocalized" class="mt-1 text-xs text-muted">{{ game.originalName }}</p>
       </div>
-      <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
+      <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-muted hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
     </div>
 
     <div class="p-4 sm:p-5">
@@ -1675,14 +1675,14 @@ onBeforeUnmount(() => {
         role="status"
       />
 
-      <p v-if="state === 'preparing' || state === 'finding'" class="flex items-center gap-3 text-sm text-ink/65">
+      <p v-if="state === 'preparing' || state === 'finding'" class="flex items-center gap-3 text-sm text-muted">
         <span class="size-2 animate-pulse rounded-full bg-copper" aria-hidden="true" />
         {{ state === 'preparing' ? copy.preparing : findingText }}
       </p>
 
       <template v-else-if="state === 'review'">
         <h4 class="font-display text-lg font-semibold">{{ hasImportableCandidate ? copy.found : copy.noImportableTitle }}</h4>
-        <p class="mt-1 text-xs leading-5 text-ink/50">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
+        <p class="mt-1 text-xs leading-5 text-muted">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
         <div
           v-if="discoveryNotice && discoverySummary"
           data-testid="rulebook-discovery-summary"
@@ -1697,7 +1697,7 @@ onBeforeUnmount(() => {
           </ul>
         </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
-          <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
+          <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-muted'">
             <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
           </li>
         </ol>
@@ -1707,9 +1707,9 @@ onBeforeUnmount(() => {
               <div class="min-w-0">
                 <p class="font-semibold">{{ candidate.title }}</p>
                 <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all text-xs font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
-                <p class="mt-2 text-xs leading-5 text-ink/55">{{ copy.publisher }}：{{ candidate.publisher || copy.unknown }} · {{ copy.language }}：{{ candidateLanguage(candidate) }} · {{ copy.edition }}：{{ candidate.edition || copy.unknown }}</p>
+                <p class="mt-2 text-xs leading-5 text-muted">{{ copy.publisher }}：{{ candidate.publisher || copy.unknown }} · {{ copy.language }}：{{ candidateLanguage(candidate) }} · {{ copy.edition }}：{{ candidate.edition || copy.unknown }}</p>
                 <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ copy.sources[candidate.sourceType] }}</p>
-                <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? copy.gallery : copy.page }}</p>
+                <p class="mt-1 text-xs text-muted">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? copy.gallery : copy.page }}</p>
                 <p class="mt-1 text-xs font-semibold text-indigo">{{ copy.capabilities[candidate.capability] }}</p>
               </div>
               <button v-if="candidate.capability !== 'GAME_INFO_ONLY'" type="button" class="min-h-11 shrink-0 rounded-lg border border-copper/35 px-4 text-sm font-semibold text-copper" :aria-pressed="isImportableCandidate(candidate) ? selected?.url === candidate.url : undefined" @click="choose(candidate)">{{ candidateActionLabel(candidate) }}</button>
@@ -1722,16 +1722,16 @@ onBeforeUnmount(() => {
         </div>
         <section v-if="identityCandidates.length" class="mt-5 border-t border-ink/10 pt-4" :aria-label="copy.identityOnlyTitle">
           <h5 class="text-sm font-semibold text-ink/70">{{ copy.identityOnlyTitle }}</h5>
-          <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.identityOnlyDetail }}</p>
+          <p class="mt-1 text-xs leading-5 text-muted">{{ copy.identityOnlyDetail }}</p>
           <ul class="mt-3 stack-y-sm">
             <li v-for="candidate in identityCandidates" :key="candidate.url" :data-capability="candidate.capability" :data-acquisition-mode="candidate.acquisitionMode" class="rounded-lg border border-ink/10 bg-paper p-3 text-xs">
               <p class="font-semibold text-ink/70">{{ candidate.title }}</p>
               <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
-              <p class="mt-1 text-ink/50">{{ copy.capabilities[candidate.capability] }}</p>
+              <p class="mt-1 text-muted">{{ copy.capabilities[candidate.capability] }}</p>
             </li>
           </ul>
         </section>
-        <div v-if="openedSource" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65" role="status">
+        <div v-if="openedSource" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-muted" role="status">
           <p>{{ copy.sourcePageHandoff }}</p>
           <a :href="openedSource.url" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
           <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
@@ -1750,7 +1750,7 @@ onBeforeUnmount(() => {
             :disabled="retrying"
           />
           <p v-if="identityNotice" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950" role="alert">{{ identityNotice }}</p>
-          <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
+          <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-muted">
             <input v-model="consent" type="checkbox" class="mt-1 size-5 shrink-0 accent-indigo">
             <span>{{ copy.consent }}</span>
           </label>
@@ -1767,8 +1767,8 @@ onBeforeUnmount(() => {
               class="mt-1 text-sm font-semibold text-ink"
               role="status"
             />
-            <p class="mt-1 text-xs leading-5 text-ink/55">{{ currentPhaseDetail }}</p>
-            <p v-if="journeyDetail" class="mt-1 text-xs leading-5 text-ink/50">{{ journeyDetail }}</p>
+            <p class="mt-1 text-xs leading-5 text-muted">{{ currentPhaseDetail }}</p>
+            <p v-if="journeyDetail" class="mt-1 text-xs leading-5 text-muted">{{ journeyDetail }}</p>
           </div>
           <span class="text-right text-sm font-semibold text-copper" :class="journeyProgressValue === null ? '' : 'font-mono'">{{ journeyProgressLabel }}</span>
         </div>
@@ -1808,7 +1808,7 @@ onBeforeUnmount(() => {
           </template>
         </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
-          <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
+          <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-muted'">
             <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
           </li>
         </ol>
@@ -1819,12 +1819,12 @@ onBeforeUnmount(() => {
           :aria-label="copy.generationSteps"
         >
           <p class="text-xs font-bold uppercase tracking-[0.1em] text-copper">{{ copy.generationSteps }}</p>
-          <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.generationProcessHint }}</p>
+          <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationProcessHint }}</p>
           <ol class="mt-3 grid gap-2 sm:grid-cols-2">
             <li
               v-for="(step, index) in copy.generationProcess"
               :key="step"
-              class="flex items-start gap-2 rounded-lg border border-copper/10 bg-paper/70 px-3 py-2 text-xs leading-5 text-ink/65"
+              class="flex items-start gap-2 rounded-lg border border-copper/10 bg-paper/70 px-3 py-2 text-xs leading-5 text-muted"
             >
               <span class="grid size-5 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-[10px] font-bold text-copper" aria-hidden="true">{{ index + 1 }}</span>
               <span>{{ step }}</span>
@@ -1833,19 +1833,19 @@ onBeforeUnmount(() => {
           <div data-testid="recommendation-teaching-failure-boundary" class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
             <div data-failure-classification="local-degradation" :data-current-failure="projection.failureClassification === 'local-degradation' ? 'true' : undefined" class="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2" :class="projection.failureClassification === 'local-degradation' ? 'ring-2 ring-emerald-500/40' : ''">
               <p class="text-xs font-semibold text-emerald-800">{{ copy.generationLocalFailureTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationLocalFailure }}</p>
+              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationLocalFailure }}</p>
             </div>
             <div data-failure-classification="retry-preserved" :data-current-failure="projection.failureClassification === 'retry-preserved' ? 'true' : undefined" class="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2" :class="projection.failureClassification === 'retry-preserved' ? 'ring-2 ring-amber-500/40' : ''">
               <p class="text-xs font-semibold text-amber-800">{{ copy.generationPreservedStopTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationPreservedStop }}</p>
+              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationPreservedStop }}</p>
             </div>
             <div data-failure-classification="repair-required" :data-current-failure="projection.failureClassification === 'repair-required' ? 'true' : undefined" class="rounded-lg border border-red-200 bg-red-50/70 px-3 py-2" :class="projection.failureClassification === 'repair-required' ? 'ring-2 ring-red-500/40' : ''">
               <p class="text-xs font-semibold text-red-800">{{ copy.generationRepairTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationRepair }}</p>
+              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationRepair }}</p>
             </div>
             <div data-failure-classification="internal-correction" :data-current-failure="projection.failureClassification === 'internal-correction' ? 'true' : undefined" class="rounded-lg border border-indigo/20 bg-indigo/5 px-3 py-2" :class="projection.failureClassification === 'internal-correction' ? 'ring-2 ring-indigo/30' : ''">
               <p class="text-xs font-semibold text-indigo">{{ copy.generationInternalCorrectionTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/60">{{ copy.generationInternalCorrection }}</p>
+              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationInternalCorrection }}</p>
             </div>
           </div>
           <section
@@ -1855,7 +1855,7 @@ onBeforeUnmount(() => {
             :aria-label="copy.visualRuleGroupSummaryTitle"
           >
             <p class="text-xs font-semibold text-indigo">{{ copy.visualRuleGroupSummaryTitle }}</p>
-            <p class="mt-1 text-xs leading-5 text-ink/55">{{ copy.visualRuleGroupSummaryHint }}</p>
+            <p class="mt-1 text-xs leading-5 text-muted">{{ copy.visualRuleGroupSummaryHint }}</p>
             <dl class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <div
                 v-for="bucket in visualPageRuleGroupBuckets"
@@ -1870,19 +1870,19 @@ onBeforeUnmount(() => {
                       ? 'border-copper/20 bg-copper/5'
                       : 'border-amber-200 bg-amber-50/70'"
               >
-                <dt class="text-[11px] font-semibold leading-4 text-ink/65">{{ copy.visualRuleGroupStatus[bucket.state] }}</dt>
-                <dd class="mt-1 text-xs leading-5 text-ink/55">
+                <dt class="text-[11px] font-semibold leading-4 text-muted">{{ copy.visualRuleGroupStatus[bucket.state] }}</dt>
+                <dd class="mt-1 text-xs leading-5 text-muted">
                   <span class="font-semibold text-ink/75">{{ copy.visualRuleGroupCount(bucket.pages.length) }}</span>
                   <span v-if="bucket.pages.length"> · {{ copy.visualRuleGroupPages(bucket.pages) }}</span>
                 </dd>
               </div>
             </dl>
           </section>
-          <p class="mt-3 text-[11px] font-bold uppercase tracking-[0.08em] text-ink/45">{{ copy.generationLatest }}</p>
+          <p class="mt-3 text-[11px] font-bold uppercase tracking-[0.08em] text-muted">{{ copy.generationLatest }}</p>
           <p
             v-if="hasUnsuccessfulTeachingAttempt"
             data-testid="recommendation-teaching-attempt-marker-hint"
-            class="mt-1 text-xs leading-5 text-ink/55"
+            class="mt-1 text-xs leading-5 text-muted"
           >
             {{ copy.generationAttemptMarkerHint }}
           </p>
@@ -1891,7 +1891,7 @@ onBeforeUnmount(() => {
             <li
               v-for="step in visibleJourneyTeachingSteps"
               :key="step.key"
-              class="flex items-start gap-2 text-xs leading-5 text-ink/65"
+              class="flex items-start gap-2 text-xs leading-5 text-muted"
             >
               <span
                 class="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
@@ -1902,11 +1902,11 @@ onBeforeUnmount(() => {
             </li>
           </ol>
         </section>
-        <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ safeCloseDetail }}</p>
+        <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-muted">{{ safeCloseDetail }}</p>
         <p v-if="pollingWarning" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900" role="status">{{ copy.pollingWarning }}</p>
         <p v-if="retryFailure" data-testid="recommendation-retry-failure" class="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-900" role="alert">{{ copy.retryFailed }}</p>
         <p v-if="stopFailure" data-testid="recommendation-stop-failure" class="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-900" role="alert">{{ copy.stopFailed }}</p>
-        <div v-if="projection.canReadRulebook" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65">
+        <div v-if="projection.canReadRulebook" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-muted">
           <p>{{ projection.canReadLesson ? copy.rulebookAvailable : copy.rulebookReady }}</p>
           <button type="button" class="mt-3 min-h-11 rounded-lg border border-indigo/25 px-4 font-semibold text-indigo" @click="emit('open-rulebook', journeyStatus)">{{ copy.readRulebook }}</button>
         </div>
@@ -1922,7 +1922,7 @@ onBeforeUnmount(() => {
           <button v-if="generationStoppedByPlayer" type="button" :disabled="retrying" class="min-h-11 text-sm font-semibold text-indigo underline disabled:opacity-40" @click="restartGeneration">{{ copy.restart }}</button>
           <button ref="deleteTrigger" type="button" :disabled="deleting" class="min-h-11 text-sm font-semibold text-red-700 underline disabled:opacity-40" @click="openDeleteConfirmation">{{ copy.remove }}</button>
           <RouterLink to="/catalog" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline">{{ copy.catalog }} →</RouterLink>
-          <button type="button" class="min-h-11 text-sm font-semibold text-ink/50 underline" @click="emit('change')">{{ copy.change }}</button>
+          <button type="button" class="min-h-11 text-sm font-semibold text-muted underline" @click="emit('change')">{{ copy.change }}</button>
         </div>
         <div v-if="deleteConfirmOpen" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900" role="alertdialog" aria-modal="true" :aria-label="copy.remove" :aria-describedby="`recommendation-delete-confirm-${game.bggId}`">
           <p :id="`recommendation-delete-confirm-${game.bggId}`">{{ copy.removeConfirm }}</p>
@@ -1933,12 +1933,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-else-if="state === 'login'" class="text-sm leading-6 text-ink/65" role="status">
+      <div v-else-if="state === 'login'" class="text-sm leading-6 text-muted" role="status">
         <p>{{ copy.login }}</p>
         <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.loginAction }} →</RouterLink>
       </div>
 
-      <div v-else-if="state === 'unavailable'" class="text-sm leading-6 text-ink/65" role="status">
+      <div v-else-if="state === 'unavailable'" class="text-sm leading-6 text-muted" role="status">
         <p>{{ copy.unavailable }}</p>
         <div
           v-if="discoveryNotice && discoverySummary"
@@ -1956,7 +1956,7 @@ onBeforeUnmount(() => {
         <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
       </div>
 
-      <div v-else-if="state === 'browser-required'" class="text-sm leading-6 text-ink/65" role="status">
+      <div v-else-if="state === 'browser-required'" class="text-sm leading-6 text-muted" role="status">
         <p>{{ copy.browserRequired }}</p>
         <a v-if="selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
         <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>

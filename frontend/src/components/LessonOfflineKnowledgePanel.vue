@@ -47,7 +47,7 @@ function entryCountLabel(count: number) {
               <span>
                 <span class="block font-semibold leading-6">{{ entry.question }}</span>
               </span>
-              <span class="text-xs font-semibold text-ink/45">{{ entry.ruling ? t('lesson.reader.offline.confirmedRuling') : t('lesson.reader.offline.recentAnswer') }} · {{ cachedAtLabel(entry.cachedAt) }}</span>
+              <span class="text-xs font-semibold text-muted">{{ entry.ruling ? t('lesson.reader.offline.confirmedRuling') : t('lesson.reader.offline.recentAnswer') }} · {{ cachedAtLabel(entry.cachedAt) }}</span>
             </span>
           </summary>
           <p class="mt-4 border-t border-ink/10 pt-4 font-display text-lg font-semibold leading-7">{{ entry.ruling?.shortVerdict ?? entry.answer.shortVerdict }}</p>
@@ -55,7 +55,7 @@ function entryCountLabel(count: number) {
           <ol class="mt-4 stack-y-sm">
             <li v-for="(citation, citationIndex) in (entry.ruling?.citations ?? entry.answer.citations)" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-xl bg-indigo/5 p-3 text-sm">
               <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
-              <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>
+              <p class="mt-1 leading-6 text-muted">{{ citation.excerpt }}</p>
             </li>
           </ol>
         </details>

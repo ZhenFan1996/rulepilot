@@ -138,7 +138,7 @@ test('lays out twenty cover frames before bytes arrive and starts the eager row 
     expect(thumbnailRequests.length).toBeLessThanOrEqual(20)
     expect(new Set(thumbnailRequests).size).toBe(thumbnailRequests.length)
     expect(coverMetadataRequests).toBe(0)
-    expect(displayImageRequests).toBe(0)
+    await expect.poll(() => displayImageRequests).toBe(pendingFrames.filter(frame => frame.loading === 'eager').length)
   } finally {
     releaseCoverResponses()
   }

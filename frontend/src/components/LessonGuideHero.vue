@@ -34,7 +34,7 @@ const initials = computed(() => props.title.trim().slice(0, 2).toLocaleUpperCase
         :href="coverHref || undefined"
         :target="coverHref ? '_blank' : undefined"
         :rel="coverHref ? 'noopener noreferrer' : undefined"
-        class="aspect-[3/4] shrink-0 place-items-center overflow-hidden rounded-md bg-paper text-ink/60"
+        class="aspect-[3/4] shrink-0 place-items-center overflow-hidden rounded-md bg-paper text-muted"
         :class="compact ? 'hidden' : 'grid w-16 sm:w-24'"
       >
         <img v-if="coverUrl && !coverUnavailable" :src="coverUrl" :alt="coverAlt" class="size-full bg-paper object-contain p-1" decoding="async" @error="emit('coverError')">
@@ -45,10 +45,10 @@ const initials = computed(() => props.title.trim().slice(0, 2).toLocaleUpperCase
       </component>
 
       <div class="min-w-0 flex-1 py-1">
-        <p class="text-xs font-medium text-ink/60">{{ eyebrow }}</p>
+        <p class="text-xs font-medium text-muted">{{ eyebrow }}</p>
         <h1 class="mt-1 break-words font-semibold leading-tight tracking-tight text-ink" :class="compact ? 'text-2xl' : 'text-2xl sm:text-3xl'">{{ title }}</h1>
-        <p v-if="rulebookTitle && rulebookTitle !== title" class="mt-2 text-sm font-medium text-ink/60">{{ rulebookTitle }}</p>
-        <p class="max-w-2xl text-sm text-ink/60 sm:text-base" :class="compact ? 'mt-3 leading-6' : 'mt-3 leading-6'">{{ description }}</p>
+        <p v-if="rulebookTitle && rulebookTitle !== title" class="mt-2 text-sm font-medium text-muted">{{ rulebookTitle }}</p>
+        <p class="max-w-2xl text-sm text-muted sm:text-base" :class="compact ? 'mt-3 leading-6' : 'mt-3 leading-6'">{{ description }}</p>
         <div v-if="$slots.actions" class="mt-5 flex flex-wrap gap-3"><slot name="actions" /></div>
       </div>
     </div>

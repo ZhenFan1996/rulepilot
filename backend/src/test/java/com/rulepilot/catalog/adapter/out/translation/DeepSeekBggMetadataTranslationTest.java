@@ -263,7 +263,7 @@ class DeepSeekBggMetadataTranslationTest {
     }
 
     @Test
-    void omitsAnOversizedOptionalDescriptionButStillTranslatesStructuredTerms() throws Exception {
+    void retainsTheCompleteLongDescriptionInProviderInputAndStoredOutput() throws Exception {
         String sourceDescription = "Long publisher description. ".repeat(700);
         Request request = new Request(
                 266192,
@@ -271,10 +271,17 @@ class DeepSeekBggMetadataTranslationTest {
                 sourceDescription,
                 List.of("Animals"),
                 List.of("Card Drafting"));
-        HttpServer server = responseServer(Map.of(
-                "description", "",
-                "categories", List.of("动物"),
-                "mechanics", List.of("卡牌轮抽")));
+        String translatedDescription = "这份完整的出版方简介必须保留各段内容。".repeat(1100);
+        AtomicReference<String> submittedDescription = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            ObjectMapper json = new ObjectMapper();
+            var body = json.readTree(exchange.getRequestBody());
+            submittedDescription.set(json.readTree(body.path("messages").path(1).path("content").asText())
+                    .path("description").asText());
+            respond(exchange, Map.of("description", translatedDescription,
+                    "categories", List.of("动物"), "mechanics", List.of("卡牌轮抽")));
+        });
         server.start();
         try {
             RedisMocks redis = redisWithMissAndBudget(1L);
@@ -283,8 +290,9 @@ class DeepSeekBggMetadataTranslationTest {
                     redis.template(), store, true, "http://127.0.0.1:" + server.getAddress().getPort());
 
             assertThat(adapter.prewarm(request).status()).isEqualTo(PrewarmStatus.READY);
+            assertThat(submittedDescription.get()).isEqualTo(sourceDescription.strip());
             assertThat(store.values.values()).singleElement().satisfies(value -> {
-                assertThat(value.description()).isEqualTo(sourceDescription.strip());
+                assertThat(value.description()).isEqualTo(translatedDescription);
                 assertThat(value.categories()).containsExactly("动物");
                 assertThat(value.mechanics()).containsExactly("卡牌轮抽");
             });
@@ -316,6 +324,54 @@ class DeepSeekBggMetadataTranslationTest {
                 .isEqualTo(PrewarmStatus.SKIPPED_INVALID_SOURCE);
 
         verify(calls, never()).newCall(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void missingDescriptionIsCorrectedByTheModelWithTheCompleteCandidatePreservedOnce() throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        var bodies = new java.util.ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        var invalid = Map.<String, Object>of("description", "", "categories", List.of("动物"), "mechanics", List.of("卡牌轮抽"));
+        server.createContext("/chat/completions", exchange -> {
+            bodies.add(json.readTree(exchange.getRequestBody()));
+            respond(exchange, bodies.size() == 1 ? invalid : Map.of(
+                    "description", "建造一座鸟类保护区。", "categories", List.of("动物"), "mechanics", List.of("卡牌轮抽")));
+        });
+        server.start();
+        try {
+            var store = new MemoryTranslationStore();
+            var adapter = adapter(redisWithMissAndBudget(1L).template(), store, true,
+                    "http://127.0.0.1:" + server.getAddress().getPort());
+            assertThat(adapter.prewarm(REQUEST).status()).isEqualTo(PrewarmStatus.READY);
+            assertThat(store.values.values()).singleElement()
+                    .satisfies(value -> assertThat(value.description()).isEqualTo("建造一座鸟类保护区。"));
+            var messages = bodies.getLast().path("messages");
+            assertThat(messages.findValuesAsText("role")).contains("assistant");
+            assertThat(messages.findValuesAsText("content").stream()
+                    .filter(json.writeValueAsString(invalid)::equals).count()).isEqualTo(1);
+            assertThat(messages.get(messages.size() - 1).path("content").asText())
+                    .contains("description", "original schema", "266192");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void persistenceFailureRetainsUsableCacheButDoesNotReportDurableCompletion() throws Exception {
+        var redis = redisWithMissAndBudget(1L);
+        var store = mock(BggMetadataTranslationStore.class);
+        doThrow(new IllegalStateException("database unavailable"))
+                .when(store).save(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        HttpServer server = responseServer(Map.of("description", "建造一座鸟类保护区。",
+                "categories", List.of("动物"), "mechanics", List.of("卡牌轮抽")));
+        server.start();
+        try {
+            var adapter = adapter(redis.template(), store, true, "http://127.0.0.1:" + server.getAddress().getPort());
+            assertThat(adapter.prewarm(REQUEST).status()).isEqualTo(PrewarmStatus.RETRY_LATER);
+            verify(redis.values()).set(anyString(), anyString(), org.mockito.ArgumentMatchers.any(Duration.class));
+        } finally {
+            server.stop(0);
+        }
     }
 
     private HttpServer translationServer(

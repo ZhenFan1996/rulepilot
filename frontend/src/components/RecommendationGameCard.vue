@@ -64,8 +64,8 @@ function hideBrokenImage(event: Event) {
         <TabletopGlyph v-else name="cards" :size="44" :aria-label="labels.noCover" />
       </div>
       <h3 data-testid="recommendation-game-title" class="mt-3 line-clamp-2 font-display text-xl font-semibold leading-tight">{{ entry.game.name }}</h3>
-      <p v-if="entry.game.nameLocalized" data-testid="recommendation-game-original-title" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ entry.game.originalName }}</p>
-      <p v-if="quickFacts.length" data-testid="recommendation-game-quick-facts" class="mt-2 line-clamp-2 text-xs leading-5 text-ink/55">{{ quickFacts.join(' · ') }}</p>
+      <p v-if="entry.game.nameLocalized" data-testid="recommendation-game-original-title" class="mt-1 line-clamp-1 text-xs text-muted">{{ entry.game.originalName }}</p>
+      <p v-if="quickFacts.length" data-testid="recommendation-game-quick-facts" class="mt-2 line-clamp-2 text-xs leading-5 text-muted">{{ quickFacts.join(' · ') }}</p>
     </button>
 
     <div class="mt-3 flex flex-wrap gap-3">

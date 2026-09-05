@@ -416,24 +416,24 @@ onBeforeUnmount(() => {
 
         <div class="tabletop-panel player-board mt-6 grid gap-4 p-5 lg:grid-cols-[minmax(18rem,1.4fr)_minmax(11rem,0.7fr)_minmax(11rem,0.7fr)_auto] lg:items-end">
           <form class="lg:contents" role="search" @submit.prevent="searchGames">
-            <label class="grid gap-2 text-xs font-semibold text-ink/55" for="bgg-catalog-search">{{ t('searchLabel') }}
+            <label class="grid gap-2 text-xs font-semibold text-muted" for="bgg-catalog-search">{{ t('searchLabel') }}
               <input id="bgg-catalog-search" v-model="searchQuery" type="search" :placeholder="t('searchPlaceholder')" class="min-h-12 min-w-0 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-normal outline-none focus:border-copper">
             </label>
             <button type="submit" :disabled="loading" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-50 lg:order-last">{{ t('search') }}</button>
           </form>
           <form data-testid="catalog-filter-form" class="contents" @submit.prevent="applyFilters">
-            <label class="grid gap-2 text-xs font-semibold text-ink/55">{{ t('sortLabel') }}
+            <label class="grid gap-2 text-xs font-semibold text-muted">{{ t('sortLabel') }}
               <select v-model="sort" class="min-h-12 rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option value="hot">{{ t('sortHot') }}</option><option value="rating">{{ t('sortRating') }}</option><option value="rank">{{ t('sortRank') }}</option></select>
             </label>
-            <label class="grid gap-2 text-xs font-semibold text-ink/55">{{ t('typeLabel') }}
+            <label class="grid gap-2 text-xs font-semibold text-muted">{{ t('typeLabel') }}
               <select v-model="type" class="min-h-12 rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option v-for="item in typeOptions" :key="item" :value="item">{{ t(item) }}</option></select>
             </label>
             <button type="submit" :disabled="loading" class="sr-only">{{ t('apply') }}</button>
           </form>
         </div>
-        <button v-if="filterActive" type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold text-ink/60" @click="clearFilters">{{ t('clear') }}</button>
+        <button v-if="filterActive" type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold text-muted" @click="clearFilters">{{ t('clear') }}</button>
 
-        <p v-if="ready" class="mt-4 text-sm text-ink/50">
+        <p v-if="ready" class="mt-4 text-sm text-muted">
           {{ t('scope', { sourceCount: sourceCount.toLocaleString(), total: total.toLocaleString() }) }}
           <span v-if="sourceDate"> · {{ t('sourceDate', { date: sourceDate }) }}</span>
         </p>
@@ -442,20 +442,20 @@ onBeforeUnmount(() => {
           <div v-for="index in 8" :key="index" class="animate-pulse rounded-2xl border border-ink/10 bg-paper p-3"><div class="aspect-[4/3] rounded-xl bg-ink/8" /><div class="mt-3 h-4 w-2/3 rounded bg-ink/8" /></div>
         </div>
         <div v-else-if="loadFailed && !games.length" class="mt-7 rounded-2xl border border-danger/20 bg-danger/5 p-6" role="alert">
-          <h3 class="font-display text-2xl font-semibold">{{ t('errorTitle') }}</h3><p class="mt-2 text-sm text-ink/60">{{ t('errorDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas" @click="retryFailedPage">{{ t('retry') }}</button>
+          <h3 class="font-display text-2xl font-semibold">{{ t('errorTitle') }}</h3><p class="mt-2 text-sm text-muted">{{ t('errorDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas" @click="retryFailedPage">{{ t('retry') }}</button>
         </div>
         <div v-else-if="!ready" class="mt-7 rounded-2xl border border-copper/25 bg-copper/5 p-7" role="status">
-          <h3 class="font-display text-2xl font-semibold">{{ t('unavailableTitle') }}</h3><p class="mt-2 max-w-2xl text-sm leading-6 text-ink/60">{{ t('unavailableDescription') }}</p>
+          <h3 class="font-display text-2xl font-semibold">{{ t('unavailableTitle') }}</h3><p class="mt-2 max-w-2xl text-sm leading-6 text-muted">{{ t('unavailableDescription') }}</p>
         </div>
         <TransitionGroup v-if="games.length" tag="div" name="tile" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :class="loading ? 'opacity-70' : ''">
-          <article v-for="(game, index) in games" :key="game.bggId" class="game-tile group min-w-0 p-3">
+          <article v-for="(game, index) in games" :key="game.bggId" class="catalog-entry group min-w-0 pb-5">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="block">
-              <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
+              <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-paper p-4 text-ink/25">
                 <ProgressiveCatalogCover
                   v-if="hasValidBggId(game)"
                   :bgg-id="game.bggId"
                   :alt="t('coverAlt', { game: game.name })"
-                  :upgrade="false"
+                  :upgrade="index < 4"
                   :loading="index < 4 ? 'eager' : 'lazy'"
                   :fetch-priority="index < 4 ? 'high' : 'auto'"
                   class="h-full w-full"
@@ -464,20 +464,20 @@ onBeforeUnmount(() => {
                 <span v-if="game.hotRank" class="absolute left-2 top-2 rounded-full bg-copper px-2.5 py-1 text-xs font-bold text-on-accent">{{ t('hotRank', { rank: game.hotRank }) }}</span>
               </div>
               <h3 class="mt-3 line-clamp-2 font-display text-lg font-semibold leading-6">{{ game.name }}</h3>
-              <p v-if="game.nameLocalized" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ game.originalName }}</p>
+              <p v-if="game.nameLocalized" class="mt-1 line-clamp-1 text-xs text-muted">{{ game.originalName }}</p>
             </RouterLink>
-            <p class="mt-2 text-xs leading-5 text-ink/55">{{ game.overallRank ? t('rank', { rank: game.overallRank }) : t('noRank') }} · {{ t('rating', { rating: game.averageRating.toFixed(2) }) }}</p>
-            <p class="text-xs leading-5 text-ink/45">{{ t('geekRating', { rating: game.geekRating.toFixed(2) }) }} · {{ t('votes', { count: game.usersRated.toLocaleString() }) }}</p>
-            <p v-if="playerTime(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTime(game) }}<span v-if="game.averageWeight !== null"> · {{ t('weight', { weight: game.averageWeight.toFixed(1) }) }}</span></p>
-            <p v-else class="mt-1 text-xs leading-5 text-ink/40">{{ t('detailPending') }}</p>
+            <p class="mt-2 text-xs leading-5 text-muted">{{ game.overallRank ? t('rank', { rank: game.overallRank }) : t('noRank') }} · {{ t('rating', { rating: game.averageRating.toFixed(2) }) }}</p>
+            <p class="text-xs leading-5 text-muted">{{ t('geekRating', { rating: game.geekRating.toFixed(2) }) }} · {{ t('votes', { count: game.usersRated.toLocaleString() }) }}</p>
+            <p v-if="playerTime(game)" class="mt-1 text-xs leading-5 text-muted">{{ playerTime(game) }}<span v-if="game.averageWeight !== null"> · {{ t('weight', { weight: game.averageWeight.toFixed(1) }) }}</span></p>
+            <p v-else class="mt-1 text-xs leading-5 text-muted">{{ t('detailPending') }}</p>
           </article>
         </TransitionGroup>
-        <div v-else-if="ready && !loading" class="mt-7 rounded-2xl border border-dashed border-ink/15 bg-paper p-7 text-center"><h3 class="font-display text-2xl font-semibold">{{ t('emptyTitle') }}</h3><p class="mt-2 text-sm text-ink/55">{{ t('emptyDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-5 text-sm font-semibold" @click="clearFilters">{{ t('clear') }}</button></div>
+        <div v-else-if="ready && !loading" class="mt-7 rounded-2xl border border-dashed border-ink/15 bg-paper p-7 text-center"><h3 class="font-display text-2xl font-semibold">{{ t('emptyTitle') }}</h3><p class="mt-2 text-sm text-muted">{{ t('emptyDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-5 text-sm font-semibold" @click="clearFilters">{{ t('clear') }}</button></div>
 
         <nav v-if="ready && games.length" data-testid="catalog-pagination" class="player-board mt-8 flex flex-col gap-4 rounded-2xl border border-ink/10 bg-paper/80 px-4 py-5 sm:px-6" :aria-label="t('pagination')">
           <div class="flex flex-col gap-1 text-center sm:flex-row sm:items-center sm:justify-between sm:text-left">
             <strong class="font-display text-lg">{{ t('pageSummary', { current: page + 1, total: totalPages }) }}</strong>
-            <span class="text-sm text-ink/55">{{ t('shown', { shown: games.length }) }}</span>
+            <span class="text-sm text-muted">{{ t('shown', { shown: games.length }) }}</span>
           </div>
           <div v-if="loadFailed" class="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-center text-sm text-danger" role="alert">
             <p>{{ t('pageError') }}</p>
@@ -486,7 +486,7 @@ onBeforeUnmount(() => {
           <div class="flex flex-wrap items-center justify-center gap-2">
             <button type="button" :disabled="loading || page === 0" class="min-h-11 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold transition hover:border-copper hover:text-copper disabled:cursor-not-allowed disabled:opacity-35" @click="navigateToPage(page - 1)">{{ t('previousPage') }}</button>
             <template v-for="item in paginationItems" :key="item.key">
-              <span v-if="item.page === null" class="flex min-h-11 min-w-9 items-center justify-center text-ink/40" aria-hidden="true">{{ item.label }}</span>
+              <span v-if="item.page === null" class="flex min-h-11 min-w-9 items-center justify-center text-muted" aria-hidden="true">{{ item.label }}</span>
               <button
                 v-else
                 type="button"
@@ -495,7 +495,7 @@ onBeforeUnmount(() => {
                 :aria-label="t('goToPage', { page: item.page + 1 })"
                 :disabled="loading"
                 class="min-h-11 min-w-11 rounded-xl border px-3 text-sm font-bold transition disabled:cursor-wait disabled:opacity-50"
-                :class="item.page === page ? 'border-felt bg-felt text-white elevation-sm' : 'border-ink/15 bg-canvas text-ink/65 hover:border-copper hover:text-copper'"
+                :class="item.page === page ? 'border-felt bg-felt text-white elevation-sm' : 'border-ink/15 bg-canvas text-muted hover:border-copper hover:text-copper'"
                 @click="navigateToPage(item.page)"
               >
                 {{ item.label }}

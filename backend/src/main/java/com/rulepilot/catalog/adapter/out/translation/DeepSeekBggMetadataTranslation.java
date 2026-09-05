@@ -43,10 +43,10 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DeepSeekBggMetadataTranslation.class);
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private static final int MAX_SOURCE_CHARACTERS = 14_000;
-    private static final int MAX_TRANSLATION_CHARACTERS = 18_000;
     private static final int MAX_RESPONSE_BYTES = 512_000;
-    private static final int MAX_TERMS_PER_GROUP = 50;
+    // A token cannot encode less than one byte; this matches the translation table's 128 KiB
+    // payload envelope and stays below DeepSeek V4's documented 384K output-token capacity.
+    private static final int MAX_OUTPUT_TOKENS = 131_072;
     private static final int KEY_LOCK_COUNT = 64;
     private static final String TRANSLATION_LOCALE = "zh-CN";
     private static final int TRANSLATION_CONTRACT_VERSION = 5;
@@ -145,23 +145,34 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         if (!validRequest(request)) return result(PrewarmStatus.SKIPPED_INVALID_SOURCE);
         String sourceDigest = sourceDigest(request);
         String cacheKey = cacheKey(request, sourceDigest);
-        if (stored(request, sourceDigest, cacheKey).isPresent()) return result(PrewarmStatus.READY);
+        Optional<Translation> existing = stored(request, sourceDigest, cacheKey);
+        if (existing.isPresent()) return ensurePersisted(translationKey(request, sourceDigest), existing.orElseThrow());
         if (!configured()) return result(PrewarmStatus.RETRY_NOT_CONFIGURED);
 
         Object keyLock = keyLocks[Math.floorMod(cacheKey.hashCode(), keyLocks.length)];
         synchronized (keyLock) {
-            if (stored(request, sourceDigest, cacheKey).isPresent()) return result(PrewarmStatus.READY);
+            existing = stored(request, sourceDigest, cacheKey);
+            if (existing.isPresent()) return ensurePersisted(translationKey(request, sourceDigest), existing.orElseThrow());
             if (!providerPermits.tryAcquire()) return result(PrewarmStatus.RETRY_PROVIDER_BUSY);
             try {
                 if (!acquireHourlyAllowance()) return result(PrewarmStatus.RETRY_HOURLY_BUDGET);
                 Optional<Translation> translated = requestTranslation(request);
                 if (translated.isEmpty()) return result(PrewarmStatus.RETRY_PROVIDER_UNAVAILABLE);
-                persist(translationKey(request, sourceDigest), translated.orElseThrow());
+                boolean persisted = persist(translationKey(request, sourceDigest), translated.orElseThrow());
                 cache(cacheKey, translated.orElseThrow());
-                return result(PrewarmStatus.READY);
+                return result(persisted ? PrewarmStatus.READY : PrewarmStatus.RETRY_LATER);
             } finally {
                 providerPermits.release();
             }
+        }
+    }
+
+    private PrewarmResult ensurePersisted(Key key, Translation translation) {
+        try {
+            if (persistentTranslations.find(key).isPresent()) return result(PrewarmStatus.READY);
+            return result(persist(key, translation) ? PrewarmStatus.READY : PrewarmStatus.RETRY_LATER);
+        } catch (RuntimeException exception) {
+            return result(PrewarmStatus.RETRY_LATER);
         }
     }
 
@@ -182,9 +193,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         if (request == null || request.bggId() <= 0 || request.gameName() == null || request.gameName().isBlank()) {
             return false;
         }
-        if (request.categories().size() > MAX_TERMS_PER_GROUP
-                || request.mechanics().size() > MAX_TERMS_PER_GROUP) return false;
-        return sourceText(request).length() <= MAX_SOURCE_CHARACTERS;
+        return true;
     }
 
     private Optional<Translation> cached(String key, Request request) {
@@ -241,53 +250,99 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         }
     }
 
-    private void persist(Key key, Translation translation) {
+    private boolean persist(Key key, Translation translation) {
         try {
             persistentTranslations.save(key, translation, clock.instant());
+            return true;
         } catch (RuntimeException exception) {
             LOGGER.warn("BGG metadata translation could not be persisted for bggId={}", key.bggId());
+            return false;
         }
     }
 
     private Optional<Translation> requestTranslation(Request request) {
+        List<Map<String, String>> messages = new ArrayList<>(List.of(
+                Map.of("role", "system", "content", systemPrompt()),
+                Map.of("role", "user", "content", sourceText(request))));
+        java.util.Set<String> rejected = new java.util.HashSet<>();
+        long deadline = Long.MAX_VALUE;
+        Optional<Translation> supported = Optional.empty();
         try {
-            byte[] requestBytes = json.writeValueAsBytes(Map.of(
-                    "model", model,
-                    "temperature", 0,
-                    "max_tokens", 3_000,
-                    "stream", false,
-                    "thinking", Map.of("type", "disabled"),
-                    "response_format", Map.of("type", "json_object"),
-                    "messages", List.of(
-                            Map.of("role", "system", "content", systemPrompt()),
-                            Map.of("role", "user", "content", sourceText(request)))));
-            okhttp3.Request httpRequest = new okhttp3.Request.Builder()
-                    .url(endpoint)
-                    .header("Authorization", "Bearer " + apiKey)
-                    .header("Accept", "application/json")
-                    .post(RequestBody.create(requestBytes, JSON))
-                    .build();
-            try (Response response = calls.newCall(httpRequest).execute()) {
-                if (!response.isSuccessful()) {
-                    LOGGER.warn(
-                            "DeepSeek BGG metadata translation returned status {} for bggId={}",
-                            response.code(),
-                            request.bggId());
-                    return Optional.empty();
+            while (System.nanoTime() < deadline) {
+                byte[] requestBytes = json.writeValueAsBytes(Map.of(
+                        "model", model, "temperature", 0, "max_tokens", MAX_OUTPUT_TOKENS,
+                        "stream", false, "thinking", Map.of("type", "disabled"),
+                        "response_format", Map.of("type", "json_object"), "messages", messages));
+                okhttp3.Request httpRequest = new okhttp3.Request.Builder()
+                        .url(endpoint).header("Authorization", "Bearer " + apiKey)
+                        .header("Accept", "application/json")
+                        .post(RequestBody.create(requestBytes, JSON)).build();
+                Call call = calls.newCall(httpRequest);
+                if (deadline == Long.MAX_VALUE) {
+                    long timeout = call.timeout().timeoutNanos();
+                    if (timeout == 0 && calls instanceof OkHttpClient client) {
+                        timeout = TimeUnit.MILLISECONDS.toNanos(client.readTimeoutMillis());
+                    }
+                    if (timeout <= 0) throw new IllegalStateException("Translation requires a provider deadline");
+                    deadline = System.nanoTime() + timeout;
                 }
-                byte[] responseBytes = response.body().byteStream().readNBytes(MAX_RESPONSE_BYTES + 1);
-                if (responseBytes.length > MAX_RESPONSE_BYTES) return Optional.empty();
-                JsonNode root = json.readTree(responseBytes);
-                JsonNode choice = root.path("choices").path(0);
-                if (!"stop".equals(choice.path("finish_reason").asText())) return Optional.empty();
-                String content = choice.path("message").path("content").asText("");
-                if (content.length() > MAX_TRANSLATION_CHARACTERS) return Optional.empty();
-                return parseTranslation(json.readTree(content), request);
+                call.timeout().deadlineNanoTime(deadline);
+                try (Response response = call.execute()) {
+                    if (!response.isSuccessful()) {
+                        LOGGER.warn("BGG translation returned status {} for bggId={}", response.code(), request.bggId());
+                        return supported;
+                    }
+                    byte[] responseBytes = response.body().byteStream().readNBytes(MAX_RESPONSE_BYTES + 1);
+                    if (responseBytes.length > MAX_RESPONSE_BYTES) return supported;
+                    JsonNode choice = json.readTree(responseBytes).path("choices").path(0);
+                    if (!"stop".equals(choice.path("finish_reason").asText())) return supported;
+                    String content = choice.path("message").path("content").asText("");
+                    JsonNode candidate;
+                    String error;
+                    try {
+                        candidate = json.readTree(content);
+                        error = validationError(candidate, request);
+                    } catch (IOException exception) {
+                        candidate = null;
+                        error = "The response must be a complete JSON object.";
+                    }
+                    if (error == null) return parseTranslation(candidate, request);
+                    if (candidate != null && candidate.path("description").isTextual()
+                            && (request.description().isBlank() || !candidate.path("description").asText().isBlank())) {
+                        supported = parseTranslation(candidate, request);
+                    }
+                    if (!rejected.add(content)) return supported;
+                    messages.add(Map.of("role", "assistant", "content", content));
+                    messages.add(Map.of("role", "user", "content", error
+                            + " Return a new complete object under the original schema: "
+                            + "{\"description\":\"string\",\"categories\":[\"string\"],\"mechanics\":[\"string\"]}. "
+                            + "The only allowed game identity is BGG " + request.bggId()
+                            + "; keep the original source's array order and cardinality."));
+                }
             }
         } catch (IOException | RuntimeException exception) {
-            LOGGER.warn("DeepSeek BGG metadata translation is temporarily unavailable for bggId={}", request.bggId());
-            return Optional.empty();
+            LOGGER.warn("BGG metadata translation is temporarily unavailable for bggId={}", request.bggId());
         }
+        return supported;
+    }
+
+    private String validationError(JsonNode candidate, Request request) {
+        if (candidate == null || !candidate.isObject()) return "The response must be a complete JSON object.";
+        if (!candidate.path("description").isTextual()
+                || !request.description().isBlank() && candidate.path("description").asText().isBlank()) {
+            return "description must contain the complete translation of the non-empty source description.";
+        }
+        for (String field : List.of("categories", "mechanics")) {
+            int expected = field.equals("categories") ? request.categories().size() : request.mechanics().size();
+            JsonNode values = candidate.path(field);
+            if (!values.isArray() || values.size() != expected) {
+                return field + " must be an array with exactly " + expected + " entries in source order.";
+            }
+            for (JsonNode value : values) {
+                if (!value.isTextual() || value.asText().isBlank()) return field + " entries must be non-empty strings.";
+            }
+        }
+        return null;
     }
 
     private Optional<Translation> parseTranslation(JsonNode translated, Request request) {
@@ -353,15 +408,13 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     }
 
     private String sourceText(Request request) {
-        String full = requestPayload(request, request.description());
-        if (full.length() <= MAX_SOURCE_CHARACTERS) return full;
-        return requestPayload(request, "");
+        return requestPayload(request, request.description());
     }
 
     private String requestPayload(Request request, String description) {
         try {
             Map<String, Object> source = new LinkedHashMap<>();
-            source.put("gameName", bounded(request.gameName(), 500));
+            source.put("gameName", request.gameName().strip());
             source.put("description", description == null ? "" : description.strip());
             source.put("categories", request.categories());
             source.put("mechanics", request.mechanics());
