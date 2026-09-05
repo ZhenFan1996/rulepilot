@@ -74,7 +74,7 @@ describe('GameRecommendationAgent', () => {
     setLocale('zh-CN')
   })
 
-  async function mountAgent() {
+  async function mountAgent(sessionIdentity?: string) {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -90,6 +90,7 @@ describe('GameRecommendationAgent', () => {
     await router.isReady()
     const wrapper = mount(GameRecommendationAgent, {
       attachTo: document.body,
+      props: { sessionIdentity },
       global: { plugins: [router] },
     })
     mountedAgents.push(wrapper)
@@ -112,8 +113,8 @@ describe('GameRecommendationAgent', () => {
       .toBe(assistantMessage)
   })
 
-  it('shows recommendation cards, claim-scoped tradeoffs, and attributed evidence', async () => {
-    const assistantMessage = '我会先选《展翅翱翔》；人数与时长合适，但第一次玩要预留讲解时间。'
+  it('keeps the full model reply together with factual cards and inspectable sources', async () => {
+    const assistantMessage = '我会先选《**展翅翱翔**》。\n\n人数与时长合适，但第一次玩要预留讲解时间。'
     const result: RecommendationAgentResponse = {
       outcome: 'recommendations',
       responseLocale: 'zh-CN',
@@ -122,6 +123,7 @@ describe('GameRecommendationAgent', () => {
       clarification: null,
       sourceCount: 1,
       candidatesEvaluated: 1,
+      completedWork: ['search_bgg_catalog'],
       researchSources: [{
         index: 7,
         title: '发行商游戏指南',
@@ -131,22 +133,7 @@ describe('GameRecommendationAgent', () => {
       games: [{
         game,
         fitClaims: [],
-        replyParts: [
-          {
-            role: 'verified_fact',
-            claimType: 'publisher_description',
-            subject: 'teaching',
-            text: '发行商指南提供了分步教学建议。',
-            sourceIndexes: [7],
-          },
-          {
-            role: 'tradeoff',
-            claimType: 'structured_fact',
-            subject: 'complexity',
-            text: '第一次玩要照顾卡牌文字量。',
-            sourceIndexes: [],
-          },
-        ],
+        replyParts: [],
       }],
     }
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
@@ -160,21 +147,111 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
 
     const turn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
-    expect(turn.get('[data-testid="assistant-recommendation-message"]').text())
-      .toBe(assistantMessage)
+    const reply = turn.get('[data-testid="assistant-recommendation-message"]')
+    expect(reply.findAll('p').map(paragraph => paragraph.text()))
+      .toEqual(['我会先选《展翅翱翔》。', '人数与时长合适，但第一次玩要预留讲解时间。'])
+    expect(reply.get('strong').text()).toBe('展翅翱翔')
     const card = turn.get('[data-testid="recommendation-game-card"]')
     expect(card.get('[data-testid="recommendation-game-title"]').text()).toBe('展翅翱翔')
     expect(card.get('[data-testid="recommendation-game-original-title"]').text()).toBe('Wingspan')
-    expect(card.get('[data-role="verified_fact"] dd').text())
-      .toBe('发行商指南提供了分步教学建议。')
-    expect(card.get('[data-role="tradeoff"] dd').text())
-      .toBe('第一次玩要照顾卡牌文字量。')
+    expect(card.find('[data-testid="recommendation-reason-unavailable"]').exists()).toBe(false)
+    expect(card.find('dl').exists()).toBe(false)
     expect(card.get('button[aria-label="查看完整资料：展翅翱翔"]')).toBeDefined()
 
-    const evidence = turn.get('[data-testid="recommendation-research-sources"] a')
+    const details = turn.get('details[data-testid="recommendation-verification-details"]')
+    expect(details.attributes('open')).toBeUndefined()
+    expect(details.text()).toContain('浏览 BGG 目录候选')
+    expect(details.text()).toContain('核对了 1 款候选')
+    const evidence = details.get('[data-testid="recommendation-research-sources"] a[href="https://publisher.example/wingspan-guide"]')
     expect(evidence.text()).toContain('发行商游戏指南')
     expect(evidence.attributes('href')).toBe('https://publisher.example/wingspan-guide')
     expect(evidence.attributes('rel')).toContain('noopener')
+  })
+
+  it('keeps restored explanation parts readable without adding them to the original reply', async () => {
+    const assistantMessage = '先看这款，下面是当时核对过的资料。'
+    const oldExplanation = '适合你提到的**自然主题**。\n\n第一次玩可以一起熟悉卡牌。'
+    const latestResponse: RecommendationAgentResponse = {
+      ...conversationResult(assistantMessage),
+      outcome: 'recommendations',
+      sourceCount: 1,
+      candidatesEvaluated: 1,
+      games: [{
+        game,
+        fitClaims: [],
+        replyParts: [{
+          role: 'why_fit', claimType: 'preference_inference', subject: 'theme',
+          text: oldExplanation, sourceIndexes: [], publisherDescriptionGrounded: true,
+        }],
+      }],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      conversationId: '927ce433-ccea-49a0-9d39-00dc00e63580',
+      revision: 1, profile, processing: false, processingSince: null,
+      transcript: [{ role: 'assistant', text: assistantMessage }],
+      knownGames: [], shownBggIds: [game.bggId], latestResponse,
+    })))
+    const wrapper = await mountAgent('history-reader')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="assistant-recommendation-turn"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="assistant-recommendation-message"]').text()).toBe(assistantMessage)
+    const details = wrapper.get('details[data-testid="recommendation-verification-details"]')
+    expect(details.attributes('open')).toBeUndefined()
+    const explanation = details.get('[data-testid="recommendation-previous-explanation"]')
+    expect(explanation.get('h4').text()).toBe(game.name)
+    expect(explanation.get('strong').text()).toBe('自然主题')
+    expect(explanation.findAll('p').map(paragraph => paragraph.text()))
+      .toEqual(['适合你提到的自然主题。', '第一次玩可以一起熟悉卡牌。'])
+    expect(explanation.text()).toContain('参考 BGG 出版方简介')
+    expect(wrapper.get('[data-testid="recommendation-game-card"]').text()).not.toContain('自然主题')
+  })
+
+  it.each(['live', 'restored'])('keeps verified cards without assigning a missing reply to earlier dialogue: %s', async (delivery) => {
+    const earlierReply = '我们可以先看看自然主题。'
+    const result: RecommendationAgentResponse = {
+      ...conversationResult(''), outcome: 'recommendations',
+      sourceCount: 1, candidatesEvaluated: 1,
+      games: [{ game, fitClaims: [], replyParts: [] }],
+    }
+    const requests: Array<{ transcript: Array<{ role: string; text: string }> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (String(input).endsWith('/session')) return Response.json({
+        conversationId: '927ce433-ccea-49a0-9d39-00dc00e63580',
+        revision: 1, profile, processing: false, processingSince: null,
+        transcript: [{ role: 'assistant', text: earlierReply }, { role: 'user', text: '给我推荐一款' }],
+        knownGames: [], shownBggIds: [game.bggId], latestResponse: result,
+      })
+      requests.push(JSON.parse(String(options?.body)))
+      return recommendationStreamResult(requests.length === 1 && delivery === 'live'
+        ? conversationResult(earlierReply)
+        : requests.length === 2 && delivery === 'live' ? result : conversationResult('可以继续聊。'))
+    }))
+    const wrapper = await mountAgent(delivery === 'restored' ? 'history-reader' : undefined)
+    await flushPromises()
+    if (delivery === 'live') {
+      await wrapper.get('textarea').setValue('我想玩自然主题')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      await wrapper.get('textarea').setValue('给我推荐一款')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+    }
+
+    expect(wrapper.get('[data-testid="assistant-conversation-turn"]').text()).toBe(earlierReply)
+    const published = wrapper.get('[data-testid="assistant-recommendation-turn"]')
+    expect(published.find('[data-testid="assistant-recommendation-message"]').exists()).toBe(false)
+    expect(published.findAll('[role="status"]')).toHaveLength(1)
+    expect(published.get('[role="status"]').text()).toContain('候选已核对')
+    expect(published.get('[data-testid="recommendation-game-title"]').text()).toBe(game.name)
+    expect(published.get('[data-testid="recommendation-game-card"]').find('[role="status"]').exists()).toBe(false)
+
+    await wrapper.get('textarea').setValue('继续说说')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(requests.at(-1)?.transcript.every(turn => turn.text.trim().length > 0)).toBe(true)
+    expect(requests.at(-1)?.transcript.some(turn => turn.text === earlierReply)).toBe(true)
   })
 
   it('shows validated recommendation cards as they arrive before the terminal result', async () => {

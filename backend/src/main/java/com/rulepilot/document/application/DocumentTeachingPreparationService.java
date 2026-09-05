@@ -2,7 +2,6 @@ package com.rulepilot.document.application;
 
 import com.rulepilot.catalog.CatalogEditionProvisioning;
 import com.rulepilot.document.DocumentTeachingPreparation;
-import com.rulepilot.document.RulebookTitleInferencePolicy;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
 import com.rulepilot.document.domain.RuleDocument;
 import java.util.UUID;
@@ -32,11 +31,6 @@ class DocumentTeachingPreparationService implements DocumentTeachingPreparation 
                 .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
         if (!"READY".equals(version.status().name())) {
             throw new IllegalArgumentException("rule document is not ready for teaching");
-        }
-        if (RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle(
-                document.title(), sourceConfirmedGameName)) {
-            document = document.withTitle(sourceConfirmedGameName.strip());
-            documents.update(document);
         }
         if (document.gameEditionId() == null) {
             String gameName = sourceConfirmedGameName == null || sourceConfirmedGameName.isBlank()

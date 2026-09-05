@@ -68,6 +68,9 @@ const similarToMosaicField = {
   bggUrl: 'https://boardgamegeek.com/boardgame/600061',
 }
 
+const recommendationReply = '我会先推荐《展翅翱翔》。它支持 4 人，标示时长约 70 分钟，复杂度 2.5，符合你的人数和时间要求。\n\n它是否符合你想要的热闹气氛，还需要核对真实互动体验；单凭这些资料，我不会把它说成聚会游戏。'
+const similarGameReply = '你说的是 Mosaic Field。按你前面提到的机制相近，我会推荐 Glass Orchard：它同样有轮抽和图案构筑，能保留挑选与布局的乐趣。\n\n它使用骰子，这一点与参考游戏有所不同；如果你最喜欢的是对布局的控制感，我们还可以继续比较这一点。'
+
 const teachingPlan = {
   id: 'plan-1', documentVersionId: 'version-1', gameTitle: '展翅翱翔', premise: '先看目标，再按回合顺序练习。',
   createdBy: 'player',
@@ -289,7 +292,7 @@ async function mockPublicDiscovery(
       && body.transcript.some(message => message.role === 'user' && message.text.includes('马赛克花园'))) {
       await fulfill({
         outcome: 'recommendations', mode: 'model_assisted',
-        assistantMessage: '对，你说的是 Mosaic Field。我已经把它和上一句的“机制相近”连在一起，先核对了 BGG 中的参考游戏，再查候选，不会把 Mosaic Field 当成一个全新问题。',
+        assistantMessage: similarGameReply,
         profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 6,
         userModel: { summary: '以 Mosaic Field 为参照，寻找机制相近的游戏。', hypotheses: [] },
@@ -297,17 +300,14 @@ async function mockPublicDiscovery(
         games: [{
           game: similarToMosaicField,
           fitClaims: [],
-          replyParts: [
-            { role: 'why_fit', claimType: 'taxonomy_classification', subject: 'mechanics', text: '同样包含轮抽与图案构筑', sourceIndexes: [] },
-            { role: 'tradeoff', claimType: 'taxonomy_classification', subject: 'mechanics', text: '候选使用骰子，随机性更高', sourceIndexes: [] },
-          ],
+          replyParts: [],
         }],
       })
       return
     }
     if (body.focusedBggId === 266192) {
       await fulfill({
-        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '我补查了教学和实际桌上节奏。',
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '我补查了教学资料：发行商提供了分步教学流程，可以按步骤了解这款游戏。\n\n至于你关心的实际桌上节奏，这份资料还不足以判断全桌是否能持续参与，我会把这一点保留为待核实的问题。',
         profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 1,
         userModel: { summary: '朋友聚会，可能重视参与感', hypotheses: [{ text: '可能不喜欢等待太久', confidence: 'medium', basedOn: '想热闹一点' }] },
@@ -316,17 +316,13 @@ async function mockPublicDiscovery(
         games: [{
           game: catalog.games[0],
           fitClaims: [],
-          replyParts: [
-            { role: 'verified_fact', claimType: 'structured_fact', subject: 'overallRank', text: 'BGG 总榜第 34 名', sourceIndexes: [] },
-            { role: 'why_fit', claimType: 'preference_inference', subject: 'interaction', text: '可能适合希望全桌持续参与的场景', sourceIndexes: [] },
-            { role: 'verified_fact', claimType: 'attributed_experience', subject: 'teaching', text: '发行商资料提供了分步教学流程', sourceIndexes: [1] },
-          ],
+          replyParts: [],
         }],
       })
       return
     }
     await fulfill({
-      outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '明白：4 个人、90 分钟内，想要中等策略和有参与感的聚会气氛。我先按这些条件核对一批；哪一点不对，直接告诉我就行。',
+      outcome: 'recommendations', mode: 'model_assisted', assistantMessage: recommendationReply,
       profile: {
         type: 'all', interaction: 'any',
         playerCount: { minimum: 4, maximum: 4, strength: 'hard', sourceText: '4 个人', confirmedTurn: 1 },
@@ -337,10 +333,7 @@ async function mockPublicDiscovery(
       completedWork: ['browse_bgg_catalog', 'lookup_bgg_games', 'recommend_games'],
       games: [{
         game: catalog.games[0],
-        fitClaims: [
-          { subject: 'playerCount', strength: 'hard', relation: 'satisfied', text: '支持 4 人游玩' },
-          { subject: 'durationMinutes', strength: 'hard', relation: 'satisfied', text: '70 分钟，不超过你的时长上限' },
-        ],
+        fitClaims: [],
         replyParts: [],
       }],
     })
@@ -582,8 +575,12 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await composer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await firstAgentRequest
-  await expect(page.getByText('从完整 BGG 目录中核对了 20 款候选。')).toBeVisible()
   await expectWingspanRecommendationReady(page)
+  const firstRecommendation = page.getByTestId('assistant-recommendation-turn').last()
+  await expect(firstRecommendation.getByTestId('assistant-recommendation-message')).toHaveText(recommendationReply)
+  await expect(firstRecommendation.getByTestId('recommendation-game-card').getByText(/为什么选它|需要留意|没有形成可安全发布/)).toHaveCount(0)
+  await firstRecommendation.getByText('资料与核对记录', { exact: true }).click()
+  await expect(firstRecommendation.locator('.recommendation-source-summary')).toContainText('20')
 
   const focusedRequest = page.waitForRequest(request => {
     if (!request.url().includes('/api/v1/bgg/recommendation-agent')) return false
@@ -591,7 +588,9 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   })
   await page.getByRole('button', { name: '介绍一下' }).click()
   await focusedRequest
-  await expect(page.getByText('我补查了教学和实际桌上节奏。')).toBeVisible()
+  const focusedRecommendation = page.getByTestId('assistant-recommendation-turn').last()
+  await expect(focusedRecommendation.getByTestId('assistant-recommendation-message')).toContainText('我补查了教学资料')
+  await focusedRecommendation.getByText('资料与核对记录', { exact: true }).click()
   await expect(page.getByRole('link', { name: /Publisher guide/ })).toHaveAttribute('rel', /noopener/)
   await expect(page.getByText('目前记下的偏好')).toBeVisible()
 })
@@ -787,8 +786,9 @@ test('keeps a corrected reference title in conversational context on mobile', as
   })
 
   const recommendationTurn = page.getByTestId('assistant-recommendation-turn')
-  const reply = recommendationTurn.getByText(/Mosaic Field 当成一个全新问题/)
+  const reply = recommendationTurn.getByTestId('assistant-recommendation-message')
   await expect(reply).toBeVisible()
+  await expect(reply).toHaveText(similarGameReply)
   await expect(recommendationTurn.getByRole('heading', { level: 3, name: 'Glass Orchard' })).toBeVisible()
   const replyBox = await reply.boundingBox()
   const conversationBox = await page.getByTestId('recommendation-conversation').boundingBox()
@@ -1056,8 +1056,8 @@ test('advances My Guides from plan startup to the first readable chapter without
 
   preparation.completePreparation()
   preparation.publishFirstLesson()
-  await expect(page.getByText('正在补充图片或核对细节')).toBeVisible({ timeout: 12_000 })
-  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toBeVisible()
+  await expect(page.getByText('已有章节可读', { exact: true })).toBeVisible({ timeout: 12_000 })
+  await expect(page.getByRole('link', { name: '阅读已完成章节' })).toBeVisible()
   await expect(pending).toHaveCount(0)
 })
 
@@ -1182,7 +1182,7 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   await expect(continuation).toBeVisible()
   expect(await continuation.evaluate(element =>
     element.closest('[data-testid="recommendation-chat-workspace"]') !== null)).toBe(true)
-  await expect(readGuide).toContainText('基础讲解可读', { timeout: 8_000 })
+  await expect(readGuide).toContainText('已有章节可读', { timeout: 8_000 })
   await expect(readGuide).toContainText('打开讲解')
   await expect(viewProgress).toHaveText('查看详细进度')
 

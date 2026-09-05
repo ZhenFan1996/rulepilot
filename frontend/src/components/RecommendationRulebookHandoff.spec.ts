@@ -338,6 +338,8 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.text()).toContain('Wingspan Rulebook')
     expect(wrapper.text()).toContain('英文（来源已明确标注）')
     expect(wrapper.text()).toContain('出版社 / 权利方来源')
+    expect(wrapper.findAll('a').find(link => link.text().includes('提供公开链接或自己的规则书'))?.attributes('href'))
+      .toContain('editionId=edition-1')
     const reviewStatus = wrapper.get('[data-testid="player-work-status"]')
     expect(reviewStatus.text()).toBe('等待你继续')
     expect(reviewStatus.attributes('data-player-work-terminality')).toBe('waiting')
@@ -868,7 +870,7 @@ describe('RecommendationRulebookHandoff', () => {
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('本次属于：局部降级：可用内容保留'))
     const status = wrapper.get('[data-testid="player-work-status"]')
-    expect(status.text()).toBe('基础讲解可读')
+    expect(status.text()).toBe('已有章节可读')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(status.attributes('data-player-work-outcome')).toBe('none')
     expect(wrapper.text()).toContain('REVIEW_UNAVAILABLE')

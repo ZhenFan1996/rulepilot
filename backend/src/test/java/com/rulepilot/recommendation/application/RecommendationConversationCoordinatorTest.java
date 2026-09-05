@@ -335,7 +335,7 @@ class RecommendationConversationCoordinatorTest {
     @Test
     void unavailableTurnPreservesThePriorPublishedResponseWithoutChangingItsIdempotentResult() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        ConversationResponse published = responseWithGame("上一轮已经核对完成。", verifiedGame(65));
+        ConversationResponse published = responseWithGame("", verifiedGame(65));
         ConversationResponse unavailable = unavailableResponse("这一轮没有完成。");
         when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
                 .thenReturn(published)
@@ -356,6 +356,9 @@ class RecommendationConversationCoordinatorTest {
                 "zh-CN",
                 "alice",
                 ignored -> {});
+        assertThat(first.response().outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(coordinator.latest("alice").orElseThrow().latestPublishedTurn())
+                .isEqualTo(new PublishedTurn(publishedTurnId, "zh-CN", published));
         var second = coordinator.converse(
                 new SessionTurn(
                         first.conversationId(),
@@ -376,7 +379,7 @@ class RecommendationConversationCoordinatorTest {
                 .containsExactly(67, 65);
         assertThat(stored.state().transcript())
                 .extracting(message -> message.role() + ":" + message.text())
-                .containsExactly("user:先推荐一款", "assistant:上一轮已经核对完成。");
+                .containsExactly("user:先推荐一款");
 
         var replay = coordinator.converse(
                 new SessionTurn(

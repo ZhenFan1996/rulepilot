@@ -27,7 +27,7 @@ public class BoardGameRecommendationAgent {
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String RECOMMEND_TOOL = "recommend_games";
     static final String COMPARE_TOOL = "compare_candidates";
-    static final String PROMPT_VERSION = "recommendation-agent-v103-incremental-first-decision";
+    static final String PROMPT_VERSION = "recommendation-agent-v105-verified-candidate-choice";
 
     private final RecommendationReActLoop loop;
 
@@ -620,6 +620,8 @@ public class BoardGameRecommendationAgent {
         }
     }
 
+    // claims/replyParts retain already-published history. Remove those fields only after an authorized
+    // forward migration preserves that history and confirms no stored response still contains them.
     public record RecommendedGame(
             Game game,
             List<CandidateClaim> claims,

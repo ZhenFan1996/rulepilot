@@ -40,7 +40,7 @@ describe('playerAnswerContract', () => {
     expect(JSON.stringify(parsed)).not.toMatch(/assistantRunId|chunkId|sectionType|schemaDiagnostic|11111111/)
   })
 
-  it('requires cited conclusions without rejecting useful prose for warning bookkeeping', () => {
+  it('requires cited conclusions while preserving a clarification about the unresolved part', () => {
     expect(parsePlayerFacingRuleAnswer({ ...answered, citations: [] })).toBeNull()
     expect(parsePlayerFacingRuleAnswer({ ...answered, answerBasis: null })).toBeNull()
     expect(parsePlayerFacingRuleAnswer({
@@ -52,6 +52,12 @@ describe('playerAnswerContract', () => {
       ...answered,
       warnings: [{ type: 'SOURCE_COVERAGE_PARTIAL' }],
     })).not.toBeNull()
+    const partial = {
+      ...answered,
+      confidence: 'MEDIUM' as const,
+      clarification: 'Which gate effect is active for the remaining movement?',
+    }
+    expect(parsePlayerFacingRuleAnswer(partial)).toEqual(partial)
   })
 
   it('preserves evidence-backed partial answers instead of requiring an empty fallback shape', () => {

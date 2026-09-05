@@ -9,8 +9,7 @@ const PLAYER_WORK_LABELS = {
     READING_RULEBOOK: '读取规则书',
     RULEBOOK_READY: '规则书可读',
     ORGANIZING_GUIDE: '正在组织讲解',
-    GUIDE_READABLE: '基础讲解可读',
-    REVIEWING_GUIDE: '正在补充图片或核对细节',
+    GUIDE_READABLE: '已有章节可读',
     GUIDE_COMPLETE: '讲解完成',
     CHECKING_ANSWER: '正在核对回答',
     ANSWER_READY: '回答可读',
@@ -26,8 +25,7 @@ const PLAYER_WORK_LABELS = {
     READING_RULEBOOK: 'Reading rulebook',
     RULEBOOK_READY: 'Rulebook ready',
     ORGANIZING_GUIDE: 'Organizing guide',
-    GUIDE_READABLE: 'Base guide ready',
-    REVIEWING_GUIDE: 'Adding visuals or checking details',
+    GUIDE_READABLE: 'Chapters available',
     GUIDE_COMPLETE: 'Guide complete',
     CHECKING_ANSWER: 'Checking answer',
     ANSWER_READY: 'Answer ready',
@@ -55,7 +53,7 @@ export interface PlayerWorkStatus extends PlayerWorkFacts {
   label: string
 }
 
-export type GuideWorkPhase = 'organizing' | 'readable' | 'reviewing' | 'complete' | 'needs-action'
+export type GuideWorkPhase = 'organizing' | 'readable' | 'complete' | 'needs-action'
 
 /** Keeps the player label separate from capability, readiness, terminality, and recovery outcome. */
 export function playerWorkStatus(
@@ -72,16 +70,14 @@ export function guideWorkStatus(
   locale: AppLocale,
 ): PlayerWorkStatus {
   const resolvedPhase = phase === 'complete' && availableSectionCount === 0 ? 'needs-action' : phase
-  const active = resolvedPhase === 'organizing' || resolvedPhase === 'readable' || resolvedPhase === 'reviewing'
+  const active = resolvedPhase === 'organizing' || resolvedPhase === 'readable'
   const complete = resolvedPhase === 'complete'
   return playerWorkStatus(
     resolvedPhase === 'organizing'
       ? 'ORGANIZING_GUIDE'
       : resolvedPhase === 'readable'
         ? 'GUIDE_READABLE'
-        : resolvedPhase === 'reviewing'
-          ? 'REVIEWING_GUIDE'
-          : complete ? 'GUIDE_COMPLETE' : 'NEEDS_ACTION',
+        : complete ? 'GUIDE_COMPLETE' : 'NEEDS_ACTION',
     {
       capability: availableSectionCount > 0 ? 'guide' : 'rulebook',
       readiness: complete ? 'complete' : 'usable',

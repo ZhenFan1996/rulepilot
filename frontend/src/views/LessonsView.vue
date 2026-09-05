@@ -249,7 +249,7 @@ function planWorkStatus(planId: string) {
   if (state === 'GENERATING') {
     const readable = hasReadableLesson(lesson)
     return guideWorkStatus(
-      lesson?.status === 'DRAFT_READY' ? 'reviewing' : readable ? 'readable' : 'organizing',
+      readable ? 'readable' : 'organizing',
       readable ? 1 : 0,
       locale.value,
     )
@@ -301,8 +301,7 @@ function planWorkStatus(planId: string) {
 function stateClass(planId: string) {
   const state = stateOf(planId)
   const failurePolicy = planFailurePolicy(planId)
-  if (state === 'COMPLETE' || state === 'DRAFT_READY'
-    || state === 'GENERATING' && progress.value[planId]?.lesson?.status === 'DRAFT_READY') {
+  if (state === 'COMPLETE' || state === 'DRAFT_READY') {
     return 'bg-emerald-50 text-emerald-800'
   }
   if (state === 'GENERATING') return 'bg-indigo/10 text-indigo'
@@ -400,9 +399,6 @@ function progressText(plan: TeachingPlan) {
   const state = stateOf(plan.id)
   const failurePolicy = planFailurePolicy(plan.id)
   if (state === 'GENERATING') {
-    if (item?.lesson?.status === 'DRAFT_READY') {
-      return t('lessons.progress.draftReviewing', { elapsed: elapsedLabel(plan) })
-    }
     return t('lessons.progress.generating', { activity: activityText(plan, item!.run!.activities.at(-1)), elapsed: elapsedLabel(plan) })
   }
   if (state === 'DRAFT_READY') {
@@ -1200,7 +1196,7 @@ onBeforeUnmount(() => {
             <div class="flex items-start justify-between gap-4">
               <div>
                 <p class="text-sm font-semibold text-indigo">{{ activityText(plan, currentActivity(plan)) }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.live.draftHint') : t('lessons.live.activityHint') }}</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lessons.live.activityHint') }}</p>
               </div>
               <span class="shrink-0 font-mono text-sm font-semibold text-indigo">{{ elapsedLabel(plan) }}</span>
             </div>
@@ -1210,7 +1206,7 @@ onBeforeUnmount(() => {
             <div class="mt-2 text-xs text-ink/55">
               <span>{{ t('lessons.live.processed', { processed: processedChapterCount(plan), total: plan.sections.length, supported: supportedChapterCount(plan) }) }}</span>
             </div>
-            <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} {{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.live.readNow') : t('lessons.live.background') }}</p>
+            <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} {{ t('lessons.live.background') }}</p>
             <ol v-if="recentActivities(plan).length" class="mt-4 stack-y-sm border-t border-indigo/10 pt-3" :aria-label="t('lessons.live.recent')">
               <li v-for="activity in recentActivities(plan)" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
                 <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
@@ -1225,7 +1221,7 @@ onBeforeUnmount(() => {
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">{{ t('lessons.lastOpened') }}</span>
             <span v-else class="text-xs text-ink/35">{{ t('lessons.chapterCount', { count: plan.sections.length }) }}</span>
             <div class="flex flex-wrap items-center justify-end gap-2">
-              <RouterLink v-if="hasReadableLesson(progress[plan.id]?.lesson)" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.action.readFull') : stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
+              <RouterLink v-if="hasReadableLesson(progress[plan.id]?.lesson)" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'DRAFT_READY' || stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
               <button v-if="canLaunchPlan(plan.id)" type="button" :disabled="Boolean(launchingPlanId) || Boolean(deletingPlanId)" :aria-busy="launchingPlanId === plan.id" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="launch(plan.id)">{{ planLaunchLabel(plan.id) }}</button>
               <span v-else-if="stateOf(plan.id) === 'GENERATING'" class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />{{ t('lessons.action.background') }}</span>
               <button type="button" :disabled="Boolean(launchingPlanId) || Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>

@@ -44,6 +44,7 @@ import org.springframework.stereotype.Component;
 @Profile("!test")
 public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSourceFetcher {
 
+    static final String SOURCE_USER_AGENT = "RulePilot/0.1 (+https://rulepilot.cn)";
     private static final int MAX_REDIRECTS = 3;
     private static final int MAX_IMAGE_BYTES = 8 * 1024 * 1024;
     private static final int MAX_GALLERY_DOWNLOAD_CONCURRENCY = 4;
@@ -226,13 +227,8 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                         throw new IllegalStateException("official rulebook source returned no body");
                     }
                     String contentType = response.header("Content-Type", "").toLowerCase(Locale.ROOT);
-                    String disposition = response.header("Content-Disposition", "").toLowerCase(Locale.ROOT);
-                    if (isHtml(contentType)) {
-                        return fetchImageGallery(current, response, progress);
-                    }
-                    if (!contentType.startsWith("application/pdf")
-                            && !(disposition.contains("filename=") && disposition.contains(".pdf"))
-                            && !contentType.startsWith("application/octet-stream")) {
+                    if (!hasPdfMagic(response.peekBody(5).bytes())) {
+                        if (isHtml(contentType)) return fetchImageGallery(current, response, progress);
                         throw new IllegalArgumentException("official rulebook source did not return a PDF or rulebook gallery");
                     }
                     long declaredSize = response.body().contentLength();
@@ -244,7 +240,6 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                     progress.downloadStarted(totalBytes);
                     byte[] content = readBounded(response, progress, totalBytes, maxCompressiblePdfBytes);
                     progress.downloadCompleted();
-                    validatePdfMagic(content);
                     if (content.length > maxPdfBytes) {
                         progress.compressing();
                         content = pdfCompressor.compress(content, maxPdfBytes);
@@ -511,21 +506,20 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
         if (content.length == 0 || content.length > maxPdfBytes) {
             throw new IllegalArgumentException("official rulebook PDF exceeds the configured size limit");
         }
-        validatePdfMagic(content);
-    }
-
-    private void validatePdfMagic(byte[] content) {
-        String signature = new String(content, 0, Math.min(5, content.length), StandardCharsets.US_ASCII);
-        if (!"%PDF-".equals(signature)) {
+        if (!hasPdfMagic(content)) {
             throw new IllegalArgumentException("official rulebook source content is not a PDF");
         }
+    }
+
+    static boolean hasPdfMagic(byte[] content) {
+        return "%PDF-".equals(new String(content, 0, Math.min(5, content.length), StandardCharsets.US_ASCII));
     }
 
     private Request request(URI source) {
         return new Request.Builder()
                 .url(source.toASCIIString())
                 .header("Accept", "application/pdf,text/html,application/xhtml+xml;q=0.9,*/*;q=0.1")
-                .header("User-Agent", "RulePilot/0.1 user-confirmed-rulebook-import")
+                .header("User-Agent", SOURCE_USER_AGENT)
                 .build();
     }
 
@@ -534,7 +528,7 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                 .url(source.toASCIIString())
                 .header("Accept", "image/jpeg,image/png;q=0.9")
                 .header("Referer", gallerySource.toASCIIString())
-                .header("User-Agent", "RulePilot/0.1 user-confirmed-rulebook-import")
+                .header("User-Agent", SOURCE_USER_AGENT)
                 .build();
     }
 

@@ -480,7 +480,7 @@ function productionRecommendationRawReport(overrides = {}) {
   const activeReleaseId = `${testedSha}-101-1`
   const model = { provider: 'qwen', model: 'qwen3.7-plus' }
   const report = {
-    reportSchemaVersion: 2,
+    reportSchemaVersion: 3,
     generatedAt: '2026-08-29T00:00:00.000Z',
     completed: true,
     stage: 'completed',
@@ -526,7 +526,6 @@ function productionRecommendationRawReport(overrides = {}) {
         bggId,
         nameSha256: String(5 + index).repeat(64),
         originalNameSha256: String(8 + index).slice(-1).repeat(64),
-        replyPartsSha256: String(index).repeat(64),
       })),
       shortfallCount: 0,
       publicationErrors: [],
@@ -534,6 +533,9 @@ function productionRecommendationRawReport(overrides = {}) {
       domMatched: true,
       agentElapsedMs: 3_400,
       modelCallElapsedMs: [900, 2_300],
+      firstAnswerPartMs: 450,
+      firstRecommendationPartMs: 2_100,
+      terminalMs: 3_600,
       failure: null,
     },
     handoff: {
@@ -977,7 +979,7 @@ test('production recommendation keeps only the deployed user-visible journey con
     /name: Upload sanitized journey report[\s\S]{0,500}?journey\.raw\.json/)
   assert.doesNotMatch(productionRecommendationWorkflow, /echo "\$player_password"/)
 
-  assert.match(productionRecommendationSanitizer, /reportSchemaVersion: 2/)
+  assert.match(productionRecommendationSanitizer, /reportSchemaVersion: 3/)
   assert.match(productionRecommendationSanitizer,
     /def completed_acceptance\(\$raw\):[\s\S]*?exact_release\(\$raw\.deployment\.before\)[\s\S]*?exact_model\(\$raw\.model\.after\)/)
   assert.match(productionRecommendationSanitizer,
@@ -1003,7 +1005,7 @@ test('production recommendation keeps only the deployed user-visible journey con
   assert.doesNotMatch(productionRecommendationSanitizer,
     /progress|sse|slo|modelCalls|catalogCalls|webResearchCalls|characterCount|contentDigest|handoffFreshness|handoffRestored|handoffDiscoveryCandidate/i)
 
-  assert.match(productionRecommendationSpec, /reportSchemaVersion: 2/)
+  assert.match(productionRecommendationSpec, /reportSchemaVersion: 3/)
   assert.match(productionRecommendationSpec, /rawModelOutputCaptured: false/)
   assert.match(productionRecommendationSpec,
     /production publishes natural and grounded recommendation replies before the exact-card handoff/)
@@ -1028,7 +1030,7 @@ test('production recommendation sanitizer publishes a nested allowlisted success
 
     const sanitizedText = await readFile(fixture.sanitizedReportPath, 'utf8')
     const sanitized = JSON.parse(sanitizedText)
-    assert.equal(sanitized.reportSchemaVersion, 2)
+    assert.equal(sanitized.reportSchemaVersion, 3)
     assert.equal(sanitized.completed, true)
     assert.deepEqual(Object.keys(sanitized).sort(), [
       'completed', 'deployment', 'failedStage', 'fatalFailure', 'generatedAt', 'handoff',
@@ -1044,9 +1046,18 @@ test('production recommendation sanitizer publishes a nested allowlisted success
     assert.equal(sanitized.naturalReply.noExternalWork, true)
     assert.equal(sanitized.naturalReply.agentElapsedMs, 1_200)
     assert.deepEqual(sanitized.naturalReply.modelCallElapsedMs, [1_150])
+    assert.equal(sanitized.naturalReply.firstAnswerPartMs, null)
+    assert.equal(sanitized.naturalReply.firstRecommendationPartMs, null)
+    assert.equal(sanitized.naturalReply.terminalMs, null)
     assert.equal(sanitized.recommendation.cards.length, 3)
+    assert.deepEqual(Object.keys(sanitized.recommendation.cards[0]).sort(), [
+      'bggId', 'nameSha256', 'originalNameSha256',
+    ])
     assert.equal(sanitized.recommendation.agentElapsedMs, 3_400)
     assert.deepEqual(sanitized.recommendation.modelCallElapsedMs, [900, 2_300])
+    assert.equal(sanitized.recommendation.firstAnswerPartMs, 450)
+    assert.equal(sanitized.recommendation.firstRecommendationPartMs, 2_100)
+    assert.equal(sanitized.recommendation.terminalMs, 3_600)
     assert.deepEqual(sanitized.recommendation.publicationErrors, [])
     assert.equal(sanitized.handoff.terminal, 'SOURCE_REVIEW')
     assert.equal(sanitized.handoff.editionBelongsToGame, true)
@@ -1176,13 +1187,15 @@ test('production recommendation sanitizer preserves bounded fatal diagnostics', 
 })
 
 test('production recommendation sanitizer emits a safe fallback without a valid raw report', async () => {
-  for (const rawReport of [undefined, '{not-json']) {
+  for (const rawReport of [undefined, '{not-json', productionRecommendationRawReport({
+    recommendation: { firstAnswerPartMs: 'player-secret-marker' },
+  })]) {
     const fixture = await productionRecommendationSanitizerFixture(rawReport)
     try {
       await runProductionRecommendationSanitizer(fixture.root)
       const sanitizedText = await readFile(fixture.sanitizedReportPath, 'utf8')
       const sanitized = JSON.parse(sanitizedText)
-      assert.equal(sanitized.reportSchemaVersion, 2)
+      assert.equal(sanitized.reportSchemaVersion, 3)
       assert.equal(sanitized.completed, false)
       assert.equal(sanitized.stage, 'preflight-failed')
       assert.equal(sanitized.failedStage, 'preflight')

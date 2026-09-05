@@ -11,7 +11,6 @@ function mountStatus(overrides: Record<string, unknown> = {}) {
       active: true,
       statusUnknown: false,
       statusText: '正在依据规则书编写“开始对局”',
-      draftReady: false,
       availableSectionCount: 2,
       totalSectionCount: 5,
       elapsed: '1:12',
@@ -39,7 +38,7 @@ describe('LessonGenerationStatus', () => {
     const wrapper = mountStatus()
 
     const status = wrapper.get('[data-testid="player-work-status"]')
-    expect(status.text()).toBe('基础讲解可读')
+    expect(status.text()).toBe('已有章节可读')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(wrapper.text()).toContain('正在依据规则书编写“开始对局”')
     expect(wrapper.text()).toContain('后台已处理 2/5 节，其中 1 节通过核对')
@@ -48,12 +47,12 @@ describe('LessonGenerationStatus', () => {
     expect(wrapper.text()).not.toContain('composeTeachingSection')
   })
 
-  it('keeps unknown, retry, and cited-draft states distinct', () => {
-    const wrapper = mountStatus({ statusUnknown: true, refreshFailed: true, draftReady: true })
+  it('keeps published chapters usable without claiming a complete guide when status is unknown', () => {
+    const wrapper = mountStatus({ statusUnknown: true, refreshFailed: true })
 
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在补充图片或核对细节')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-stage')).toBe('GUIDE_READABLE')
     expect(wrapper.text()).toContain('正在确认后台生成状态')
-    expect(wrapper.text()).toContain('完整基础讲解已经可用')
+    expect(wrapper.text()).not.toContain('完整基础讲解已经可用')
     expect(wrapper.text()).toContain('正在自动重试')
     expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
   })
@@ -80,7 +79,7 @@ describe('LessonGenerationStatus', () => {
       }, 'zh-CN'),
     })
     const stopped = wrapper.get('[data-testid="player-work-status"]')
-    expect(stopped.text()).toBe('基础讲解可读')
+    expect(stopped.text()).toBe('已有章节可读')
     expect(stopped.attributes('data-player-work-outcome')).toBe('none')
     expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
 
@@ -118,7 +117,7 @@ describe('LessonGenerationStatus', () => {
     setLocale('en')
     const wrapper = mountStatus({ statusText: 'Writing “开始对局” from the rulebook', remainingTime: 'About 2 minutes remaining.' })
 
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('Base guide ready')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('Chapters available')
     expect(wrapper.text()).toContain('Writing “开始对局” from the rulebook')
     expect(wrapper.text()).toContain('The complete guide is still being built')
     expect(wrapper.text()).toContain('2/5 chapters processed; 1 passed review')

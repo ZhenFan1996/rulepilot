@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -10,6 +11,8 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.application.CitationScopeVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
@@ -29,6 +32,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
@@ -36,13 +42,19 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
-    void oneChapterProviderAndVisualFailuresDoNotEraseAnIndependentReadableChapter() {
+    void dependentTextStartsWhilePrerequisiteVisualsSettleAndLocalFailuresPreserveReadableChapters() {
         UUID versionId = UUID.randomUUID();
+        CountDownLatch dependentTextStarted = new CountDownLatch(1);
+        CountDownLatch textOnlyPublished = new CountDownLatch(1);
+        AtomicBoolean textOverlappedVisualWork = new AtomicBoolean();
+        AtomicBoolean textPublishedDuringVisualWork = new AtomicBoolean();
+        AtomicBoolean unplannedVisualWork = new AtomicBoolean();
         AssistantReadTools tools = request -> List.of(evidence(versionId, request.query()));
         TeachingLessonModel model = request -> {
             if (request.topicKey().equals("unavailable")) {
                 throw new ProviderFailureException(new IllegalStateException("provider unavailable"));
             }
+            if (request.topicKey().equals("dependent")) dependentTextStarted.countDown();
             UUID evidenceId = request.evidence().getFirst().chunkId();
             return new SectionDraft(
                     "A readable chapter",
@@ -58,7 +70,15 @@ class GroundedTeachingAgentTest {
         when(visuals.supportsVisualEvidence("player")).thenReturn(true);
         when(visuals.enrichSection(
                         eq(versionId), any(TeachingPlan.PlannedSection.class), any(LessonSection.class), any(), eq("player"), any(), any()))
-                .thenThrow(new IllegalStateException("image provider unavailable"));
+                .thenAnswer(invocation -> {
+                    LessonSection section = invocation.getArgument(2);
+                    if (section.topicKey().equals("text-only")) unplannedVisualWork.set(true);
+                    if (section.topicKey().equals("readable")) {
+                        textOverlappedVisualWork.set(dependentTextStarted.await(2, TimeUnit.SECONDS));
+                        textPublishedDuringVisualWork.set(textOnlyPublished.await(2, TimeUnit.SECONDS));
+                    }
+                    throw new IllegalStateException("image provider unavailable");
+                });
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 tools,
                 model,
@@ -69,17 +89,24 @@ class GroundedTeachingAgentTest {
                 visuals);
         List<IllustratedLesson> snapshots = new ArrayList<>();
 
-        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, snapshots::add);
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, snapshot -> {
+            snapshots.add(snapshot);
+            if (snapshot.sections().stream().anyMatch(section -> section.topicKey().equals("text-only"))) {
+                textOnlyPublished.countDown();
+            }
+        });
 
+        assertThat(textOverlappedVisualWork).isTrue();
+        assertThat(textPublishedDuringVisualWork).isTrue();
+        assertThat(unplannedVisualWork).isFalse();
         assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(lesson.sections()).singleElement().satisfies(section -> {
-            assertThat(section.topicKey()).isEqualTo("readable");
+        assertThat(lesson.sections()).extracting(LessonSection::topicKey).containsExactly("readable", "dependent", "text-only");
+        assertThat(lesson.sections()).allSatisfy(section -> {
             assertThat(section.steps().getFirst().text())
                     .isEqualTo("Use the option described by the cited rule.");
             assertThat(section.steps().getFirst().visualFoci()).isEmpty();
         });
-        assertThat(snapshots).singleElement().satisfies(snapshot ->
-                assertThat(snapshot.sections()).extracting(LessonSection::topicKey).containsExactly("readable"));
+        assertThat(snapshots.getLast().sections()).isEqualTo(lesson.sections());
         assertThat(invocations.records)
                 .anySatisfy(record -> {
                     assertThat(record.operation()).isEqualTo("publishTeachingSection|1");
@@ -93,7 +120,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void aNewRunReusesPublishedChaptersAndComposesOnlyTheMissingWork() {
+    void retriesPreserveEveryPublishedChapterEvenWhenRemainingWorkReachesItsDeadline() {
         UUID versionId = UUID.randomUUID();
         TeachingPlan resumablePlan = new TeachingPlan(
                 UUID.randomUUID(),
@@ -101,8 +128,10 @@ class GroundedTeachingAgentTest {
                 null,
                 "Resumable lesson",
                 "Keep grounded chapters readable while the rest continues.",
-                new WholeGameContext(List.of(), List.of()),
-                List.of(section(1, "published"), section(2, "remaining")),
+                new WholeGameContext(List.of(
+                        new TeachingPlan.TopicDependency("published", "remaining", "Continue the published rule."),
+                        new TeachingPlan.TopicDependency("preserved", "remaining", "Keep its prerequisite context.")), List.of()),
+                List.of(section(1, "published", false), section(2, "preserved", false), section(3, "remaining", false)),
                 "player",
                 Instant.EPOCH);
         AssistantReadTools tools = request -> List.of(evidence(versionId, request.query()));
@@ -128,11 +157,15 @@ class GroundedTeachingAgentTest {
         assertThat(partial.status()).isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(partial.sections())
                 .extracting(LessonSection::topicKey)
-                .containsExactly("published");
+                .containsExactly("published", "preserved");
 
         List<String> composedTopics = new CopyOnWriteArrayList<>();
+        AtomicBoolean deadlineReached = new AtomicBoolean(true);
         TeachingLessonModel resumedModel = request -> {
             composedTopics.add(request.topicKey());
+            assertThat(request.priorSections()).extracting(context -> context.topicKey())
+                    .containsExactly("published", "preserved");
+            if (deadlineReached.get()) throw new AgentExecutionStoppedException(StopReason.TIMEOUT);
             return supportedDraft(request, "The remaining rule is now grounded.");
         };
         RecordingInvocations resumedInvocations = new RecordingInvocations();
@@ -144,16 +177,26 @@ class GroundedTeachingAgentTest {
                 visualFacts,
                 VisualRulebookCatalogerTestFixture.unavailable(tools, resumedInvocations, visualFacts));
 
-        IllustratedLesson completed = resumedRun.createBase(
-                resumablePlan, UUID.randomUUID(), partial, ignored -> {});
+        List<IllustratedLesson> resumedSnapshots = new ArrayList<>();
+        assertThatThrownBy(() -> resumedRun.createBase(
+                resumablePlan, UUID.randomUUID(), partial, resumedSnapshots::add))
+                .isInstanceOf(AgentExecutionStoppedException.class);
 
+        assertThat(resumedSnapshots).isNotEmpty().allSatisfy(snapshot ->
+                assertThat(snapshot.sections()).containsAll(partial.sections()));
+        deadlineReached.set(false);
+        IllustratedLesson completed = resumedRun.createBase(
+                resumablePlan, UUID.randomUUID(), resumedSnapshots.getLast(), resumedSnapshots::add);
+
+        assertThat(resumedSnapshots).allSatisfy(snapshot ->
+                assertThat(snapshot.sections()).containsAll(partial.sections()));
         assertThat(completed.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(completed.sections())
                 .extracting(LessonSection::topicKey)
-                .containsExactly("published", "remaining");
+                .containsExactly("published", "preserved", "remaining");
         assertThat(completed.sections().getFirst().steps().getFirst().text())
                 .isEqualTo("The already published rule remains readable.");
-        assertThat(composedTopics).containsExactly("remaining");
+        assertThat(composedTopics).containsOnly("remaining");
     }
 
     private SectionDraft supportedDraft(
@@ -176,21 +219,23 @@ class GroundedTeachingAgentTest {
                 "Independent chapters",
                 "Teach every chapter that can be grounded.",
                 new WholeGameContext(
-                        List.of(),
+                        List.of(new TeachingPlan.TopicDependency("readable", "dependent", "Continue the cited rule."),
+                                new TeachingPlan.TopicDependency("readable", "text-only", "Use the validated prerequisite.")),
                         List.of("The unavailable chapter remains unresolved.")),
-                List.of(section(1, "unavailable"), section(2, "readable")),
+                List.of(section(1, "unavailable", false), section(2, "readable", true),
+                        section(3, "dependent", true), section(4, "text-only", false)),
                 "player",
                 Instant.EPOCH);
     }
 
-    private TeachingPlan.PlannedSection section(int position, String topicKey) {
+    private TeachingPlan.PlannedSection section(int position, String topicKey, boolean visualRecommended) {
         return new TeachingPlan.PlannedSection(
                 position,
                 topicKey,
                 "Chapter " + position,
                 "Explain " + topicKey + ".",
                 true,
-                false,
+                visualRecommended,
                 List.of(topicKey),
                 List.of(),
                 List.of());

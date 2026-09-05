@@ -15,7 +15,6 @@ const props = defineProps<{
   active: boolean
   statusUnknown: boolean
   statusText: string
-  draftReady: boolean
   availableSectionCount: number
   totalSectionCount: number | null
   elapsed: string
@@ -32,7 +31,7 @@ const props = defineProps<{
 
 const { locale, t } = useLocale()
 const workStatus = computed(() => guideWorkStatus(
-  props.draftReady ? 'reviewing' : props.availableSectionCount > 0 ? 'readable' : 'organizing',
+  props.availableSectionCount > 0 ? 'readable' : 'organizing',
   props.availableSectionCount,
   locale.value,
 ))
@@ -51,7 +50,7 @@ const workStatus = computed(() => guideWorkStatus(
             aria-atomic="true"
           />
           <p class="mt-1 text-xs leading-5 text-ink/60">{{ statusUnknown ? t('lesson.generation.statusUnknown') : statusText }}</p>
-          <p class="mt-1 text-xs leading-5 text-ink/55">{{ draftReady ? t('lesson.generation.draftReady', { count: availableSectionCount }) : t('lesson.generation.inProgress', { count: availableSectionCount }) }}</p>
+          <p class="mt-1 text-xs leading-5 text-ink/55">{{ t('lesson.generation.inProgress', { count: availableSectionCount }) }}</p>
         </div>
         <span v-if="!statusUnknown" class="shrink-0 font-mono text-sm font-semibold text-indigo" :aria-label="t('lesson.generation.elapsed')">{{ elapsed }}</span>
       </div>
@@ -62,7 +61,7 @@ const workStatus = computed(() => guideWorkStatus(
         <div class="mt-2 text-xs text-ink/55">
           <span>{{ t('lesson.generation.processed', { processed: processedChapterCount, total: totalSectionCount, supported: supportedChapterCount }) }}</span>
         </div>
-        <p class="mt-2 text-xs leading-5 text-ink/50">{{ remainingTime }} {{ draftReady ? t('lesson.generation.readyHint') : t('lesson.generation.progressHint') }}</p>
+        <p class="mt-2 text-xs leading-5 text-ink/50">{{ remainingTime }} {{ t('lesson.generation.progressHint') }}</p>
         <ol v-if="activities.length" class="mt-3 grid gap-1.5 border-t border-indigo/10 pt-3 sm:grid-cols-3" :aria-label="t('lesson.generation.activitiesAria')">
           <li v-for="activity in activities" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
             <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />

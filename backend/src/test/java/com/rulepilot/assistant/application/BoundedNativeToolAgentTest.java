@@ -96,20 +96,33 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
-    void returnsTheWholeRejectedTerminalAndTypedBoundaryToTheSameAgent() {
+    void preservesEachRejectedTerminalWhileTheSameAgentCorrectsDistinctPublicationFailures() throws Exception {
         String rejected = "{\"kind\":\"RULE_ANSWER\",\"citationIds\":[\"outside\"],\"extra\":true}";
-        String accepted = "{\"kind\":\"CHAT\",\"shortVerdict\":\"你好\",\"explanation\":\"\",\"extra\":true}";
-        QueueModel model = new QueueModel(finalTurn(rejected), finalTurn(accepted));
+        String correctedCitation = """
+                {"kind":"RULE_ANSWER","citationIds":["evidence-1"],
+                 "numericClaims":[{"value":"7","evidenceId":"evidence-1"}]}
+                """.strip();
+        String accepted = """
+                {"kind":"RULE_ANSWER","citationIds":["evidence-1"],
+                 "numericClaims":[{"value":"2","evidenceId":"evidence-1"}]}
+                """.strip();
+        QueueModel model = new QueueModel(
+                finalTurn(rejected), finalTurn(correctedCitation), finalTurn(accepted));
         String schema = """
                 {"type":"object","required":["kind"],"properties":{"kind":{"type":"string"}},
                  "additionalProperties":true}
                 """;
+        String schemaJson = JsonMapper.builder().build().readTree(schema).toString();
         TerminalContract contract = TerminalContract.json(schema, (candidate, observations) ->
                 candidate.equals(rejected)
                         ? TerminalValidation.rejected(
                                 "CITATION_NOT_OBSERVED", "/citationIds/0", "identity is outside this run",
                                 Set.of("evidence-1"))
-                        : TerminalValidation.accepted());
+                        : candidate.equals(correctedCitation)
+                                ? TerminalValidation.rejected(
+                                        "NUMERIC_VALUE_UNSUPPORTED", "/numericClaims/0/value",
+                                        "numeric value is absent from the cited evidence", Set.of("evidence-1"))
+                                : TerminalValidation.accepted());
         RecordingInvocations audited = new RecordingInvocations(null);
 
         var result = agent(model, List.of(tool("search_rule_evidence")), audited)
@@ -117,11 +130,10 @@ class BoundedNativeToolAgentTest {
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.text()).isEqualTo(accepted);
-        assertThat(model.requests).hasValue(2);
-        assertThat(model.conversations.get(1))
-                .anySatisfy(message -> assertThat(message)
-                        .returns(MessageRole.ASSISTANT, ConversationMessage::role)
-                        .returns(rejected, ConversationMessage::content));
+        assertThat(model.conversations.getLast())
+                .filteredOn(message -> message.role() == MessageRole.ASSISTANT)
+                .extracting(ConversationMessage::content)
+                .containsExactly(rejected, correctedCitation);
         assertThat(model.conversations.get(1))
                 .filteredOn(message -> message.role() == MessageRole.USER
                         && message.content().contains("CITATION_NOT_OBSERVED"))
@@ -133,16 +145,21 @@ class BoundedNativeToolAgentTest {
                                 "currentSchema",
                                 "evidence-1")
                         .doesNotContain(rejected, "<rejected-candidate>"));
-        assertThat(audited.operations).contains("nativeCompletionRejection|CITATION_NOT_OBSERVED");
+        assertThat(model.conversations.getLast())
+                .filteredOn(message -> message.role() == MessageRole.USER
+                        && message.content().contains("NUMERIC_VALUE_UNSUPPORTED"))
+                .singleElement()
+                .satisfies(message -> assertThat(message.content())
+                        .contains("/numericClaims/0/value", "numeric value is absent from the cited evidence", schemaJson)
+                        .doesNotContain(correctedCitation));
     }
 
     @Test
-    void stopsAfterOneTargetedTerminalRepairEvenWhenTheReplacementFailureDiffers() {
+    void stopsWhenTheSameRejectedCompletionMakesNoProgress() {
         String rejected = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Move.\"}";
-        String differentRejected = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Move now.\"}";
         QueueModel model = new QueueModel(
                 finalTurn(rejected),
-                finalTurn(differentRejected),
+                finalTurn(rejected),
                 finalTurn("{\"kind\":\"CHAT\",\"shortVerdict\":\"must not run\"}"));
         RecordingInvocations audited = new RecordingInvocations(null);
         TerminalContract contract = TerminalContract.json(
@@ -154,11 +171,7 @@ class BoundedNativeToolAgentTest {
                 .run(request(Set.of("search_rule_evidence"), contract));
 
         assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
-        assertThat(result.reason()).isEqualTo("TERMINAL_REPAIR_EXHAUSTED");
-        assertThat(model.requests).hasValue(2);
-        assertThat(audited.operations).contains(
-                "nativeCompletionRejection|TERMINAL_FIELD_INVALID",
-                "nativeToolFallback|TERMINAL_REPAIR_EXHAUSTED");
+        assertThat(result.reason()).isEqualTo("COMPLETION_NO_PROGRESS");
     }
 
     @Test

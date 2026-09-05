@@ -3,9 +3,7 @@ import { computed, getCurrentScope, onScopeDispose, ref } from 'vue'
 import type { AppLocale } from '@/lib/locale'
 import { answerFailureDescriptor } from '@/lib/playerFailureSemantics'
 import {
-  answerAgentTrace,
   streamedAnswerTraceItem,
-  type AnswerAgentActivity,
   type AnswerAgentTraceItem,
 } from '@/lib/answerAgentTrace'
 import {
@@ -79,7 +77,6 @@ interface UseLessonAnswersOptions {
   currentContext: () => AnswerContext | null
   currentLessonRequest: () => number
   isCurrentLessonLoad: (request: number, planId: string) => boolean
-  canRead?: () => boolean
   requestLogin: () => Promise<unknown>
   onReceived: (
     context: AnswerContext,
@@ -107,10 +104,8 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   const answerSoftBudgetReached = computed(() =>
     answerLoading.value && answerElapsedSeconds.value >= ANSWER_SOFT_BUDGET_SECONDS)
   let latestAnswerRequest = 0
-  let traceTimer: ReturnType<typeof setTimeout> | null = null
   let answerClock: ReturnType<typeof setInterval> | null = null
   let activeAnswerController: AbortController | null = null
-  let activeTraceController: AbortController | null = null
   let activeAnswerRunId: string | null = null
   let activeCancellationCsrf: CsrfResponse | null = null
   let disposed = false
@@ -126,7 +121,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     requestServerAnswerCancellation()
     activeAnswerController?.abort()
     activeAnswerController = null
-    cancelReadTransport()
     stopAnswerClock()
     if (clearQuestion) question.value = ''
     answer.value = null
@@ -154,7 +148,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   }
 
   function clearAnswerFeedback() {
-    cancelReadTransport()
     answer.value = null
     answerError.value = ''
     answerFailureRecovery.value = null
@@ -168,7 +161,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     const responseLocale = context.locale
     const lessonRequest = options.currentLessonRequest()
     const answerRequest = ++latestAnswerRequest
-    cancelReadTransport()
     const controller = new AbortController()
     activeAnswerController = controller
     answerLoading.value = true
@@ -195,7 +187,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       const csrf = (await csrfResponse.json()) as CsrfResponse
       activeCancellationCsrf = csrf
       const previousTurn = answerTurns.value.at(-1)
-      startRunIdentityFallback(context, answerRequest, lessonRequest)
       const response = await streamStructuredAnswer(`/api/v1/document-versions/${context.documentVersionId}/answers/stream`, {
         method: 'POST',
         credentials: 'include',
@@ -211,7 +202,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       }, (runId) => {
         if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
           activeAnswerRunId = runId
-          stopTracePolling()
         }
       }, {
         onActivity: (activity) => {
@@ -260,7 +250,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     } finally {
       if (activeAnswerController === controller) activeAnswerController = null
       if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
-        stopTracePolling()
         stopAnswerClock()
         clearActiveServerAnswer()
         answerLoading.value = false
@@ -270,15 +259,11 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   }
 
   function cancelAnswer() {
-    if (!answerLoading.value) {
-      cancelReadTransport()
-      return
-    }
+    if (!answerLoading.value) return
     latestAnswerRequest++
     requestServerAnswerCancellation()
     activeAnswerController?.abort()
     activeAnswerController = null
-    cancelReadTransport()
     stopAnswerClock()
     clearActiveServerAnswer()
     answerLoading.value = false
@@ -289,45 +274,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerFailureRecovery.value = recovery
     answerError.value = recovery.message
     answerOutcome.value = 'cancelled'
-  }
-
-  function stopTracePolling() {
-    if (traceTimer !== null) clearTimeout(traceTimer)
-    traceTimer = null
-    activeTraceController?.abort()
-    activeTraceController = null
-  }
-
-  function startRunIdentityFallback(context: AnswerContext, answerRequest: number, lessonRequest: number) {
-    stopTracePolling()
-    if (options.canRead?.() === false) return
-    traceTimer = setTimeout(async () => {
-      traceTimer = null
-      if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId) || !answerLoading.value) return
-      const controller = new AbortController()
-      activeTraceController = controller
-      try {
-        const parameters = new URLSearchParams({ mode: 'QUESTION_ANSWER', subjectId: context.documentVersionId })
-        const response = await fetch(`/api/v1/assistant-runs/latest?${parameters}`, {
-          credentials: 'include',
-          signal: controller.signal,
-        })
-        if (!response.ok || activeTraceController !== controller
-          || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
-        const details = await response.json() as AnswerRunDetails
-        if (details.run.subjectId !== context.documentVersionId) return
-        activeAnswerRunId = details.run.id
-        if (!agentTrace.value.length) agentTrace.value = answerAgentTrace(details.activities, context.locale)
-      } catch {
-        // The SSE remains authoritative; this single lookup only recovers a lost run identity for cancellation.
-      } finally {
-        if (activeTraceController === controller) activeTraceController = null
-      }
-    }, 250)
-  }
-
-  function cancelReadTransport() {
-    stopTracePolling()
   }
 
   function startAnswerClock() {
@@ -369,7 +315,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       latestAnswerRequest += 1
       activeAnswerController?.abort()
       activeAnswerController = null
-      cancelReadTransport()
       stopAnswerClock()
       clearActiveServerAnswer()
     })
@@ -390,7 +335,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     streamedAnswerParts,
     answerElapsedSeconds,
     answerSoftBudgetReached,
-    cancelReadTransport,
     clearAnswerFeedback,
     cancelAnswer,
     resetConversation,
@@ -627,9 +571,4 @@ function safeRulingReference(value: unknown, citationCount: number): AnswerRulin
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-interface AnswerRunDetails {
-  run: { id: string; subjectId: string }
-  activities: AnswerAgentActivity[]
 }

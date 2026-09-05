@@ -339,19 +339,17 @@ final class RecommendationReActLoop {
                 RecommendationDecisionBrief.StreamingPublisher decisionStream =
                         state.modelCalls == 1 && answerPartListener != null
                                 ? decisionBrief.streamingPublisher(
-                                        locale,
                                         currentActions.stream().map(ToolSpec::name).collect(java.util.stream.Collectors.toSet()),
                                         answerPartListener)
                                 : null;
-                Consumer<String> publicationStream = state.pendingPublicationSeed == null
+                Consumer<ToolCall> publicationStream = state.pendingPublicationSeed == null
                         || currentActions.size() != 1
                         || !RECOMMEND_TOOL.equals(currentActions.getFirst().name())
                         ? null
                         : publication.previewPublisher(
                                 state,
-                                locale,
                                 recommendationPartListener);
-                Consumer<String> argumentStream = decisionStream == null
+                Consumer<ToolCall> argumentStream = decisionStream == null
                         ? publicationStream
                         : publicationStream == null
                                 ? decisionStream
@@ -705,7 +703,8 @@ final class RecommendationReActLoop {
             ProgressTracker progress,
             ConversationResponse decision) {
         progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.REPLY_TO_USER);
-        if (decision.assistantMessage().isBlank()) {
+        if (decision.assistantMessage().isBlank()
+                && (decision.outcome() != Outcome.RECOMMENDATIONS || decision.games().isEmpty())) {
             progress.fail();
             throw new IllegalStateException("validated recommendation decision omitted its player reply");
         }

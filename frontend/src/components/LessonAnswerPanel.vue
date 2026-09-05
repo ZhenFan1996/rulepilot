@@ -402,7 +402,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
             <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.history.open') }}</summary>
             <div class="mt-3 stack-y-md text-sm leading-6 text-ink/65">
               <p v-if="turn.answer.clarification" class="rounded-xl bg-amber-50 px-3 py-2 text-amber-950">{{ turn.answer.clarification }}</p>
-              <p v-else-if="turn.answer.explanation.trim()">{{ turn.answer.explanation.trim() }}</p>
+              <p v-if="turn.answer.explanation.trim()">{{ turn.answer.explanation.trim() }}</p>
               <div v-if="turn.answer.calculations?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}</p>
                 <ul class="mt-1 stack-y-xs font-mono text-xs text-indigo">
@@ -699,6 +699,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               </div>
               <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
               <p v-if="publishesConclusion(answer.status) && answer.explanation.trim()" class="mt-3 text-sm leading-7 text-ink/70">{{ answer.explanation.trim() }}</p>
+              <p v-if="publishesConclusion(answer.status) && answer.clarification" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ answer.clarification }}</p>
 
               <div v-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
                 <p>{{ answer.recovery?.message || answer.clarification || answerFailureMessage(answer.status) }}</p>

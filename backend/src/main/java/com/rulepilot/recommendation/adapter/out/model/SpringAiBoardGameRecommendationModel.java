@@ -122,7 +122,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     public Turn nextStreaming(
             Request request,
             String ownerUsername,
-            Consumer<String> accumulatedArgumentsListener) {
+            Consumer<ToolCall> accumulatedActionListener) {
         RuntimeModelConfiguration.ResolvedModel selected = resolvedModelFor(ownerUsername);
         String effectiveModelName = effectiveModelName(selected, request);
         Prompt prompt = new Prompt(
@@ -157,10 +157,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                     if (!call.name().isBlank()) toolCall.name = call.name();
                     if (!call.arguments().isEmpty()) {
                         toolCall.mergeArguments(call.arguments());
-                        if (call.index() == 0) {
-                            accumulatedArgumentsListener.accept(toolCall.arguments.toString());
-                        }
                     }
+                    if (call.index() == 0) toolCall.publishSnapshot(accumulatedActionListener);
                 }
                 if (!chunk.finishReason().isBlank()) {
                     BoardGameRecommendationModel.CompletionStatus observed =
@@ -191,8 +189,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                     if (chunk.name() != null && !chunk.name().isBlank()) toolCall.name = chunk.name();
                     if (chunk.arguments() != null && !chunk.arguments().isEmpty()) {
                         toolCall.mergeArguments(chunk.arguments());
-                        if (index == 0) accumulatedArgumentsListener.accept(toolCall.arguments.toString());
                     }
+                    if (index == 0) toolCall.publishSnapshot(accumulatedActionListener);
                 }
                 String finishReason = response.getResult().getMetadata() == null
                         ? null
@@ -556,6 +554,12 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         private String id;
         private String name;
         private final StringBuilder arguments = new StringBuilder();
+
+        private void publishSnapshot(Consumer<ToolCall> listener) {
+            String snapshot = arguments.toString();
+            if (id == null || id.isBlank() || name == null || name.isBlank() || snapshot.isBlank()) return;
+            listener.accept(new ToolCall(id, name, snapshot));
+        }
 
         private ToolCall finish(String requiredName, int index) {
             String completedName = name == null || name.isBlank() ? requiredName : name;

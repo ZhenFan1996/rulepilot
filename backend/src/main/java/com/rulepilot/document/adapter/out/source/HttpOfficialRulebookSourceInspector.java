@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
-import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -129,17 +128,12 @@ public class HttpOfficialRulebookSourceInspector implements OfficialRulebookSour
                     }
                     if (!response.isSuccessful() || response.body() == null) return Optional.empty();
                     String contentType = response.header("Content-Type", "").toLowerCase(Locale.ROOT);
-                    String disposition = response.header("Content-Disposition", "").toLowerCase(Locale.ROOT);
-                    if (contentType.startsWith("application/pdf")
-                            || declaresPdfFilename(disposition)) {
+                    if (HttpOfficialRulebookSourceFetcher.hasPdfMagic(response.peekBody(5).bytes())) {
                         return Optional.of(new Inspection(current, MediaType.PDF, List.of()));
                     }
                     long declaredSize = response.body().contentLength();
                     if (declaredSize > maxHtmlBytes && isHtml(contentType)) return Optional.empty();
                     byte[] body = response.body().byteStream().readNBytes(maxHtmlBytes + 1);
-                    if (hasPdfMagic(body)) {
-                        return Optional.of(new Inspection(current, MediaType.PDF, List.of()));
-                    }
                     if (body.length > maxHtmlBytes || !isHtml(contentType) && !looksLikeHtml(body)) {
                         return Optional.empty();
                     }
@@ -204,35 +198,6 @@ public class HttpOfficialRulebookSourceInspector implements OfficialRulebookSour
         return !document.select(
                         "[data-document-count=0], [data-rulebook-count=0], [data-file-count=0]")
                 .isEmpty();
-    }
-
-    private boolean declaresPdfFilename(String disposition) {
-        StringTokenizer parameters = new StringTokenizer(disposition, ";");
-        while (parameters.hasMoreTokens()) {
-            String parameter = parameters.nextToken().strip();
-            int separator = parameter.indexOf('=');
-            if (separator <= 0) continue;
-            String name = parameter.substring(0, separator).strip();
-            if (!name.equals("filename") && !name.equals("filename*")) continue;
-            String value = parameter.substring(separator + 1).strip();
-            boolean startsQuoted = value.startsWith("\"");
-            boolean endsQuoted = value.endsWith("\"");
-            if (startsQuoted != endsQuoted) continue;
-            if (value.length() >= 2 && startsQuoted) {
-                value = value.substring(1, value.length() - 1);
-            }
-            if (name.equals("filename*")) {
-                int encodingSeparator = value.indexOf("''");
-                if (encodingSeparator >= 0) value = value.substring(encodingSeparator + 2);
-                try {
-                    value = URLDecoder.decode(value, StandardCharsets.UTF_8);
-                } catch (IllegalArgumentException exception) {
-                    continue;
-                }
-            }
-            if (value.endsWith(".pdf")) return true;
-        }
-        return false;
     }
 
     private boolean hasStructuredGameInformation(Document document) {
@@ -357,15 +322,6 @@ public class HttpOfficialRulebookSourceInspector implements OfficialRulebookSour
                 || contentType.startsWith("application/xhtml+xml");
     }
 
-    private boolean hasPdfMagic(byte[] body) {
-        return body.length >= 5
-                && body[0] == '%'
-                && body[1] == 'P'
-                && body[2] == 'D'
-                && body[3] == 'F'
-                && body[4] == '-';
-    }
-
     private boolean looksLikeHtml(byte[] body) {
         int length = Math.min(body.length, 256);
         String prefix = new String(body, 0, length, StandardCharsets.US_ASCII).stripLeading().toLowerCase(Locale.ROOT);
@@ -376,7 +332,7 @@ public class HttpOfficialRulebookSourceInspector implements OfficialRulebookSour
         return new Request.Builder()
                 .url(source.toASCIIString())
                 .header("Accept", "application/pdf,text/html,application/xhtml+xml;q=0.9,*/*;q=0.1")
-                .header("User-Agent", "RulePilot/0.1 rulebook-source-review")
+                .header("User-Agent", HttpOfficialRulebookSourceFetcher.SOURCE_USER_AGENT)
                 .build();
     }
 }

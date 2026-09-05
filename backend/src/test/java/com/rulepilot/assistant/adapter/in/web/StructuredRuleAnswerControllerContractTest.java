@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
@@ -16,7 +17,11 @@ import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.task.TaskRejectedException;
 
 class StructuredRuleAnswerControllerContractTest {
 
@@ -237,7 +242,30 @@ class StructuredRuleAnswerControllerContractTest {
     }
 
     @Test
-    void identifiesExecutorUnavailabilityAsSafeToRetryAfterRecovery() {
+    void rejectsAnUnadmittedAnswerWithoutSchedulingItAndOffersRetry() throws Exception {
+        var executor = new StructuredRuleAnswerStreamConfiguration().structuredRuleAnswerStreamExecutor();
+        executor.initialize();
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean rejectedWorkStarted = new AtomicBoolean();
+        try {
+            for (int index = 0; index < executor.getMaxPoolSize(); index++) {
+                executor.execute(() -> {
+                    try {
+                        release.await();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
+            assertThatThrownBy(() -> executor.execute(() -> rejectedWorkStarted.set(true)))
+                    .isInstanceOf(TaskRejectedException.class);
+        } finally {
+            release.countDown();
+            executor.shutdown();
+        }
+        assertThat(executor.getThreadPoolExecutor().awaitTermination(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(rejectedWorkStarted).isFalse();
+
         var error = StructuredRuleAnswerController.serviceUnavailable(
                 request("How many actions may I take?", "en-US"));
 

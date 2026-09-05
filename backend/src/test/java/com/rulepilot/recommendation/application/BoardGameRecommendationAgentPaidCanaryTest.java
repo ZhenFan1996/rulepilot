@@ -19,7 +19,6 @@ import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
-import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Request;
@@ -360,12 +359,16 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .argumentsJson());
             assertThat(search.path("requiredInteraction").asText()).isEqualTo("COOPERATIVE");
             assertThat(search.path("descriptionQuery").asText()).isNotBlank();
-            assertThat(response.games().stream()
-                            .flatMap(game -> game.replyParts().stream())
-                            .flatMap(part -> part.claim().evidence().stream())
-                            .map(CandidateObservation::attribute))
-                    .contains("publisherDescription");
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)).hasSize(1);
+            JsonNode publication = json.readTree(capture
+                    .toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)
+                    .getFirst()
+                    .argumentsJson());
+            List<String> citedEvidenceIds = new ArrayList<>();
+            publication.path("selections").forEach(selection -> selection.path("internalEvidenceIds")
+                    .forEach(id -> citedEvidenceIds.add(id.asText())));
+            assertThat(citedEvidenceIds).anyMatch(id -> id.endsWith(":publisherDescription"));
+            assertThat(response.assistantMessage()).isNotBlank().isEqualTo(publication.path("playerReply").asText());
             assertThat(totalMs).isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
             writeArtifact("candlelight-cooperative", capture, response, totalMs, null);
         } catch (Throwable failure) {
@@ -426,7 +429,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             public Turn nextStreaming(
                     BoardGameRecommendationModel.Request request,
                     String ownerUsername,
-                    java.util.function.Consumer<String> accumulatedArgumentsListener) {
+                    java.util.function.Consumer<ToolCall> accumulatedActionListener) {
                 String selectedModel = request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
                                 && request.tools().size() == 1
                         ? selectedPublicationModelName
@@ -435,12 +438,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 int callIndex = capture.begin("react_stream", selectedModel, request);
                 AtomicLong firstOutputMs = new AtomicLong(-1);
                 try {
-                    Turn result = delegate.nextStreaming(request, null, arguments -> {
+                    Turn result = delegate.nextStreaming(request, null, action -> {
                         long observed = elapsed(started);
                         if (firstOutputMs.compareAndSet(-1, observed)) {
                             capture.firstStreamOutput(callIndex, observed);
                         }
-                        accumulatedArgumentsListener.accept(arguments);
+                        accumulatedActionListener.accept(action);
                     });
                     capture.complete(callIndex, result, elapsed(started));
                     return result;
@@ -586,10 +589,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         published.put("games", response.games().stream()
                 .map(game -> Map.of(
                         "bggId", game.game().ranking().bggId(),
-                        "name", game.game().ranking().sourceName(),
-                        "replyParts", game.replyParts().stream()
-                                .map(part -> part.claim().text())
-                                .toList()))
+                        "name", game.game().ranking().sourceName()))
                 .toList());
         published.put("modelCalls", response.harness().modelCalls());
         published.put("catalogCalls", response.harness().catalogCalls());

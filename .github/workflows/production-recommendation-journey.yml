@@ -493,6 +493,9 @@ jobs:
                 . == null or is_integer($minimum; $maximum);
               def is_elapsed_array:
                 type == "array" and all(.[]; is_integer(0; 120000));
+              # Browser millisecond telemetry uses Number.MAX_SAFE_INTEGER, not a latency acceptance ceiling.
+              def is_stream_timing:
+                is_integer_or_null(0; 9007199254740991);
               def is_boolean_or_null:
                 . == null or type == "boolean";
               def is_sha256:
@@ -548,13 +551,12 @@ jobs:
                 type == "object"
                   and (.bggId | is_integer(1; 1000000000))
                   and (.nameSha256 | is_sha256)
-                  and (.originalNameSha256 | is_sha256)
-                  and (.replyPartsSha256 | is_sha256);
+                  and (.originalNameSha256 | is_sha256);
               def is_safe_text_array($maximum):
                 type == "array" and length <= $maximum and all(.[]; is_safe_text);
               def is_report_shape:
                 type == "object"
-                  and .reportSchemaVersion == 2
+                  and .reportSchemaVersion == 3
                   and (.generatedAt | type) == "string"
                   and (.generatedAt | length) <= 64
                   and (.completed | type) == "boolean"
@@ -584,6 +586,9 @@ jobs:
                   and (.naturalReply.domMatched | is_boolean_or_null)
                   and (.naturalReply.agentElapsedMs | is_integer_or_null(0; 120000))
                   and (.naturalReply.modelCallElapsedMs | is_elapsed_array)
+                  and (.naturalReply.firstAnswerPartMs | is_stream_timing)
+                  and (.naturalReply.firstRecommendationPartMs | is_stream_timing)
+                  and (.naturalReply.terminalMs | is_stream_timing)
                   and (.naturalReply.failure | is_failure_or_null)
                   and (.recommendation | type) == "object"
                   and (.recommendation.promptSha256 | is_sha256)
@@ -610,6 +615,9 @@ jobs:
                   and (.recommendation.domMatched | is_boolean_or_null)
                   and (.recommendation.agentElapsedMs | is_integer_or_null(0; 120000))
                   and (.recommendation.modelCallElapsedMs | is_elapsed_array)
+                  and (.recommendation.firstAnswerPartMs | is_stream_timing)
+                  and (.recommendation.firstRecommendationPartMs | is_stream_timing)
+                  and (.recommendation.terminalMs | is_stream_timing)
                   and (.recommendation.failure | is_failure_or_null)
                   and (.handoff | type) == "object"
                   and (.handoff.selectedBggId | is_integer_or_null(1; 1000000000))
@@ -663,7 +671,7 @@ jobs:
                     end
                   );
               def completed_acceptance($raw):
-                $raw.reportSchemaVersion == 2
+                $raw.reportSchemaVersion == 3
                   and $raw.completed == true
                   and $raw.stage == "completed"
                   and $raw.failedStage == null
@@ -716,7 +724,7 @@ jobs:
                   );
               def fallback_report($code):
                 {
-                  reportSchemaVersion: 2,
+                  reportSchemaVersion: 3,
                   generatedAt: (now | todateiso8601),
                   completed: false,
                   stage: "preflight-failed",
@@ -751,6 +759,9 @@ jobs:
                     domMatched: null,
                     agentElapsedMs: null,
                     modelCallElapsedMs: [],
+                    firstAnswerPartMs: null,
+                    firstRecommendationPartMs: null,
+                    terminalMs: null,
                     failure: null
                   },
                   recommendation: {
@@ -770,6 +781,9 @@ jobs:
                     domMatched: null,
                     agentElapsedMs: null,
                     modelCallElapsedMs: [],
+                    firstAnswerPartMs: null,
+                    firstRecommendationPartMs: null,
+                    terminalMs: null,
                     failure: null
                   },
                   handoff: {
@@ -794,7 +808,7 @@ jobs:
               if is_report_shape then
                 completed_acceptance(.) as $accepted
                 | {
-                    reportSchemaVersion: 2,
+                    reportSchemaVersion: 3,
                     generatedAt: .generatedAt,
                     completed: $accepted,
                     stage: (
@@ -844,6 +858,9 @@ jobs:
                       domMatched: .naturalReply.domMatched,
                       agentElapsedMs: .naturalReply.agentElapsedMs,
                       modelCallElapsedMs: .naturalReply.modelCallElapsedMs,
+                      firstAnswerPartMs: .naturalReply.firstAnswerPartMs,
+                      firstRecommendationPartMs: .naturalReply.firstRecommendationPartMs,
+                      terminalMs: .naturalReply.terminalMs,
                       failure: .naturalReply.failure
                     },
                     recommendation: {
@@ -857,7 +874,7 @@ jobs:
                       outcome: .recommendation.outcome,
                       assistantMessageSha256: .recommendation.assistantMessageSha256,
                       cards: [.recommendation.cards[] | {
-                        bggId, nameSha256, originalNameSha256, replyPartsSha256
+                        bggId, nameSha256, originalNameSha256
                       }],
                       shortfallCount: .recommendation.shortfallCount,
                       publicationErrors: .recommendation.publicationErrors,
@@ -865,6 +882,9 @@ jobs:
                       domMatched: .recommendation.domMatched,
                       agentElapsedMs: .recommendation.agentElapsedMs,
                       modelCallElapsedMs: .recommendation.modelCallElapsedMs,
+                      firstAnswerPartMs: .recommendation.firstAnswerPartMs,
+                      firstRecommendationPartMs: .recommendation.firstRecommendationPartMs,
+                      terminalMs: .recommendation.terminalMs,
                       failure: .recommendation.failure
                     },
                     handoff: {
@@ -945,7 +965,7 @@ jobs:
                   and .noStore == true;
               def exact_model:
                 .provider == $expectedProvider and .model == $expectedModel;
-              .reportSchemaVersion == 2
+              .reportSchemaVersion == 3
                 and .completed == true
                 and .stage == "completed"
                 and .failedStage == null
@@ -978,8 +998,7 @@ jobs:
                 and all(.recommendation.cards[];
                   (.bggId | type) == "number"
                     and (.nameSha256 | is_sha256)
-                    and (.originalNameSha256 | is_sha256)
-                    and (.replyPartsSha256 | is_sha256))
+                    and (.originalNameSha256 | is_sha256))
                 and ([.recommendation.cards[].bggId] | unique | length)
                   == (.recommendation.cards | length)
                 and .recommendation.shortfallCount

@@ -16,7 +16,8 @@ class StructuredRuleAnswerStreamConfiguration {
         executor.setThreadNamePrefix("structured-answer-stream-");
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(20);
+        // A queued answer has no run identity or deadline yet. Admit it now or return the recoverable busy response.
+        executor.setQueueCapacity(0);
         executor.setWaitForTasksToCompleteOnShutdown(false);
         executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;

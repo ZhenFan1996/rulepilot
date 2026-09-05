@@ -70,7 +70,7 @@ public final class PlayerFacingAnswerPresenter {
                 answer.confidence(),
                 answer.answerBasis(),
                 source(answer),
-                null,
+                answer.clarification(),
                 null,
                 answer.warnings(),
                 List.of(),

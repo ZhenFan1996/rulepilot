@@ -77,8 +77,8 @@ describe('teaching progress', () => {
   it('uses safe player language and derives chapter outcomes from publication activities', () => {
     const activities = [
       activity(1, 'composeTeachingSection|1', 'RUNNING'),
-      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
-      activity(3, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: POST_PUBLICATION_REVIEW_ACCEPTED'),
+      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: SUPPORTED_SECTION_PUBLISHED'),
+      activity(3, 'publishTeachingSection|1', 'SUCCEEDED', 'Published chapter'),
       activity(4, 'publishTeachingSection|2', 'REJECTED'),
     ]
     const snapshot = run('run-1', activities)
@@ -110,6 +110,8 @@ describe('teaching progress', () => {
     expect(teachingChapterFailureText(snapshot)).toBe('引用页没有形成可供这些章节发布的规则依据。')
     expect(teachingChapterFailureText(snapshot, 'en'))
       .toBe('The cited pages did not yield publishable rule evidence for these chapters.')
+    expect(teachingRemainingTimeText(plan, snapshot, Date.parse('2026-07-21T00:02:00Z')))
+      .not.toContain('完整基础讲解已经可读')
   })
 
   it('distinguishes an invalid evidence identity from an empty page read', () => {

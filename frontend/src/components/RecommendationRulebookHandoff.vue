@@ -1716,8 +1716,8 @@ onBeforeUnmount(() => {
             </div>
           </li>
         </ul>
-        <div v-if="!hasImportableCandidate" class="mt-4 flex flex-wrap gap-x-4 gap-y-2">
-          <button type="button" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline" @click="discover()">{{ copy.retryDiscovery }} →</button>
+        <div class="mt-4 flex flex-wrap gap-x-4 gap-y-2">
+          <button v-if="!hasImportableCandidate" type="button" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline" @click="discover()">{{ copy.retryDiscovery }} →</button>
           <RouterLink :to="manualRoute" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
         </div>
         <section v-if="identityCandidates.length" class="mt-5 border-t border-ink/10 pt-4" :aria-label="copy.identityOnlyTitle">

@@ -110,10 +110,31 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
 })
 
-test('keeps the tabletop guide and agent workspace usable on mobile', async ({ page }) => {
+test('keeps available chapters and the answer workspace usable while the mobile guide continues', async ({ page }, testInfo) => {
   let answerRequest: Record<string, unknown> | null = null
   await page.setViewportSize({ width: 390, height: 844 })
   await mockSharedApis(page)
+  await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({
+    json: { ...plan, sections: [...plan.sections, { position: 2, title: '完成回合', visualEvidenceRecommended: false }] },
+  }))
+  await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', route => route.fulfill({
+    json: { id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY', sections },
+  }))
+  await page.route('**/api/v1/assistant-runs/latest?mode=TEACHING*', route => route.fulfill({
+    json: {
+      run: {
+        id: 'teaching-run', subjectId: 'plan-1', state: 'RETRIEVING',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        completedAt: null, lastErrorCode: null,
+      },
+      budget: { usedModelCalls: 1 },
+      activities: [{
+        sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1',
+        outcome: 'SUCCEEDED', summary: 'SUPPORTED_SECTION_PUBLISHED', latencyMs: 10,
+        occurredAt: new Date().toISOString(),
+      }],
+    },
+  }))
   await page.route('**/api/auth/csrf', route => route.fulfill({
     json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' },
   }))
@@ -127,8 +148,8 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
           heading: '设置',
           excerpt: 'Place the lighthouse card at the route start.', pageFrom: 2, pageTo: 2,
         }],
-        exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
-        clarification: null, recovery: null, warnings: [],
+        exceptions: [], confidence: 'MEDIUM', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+        clarification: '你说的是哪一张效果牌？', recovery: null, warnings: [],
       },
       conversationTurnId: null,
       rulingReference: {
@@ -138,10 +159,14 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   })
 
   await page.goto('/lesson/plan-1')
+  await expect(page.getByText('已有章节可读', { exact: true })).toBeVisible()
+  await expect(page.getByText(/整本仍在后台生成 · 当前已有 1 节可以阅读/)).toBeVisible()
   const visual = page.getByTestId('lesson-visual-evidence')
   await expect(visual).toBeVisible()
   await expect(page.getByTestId('lesson-visual-context')).toHaveCount(0)
   await expectLoadedVisualImage(page)
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.screenshot({ path: testInfo.outputPath('partial-guide-mobile.png') })
   const visualBox = await visual.boundingBox()
   expect(visualBox).not.toBeNull()
   expect(visualBox!.width).toBeLessThanOrEqual(374)
@@ -152,12 +177,14 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   await expect(page.getByText('桌游资料由 BoardGameGeek 提供')).toBeVisible()
   await expect(page.locator('#lesson-question-panel .tabletop-panel.player-board')).toBeVisible()
   await expect(page.getByRole('textbox', { name: '向规则书提问' })).toBeVisible()
-  await page.getByRole('textbox', { name: '向规则书提问' }).fill('灯塔牌放在哪里？')
+  await page.getByRole('textbox', { name: '向规则书提问' }).fill('灯塔牌放在哪里，这张效果牌会改变设置吗？')
   await page.getByRole('button', { name: '提交问题' }).click()
   await expect(page.getByText('按规则书给出的设置顺序放置。')).toBeVisible()
+  await expect(page.getByText('你说的是哪一张效果牌？')).toBeVisible()
+  await expect(page.locator('[data-confidence="MEDIUM"]')).toBeVisible()
   await expect(page.getByText('第 2 页')).toBeVisible()
   expect(answerRequest).toMatchObject({
-    question: '灯塔牌放在哪里？',
+    question: '灯塔牌放在哪里，这张效果牌会改变设置吗？',
     language: 'zh-CN',
     learningIntent: null,
   })

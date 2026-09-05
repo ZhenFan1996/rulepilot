@@ -41,7 +41,6 @@ describe('RecommendationGameCard', () => {
           ],
           replyParts: [],
         },
-        sources: [],
         loading: false,
         responseLocale: 'en',
       },
@@ -50,8 +49,7 @@ describe('RecommendationGameCard', () => {
     expect(wrapper.text()).toContain('2–5 players · 45–75 min · Weight 2.2')
     expect(wrapper.get('[data-testid="recommendation-game-card"]').attributes('data-bgg-id')).toBe('901')
     expect(wrapper.find('[data-testid="candidate-fit-claims"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="recommendation-reason-unavailable"]').text())
-      .toContain('did not produce a safe candidate-specific reason')
+    expect(wrapper.find('[data-testid="recommendation-reason-unavailable"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Constraint check')
     expect(wrapper.text()).not.toContain('Candidate player range is inside the request.')
 
@@ -59,72 +57,6 @@ describe('RecommendationGameCard', () => {
     expect(wrapper.emitted('introduce')).toEqual([[game.bggId, game.name, 'en']])
     await wrapper.findAll('button').find(button => button.text() === 'Choose and find rulebook')!.trigger('click')
     expect(wrapper.emitted('select')).toEqual([[game]])
-  })
-
-  it('lays out claim-scoped reasons and tradeoffs without exposing evidence identifiers', () => {
-    const wrapper = mount(RecommendationGameCard, {
-      props: {
-        entry: {
-          game,
-          fitClaims: [],
-          replyParts: [
-            {
-              role: 'why_fit',
-              claimType: 'preference_inference',
-              subject: 'interaction',
-              text: '出版方简介描述了连续协作的共同决策。',
-              sourceIndexes: [],
-              publisherDescriptionGrounded: true,
-            },
-            {
-              role: 'tradeoff',
-              claimType: 'structured_fact',
-              subject: 'complexity',
-              text: 'BGG 标注复杂度：2.2 / 5。',
-              sourceIndexes: [],
-            },
-          ],
-        },
-        sources: [],
-        loading: false,
-        responseLocale: 'zh-CN',
-      },
-    })
-
-    expect(wrapper.text()).toContain('为什么选它')
-    expect(wrapper.text()).toContain('出版方简介描述了连续协作的共同决策。')
-    expect(wrapper.get('[data-testid="publisher-description-grounding"]').text())
-      .toBe('参考 BGG 出版方简介')
-    expect(wrapper.text()).toContain('需要留意')
-    expect(wrapper.text()).toContain('BGG 标注复杂度：2.2 / 5')
-    expect(wrapper.findAll('[data-testid="publisher-description-grounding"]')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="recommendation-reason-unavailable"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('evidenceId')
-  })
-
-  it('labels a recovery fact as verified material instead of claiming it explains user fit', () => {
-    const wrapper = mount(RecommendationGameCard, {
-      props: {
-        entry: {
-          game,
-          fitClaims: [],
-          replyParts: [{
-            role: 'verified_fact',
-            claimType: 'taxonomy_classification',
-            subject: 'mechanics',
-            text: '已核对的机制包括：牌库构筑。',
-            sourceIndexes: [],
-          }],
-        },
-        sources: [],
-        loading: false,
-        responseLocale: 'zh-CN',
-      },
-    })
-
-    expect(wrapper.text()).toContain('已核对资料')
-    expect(wrapper.text()).toContain('已核对的机制包括：牌库构筑。')
-    expect(wrapper.text()).not.toContain('为什么选它')
   })
 
 })

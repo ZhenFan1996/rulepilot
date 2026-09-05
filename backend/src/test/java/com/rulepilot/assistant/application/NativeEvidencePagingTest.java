@@ -368,12 +368,10 @@ class NativeEvidencePagingTest {
         data.put("requestedAnchorCount", 1);
         data.put("anchorBatchCount", 1);
         data.put("returnedAnchorCount", 1);
-        data.put("anchors", List.of(evidenceObservation(anchor)));
-        data.put("surroundingEvidence", List.of());
+        data.put("evidence", List.of(evidenceObservation(anchor)));
         data.put("hasMore", true);
         data.put("nextCursor", NativeEvidenceObservationBudget.PROVISIONAL_CURSOR);
         data.put("contextApplicabilityAuthority", false);
-        data.put("nextAction", "READ_EXACT_PAGES_AND_CHECK_APPLICABILITY");
         int envelope = observationTokens(ToolObservation.partial("EVIDENCE_CONTEXT_PARTIAL", data, 1));
         UUID runId = UUID.randomUUID();
         var tool = new ExpandRuleEvidenceContextNativeTool(reads, json, new NativeEvidenceCursorStore());
@@ -445,7 +443,6 @@ class NativeEvidencePagingTest {
         data.put("hasMore", true);
         data.put("nextCursor", NativeEvidenceObservationBudget.PROVISIONAL_CURSOR);
         data.put("relationshipClassificationAuthority", false);
-        data.put("nextAction", "READ_EXACT_PAGES_AND_COMPARE_APPLICABILITY");
         int envelope = observationTokens(ToolObservation.partial("RELATIONSHIP_CANDIDATE_PAGE", data, 1));
         UUID runId = UUID.randomUUID();
         var tool = new SearchRuleRelationshipsNativeTool(reads, json, new NativeEvidenceCursorStore());

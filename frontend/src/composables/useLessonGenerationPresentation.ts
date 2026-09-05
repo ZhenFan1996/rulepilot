@@ -14,15 +14,8 @@ import {
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
 
-interface GenerationLesson {
-  status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
-  sections: unknown[]
-}
-
 interface UseLessonGenerationPresentationOptions {
   plan: Readonly<Ref<TeachingProgressPlan | null>>
-  lesson: Readonly<Ref<GenerationLesson | null>>
-  currentSectionIndex: Readonly<Ref<number>>
   generationRun: Ref<TeachingRunProgress | null>
   generationStatusUnknown: Ref<boolean>
   now: Ref<number>
@@ -32,12 +25,6 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
   const { locale, t } = useLocale()
   const generationActive = computed(
     () => options.generationStatusUnknown.value || teachingRunIsActive(options.generationRun.value?.run.state),
-  )
-  const draftReady = computed(() => options.lesson.value?.status === 'DRAFT_READY')
-  const lessonStillGrowing = computed(() => generationActive.value && !draftReady.value)
-  const readingCurrentLastChapter = computed(
-    () => Boolean(options.lesson.value?.sections.length)
-      && options.currentSectionIndex.value === options.lesson.value!.sections.length - 1,
   )
   const generationActivities = computed(() => options.generationRun.value?.activities ?? [])
   const currentGenerationActivity = computed(() => generationActivities.value.at(-1))
@@ -62,9 +49,6 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
 
   return {
     generationActive,
-    draftReady,
-    lessonStillGrowing,
-    readingCurrentLastChapter,
     currentGenerationText,
     generationElapsed,
     processedGenerationChapters,

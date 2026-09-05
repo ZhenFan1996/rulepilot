@@ -16,8 +16,9 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
   → 玩家选择一张已验证身份的游戏卡
   → 发现官方规则书，或由玩家上传
   → 绑定不可变文档版本并提取页面
-  → 讲解 Agent 规划并逐章发布正文与可选配图
-  → 答疑 Agent 按需搜索、读页并给出引用回答
+  ├─ 直接阅读原规则书，并向答疑 Agent 提问
+  └─ 讲解 Agent 规划并逐章发布正文与可选配图
+       → 答疑 Agent 按需搜索、读页并给出引用回答
 ```
 
 | 结果 | 最小成功标准 | 后续失败时保留什么 |
@@ -33,7 +34,7 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
 
 | 层级 | 技术 | 职责 |
 | --- | --- | --- |
-| Web | Vue 3、TypeScript strict、Vite、Tailwind、Vue Query、PWA | 对话、真实进度、失败语义、讲解阅读和答疑 |
+| Web | Vue 3、TypeScript strict、Vite、Tailwind、PWA | 对话、真实进度、失败语义、讲解阅读和答疑 |
 | API | Java 21、Spring Boot 4、Spring Modulith、Spring AI | 用例、事务、Agent 工具协议和确定性发布边界 |
 | 数据 | PostgreSQL、pgvector | 业务事实、证据、会话、任务和持久化快照 |
 | 协调 | Redis、RabbitMQ、Transactional Outbox | 租约、并发、异步任务和可靠事件 |
@@ -60,7 +61,7 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
 
 系统不再单独调用“下一步动作模型”，也不规定一次请求必须经过几次模型、几次工具、几次修正或几个固定阶段。普通问候和不需要资料的闲聊可以一次模型调用、零工具结束；需要资料时，模型可在首轮直接选择搜索。
 
-调用次数和延迟是审计事实，不是正确性合同。同步答疑保留持久化 hard token 包络；逐章发布的讲解把 workload token 阈值作为容量观测，不因估算阈值被跨过而停止或清除已发布章节。真实停止边界仍是 provider 上下文/输出与额度、active-work deadline、取消、并发准入、安全尺寸、数据库能力，以及明确启用的资源包络。完全相同的已拒绝 action/observation 再次出现时，以 no-progress 停止，避免无意义循环；非终态的新完整候选仍可继续修正。已经声明完成的终态由发布边界一次性消费，不重新进入模型循环。
+调用次数和延迟是审计事实，不是正确性合同。同步答疑保留持久化 hard token 包络；逐章发布的讲解把 workload token 阈值作为容量观测，不因估算阈值被跨过而停止或清除已发布章节。真实停止边界仍是 provider 上下文/输出与额度、active-work deadline、取消、并发准入、安全尺寸、数据库能力，以及明确启用的资源包络。完全相同的已拒绝 action/observation 再次出现时，以 no-progress 停止，避免无意义循环；答疑的新完整候选可在资源边界内根据精确验证反馈继续修正。推荐的 `recommend_games` 由发布边界一次性消费，不重新进入模型循环。
 
 自由文本只用于玩家展示，不参与意图、实体、偏好、数量、证据、工具或状态路由。应用不得从旧稿抽字段、套模板或拼接玩家回复。
 
@@ -71,26 +72,35 @@ RulePilot 是一个证据优先的桌游助手：先根据玩家的自然需求�
 1. 模型收到自然对话、当前 turn 的显式证据和当前可用工具。
 2. 它可以直接自然回复，或调用目录搜索、目录发现、公开资料研究和比较等 typed tools。
 3. 每个模型轮次至多调用一个 typed action；应用返回 observation 后，模型再决定是否继续，避免并行提交尚未满足前置条件的动作。
-4. `recommend_games` 是一次性完整终态：包含候选身份，以及模型希望发布的 `playerReply`、证据绑定说明和可选取舍；当前搜索的目标数量由搜索 contract 提供，只有不搜索的已展示候选 follow-up 才在终态声明数量。调用后不会再进入 Agent 修正轮次。
-5. 应用不写推荐理由或取舍，也不根据已有候选伪造成功回复；局部叙述未通过证据边界时，只能显示透明的降级状态并保留已核验卡片。
+4. 首次工具调用的 `decisionBrief` 只包含经工具身份校验的 `chosenAction` 和模型撰写的公开 `message`；公开说明原文流式展示，应用不补标题、段落或默认判断。
+5. `recommend_games` 是一次性完整终态：`playerReply` 承载完整自然回答，选择理由、差异和有依据的取舍由模型连贯表达；`selections` 只绑定候选身份与支持证据，不再重复生成逐卡叙述。当前搜索的目标数量由搜索 contract 提供，只有不搜索的已展示候选 follow-up 才在终态声明数量。调用后不会再进入 Agent 修正轮次。
+6. 应用不写推荐理由或取舍，也不根据已有候选伪造成功回复；局部叙述未通过证据边界时，只能显示透明的降级状态并保留已核验卡片。
 
 搜索工具用一个完整的 current-turn contract 表达肯定类型、排除类型、显式机制、标题、人数、时长、复杂度和 `publicationCount`。这个字段只表示最终推荐卡片数量：玩家明确数量时必须保留，否则由 Agent 选择合理数量；目录候选窗口由应用独立控制，不能用发布数量缩小搜索。“不要扩展”不会再被保存成“偏好扩展”。通用发现还可以携带模型明确给出的简短英文 `descriptionQuery`：PostgreSQL 在同一次目录查询中用已有 BGG 名称、出版方简介和标签全文索引软排序，未命中时按普通排行降级；人数、时长、类型、机制和复杂度硬边界仍由结构化字段过滤和应用发布门共同保证。点名标题检索不能同时使用简介排序。候选选择不继承历史 profile。当前搜索拥有发布数量，`recommend_games` 的 schema 不再重复这个字段，也不能把“换一款”扩成三款；产品配置只作为最终展示上限，候选池大小仍不是发布数量。
 
 一次 turn 最多有一个目录搜索和一个有出处的体验研究。已有候选的主观体验追问在研究可用时直接选择研究或基于已有 observation 诚实回答，不再先运行一个只会重排相同字段的比较阶段；离线时仍可把已核验字段整理成一次结构化比较。内部 checkpoint 可以保留未发布候选供恢复审计，但 Agent 下一轮只能看到已经展示或明确聚焦的候选，不能把内部候选当成玩家已经收到的推荐。
 
-`recommend_games` 的工具 schema 对候选 ID 和本轮全部允许证据各保留一个扁平 enum；每条证据是否属于对应候选仍由应用边界校验，不为每个候选复制一套 `oneOf` schema。发布边界验证 BGG 身份、玩家明确的硬条件与排除项、候选和证据归属。additive unknown JSON 字段被忽略。至少一个候选通过身份和硬条件时，安全子集立即发布：无效候选形成 shortfall，无效的 `playerReply`、理由、取舍或证据绑定只删除对应叙述并明确降级，不触发新的模型调用。没有任何候选通过时返回 typed publication failure。完整原参数只存在于这一次 assistant tool call，不再复制成 correction payload。
+`recommend_games` 的工具 schema 对候选 ID 和本轮全部允许证据各保留一个扁平 enum；每条证据是否属于对应候选仍由应用边界校验，不为每个候选复制一套 `oneOf` schema。发布边界验证 BGG 身份、玩家明确的硬条件与排除项、候选和证据归属。additive unknown JSON 字段被忽略。至少一个候选通过身份和硬条件时，安全子集立即发布：无效候选形成 shortfall；任何选择身份或证据绑定失效时，完整正文的支持关系也不再成立，因此省略该正文，保留独立核实的卡片并显示一次单独的降级状态，不触发新的模型调用。有效的完整正文按原文发布，不拼接应用撰写的推荐理由。没有任何候选通过时返回 typed publication failure。完整原参数只存在于这一次 assistant tool call，不再复制成 correction payload。
 
-候选的 BGG 出版方简介以 `B{bggId}:publisherDescription` 作为候选级证据进入终态判断；只有一条已发布理由实际绑定这类证据时，卡片才显示“参考 BGG 出版方简介”，不会把普通结构化事实冒充成简介 RAG。BGG 元数据翻译的当前持久身份是英文源名称、完整规范化简介、分类和机制组成的稳定 V5 摘要；V4 无序字段摘要只用于精确兼容读取，历史行保留审计但新写入和批量预热不再产生 V4 身份。
+终态工具向 Agent 提供当前候选窗口内全部通过硬条件的候选身份和对应简介，供它自主取舍；最终卡片数量只约束选择结果，不提前截断可选身份或详细证据。身份与证据归属校验不等于逐句自然语言蕴含校验，推荐叙述的准确性仍需真实回答验收。
+
+候选的 BGG 出版方简介以 `B{bggId}:publisherDescription` 作为候选级证据进入终态判断；来源由已校验的选择证据直接投影，不依赖逐卡叙述。卡片展示已核实资料与操作，资料链接、候选核对数量和工具轨迹集中在可展开区域。历史持久会话仍可在该区域读取原有逐卡说明；新的推荐不再产生这套叙述字段。历史字段的移除条件是经过批准的前向数据迁移完成且持久记录中不再存在非空逐卡说明。BGG 元数据翻译的当前持久身份是英文源名称、完整规范化简介、分类和机制组成的稳定 V5 摘要；V4 无序字段摘要只用于精确兼容读取，历史行保留审计但新写入和批量预热不再产生 V4 身份。
 
 `NO_MATCH` 是有解释的成功结果；provider、协议、空响应、输出截断、deadline、取消、持久化或发布边界停止是 typed failure。失败 turn 不覆盖最近一次成功发布结果，也不把内部 checkpoint 冒充成玩家已收到的卡片。
 
 ## 规则书取得
 
-玩家明确选择游戏后才开始来源发现。官方来源必须通过 URL、内容类型、可读性、游戏/版本身份与来源归属校验；无法确认时要求玩家确认或上传。
+玩家明确选择游戏后才开始来源发现。官方来源必须通过 URL、响应内容、可读性、游戏/版本身份与来源归属校验；无法确认时要求玩家确认或上传。
+
+来源检查和下载共享 PDF 文件签名识别；响应类型或附件名不能单独证明返回的是规则书，也不能否定具有 PDF 签名的文件。来源请求明确标识 RulePilot 与项目地址。来源拒绝访问时保留浏览器或上传恢复入口；即使自动查找已有可导入候选，玩家仍可提供其他公开链接或自己的文件。
+
+讲解发布保留玩家的规则书标题；从原文确认的游戏名称用于讲解展示和未关联文档的目录关联，不重命名已保存的规则书。下载与讲解可独立恢复，讲解失败不会丢失已下载的文档版本。
 
 上传和官方导入最终形成同一种不可变文档版本。PDF/图片页处理按批次遍历全部输入；每批读取大小、文件字节、页面像素、总上传页数和网络响应大小属于内存、存储与安全资源边界，不是“只读前 N 页”的内容正确性门禁。
 
 导入失败只影响来源/文档 owner，不会重新执行推荐，也不会删除已经成功取得的来源和页面。
+
+页面就绪后即可进入原规则书阅读与答疑，无须等待讲解。阅读器保留当前页和提问草稿；桌面答疑与原页并排显示，手机以可关闭的对话层展示。页面支持适合页面与原尺寸放大切换，放大后在页内滚动查看。
 
 ## 讲解
 
@@ -112,11 +122,11 @@ Agent 每次都看到可用页、已读页原文、已发布章节、未读可�
 
 `GroundedTeachingAgent` 以章节为最小工作单元：
 
-1. 独立章节在虚拟线程中并行；有依赖的章节等待 prerequisite future。
+1. 重试先发布当前计划、生成器版本下全部已有的支持章节，并将它们作为已完成依赖；只生成缺失章节，复用章节不重复配图。独立章节在虚拟线程中并行；有依赖的正文只等待前章已验证正文，不等待可选配图。
 2. 章节读取 Agent 选中的原始 source pages，并生成完整自然正文候选。
 3. 发布边界只验证必需结构、当前文档/页面/证据身份和引用。
-4. 同一个章节任务继续准备可选配图；图片读取、模型选择或 crop 失败只省略当前图片。
-5. 正文与可选图片作为一次完整章节快照原子发布，不向玩家暴露半拼接章节。
+4. 计划明确建议配图的章节继续准备可选图片，并使用前章已接受图片避免重复裁图；无须配图的章节直接准备发布。图片读取、模型选择或 crop 失败只省略当前图片。
+5. 正文与可选图片作为一次完整章节快照原子发布，不向玩家暴露半拼接章节。每张重试快照保留全部可复用章节；`DRAFT_READY` 表示已有章节可读，是否仍在生成由任务状态决定，不代表整本完成或存在后台审核阶段。
 
 配图的语义和几何分属不同责任：应用为每个有引用的教学步骤提供有界视觉对象候选，视觉 Agent 必须逐步骤返回已选的
 opaque candidate ID，或明确返回 `NO_VISUAL`。模型不能跳过步骤、生成坐标或扩大区域；最终几何必须与应用提供的候选
@@ -151,11 +161,13 @@ NativeRuleAnswerAgent
 
 - `CHAT`：普通对话可一次调用、零工具，无引用。
 - `CLARIFICATION`：模型提出一个完整、自然的澄清问题，无伪造引用。
-- `RULE_ANSWER`：模型按需搜索 relationship/context/page/visual/image/crop 工具；发布时只能引用同一 run 内 source-bearing `search_rule_evidence` 或 `read_rule_pages` 返回的 canonical evidence identity。
+- `RULE_ANSWER`：模型按需搜索 relationship/context/page/visual/image/crop 工具；发布时只能引用同一 run 内 `search_rule_evidence`、`search_rule_relationships`、`expand_rule_evidence_context` 或 `read_rule_pages` 返回的 canonical evidence identity。完整原文通过同一验证后可直接引用，不要求重复读页；缺少适用条件时继续取证。视觉事实本身不能冒充原文证据。
+
+流式答疑有可用执行资源时立即开始，满载时立即返回保留原问题的可重试忙碌响应；未创建 run 的请求不进入等待队列。创建 run 后，模型和工具调用共享持久截止时间。
 
 同一 turn 中互不依赖的 read actions 使用虚拟线程并行。单个 sibling 的 provider/tool Runtime failure 只形成 correlated `TOOL_EXECUTION_FAILED` observation；成功 sibling 保留。只有取消、deadline、持久化资源控制或 owner boundary 才中断整批。
 
-发布边界验证当前文档版本、精确页快照、引用身份和硬数字。硬数字由模型在 `numericClaims` 中逐 literal 指向一个已引用证据 ID；自然解释、结论、例外和澄清全部由模型生成并原样发布。`shortVerdict` 是唯一必需的玩家结论；`explanation` 只是可选补充，省略或返回 `null` 时归一为空字符串，不会把已经完整的短答案变成协议失败。
+发布边界验证当前文档版本、精确页快照、引用身份和硬数字。硬数字由模型在 `numericClaims` 中逐 literal 指向一个已引用证据 ID；自然解释、结论、例外和澄清全部由模型生成并原样发布。已有依据的答案可以保留一个针对未确定部分的 `clarification`，此时使用 `MEDIUM` 信心，账户内和公开答疑都同时展示答案、引用和澄清。`shortVerdict` 是唯一必需的玩家结论；`explanation` 只是可选补充，省略或返回 `null` 时归一为空字符串，不会把已经完整的短答案变成协议失败。
 
 非法工具参数或终态的完整原 payload 只在前一条 assistant message 中保留一次；correction 将 `code/path/reason/currentSchema`、允许工具名或 evidence IDs 返回同一 Agent。additive unknown 字段被忽略。应用不要求玩家因为 `INVALID_MODEL_OUTPUT` 改写问题，也不以本地模板修补答案。
 
@@ -168,14 +180,14 @@ NativeRuleAnswerAgent
 | `local-degradation` | 单页、单章、单张配图或一个可选读取不可用 | 保留正文和成功 sibling，继续其余工作；终态列出具体缺口 |
 | `retry-preserved` | provider、队列、transport、deadline、账户暂不可用或取消 | 当前 owner 停止；持久化进度保留，可用原输入启动新 run |
 | `repair-required` | 认证、输入、来源、所有权、版本、持久化、身份或引用硬边界不成立 | 先修复前置事实；无变化重试既不安全也不会成功 |
-| `internal-correction` | 非终态 typed JSON、工具参数、协议或计划候选不合法 | 不是玩家请求失败；完整候选和精确诊断回到同一 Agent 整包重生 |
+| `internal-correction` | typed JSON、工具参数、协议、计划或答疑候选不合法 | 不是玩家请求失败；完整候选和精确诊断回到同一 Agent 整包重生 |
 
-`internal-correction` 只有在完全相同的拒绝重复、资源停止或 provider 无法继续时才转成最终停止。已经声明完成的终态不属于 internal correction：边界发布安全子集并局部降级，或在没有有效核心时直接停止。持久化活动只记录格式受限的 terminal rejection code；生产 canary 可以公开 nullable `completionRejectionCode`，但不会公开 path、reason、原候选、问题、证据、owner 或 subject。前端不解析自由文本来判断分类，不展示已退休的 `nextAction`，也不承诺“自动重试一次”或固定分钟数。
+`internal-correction` 只有在完全相同的拒绝重复、资源停止或 provider 无法继续时才转成最终停止。推荐 `recommend_games` 不进入 internal correction：边界发布安全子集并局部降级，或在没有有效核心时直接停止。持久化活动只记录格式受限的 terminal rejection code；生产 canary 可以公开 nullable `completionRejectionCode`，但不会公开 path、reason、原候选、问题、证据、owner 或 subject。前端不解析自由文本来判断分类，不展示已退休的 `nextAction`，也不承诺“自动重试一次”或固定分钟数。
 
 ## 持久化、并发与恢复
 
 - PostgreSQL durable state 是 conversation、document、assistant run、teaching plan 和 lesson 的权威来源。
-- SSE 展示实时活动，轮询负责断线恢复；UI 不模拟进度或从终态倒推不存在的阶段。
+- SSE 展示实时活动；推荐、讲解以各自持久身份恢复。答疑取消只使用当前 SSE 返回的 run ID，不按规则书最新任务猜测身份；尚未收到身份时中止本地等待，后端仍受持久 deadline 约束。UI 不模拟进度或从终态倒推不存在的阶段。
 - revision、lease、activation token、fencing、幂等键和 transactional outbox 防止重复消费和旧 worker 覆盖新结果。
 - 每个章节通过边界后形成 durable snapshot；局部图片或后续章节失败不会回滚它。
 - 同一个任务的终态写入失败由独立 reconciliation owner 处理；它的调度容量和指数退避属于进程资源保护，不是内容修正次数。
@@ -190,18 +202,6 @@ PR CI 只运行可重复、无付费模型的确定性检查；真实模型 cana
 生产主机装载应用镜像后，PostgreSQL、Redis、RabbitMQ 和 MinIO 必须在至少 60 秒内各自完成至少 12 个新的成功 Docker healthcheck，候选应用才会启动；重复读取尚未翻转的旧 `healthy` 状态不算成功。每个 Docker 查询和整个观察阶段都有硬上限。应用发布对有状态依赖只有观察权：不会 build、create、start、restart 或 recreate 容器，也不会删除持久卷；缺失、停止或声明配置漂移要求走单独评审的 stateful maintenance/bootstrap。观察开始时固定每个运行容器的 ID、实际 image ID、启动时间、重启次数和 Compose 配置 hash，窗口内任一运行时身份变化都会 fail closed。可变镜像标签后来指向另一个 image 不代表运行容器被替换，也不参与应用发布的身份判定。对于已在运行但 unhealthy 的容器，部署只观察其自行恢复。失败诊断先记录全部共享依赖与应用容器的安全状态，再执行耗时的磁盘扫描，避免丢失最接近故障时刻的 owner 证据。已经在共享环境执行的 Flyway 版本及 checksum 不可改写；发现漂移时恢复原 migration，并以新的前向版本迁移数据和兼容写入，不能用 `repair` 把源码漂移变成新真相。
 
 推荐 canary 与规则书→讲解→答疑 canary 分开运行。它们记录完整结果、模型/工具调用图、各段延迟、typed failure、部署 SHA 和清理结果，但不以固定模型调用数、固定页数、固定章节数或固定延迟充当产品正确性合同。sanitizer 删除凭据、模型私有 reasoning、用户上传和受版权保护的原始规则书内容；有 artifact 不等于旅程成功。
-
-2026-08-30 至 2026-09-01 的 Qwen3.8 Flash 与 Qwen3.7 Plus 真实基线保存在仓库外 `.local/agent-evaluation`：
-
-- 推荐普通问候/非游戏闲聊/轻桌游闲聊均为一次模型、零工具；复杂推荐为模型自主搜索、研究后提交完整终态。
-- Qwen3.7 Plus 在复杂 Harbor 样例中自主执行目录搜索、非终态比较 observation、体验研究和最终发布；两张卡分别生成针对当前玩家条件的完整说明，普通问候仍为一次模型、零工具。
-- 2026-09-01 的最终真实登录、PostgreSQL 会话、SSE 与 trace 链路覆盖 4 个自然场景、8 个连续 turn，8/8 发布成功；Agent 平均 13.73 秒、最慢 16.41 秒。三轮工人放置对话只在需要新候选时搜索，“换成一款”由 current-turn search contract 锁定为一张不重复卡；已有候选的比较追问均为一次模型、零目录、零研究。目录阶段合计 0.34 秒，发布阶段合计 0.008 秒；一次可选研究超时被限制在 5 秒。终态不再进入 repair loop。原始模型输出、发布结果、PromQL/TraceQL、时间窗和 trace ID 继续只保存在任务证据与忽略的 `.local/agent-evaluation` 中。
-- 2026-09-02 的 Qwen3.7 Plus 混合召回 canary 在“两人纯合作、烛光、故事感、九十分钟内”的自然请求中，同时生成结构化硬条件、`descriptionQuery` 和体验研究问题；仍是 2 次模型、1 次目录查询，11.82 秒完成，两个发布候选都绑定 `publisherDescription`。真实 10,064 份本地生产快照上，全文召回使用既有 GIN 索引，代表性完整相关性排序约 53ms；无匹配概念按普通排行返回，不新增 embedding、向量库或模型阶段。
-- Q&A 普通问候为一次模型、零工具；SETI raw 轨迹自主并行读页并得到正确规则答案。一次新 endpoint 的终态合成独占约 60 秒后 provider failure，证明这是外部调用停止而不是本地固定流水线等待。
-- Captain is Dead 新讲解 Agent 自主完成 5 次读页、7 次章节发布和一次 complete，7/7 章发布、无 activity failure；具体未覆盖主题保留为 unresolved，未冒充完整课程。
-- Ark Nova 20 页长规则书 canary 用 15 次 outline 决策和 9 次章节模型调用发布 9/9 个有引用章节及 9 个递增进度快照，所有 56 条 activity 均无失败；5 个未覆盖主题诚实保留，所以结果为 `DRAFT_READY`。独立持久化控制测试证明讲解跨过观测阈值仍继续，而答疑 hard token 上限仍会停止。
-
-这些样本证明接线、合同和失败归属，不代表总体失败率或 provider SLO。
 
 ## AI 安全与质量边界
 

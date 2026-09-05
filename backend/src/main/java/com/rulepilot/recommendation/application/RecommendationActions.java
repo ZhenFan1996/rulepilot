@@ -829,10 +829,6 @@ final class RecommendationActions {
                 "Use the evidence ID attached to the current user turn.";
             case "SEARCH_TYPE_CONFLICT" ->
                 "Remove every BGG product type that appears in both includeTypes and excludeTypes.";
-            case "RECOMMENDATION_EVIDENCE_REQUIRED", "RECOMMENDATION_EVIDENCE_NOT_GROUNDED" ->
-                "Cite observation IDs owned by that same verified candidate.";
-            case "RECOMMENDATION_REPLY_INVALID" ->
-                "Submit the complete locale-matched playerReply and whyFit values.";
             default -> "Correct the typed arguments using the current action schema and observations.";
         };
     }
@@ -1006,10 +1002,6 @@ final class RecommendationActions {
         String value = node.asText();
         if (value.isBlank()) throw new InvalidAction("TEXT_LENGTH_INVALID");
         return value;
-    }
-
-    private String playerReply(JsonNode arguments) {
-        return playerFacingText(arguments.path("playerReply"));
     }
 
     private List<String> playerFacingStrings(JsonNode node, int minimumItems) {

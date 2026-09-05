@@ -23,7 +23,6 @@ import type {
   RecommendationProgressStage,
   RecommendationProfile,
   RecommendedGame,
-  ResearchSource,
   RecommendationServerSession,
 } from '@/components/gameRecommendationTypes'
 import { useModalFocus } from '@/composables/useModalFocus'
@@ -50,9 +49,10 @@ const copy = {
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…', workingReply: '正在回复', workingSearch: '正在查找桌游', workingRecommendation: '正在整理推荐', replyingDetail: '正在生成回复…',
     reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', modelConfigurationError: '这次推荐没有完成，也没有写入对话结果。你刚才的请求仍保留；请先配置并保存推荐模型。当前配置不变时，同一请求不会成功，也不会自动重试。', retry: '重试', modelSettings: '前往模型设置', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
-    source: '可核对的 BGG 资料 · 从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
+    source: '核对了 {count} 款候选。', more: '换一批',
     researchSources: '资料来源',
-    recommendationJudgment: '我的选择与取舍',
+    verificationDetails: '资料与核对记录', previousExplanation: '原有说明', publisherDescriptionGrounded: '参考 BGG 出版方简介',
+    explanationUnavailable: '候选已核对，本轮说明未通过核对。',
     streamingChoices: '已核对的选择',
     shortfall: '本轮已核对 · {available} / {requested} 款',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
@@ -61,7 +61,7 @@ const copy = {
     toolNames: '完整目录按标题找候选', toolDetails: 'BGG 详情核对', toolDiscover: '公开资料发现候选', toolResearch: '体验资料查证', toolCompare: '按候选事实并排核对',
     starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
-    journeyPending: '正在确认《{game}》的准备状态', journeyWorking: '正在为《{game}》获取规则书并生成讲解 · 当前步骤 {progress}%', journeyWorkingUnknown: '正在为《{game}》获取规则书并生成讲解', journeyReady: '《{game}》的基础讲解可读',
+    journeyPending: '正在确认《{game}》的准备状态', journeyWorking: '正在为《{game}》获取规则书并生成讲解 · 当前步骤 {progress}%', journeyWorkingUnknown: '正在为《{game}》获取规则书并生成讲解', journeyReady: '《{game}》已有章节可读',
     journeyFailed: '《{game}》的准备流程需要处理', journeyStopped: '《{game}》的本次生成已停止，可从已完成内容重新开始', journeyPreserved: '《{game}》的已完成讲解可读，本次生成已经停止', journeyStatusLabel: '从推荐到答疑', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyReadRulebook: '阅读规则书', journeyProgress: '查看详细进度', journeyAllWork: '全部任务', journeyDialog: '规则书与讲解进度',
     recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换任务',
     loginRequired: '推荐需要登录；你写的条件已保留在这个浏览器会话中。登录后回来检查一下，再发送。',
@@ -77,9 +77,10 @@ const copy = {
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
     reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', modelConfigurationError: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; first configure and save a recommendation model. With the configuration unchanged, the same request cannot succeed and will not retry automatically.', retry: 'Retry', modelSettings: 'Open model settings', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
-    source: 'Verifiable BGG details · Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
+    source: 'Checked {count} candidates.', more: 'Try another batch',
     researchSources: 'Sources',
-    recommendationJudgment: 'My choice and tradeoffs',
+    verificationDetails: 'Sources and checks', previousExplanation: 'Previous notes', publisherDescriptionGrounded: 'Uses BGG publisher description',
+    explanationUnavailable: 'The candidates were verified; the explanation did not pass verification this turn.',
     streamingChoices: 'Verified choices',
     shortfall: 'Verified this turn · {available} / {requested}',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
@@ -88,7 +89,7 @@ const copy = {
     toolNames: 'Find titles in the full catalog', toolDetails: 'Verify BGG details', toolDiscover: 'Discover from public sources', toolResearch: 'Verify play experience', toolCompare: 'Compare candidate-scoped facts',
     starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
-    journeyPending: 'Checking the preparation status for {game}', journeyWorking: 'Getting the rulebook and building a guide for {game} · current step {progress}%', journeyWorkingUnknown: 'Getting the rulebook and building a guide for {game}', journeyReady: 'Base guide ready for {game}',
+    journeyPending: 'Checking the preparation status for {game}', journeyWorking: 'Getting the rulebook and building a guide for {game} · current step {progress}%', journeyWorkingUnknown: 'Getting the rulebook and building a guide for {game}', journeyReady: 'Chapters available for {game}',
     journeyFailed: 'The preparation flow for {game} needs attention', journeyStopped: 'This guide run for {game} has stopped; start a new run from completed work', journeyPreserved: 'Completed guide content for {game} is readable; this run has stopped', journeyStatusLabel: 'Recommendation to Q&A', journeyOpen: 'Continue this journey', journeyRead: 'Open guide', journeyReadRulebook: 'Read rulebook', journeyProgress: 'Open detailed progress', journeyAllWork: 'All work', journeyDialog: 'Rulebook and guide progress',
     recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch task',
     loginRequired: 'Sign in to use recommendations. Your draft is saved in this browser session; review it and send after you return.',
@@ -273,7 +274,6 @@ const failureDetailCode = ref<string | null>(null)
 const failedAssistantMessage = ref('')
 const pendingAssistantPreview = ref('')
 const pendingRecommendationGames = ref<RecommendedGame[]>([])
-const pendingRecommendationSources = ref<ResearchSource[]>([])
 const activeTurnLocale = ref<AppLocale | null>(null)
 const failedTurnLocale = ref<AppLocale | null>(null)
 const loginGateVisible = ref(false)
@@ -632,7 +632,6 @@ function beginLoading() {
   if (loadingClock) clearInterval(loadingClock)
   pendingAssistantPreview.value = ''
   pendingRecommendationGames.value = []
-  pendingRecommendationSources.value = []
   loadingStage.value = 'requesting'
   reportedLoadingStages.value = []
   latestRecommendationProgress.value = null
@@ -648,7 +647,6 @@ function endLoading() {
   activeRequest = null
   pendingAssistantPreview.value = ''
   pendingRecommendationGames.value = []
-  pendingRecommendationSources.value = []
   loading.value = false
 }
 
@@ -778,12 +776,6 @@ async function submitPendingTurn(
       pendingRecommendationGames.value = index < 0
         ? [...pendingRecommendationGames.value, part.game]
         : pendingRecommendationGames.value.map((existing, position) => position === index ? part.game : existing)
-      pendingRecommendationSources.value = [
-        ...new Map(
-          [...pendingRecommendationSources.value, ...part.researchSources]
-            .map(source => [`${source.index}:${source.url}`, source]),
-        ).values(),
-      ]
     })
     if (serverResponse.clientTurnId && serverResponse.clientTurnId !== pending.clientTurnId) {
       throw new Error('recommendation response belongs to another client turn')
@@ -1070,6 +1062,7 @@ function retry() {
 
 function playerConversationTranscript() {
   return messages.value
+    .filter(({ text }) => text.trim().length > 0)
     .map(({ id, role, text }) => ({ id, role, text }))
 }
 
@@ -1254,7 +1247,8 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
     }
     rememberedKnownGames.value = minimalKnownGames()
     const lastAssistant = [...messages.value].reverse().find(message => message.role === 'assistant')
-    if (lastAssistant) lastAssistant.response = latest
+    if (latest.assistantMessage.trim() && lastAssistant) lastAssistant.response = latest
+    else messages.value.push({ id: ++messageId, role: 'assistant', text: latest.assistantMessage, response: latest })
   } else {
     clarification.value = null
   }
@@ -1647,33 +1641,49 @@ onBeforeUnmount(() => {
               <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
                 <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
-                  <span v-if="message.response?.games.length" class="mb-1.5 block pl-1 font-display text-sm italic text-copper">{{ responseT(message.response, 'recommendationJudgment') }}</span>
                   <SafeMarkdown
+                    v-if="message.text.trim()"
                     :source="message.text"
                     :data-testid="message.response?.games.length ? 'assistant-recommendation-message' : undefined"
                     class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72"
                   />
-
-                  <div v-if="message.response?.researchSources?.length" data-testid="recommendation-research-sources" class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 pl-1 text-[0.6875rem] text-ink/50">
-                    <span class="font-semibold">{{ responseT(message.response, 'researchSources') }}</span>
-                    <a v-for="source in message.response.researchSources" :key="`${source.index}-${source.url}`" :href="source.url" target="_blank" rel="noopener noreferrer" class="font-medium text-indigo underline decoration-indigo/25 underline-offset-2">{{ source.title }} ↗</a>
-                  </div>
-
-                  <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" :aria-label="responseT(message.response, 'toolTrail')">
-                    <span class="recommendation-tool-label font-semibold">{{ responseT(message.response, 'toolTrail') }}</span>
-                    <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
-                  </div>
+                  <p v-else-if="message.response?.games.length" role="status" data-testid="recommendation-explanation-unavailable" class="text-sm leading-6 text-ink/60">{{ responseT(message.response, 'explanationUnavailable') }}</p>
 
                   <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
                     <p v-if="message.response.shortfall" class="mb-2 inline-flex rounded-full border border-copper/25 bg-copper/5 px-2.5 py-1 text-[0.6875rem] font-semibold text-copper">{{ responseT(message.response, 'shortfall', { available: message.response.shortfall.availableCount, requested: message.response.shortfall.requestedCount }) }}</p>
-                    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <p class="recommendation-source-summary text-xs leading-5">{{ responseT(message.response, 'source', { source: message.response.sourceCount.toLocaleString(), count: message.response.candidatesEvaluated }) }}</p>
-                      <button v-if="message.response === response" type="button" :disabled="loading" class="min-h-11 self-start text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40 sm:self-auto" @click="moreGames(message.response)">{{ responseT(message.response, 'more') }}</button>
-                    </div>
-                    <TransitionGroup tag="div" name="tile" class="mt-3 grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                      <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame" @details="openDetails" />
+                    <TransitionGroup tag="div" name="tile" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                      <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame" @details="openDetails" />
                     </TransitionGroup>
+                    <button v-if="message.response === response" type="button" :disabled="loading" class="mt-2 min-h-11 text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40" @click="moreGames(message.response)">{{ responseT(message.response, 'more') }}</button>
                   </div>
+
+                  <details v-if="message.response && (message.response.games.length || message.response.researchSources?.length || toolLabelsFor(message.response).length)" data-testid="recommendation-verification-details" class="mt-3 rounded-xl border border-ink/8 px-4 text-xs leading-5 text-ink/55">
+                    <summary class="min-h-11 cursor-pointer py-3 font-semibold text-ink/60">{{ responseT(message.response, 'verificationDetails') }}</summary>
+                    <div class="space-y-3 pb-4">
+                      <p v-if="message.response.games.length" class="recommendation-source-summary">{{ responseT(message.response, 'source', { count: message.response.candidatesEvaluated }) }}</p>
+                      <div v-if="message.response.games.length || message.response.researchSources?.length" data-testid="recommendation-research-sources" class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span class="font-semibold">{{ responseT(message.response, 'researchSources') }}</span>
+                        <a v-for="entry in message.response.games" :key="entry.game.bggId" :href="entry.game.bggUrl" target="_blank" rel="noopener noreferrer" class="font-medium text-indigo underline decoration-indigo/25 underline-offset-2">{{ entry.game.name }} · BGG ↗</a>
+                        <a v-for="source in message.response.researchSources" :key="`${source.index}-${source.url}`" :href="source.url" target="_blank" rel="noopener noreferrer" class="font-medium text-indigo underline decoration-indigo/25 underline-offset-2">{{ source.title }} ↗</a>
+                      </div>
+                      <div v-if="toolLabelsFor(message.response).length" class="flex flex-wrap items-center gap-2" :aria-label="responseT(message.response, 'toolTrail')">
+                        <span class="recommendation-tool-label font-semibold">{{ responseT(message.response, 'toolTrail') }}</span>
+                        <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
+                      </div>
+                      <section v-if="message.response.games.some(entry => entry.replyParts?.length)" class="space-y-3 border-t border-ink/8 pt-3">
+                        <h3 class="font-semibold">{{ responseT(message.response, 'previousExplanation') }}</h3>
+                        <template v-for="entry in message.response.games" :key="entry.game.bggId">
+                          <section v-if="entry.replyParts?.length" data-testid="recommendation-previous-explanation" class="space-y-2">
+                            <h4 class="font-semibold text-ink/65">{{ entry.game.name }}</h4>
+                            <div v-for="(part, index) in entry.replyParts" :key="index">
+                              <SafeMarkdown :source="part.text" class="text-sm leading-6" />
+                              <span v-if="part.publisherDescriptionGrounded" class="text-[0.6875rem] text-indigo">{{ responseT(message.response, 'publisherDescriptionGrounded') }}</span>
+                            </div>
+                          </section>
+                        </template>
+                      </section>
+                    </div>
+                  </details>
                 </article>
               </div>
               <section v-if="loading" data-testid="recommendation-live-work" class="recommendation-live-work relative min-w-0 overflow-hidden border-y border-ink/10 py-4 pl-5 pr-2 sm:pl-7 sm:pr-4" role="status" aria-live="polite">
@@ -1713,7 +1723,7 @@ onBeforeUnmount(() => {
                 <span class="mb-1.5 block pl-1 font-display text-sm italic text-copper">{{ translated(activeTurnLocale ?? locale, 'streamingChoices') }}</span>
                 <div class="rounded-2xl border border-copper/20 bg-canvas/45 p-3 sm:p-4">
                   <TransitionGroup tag="div" name="tile" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                    <RecommendationGameCard v-for="entry in pendingRecommendationGames" :key="entry.game.bggId" :entry="entry" :sources="pendingRecommendationSources" :loading="true" :response-locale="activeTurnLocale ?? locale" />
+                    <RecommendationGameCard v-for="entry in pendingRecommendationGames" :key="entry.game.bggId" :entry="entry" :loading="true" :response-locale="activeTurnLocale ?? locale" />
                   </TransitionGroup>
                 </div>
               </article>

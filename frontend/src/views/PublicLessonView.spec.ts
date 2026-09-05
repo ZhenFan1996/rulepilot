@@ -82,6 +82,27 @@ describe('PublicLessonView failure visibility', () => {
     expect(unresolved.text()).toContain('缺少身份一致证据的可选章节')
   })
 
+  it('shows a cited conclusion alongside the clarification needed for the remaining situation', async () => {
+    const answer = {
+      status: 'ANSWERED', shortVerdict: '先完成结算，再记录本轮结果。',
+      explanation: '规则书将记录安排在结算之后。',
+      citations: [{ heading: '回合结束', excerpt: '结算后记录结果。', pageFrom: 4, pageTo: 4 }],
+      exceptions: [], confidence: 'MEDIUM', answerBasis: 'DIRECT_RULE',
+      clarification: '你提到的是哪张卡牌的效果？', warnings: [],
+    }
+    const wrapper = await mountAt('/read/plan-1/questions', () => Response.json({
+      answer, visualAids: [], examples: [],
+    }))
+    await wrapper.get('#public-question').setValue('什么时候结算？')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(answer.shortVerdict)
+    expect(wrapper.text()).toContain(answer.clarification)
+    expect(wrapper.text()).toContain('回合结束')
+    expect(wrapper.get('[data-confidence]').attributes('data-confidence')).toBe('MEDIUM')
+  })
+
   it('does not tell the player to rewrite a question after invalid model JSON', async () => {
     const wrapper = await mountAt('/read/plan-1/questions', () => Response.json(failedAnswer('INVALID_MODEL_OUTPUT')))
     await wrapper.get('#public-question').setValue('什么时候结算？')
