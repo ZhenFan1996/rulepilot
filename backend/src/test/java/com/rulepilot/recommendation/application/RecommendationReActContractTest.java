@@ -18,7 +18,6 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
-import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
@@ -40,7 +39,7 @@ import org.junit.jupiter.api.Test;
 class RecommendationReActContractTest {
 
     @Test
-    void streamsTheDetailedFirstModelDecisionBeforeRunningItsChosenAction() throws Exception {
+    void streamsTheNaturalFirstModelUpdateBeforeRunningItsChosenAction() throws Exception {
         Game game = game(449, "Open Direction", BggGameType.PARTY, 3, 6, 45, "1.6");
         RecordingCatalog catalog = new RecordingCatalog(game);
         ScriptedModel model = new ScriptedModel(
@@ -49,12 +48,7 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.SEARCH_TOOL,
                         "{\"decisionBrief\":{"
                                 + "\"chosenAction\":\"search_bgg_catalog\","
-                                + "\"understoodGoal\":\"为四位疲惫玩家找一款一小时内、互动感强的游戏。\","
-                                + "\"constraints\":[\"四人\",\"最多一小时\",\"适合轻松互相吐槽\"],"
-                                + "\"direction\":\"先用人数和时长做硬筛选，再用聚会属性缩小范围。\","
-                                + "\"decisionFactors\":[\"人数和时长会直接淘汰不合适的游戏\",\"轻松互动是这次选择的主要体验目标\"],"
-                                + "\"nextStep\":\"查询 BGG 目录并核对候选的人数、时长与类型。\","
-                                + "\"uncertainties\":[\"实际吐槽感仍需由有出处的游玩资料确认\"]},"
+                                + "\"message\":\"我先找支持四人、一小时内能结束的聚会游戏；实际吐槽感还需要有出处的游玩资料确认。\"},"
                                 + "\"evidence\":\"U1\",\"publicationCount\":1,"
                                 + "\"includeTypes\":[\"PARTY\"],\"excludeTypes\":[],"
                                 + "\"requiredInteraction\":\"ANY\",\"players\":4,\"maxMinutes\":60}"),
@@ -62,7 +56,7 @@ class RecommendationReActContractTest {
                         "first-decision-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"这款符合硬条件。\",\"selections\":[{"
-                                + "\"bggId\":449,\"whyFit\":\"支持四人并可在一小时内完成。\","
+                                + "\"bggId\":449,"
                                 + "\"internalEvidenceIds\":[\"B449:playerCount\",\"B449:durationMinutes\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
         List<String> streamed = new ArrayList<>();
@@ -87,18 +81,8 @@ class RecommendationReActContractTest {
                 ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(streamed.getFirst())
-                .contains("**我对这次请求的判断**")
-                .doesNotContain("**下一步会核对什么**");
-        assertThat(streamed.getLast()).satisfies(brief -> assertThat(brief)
-                .contains(
-                        "**我对这次请求的判断**",
-                        "四位疲惫玩家",
-                        "**我准备优先走的方向**",
-                        "先用人数和时长做硬筛选",
-                        "**影响这个选择的因素**",
-                        "**下一步会核对什么**",
-                        "实际吐槽感仍需"));
+        assertThat(streamed.getLast())
+                .isEqualTo("我先找支持四人、一小时内能结束的聚会游戏；实际吐槽感还需要有出处的游玩资料确认。");
         assertThat(streamed)
                 .extracting(String::length)
                 .isSortedAccordingTo(Integer::compareTo);
@@ -131,9 +115,9 @@ class RecommendationReActContractTest {
                         "stream-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"这两款都通过了核对。\",\"selections\":["
-                                + "{\"bggId\":451,\"whyFit\":\"第一款支持两到四人。\",\"tradeoff\":false,\"internalEvidenceIds\":[\"B451:playerCount\"]},"
-                                + "{\"bggId\":999,\"whyFit\":\"不能显示。\",\"internalEvidenceIds\":[\"B451:playerCount\"]},"
-                                + "{\"bggId\":452,\"whyFit\":\"第二款也支持两到四人。\",\"internalEvidenceIds\":[\"B452:playerCount\"]}]}"));
+                                + "{\"bggId\":451,\"internalEvidenceIds\":[\"B451:playerCount\"]},"
+                                + "{\"bggId\":999,\"internalEvidenceIds\":[\"B451:playerCount\"]},"
+                                + "{\"bggId\":452,\"internalEvidenceIds\":[\"B452:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
         List<BoardGameRecommendationAgent.RecommendedGame> streamed = new ArrayList<>();
 
@@ -146,63 +130,49 @@ class RecommendationReActContractTest {
                 part -> streamed.add(part.game()));
 
         assertThat(streamed).extracting(game -> game.game().ranking().bggId()).containsExactly(451, 452);
-        assertThat(streamed.getFirst().replyParts()).extracting(part -> part.claim().text())
-                .containsExactly("第一款支持两到四人。");
+        assertThat(streamed.getFirst().replyParts()).isEmpty();
         assertThat(streamed).containsExactlyElementsOf(response.games());
         assertThat(response.games())
                 .extracting(game -> game.game().ranking().bggId())
                 .containsExactly(451, 452);
-        assertThat(RecommendationPublication.completeSelectionObjects(
-                        "{\"selections\":[{\"bggId\":1,\"whyFit\":\"含有 } 和 \\\"引号\\\"\"},"
-                                + "{\"bggId\":2"))
-                .containsExactly("{\"bggId\":1,\"whyFit\":\"含有 } 和 \\\"引号\\\"\"}");
         loop.stopBoundedCalls();
     }
 
     @Test
     void preservesCompleteEvidenceBackedNarrativeInStreamedAndFinalRecommendations() throws Exception {
-        String introduction = """
-                I have checked the available player information before selecting this game. The recommendation
-                keeps the verified facts separate from the practical judgment about whether the game suits your
-                table. You can use the supported player range as a starting point, then decide whether the group
-                wants to explore the game further. A range tells us which group sizes the catalog supports; it
-                does not establish that every supported size feels identical. If your group is flexible, that
-                distinction can help you decide what to ask next. The explanation below keeps that uncertainty
-                visible while preserving the evidence that is already useful for making a choice.
-                """;
-        String whyFit = """
-                The verified player range includes two, three, and four players, so the same candidate can stay
-                on your shortlist when the number of people at the table changes within that range. That is a
-                practical reason to consider it for a group whose attendance varies. This recommendation uses
-                the catalog's supported range as its evidence and treats flexibility as an inference about your
-                needs. It does not assume that a two-player session and a four-player session have the same pace,
-                interaction, or feel; those are separate questions to investigate before choosing.
-                """;
-        String tradeoff = """
-                The player range alone cannot tell us which supported count your group will enjoy most. Keep
-                the candidate if flexibility matters, but treat the experience at a particular count as an open
-                question. A supported count establishes eligibility and leaves room for a more specific follow-up.
+        String playerReply = """
+                First Signal is a useful option for your group of three, especially if attendance sometimes
+                changes. Its verified player range includes two, three, and four players, so you could keep the
+                same game on your shortlist when one person drops out or another joins. That flexibility is why
+                I would start here for the situation you described.
+
+                There is a limit to what that range tells us: it confirms which group sizes are supported, but
+                it does not establish that every size has the same pace or interaction. I would keep First Signal
+                if accommodating a changing group matters most, and check the experience at three players before
+                treating it as a perfect fit. We can make a useful choice from the information already available
+                while leaving that more specific question open.
                 """;
         String arguments = new ObjectMapper().writeValueAsString(java.util.Map.of(
-                "playerReply", introduction,
+                "playerReply", playerReply,
                 "selections", List.of(java.util.Map.of(
-                        "bggId", 451, "whyFit", whyFit, "tradeoff", tradeoff,
+                        "bggId", 451,
                         "internalEvidenceIds", List.of("B451:playerCount")))));
         ScriptedModel model = new ScriptedModel(
                 action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"players\":3,\"includeTypes\":[],\"excludeTypes\":[]}"),
                 action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL, arguments));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(
                 game(451, "First Signal", BggGameType.STRATEGY, 2, 4, 60, "2.2")));
         List<BoardGameRecommendationAgent.RecommendationPart> streamed = new ArrayList<>();
 
         var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(),
-                "Explain one option for our changing group size, including the limits of the evidence."),
+                "Explain one option for three people with changing attendance, including the limits of the evidence."),
                 "en", "player", ignored -> {}, ignored -> {}, streamed::add);
 
-        assertThat(response.assistantMessage()).isEqualTo(introduction);
-        assertThat(response.games().getFirst().replyParts()).extracting(part -> part.claim().text())
-                .containsExactly(whyFit, tradeoff);
+        assertThat(response.assistantMessage()).isEqualTo(playerReply);
+        assertThat(response.games().getFirst().claims()).isEmpty();
+        assertThat(response.games().getFirst().replyParts()).isEmpty();
+        assertThat(response.harness().actions()).doesNotContain("RECOMMENDATION_NARRATIVE_PARTIAL");
         assertThat(streamed).singleElement().satisfies(part -> assertThat(part.game())
                 .isEqualTo(response.games().getFirst()));
         loop.stopBoundedCalls();
@@ -231,11 +201,11 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"目录里现有三款 Ironworks 系列作品。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":481,\"whyFit\":\"支持两到四人游玩。\","
+                                + "{\"bggId\":481,"
                                 + "\"internalEvidenceIds\":[\"B481:playerCount\"]},"
-                                + "{\"bggId\":482,\"whyFit\":\"同样支持两到四人游玩。\","
+                                + "{\"bggId\":482,"
                                 + "\"internalEvidenceIds\":[\"B482:playerCount\"]},"
-                                + "{\"bggId\":483,\"whyFit\":\"虽未共享标题词，仍属于同一目录系列。\","
+                                + "{\"bggId\":483,"
                                 + "\"internalEvidenceIds\":[\"B483:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -300,9 +270,9 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":2,\"playerReply\":\"这两款都符合本轮条件；前者更轻快，后者更偏策略。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":501,\"whyFit\":\"节奏轻快，适合两人控制在一小时内完成。\","
-                                + "\"tradeoff\":\"策略纵深相对温和。\",\"internalEvidenceIds\":[\"B501:playerCount\",\"B501:durationMinutes\"]},"
-                                + "{\"bggId\":502,\"whyFit\":\"保留两人适配与时长边界，同时提供更高的策略密度。\","
+                                + "{\"bggId\":501,"
+                                + "\"internalEvidenceIds\":[\"B501:playerCount\",\"B501:durationMinutes\"]},"
+                                + "{\"bggId\":502,"
                                 + "\"internalEvidenceIds\":[\"B502:playerCount\",\"B502:durationMinutes\",\"B502:complexity\"],"
                                 + "\"presentationHint\":\"compact\"}],\"clientTrace\":\"additive-field\"}"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -337,17 +307,6 @@ class RecommendationReActContractTest {
         });
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
                 .containsExactly(501, 502);
-        assertThat(response.games()).extracting(game -> game.replyParts().getFirst().claim().text())
-                .containsExactly(
-                        "节奏轻快，适合两人控制在一小时内完成。",
-                        "保留两人适配与时长边界，同时提供更高的策略密度。");
-        assertThat(response.games()).allSatisfy(game -> assertThat(game.claims())
-                .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
-                .extracting(CandidateClaim::subject)
-                .containsExactly("playerCount", "durationMinutes", "complexity"));
-        assertThat(response.games().getFirst().replyParts())
-                .extracting(part -> part.claim().text())
-                .containsExactly("节奏轻快，适合两人控制在一小时内完成。", "策略纵深相对温和。");
         assertThat(response.shortfall()).isNull();
         assertThat(catalog.searches).hasValue(1);
         assertThat(catalog.lastFilters.get().types()).isEmpty();
@@ -378,9 +337,6 @@ class RecommendationReActContractTest {
                 .findFirst()
                 .orElseThrow()
                 .inputSchema());
-        assertThat(publicationSchema.toString())
-                .contains("whyFit", "candidate-specific synthesis")
-                .doesNotContain("cardText");
         assertThat(publicationSchema.path("properties")
                         .path("selections")
                         .path("items")
@@ -416,9 +372,9 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"两款都满足三人和一小时的硬条件，简介证据提供了不同主题方向。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":541,\"whyFit\":\"偏向安静的档案主题。\","
+                                + "{\"bggId\":541,"
                                 + "\"internalEvidenceIds\":[\"B541:publisherDescription\"]},"
-                                + "{\"bggId\":542,\"whyFit\":\"偏向暴风雨中的庇护所主题。\","
+                                + "{\"bggId\":542,"
                                 + "\"internalEvidenceIds\":[\"B542:publisherDescription\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -473,7 +429,6 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":1,\"playerReply\":\"这款符合本轮全部硬条件。\","
                                 + "\"selections\":[{\"bggId\":551,"
-                                + "\"whyFit\":\"五人、九十分钟内的轻量聚会选择。\","
                                 + "\"internalEvidenceIds\":[\"B551:playerCount\",\"B551:durationMinutes\","
                                 + "\"B551:complexity\",\"B551:bggType\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -491,14 +446,6 @@ class RecommendationReActContractTest {
         assertThat(response.profile().type()).isEqualTo(BggGameType.PARTY);
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
                 .containsExactly(551);
-        assertThat(response.games().getFirst().claims())
-                .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
-                .allSatisfy(claim -> {
-                    assertThat(claim.strength()).isEqualTo(ConstraintRange.Strength.HARD);
-                    assertThat(claim.relation()).isEqualTo(CandidateClaim.Relation.SATISFIED);
-                })
-                .extracting(CandidateClaim::subject)
-                .containsExactly("playerCount", "durationMinutes", "complexity", "bggType");
         assertThat(toolObservation(model.requests.getLast(), "typed-search")
                         .path("verifiedCandidateBggIds").toString())
                 .isEqualTo("[551]");
@@ -525,10 +472,10 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":2,\"playerReply\":\"这两款都符合目录条件；玩家体验资料补充了取舍。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":561,\"whyFit\":\"适合希望时间更短的一组。\","
-                                + "\"internalEvidenceIds\":[\"B561:durationMinutes\"]},"
-                                + "{\"bggId\":562,\"whyFit\":\"适合希望策略更重的一组。\","
-                                + "\"internalEvidenceIds\":[\"B562:complexity\"]}]}"));
+                                + "{\"bggId\":561,"
+                                + "\"internalEvidenceIds\":[\"B561:durationMinutes\",\"R561:1\"]},"
+                                + "{\"bggId\":562,"
+                                + "\"internalEvidenceIds\":[\"B562:complexity\",\"R562:1\"]}]}"));
         BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
             @Override
             public boolean configured() {
@@ -552,6 +499,7 @@ class RecommendationReActContractTest {
             }
         };
         RecommendationReActLoop loop = loop(model, catalog, research);
+        List<BoardGameRecommendationAgent.RecommendationPart> streamed = new ArrayList<>();
 
         var response = loop.converse(
                 new ConversationRequest(
@@ -559,9 +507,17 @@ class RecommendationReActContractTest {
                         "比较两款 Harbor 游戏；如果目录事实不够，再查看混合经验玩家的实际体验。"),
                 "zh-CN",
                 "player",
-                ignored -> {});
+                ignored -> {},
+                ignored -> {},
+                streamed::add);
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.researchSources()).singleElement().satisfies(source -> {
+            assertThat(source.index()).isEqualTo(1);
+            assertThat(source.url()).isEqualTo("https://example.test/play-report");
+        });
+        assertThat(streamed).hasSize(2).allSatisfy(part ->
+                assertThat(part.researchSources()).isEqualTo(response.researchSources()));
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
         assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(toolObservation(model.requests.getLast(), "research-search")
@@ -598,9 +554,9 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":2,\"playerReply\":\"三人局我会优先第一款，第二款更短。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":571,\"whyFit\":\"三人可玩，策略更重。\","
+                                + "{\"bggId\":571,"
                                 + "\"internalEvidenceIds\":[\"B571:playerCount\",\"B571:complexity\"]},"
-                                + "{\"bggId\":572,\"whyFit\":\"三人可玩，时间更短。\","
+                                + "{\"bggId\":572,"
                                 + "\"internalEvidenceIds\":[\"B572:playerCount\",\"B572:durationMinutes\"]}]}"));
         BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
             @Override
@@ -678,8 +634,8 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":2,\"playerReply\":\"现有证据只能比较复杂度和时长，互动强弱仍不确定。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":576,\"whyFit\":\"复杂度更高。\",\"internalEvidenceIds\":[\"B576:complexity\"]},"
-                                + "{\"bggId\":577,\"whyFit\":\"时长更短。\",\"internalEvidenceIds\":[\"B577:durationMinutes\"]}]}"));
+                                + "{\"bggId\":576,\"internalEvidenceIds\":[\"B576:complexity\"]},"
+                                + "{\"bggId\":577,\"internalEvidenceIds\":[\"B577:durationMinutes\"]}]}"));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(first, second));
         ConversationRequest followUp = new ConversationRequest(
                 RecommendationProfile.empty(),
@@ -729,8 +685,8 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":2,\"playerReply\":\"离线时只能比较已核验的时长和复杂度；实际三人体验仍然未知。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":581,\"whyFit\":\"复杂度较高。\",\"internalEvidenceIds\":[\"B581:complexity\"]},"
-                                + "{\"bggId\":582,\"whyFit\":\"时间较短。\",\"internalEvidenceIds\":[\"B582:durationMinutes\"]}]}"));
+                                + "{\"bggId\":581,\"internalEvidenceIds\":[\"B581:complexity\"]},"
+                                + "{\"bggId\":582,\"internalEvidenceIds\":[\"B582:durationMinutes\"]}]}"));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(first, second));
         ConversationRequest followUp = new ConversationRequest(
                 RecommendationProfile.empty(),
@@ -847,7 +803,6 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":1,\"playerReply\":\"推荐第一款。\","
                                 + "\"selections\":[{\"bggId\":701,"
-                                + "\"whyFit\":\"这张卡错误地借用了另一款游戏的证据。\","
                                 + "\"internalEvidenceIds\":[\"B702:playerCount\"]}]}"));
         RecommendationReActLoop evidenceLoop = loop(evidenceModel, evidenceCatalog);
 
@@ -862,9 +817,7 @@ class RecommendationReActContractTest {
                 .extracting(game -> game.game().ranking().bggId())
                 .containsExactly(701);
         assertThat(evidenceResponse.games().getFirst().replyParts()).isEmpty();
-        assertThat(evidenceResponse.assistantMessage()).isEqualTo("推荐第一款。");
-        assertThat(evidenceResponse.assistantMessage())
-                .doesNotContain("错误地借用了另一款游戏的证据");
+        assertThat(evidenceResponse.assistantMessage()).isEmpty();
         assertThat(evidenceResponse.harness().actions())
                 .contains("RECOMMENDATION_NARRATIVE_PARTIAL", "RECOMMEND_GAMES");
         assertThat(evidenceResponse.harness().modelCalls()).isEqualTo(2);
@@ -885,7 +838,6 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":1,\"playerReply\":\"推荐未验证的候选。\","
                                 + "\"selections\":[{\"bggId\":999,"
-                                + "\"whyFit\":\"没有可验证依据。\","
                                 + "\"internalEvidenceIds\":[\"B801:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -920,8 +872,8 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":2,\"playerReply\":\"两款都推荐。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":999,\"whyFit\":\"未核验。\",\"internalEvidenceIds\":[\"B901:playerCount\"]},"
-                                + "{\"bggId\":902,\"whyFit\":\"适合想玩稍重策略的玩家。\","
+                                + "{\"bggId\":999,\"internalEvidenceIds\":[\"B901:playerCount\"]},"
+                                + "{\"bggId\":902,"
                                 + "\"internalEvidenceIds\":[\"B902:complexity\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -935,9 +887,7 @@ class RecommendationReActContractTest {
         assertThat(response.games())
                 .extracting(game -> game.game().ranking().bggId())
                 .containsExactly(902);
-        assertThat(response.assistantMessage())
-                .contains("已经核验的候选")
-                .doesNotContain("两款都推荐");
+        assertThat(response.assistantMessage()).isEmpty();
         assertThat(response.shortfall()).isEqualTo(new BoardGameRecommendationAgent.RecommendationShortfall(2, 1));
         assertThat(response.harness().fallbackUsed()).isTrue();
         assertThat(response.harness().modelCalls()).isEqualTo(2);
@@ -962,9 +912,9 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":5,\"playerReply\":\"先给你三款最有区分度的，目录里还有其他候选。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":951,\"whyFit\":\"第一款策略最轻。\",\"internalEvidenceIds\":[\"B951:complexity\"]},"
-                                + "{\"bggId\":952,\"whyFit\":\"第二款处于中间。\",\"internalEvidenceIds\":[\"B952:complexity\"]},"
-                                + "{\"bggId\":953,\"whyFit\":\"第三款策略更重。\",\"internalEvidenceIds\":[\"B953:complexity\"]}]}"));
+                                + "{\"bggId\":951,\"internalEvidenceIds\":[\"B951:complexity\"]},"
+                                + "{\"bggId\":952,\"internalEvidenceIds\":[\"B952:complexity\"]},"
+                                + "{\"bggId\":953,\"internalEvidenceIds\":[\"B953:complexity\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
         var response = loop.converse(
@@ -1033,7 +983,6 @@ class RecommendationReActContractTest {
                         "long-description-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"这款叙事策略游戏值得先看。\",\"selections\":[{\"bggId\":956,"
-                                + "\"whyFit\":\"它有明确的叙事定位。\","
                                 + "\"internalEvidenceIds\":[\"B956:publisherDescription\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -1054,8 +1003,8 @@ class RecommendationReActContractTest {
         assertThat(excerpt.codePointCount(0, excerpt.length()))
                 .isLessThanOrEqualTo(RecommendationActions.MODEL_PUBLISHER_DESCRIPTION_MAX_CODE_POINTS);
         assertThat(excerpt).endsWith("…");
-        assertThat(response.games().getFirst().replyParts().getFirst().claim().evidence().getFirst().value())
-                .isEqualTo(description.strip());
+        assertThat(response.games().getFirst().game().details().description())
+                .isEqualTo(description);
         loop.stopBoundedCalls();
     }
 
@@ -1076,9 +1025,9 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":3,\"playerReply\":\"这里擅自扩成了三款。\","
                                 + "\"selections\":["
-                                + "{\"bggId\":971,\"whyFit\":\"第一款。\",\"internalEvidenceIds\":[\"B971:complexity\"]},"
-                                + "{\"bggId\":972,\"whyFit\":\"第二款。\",\"internalEvidenceIds\":[\"B972:complexity\"]},"
-                                + "{\"bggId\":973,\"whyFit\":\"第三款。\",\"internalEvidenceIds\":[\"B973:complexity\"]}]}"));
+                                + "{\"bggId\":971,\"internalEvidenceIds\":[\"B971:complexity\"]},"
+                                + "{\"bggId\":972,\"internalEvidenceIds\":[\"B972:complexity\"]},"
+                                + "{\"bggId\":973,\"internalEvidenceIds\":[\"B973:complexity\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
         var response = loop.converseValidated(
@@ -1133,7 +1082,7 @@ class RecommendationReActContractTest {
                         "encoded-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"这款适合轻松开局。\","
-                                + "\"selections\":\"[{\\\"bggId\\\":976,\\\"whyFit\\\":\\\"三到五人都能玩。\\\","
+                                + "\"selections\":\"[{\\\"bggId\\\":976,"
                                 + "\\\"internalEvidenceIds\\\":[\\\"B976:playerCount\\\"]}]\"}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -1189,7 +1138,7 @@ class RecommendationReActContractTest {
                 "shown-follow-up",
                 BoardGameRecommendationAgent.RECOMMEND_TOOL,
                 "{\"publicationCount\":1,\"playerReply\":\"我先只讨论已经展示的候选。\","
-                        + "\"selections\":[{\"bggId\":981,\"whyFit\":\"适合二到四人。\","
+                        + "\"selections\":[{\"bggId\":981,"
                         + "\"internalEvidenceIds\":[\"B981:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(shown, unpublished));
         ConversationRequest followUp = new ConversationRequest(
@@ -1278,7 +1227,6 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":1,\"playerReply\":\"这款符合你们想玩的方向。\","
                                 + "\"selections\":[{\"bggId\":1001,"
-                                + "\"whyFit\":\"三人可玩且属于工人放置机制。\","
                                 + "\"internalEvidenceIds\":[\"B1001:playerCount\",\"B1001:mechanics\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -1337,7 +1285,6 @@ class RecommendationReActContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":1,\"playerReply\":\"这款是核验过的双人纯合作游戏。\","
                                 + "\"selections\":[{\"bggId\":1012,"
-                                + "\"whyFit\":\"两个人共同对抗系统，并能在九十分钟内结束。\","
                                 + "\"internalEvidenceIds\":[\"B1012:playerCount\",\"B1012:durationMinutes\",\"B1012:mechanics\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -1354,9 +1301,6 @@ class RecommendationReActContractTest {
         assertThat(response.games())
                 .extracting(game -> game.game().ranking().bggId())
                 .containsExactly(1012);
-        assertThat(response.games().getFirst().claims())
-                .extracting(CandidateClaim::subject)
-                .contains("interaction");
         assertThat(catalog.lastFilters.get().mechanics()).containsExactly("Cooperative Game");
         JsonNode observation = toolObservation(model.requests.getLast(), "cooperative-search");
         assertThat(observation.path("verifiedCandidateBggIds").toString()).isEqualTo("[1012]");

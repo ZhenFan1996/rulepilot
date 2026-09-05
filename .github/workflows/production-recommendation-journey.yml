@@ -551,13 +551,12 @@ jobs:
                 type == "object"
                   and (.bggId | is_integer(1; 1000000000))
                   and (.nameSha256 | is_sha256)
-                  and (.originalNameSha256 | is_sha256)
-                  and (.replyPartsSha256 | is_sha256);
+                  and (.originalNameSha256 | is_sha256);
               def is_safe_text_array($maximum):
                 type == "array" and length <= $maximum and all(.[]; is_safe_text);
               def is_report_shape:
                 type == "object"
-                  and .reportSchemaVersion == 2
+                  and .reportSchemaVersion == 3
                   and (.generatedAt | type) == "string"
                   and (.generatedAt | length) <= 64
                   and (.completed | type) == "boolean"
@@ -672,7 +671,7 @@ jobs:
                     end
                   );
               def completed_acceptance($raw):
-                $raw.reportSchemaVersion == 2
+                $raw.reportSchemaVersion == 3
                   and $raw.completed == true
                   and $raw.stage == "completed"
                   and $raw.failedStage == null
@@ -725,7 +724,7 @@ jobs:
                   );
               def fallback_report($code):
                 {
-                  reportSchemaVersion: 2,
+                  reportSchemaVersion: 3,
                   generatedAt: (now | todateiso8601),
                   completed: false,
                   stage: "preflight-failed",
@@ -809,7 +808,7 @@ jobs:
               if is_report_shape then
                 completed_acceptance(.) as $accepted
                 | {
-                    reportSchemaVersion: 2,
+                    reportSchemaVersion: 3,
                     generatedAt: .generatedAt,
                     completed: $accepted,
                     stage: (
@@ -875,7 +874,7 @@ jobs:
                       outcome: .recommendation.outcome,
                       assistantMessageSha256: .recommendation.assistantMessageSha256,
                       cards: [.recommendation.cards[] | {
-                        bggId, nameSha256, originalNameSha256, replyPartsSha256
+                        bggId, nameSha256, originalNameSha256
                       }],
                       shortfallCount: .recommendation.shortfallCount,
                       publicationErrors: .recommendation.publicationErrors,
@@ -966,7 +965,7 @@ jobs:
                   and .noStore == true;
               def exact_model:
                 .provider == $expectedProvider and .model == $expectedModel;
-              .reportSchemaVersion == 2
+              .reportSchemaVersion == 3
                 and .completed == true
                 and .stage == "completed"
                 and .failedStage == null
@@ -999,8 +998,7 @@ jobs:
                 and all(.recommendation.cards[];
                   (.bggId | type) == "number"
                     and (.nameSha256 | is_sha256)
-                    and (.originalNameSha256 | is_sha256)
-                    and (.replyPartsSha256 | is_sha256))
+                    and (.originalNameSha256 | is_sha256))
                 and ([.recommendation.cards[].bggId] | unique | length)
                   == (.recommendation.cards | length)
                 and .recommendation.shortfallCount

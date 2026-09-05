@@ -8,20 +8,16 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
-import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.HarnessTrace;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReplyPart;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationShortfall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -32,9 +28,9 @@ import java.util.function.Consumer;
 /** The single structure, candidate, evidence-ownership, and publication boundary for recommendation prose. */
 final class RecommendationPublication {
 
-    private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("playerReply", "selections");
+    private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("selections");
     private static final Set<String> FOLLOW_UP_PUBLICATION_FIELDS =
-            Set.of("publicationCount", "playerReply", "selections");
+            Set.of("publicationCount", "selections");
     private static final Set<String> SELECTION_REQUIRED_FIELDS = Set.of("bggId");
 
     private final BoardGameRecommendationSelector selector;
@@ -98,7 +94,7 @@ final class RecommendationPublication {
             throw invalid(Code.PUBLICATION_SELECTION_COUNT_INVALID);
         }
 
-        List<CandidateReplyDraft> candidates = new ArrayList<>();
+        List<CandidateEvidence> candidates = new ArrayList<>();
         List<Game> selectedGames = new ArrayList<>();
         Set<Integer> selectedIds = new LinkedHashSet<>();
         Set<Code> localizedFailures = new LinkedHashSet<>();
@@ -129,7 +125,7 @@ final class RecommendationPublication {
                 localizedFailures.add(failure.code());
                 continue;
             }
-            candidates.add(candidateReply(state, game, selection, localizedFailures));
+            candidates.add(selectionEvidence(state, game, selection, localizedFailures));
             selectedGames.add(game);
         }
 
@@ -139,7 +135,9 @@ final class RecommendationPublication {
         }
 
         String playerReply = null;
-        if (!candidateSetChanged) {
+        // A complete answer may refer to every selection. Once any identity or evidence binding changes,
+        // preserve the verified cards without publishing prose whose full support can no longer be established.
+        if (!candidateSetChanged && localizedFailures.isEmpty()) {
             try {
                 playerReply = playerText(root.path("playerReply"));
             } catch (InvalidPublication failure) {
@@ -160,15 +158,13 @@ final class RecommendationPublication {
 
     Consumer<ToolCall> previewPublisher(
             RecommendationAgentState state,
-            String locale,
             Consumer<BoardGameRecommendationAgent.RecommendationPart> listener) {
         Objects.requireNonNull(listener, "recommendation part listener is required");
-        return new PreviewPublisher(state, locale, listener)::accept;
+        return new PreviewPublisher(state, listener)::accept;
     }
 
     private BoardGameRecommendationAgent.RecommendationPart previewCandidate(
             RecommendationAgentState state,
-            String locale,
             String selectionJson) {
         try {
             JsonNode selection = parse(selectionJson);
@@ -177,66 +173,43 @@ final class RecommendationPublication {
             PublicationSeed pending = Objects.requireNonNull(
                     state.pendingPublicationSeed, "pending recommendation publication is required");
             Game game = validatedCandidate(state, pending, runtime.recommendableIds(state), bggId);
-            RecommendedGame preview = projectModelReply(
-                    game,
-                    candidateReply(state, game, selection, new LinkedHashSet<>()),
-                    state,
-                    locale);
-            Set<String> publishedEvidenceIds = new LinkedHashSet<>();
-            java.util.stream.Stream.concat(
-                            preview.claims().stream(),
-                            preview.replyParts().stream().map(RecommendationReplyPart::claim))
-                    .flatMap(claim -> claim.evidence().stream())
-                    .map(CandidateObservation::id)
-                    .forEach(publishedEvidenceIds::add);
+            RecommendedGame preview = verifiedCard(game);
+            CandidateEvidence evidence = selectionEvidence(state, game, selection, new LinkedHashSet<>());
             return new BoardGameRecommendationAgent.RecommendationPart(
                     preview,
-                    runtime.responseSources(state, List.of(preview), publishedEvidenceIds));
+                    runtime.responseSources(state, List.of(preview), new LinkedHashSet<>(evidence.evidenceIds())));
         } catch (InvalidPublication | IllegalArgumentException ignored) {
             return null;
         }
     }
 
-    private CandidateReplyDraft candidateReply(
+    private CandidateEvidence selectionEvidence(
             RecommendationAgentState state,
             Game game,
             JsonNode selection,
             Set<Code> localizedFailures) {
         Map<String, CandidateObservation> availableEvidence =
                 observations.narrativeObservations(game, state.research);
-        String whyFit;
-        List<String> evidenceIds;
         try {
-            whyFit = playerText(selection.path("whyFit"));
-            evidenceIds = evidenceIds(selection.path("internalEvidenceIds"), 1, availableEvidence.keySet());
+            return new CandidateEvidence(
+                    game.ranking().bggId(),
+                    evidenceIds(selection.path("internalEvidenceIds"), 1, availableEvidence.keySet()));
         } catch (InvalidPublication failure) {
             localizedFailures.add(failure.code());
-            return new CandidateReplyDraft(game.ranking().bggId(), null, null, List.of());
+            return new CandidateEvidence(game.ranking().bggId(), List.of());
         }
-        String tradeoff = null;
-        if (selection.has("tradeoff")) {
-            try {
-                tradeoff = playerText(selection.path("tradeoff"));
-            } catch (InvalidPublication failure) {
-                localizedFailures.add(failure.code());
-            }
-        }
-        return new CandidateReplyDraft(game.ranking().bggId(), whyFit, tradeoff, evidenceIds);
     }
 
     private final class PreviewPublisher {
         private final RecommendationAgentState state;
-        private final String locale;
         private final Consumer<BoardGameRecommendationAgent.RecommendationPart> listener;
         private final Set<Integer> emittedIds = new LinkedHashSet<>();
         private int inspectedObjects;
 
         private PreviewPublisher(
                 RecommendationAgentState state,
-                String locale,
                 Consumer<BoardGameRecommendationAgent.RecommendationPart> listener) {
             this.state = state;
-            this.locale = locale;
             this.listener = listener;
         }
 
@@ -249,7 +222,7 @@ final class RecommendationPublication {
                 inspectedObjects++;
                 if (emittedIds.size() >= limit) continue;
                 BoardGameRecommendationAgent.RecommendationPart part =
-                        previewCandidate(state, locale, complete.get(index));
+                        previewCandidate(state, complete.get(index));
                 if (part == null || !emittedIds.add(part.game().game().ranking().bggId())) continue;
                 listener.accept(part);
             }
@@ -333,21 +306,13 @@ final class RecommendationPublication {
             String locale) {
         Permit permit = prepared.permit();
         PublicationDraft draft = prepared.draft();
-        Map<Integer, CandidateReplyDraft> draftsById = draft.candidates().stream()
-                .collect(java.util.stream.Collectors.toMap(
-                        CandidateReplyDraft::bggId,
-                        candidate -> candidate,
-                        (first, ignored) -> first,
-                        LinkedHashMap::new));
         List<RecommendedGame> games = permit.selectedGames().stream()
-                .map(game -> projectModelReply(
-                        game,
-                        Objects.requireNonNull(draftsById.get(game.ranking().bggId())),
-                        state,
-                        locale))
+                .map(this::verifiedCard)
                 .toList();
-        if (draft.playerReply() != null
-                || draft.candidates().stream().anyMatch(candidate -> candidate.whyFit() != null)) {
+        Set<String> publishedEvidenceIds = draft.candidates().stream()
+                .flatMap(candidate -> candidate.evidenceIds().stream())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (draft.playerReply() != null) {
             state.actions.add("MODEL_AUTHORED_RECOMMENDATION");
         }
         if (prepared.localized()) state.actions.add("RECOMMENDATION_NARRATIVE_PARTIAL");
@@ -355,7 +320,8 @@ final class RecommendationPublication {
                 state,
                 permit,
                 games,
-                draft.playerReply() == null ? localizedReply(locale) : draft.playerReply(),
+                draft.playerReply() == null ? "" : draft.playerReply(),
+                publishedEvidenceIds,
                 locale,
                 prepared.localized());
     }
@@ -365,17 +331,9 @@ final class RecommendationPublication {
             Permit permit,
             List<RecommendedGame> games,
             String assistantMessage,
+            Set<String> publishedEvidenceIds,
             String locale,
             boolean recovered) {
-        Set<String> publishedEvidenceIds = new LinkedHashSet<>();
-        games.stream()
-                .flatMap(game -> java.util.stream.Stream.concat(
-                        game.claims().stream(),
-                        game.replyParts().stream().map(RecommendationReplyPart::claim)))
-                .flatMap(claim -> claim.evidence().stream())
-                .map(CandidateObservation::id)
-                .forEach(publishedEvidenceIds::add);
-
         List<String> responseActions = new ArrayList<>(state.actions);
         if (permit.shortfall() != null) responseActions.add("RECOMMENDATION_VERIFIED_SET_SHORTFALL");
         responseActions.add("RECOMMEND_GAMES");
@@ -517,64 +475,8 @@ final class RecommendationPublication {
         return List.copyOf(evidenceIds);
     }
 
-    private RecommendedGame projectModelReply(
-            Game game,
-            CandidateReplyDraft draft,
-            RecommendationAgentState state,
-            String locale) {
-        Map<String, CandidateObservation> available = observations.narrativeObservations(
-                game, state.research);
-        List<RecommendationReplyPart> replyParts = new ArrayList<>();
-        if (draft.whyFit() != null) {
-            replyParts.add(replyPart(
-                    game.ranking().bggId(),
-                    ReplyPartRole.WHY_FIT,
-                    "whyFit",
-                    draft.whyFit(),
-                    draft.evidenceIds(),
-                    available));
-        }
-        if (draft.tradeoff() != null) {
-            replyParts.add(replyPart(
-                    game.ranking().bggId(),
-                    ReplyPartRole.TRADEOFF,
-                    "tradeoff",
-                    draft.tradeoff(),
-                    draft.evidenceIds(),
-                    available));
-        }
-        List<CandidateClaim> fitClaims = selector.fitClaims(
-                game,
-                state.selectionProfile(),
-                runtime.chinese(locale));
-        return new RecommendedGame(game, fitClaims, replyParts);
-    }
-
-    private RecommendationReplyPart replyPart(
-            int bggId,
-            ReplyPartRole role,
-            String subject,
-            String text,
-            List<String> evidenceIds,
-            Map<String, CandidateObservation> available) {
-        List<CandidateObservation> evidence = evidenceIds.stream()
-                .map(id -> Objects.requireNonNull(available.get(id)))
-                .toList();
-        CandidateClaim claim = new CandidateClaim(
-                bggId,
-                subject,
-                CandidateClaim.Type.PREFERENCE_INFERENCE,
-                null,
-                CandidateClaim.Relation.OBSERVED,
-                text,
-                evidence);
-        return new RecommendationReplyPart(role, claim);
-    }
-
-    private String localizedReply(String locale) {
-        return runtime.chinese(locale)
-                ? "下面保留了已经核验的候选；未通过证据校验的说明已省略。"
-                : "The verified candidates are preserved below; explanations that failed evidence validation were omitted.";
+    private RecommendedGame verifiedCard(Game game) {
+        return new RecommendedGame(game, List.of(), List.of());
     }
 
     private InvalidPublication invalid(Code code) {
@@ -602,18 +504,16 @@ final class RecommendationPublication {
 
     private record PublicationDraft(
             String playerReply,
-            List<CandidateReplyDraft> candidates) {
+            List<CandidateEvidence> candidates) {
         PublicationDraft {
             candidates = List.copyOf(candidates);
         }
     }
 
-    private record CandidateReplyDraft(
+    private record CandidateEvidence(
             int bggId,
-            String whyFit,
-            String tradeoff,
             List<String> evidenceIds) {
-        CandidateReplyDraft {
+        CandidateEvidence {
             evidenceIds = List.copyOf(evidenceIds);
         }
     }

@@ -37,9 +37,6 @@ const FAILURE_REASONS = new Set([
   'publication_rejected', 'service_failure',
 ])
 const STREAM_ERROR_CODES = new Set<string>(RECOMMENDATION_STREAM_ERROR_CODES)
-const SOURCE_REQUIRED_CLAIMS = new Set([
-  'attributed_experience', 'rule_procedure', 'publisher_description',
-])
 const MARKDOWN = new MarkdownIt({ breaks: true, html: false, linkify: true, typographer: false })
 MARKDOWN.renderer.rules.image = (tokens, index) =>
   MARKDOWN.utils.escapeHtml(tokens[index]?.content ?? '')
@@ -62,21 +59,16 @@ interface RecommendationResult {
   modelCallElapsedMs?: number[], agentElapsedMs?: number
   failureBoundary?: string | null, failureReason?: string | null
   games: RecommendationGame[]
+  researchSources?: Array<{ title: string, url: string }>
 }
 
 interface RecommendationGame {
   game: {
-    bggId: number, name: string, originalName: string, bggTypes: string[]
+    bggId: number, name: string, originalName: string, bggUrl: string, bggTypes: string[]
     minPlayers: number | null, maxPlayers: number | null, playingTimeMinutes: number | null
     minimumPlayTimeMinutes?: number | null, maximumPlayTimeMinutes?: number | null
     averageWeight: number | null
   }
-  fitClaims?: Array<{
-    subject: string, strength: 'hard' | 'soft', relation: 'satisfied' | 'conflict' | 'unknown'
-  }>
-  replyParts?: Array<{
-    role: string, claimType: string, subject: string, text: string, sourceIndexes: number[]
-  }>
 }
 
 interface RecommendationSession {
@@ -95,7 +87,7 @@ type HandoffTerminal =
   | 'RULEBOOK_READABLE' | 'LESSON_READABLE' | 'EXPLICIT_FAILURE'
 
 interface ProductionReport {
-  reportSchemaVersion: 2, generatedAt: string, completed: boolean, stage: string
+  reportSchemaVersion: 3, generatedAt: string, completed: boolean, stage: string
   failedStage: string | null, fatalFailure: FailureEvidence | null
   rawModelOutputCaptured: false
   deployment: {
@@ -121,7 +113,7 @@ interface ProductionReport {
     expectedGameType: string | null, requestMatched: boolean, outcome: RecommendationOutcome | null
     assistantMessageSha256: string | null
     cards: Array<{
-      bggId: number, nameSha256: string, originalNameSha256: string, replyPartsSha256: string
+      bggId: number, nameSha256: string, originalNameSha256: string
     }>
     shortfallCount: number | null, publicationErrors: string[]
     persistedMatched: boolean | null, domMatched: boolean | null
@@ -203,7 +195,7 @@ function initialReport(): ProductionReport {
   const activeReleaseId = process.env.RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_ID ?? ''
   const selectionPrompt = process.env.RULEPILOT_RECOMMENDATION_SELECTION_PROMPT ?? ''
   return {
-    reportSchemaVersion: 2,
+    reportSchemaVersion: 3,
     generatedAt: new Date().toISOString(),
     completed: false,
     stage: 'validation',
@@ -525,7 +517,6 @@ function published(result: RecommendationResult) {
       bggId: entry.game.bggId,
       name: entry.game.name,
       originalName: entry.game.originalName,
-      replyParts: entry.replyParts ?? [],
     })),
   }
 }
@@ -561,18 +552,6 @@ async function renderedRecommendation(page: Page) {
         bggId: Number(card.dataset.bggId),
         name: card.dataset.gameName ?? '',
         originalName: card.dataset.originalName ?? '',
-        replyParts: [...card.querySelectorAll<HTMLElement>('dl > div')].map(part => ({
-          role: part.dataset.role ?? '',
-          claimType: part.dataset.claimType ?? '',
-          subject: part.dataset.subject ?? '',
-          text: part.querySelector<HTMLElement>('dd')?.innerText ?? '',
-          sourceIndexes: part.dataset.sourceIndexes
-            ? part.dataset.sourceIndexes.split(',').map(Number)
-            : [],
-          publisherDescriptionGrounded: part.querySelector(
-            '[data-testid="publisher-description-grounding"]',
-          ) !== null,
-        })),
       })),
   }))
 }
@@ -586,10 +565,28 @@ async function recommendationDomMatches(page: Page, result: RecommendationResult
       ...game,
       name: normalized(game.name),
       originalName: normalized(game.originalName),
-      replyParts: game.replyParts.map(part => ({ ...part, text: normalized(part.text) })),
     })),
   })
   return JSON.stringify(normalizePublication(rendered)) === JSON.stringify(normalizePublication(expected))
+}
+async function recommendationSourcesMatch(page: Page, result: RecommendationResult) {
+  const expected = [
+    ...result.games.map(({ game }) => ({ title: `${game.name} · BGG`, url: game.bggUrl })),
+    ...(result.researchSources ?? []).map(({ title, url }) => ({ title, url })),
+  ]
+  if (expected.length === 0) return true
+  const details = page.getByTestId('assistant-recommendation-turn').last()
+    .getByTestId('recommendation-verification-details')
+  await expect(details).not.toHaveAttribute('open')
+  await details.locator('summary').click()
+  const sources = details.getByTestId('recommendation-research-sources')
+  await expect(sources).toBeVisible()
+  const rendered = await sources.locator('a').evaluateAll(links => links.map(link => ({
+    title: link.textContent?.replace(/ ↗$/u, '') ?? '',
+    url: link.getAttribute('href') ?? '',
+  })))
+  await details.locator('summary').click()
+  return JSON.stringify(rendered) === JSON.stringify(expected)
 }
 function recommendationErrors(result: RecommendationResult, expected: {
   requestedCardCount: number
@@ -602,6 +599,7 @@ function recommendationErrors(result: RecommendationResult, expected: {
   const errors: string[] = []
   const profile = result.profile
   if (result.outcome !== 'recommendations') errors.push('outcome')
+  if (!result.assistantMessage.trim()) errors.push('assistant-message')
   if (result.games.length < 1 || result.games.length > expected.requestedCardCount) errors.push('card-count')
   if (profile.type !== expected.gameType
     || profile.playerCount?.strength !== 'hard'
@@ -627,19 +625,6 @@ function recommendationErrors(result: RecommendationResult, expected: {
     if (expected.titleTerm && ![game.name, game.originalName].some(title =>
       title.normalize('NFKC').toLocaleLowerCase('en-US').includes(expected.titleTerm))) {
       errors.push(`title-term:${game.bggId}`)
-    }
-    for (const subject of ['playerCount', 'durationMinutes', 'complexity', 'bggType']) {
-      if (!(entry.fitClaims ?? []).some(claim => claim.subject === subject
-        && claim.strength === 'hard' && claim.relation === 'satisfied')) {
-        errors.push(`fit-claim:${game.bggId}:${subject}`)
-      }
-    }
-    const parts = entry.replyParts ?? []
-    if (parts.length === 0 || parts.some(part => !part.subject.trim() || !part.text.trim()
-      || !Array.isArray(part.sourceIndexes)
-      || part.sourceIndexes.some(index => !Number.isSafeInteger(index) || index < 1)
-      || SOURCE_REQUIRED_CLAIMS.has(part.claimType) && part.sourceIndexes.length === 0)) {
-      errors.push(`evidence:${game.bggId}`)
     }
   }
   const shortfall = expected.requestedCardCount - result.games.length
@@ -1062,7 +1047,6 @@ test('production publishes natural and grounded recommendation replies before th
       bggId: entry.game.bggId,
       nameSha256: sha256(entry.game.name),
       originalNameSha256: sha256(entry.game.originalName),
-      replyPartsSha256: sha256(JSON.stringify(entry.replyParts ?? [])),
     }))
     report.recommendation.shortfallCount = requestedCardCount - recommendation.games.length
     if (recommendation.outcome !== 'recommendations') {
@@ -1091,6 +1075,10 @@ test('production publishes natural and grounded recommendation replies before th
     await expect(page.getByTestId('recommendation-game-card'))
       .toHaveCount(recommendation.games.length)
     report.recommendation.domMatched = await recommendationDomMatches(page, recommendation)
+      && await recommendationSourcesMatch(page, recommendation)
+    for (const card of await page.getByTestId('recommendation-game-card').all()) {
+      await expect(card.getByRole('button', { name: '选这款，找规则书', exact: true })).toBeEnabled()
+    }
     if (report.recommendation.persistedMatched === false
       || report.recommendation.domMatched === false) {
       report.recommendation.failure ??= {

@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 
 class RecommendationDecisionBriefTest {
 
+    private static final String PUBLIC_MESSAGE = "我会先查找适合四人的游戏，再核对时长。\n\n如果资料有不确定的地方，我会直接说明。";
+
     private final ObjectMapper json = new ObjectMapper();
     private final RecommendationDecisionBrief decisions = new RecommendationDecisionBrief(json);
 
@@ -19,21 +21,21 @@ class RecommendationDecisionBriefTest {
         ToolCall call = call("research_game_fit", validBrief("search_bgg_catalog"));
         List<String> snapshots = new ArrayList<>();
         var publisher = decisions.streamingPublisher(
-                "zh-CN", Set.of("search_bgg_catalog", "research_game_fit"), snapshots::add);
+                Set.of("search_bgg_catalog", "research_game_fit"), snapshots::add);
 
         publisher.accept(call);
         publisher.finish(call);
 
         assertThat(snapshots).isEmpty();
-        assertThat(decisions.render(call, "zh-CN")).isEmpty();
+        assertThat(decisions.render(call)).isEmpty();
     }
 
     @Test
     void rejectsExtraFieldsInsteadOfPublishingUnvalidatedModelText() {
         String arguments = validBrief("search_bgg_catalog")
-                .replace("\"uncertainties\":[]", "\"uncertainties\":[],\"privateReasoning\":\"hidden\"");
+                .replace("\"message\":", "\"privateReasoning\":\"hidden\",\"message\":");
 
-        assertThat(decisions.render(call("search_bgg_catalog", arguments), "zh-CN")).isEmpty();
+        assertThat(decisions.render(call("search_bgg_catalog", arguments))).isEmpty();
     }
 
     @Test
@@ -49,7 +51,7 @@ class RecommendationDecisionBriefTest {
         String arguments = validBrief("search_bgg_catalog");
         List<String> snapshots = new ArrayList<>();
         var publisher = decisions.streamingPublisher(
-                "zh-CN", Set.of("search_bgg_catalog"), snapshots::add);
+                Set.of("search_bgg_catalog"), snapshots::add);
         StringBuilder accumulated = new StringBuilder();
 
         arguments.codePoints().forEach(codePoint -> {
@@ -58,21 +60,19 @@ class RecommendationDecisionBriefTest {
         });
         publisher.finish(call("search_bgg_catalog", arguments));
 
-        assertThat(snapshots.getFirst())
-                .contains("我对这次请求的判断")
-                .doesNotContain("下一步会核对什么");
-        assertThat(snapshots.getLast())
-                .contains("找适合四人的游戏", "先核对目录硬条件", "核对人数和时长");
-        assertThat(snapshots)
-                .extracting(String::length)
-                .isSortedAccordingTo(Integer::compareTo);
+        assertThat(snapshots).isNotEmpty();
+        assertThat(snapshots.getFirst()).isNotEqualTo(PUBLIC_MESSAGE);
+        assertThat(snapshots).allSatisfy(snapshot -> assertThat(PUBLIC_MESSAGE).startsWith(snapshot));
+        assertThat(snapshots.getLast()).isEqualTo(PUBLIC_MESSAGE);
+        assertThat(decisions.render(call("search_bgg_catalog", arguments)))
+                .contains(PUBLIC_MESSAGE);
     }
 
     @Test
     void doesNotPublishAStreamForAnActionOutsideTheOfferedSchema() {
         List<String> snapshots = new ArrayList<>();
         var publisher = decisions.streamingPublisher(
-                "zh-CN", Set.of("research_game_fit"), snapshots::add);
+                Set.of("research_game_fit"), snapshots::add);
 
         ToolCall call = call("search_bgg_catalog", validBrief("search_bgg_catalog"));
         publisher.accept(call);
@@ -86,14 +86,10 @@ class RecommendationDecisionBriefTest {
     }
 
     private String validBrief(String chosenAction) {
-        return "{\"decisionBrief\":{"
-                + "\"chosenAction\":\"" + chosenAction + "\","
-                + "\"understoodGoal\":\"找适合四人的游戏\","
-                + "\"constraints\":[\"四人\"],"
-                + "\"direction\":\"先核对目录硬条件\","
-                + "\"decisionFactors\":[\"人数会淘汰不适配的候选\"],"
-                + "\"nextStep\":\"核对人数和时长\","
-                + "\"uncertainties\":[]},"
-                + "\"evidence\":\"U1\",\"publicationCount\":2} ";
+        var root = json.createObjectNode();
+        root.set("decisionBrief", json.createObjectNode()
+                .put("chosenAction", chosenAction)
+                .put("message", PUBLIC_MESSAGE));
+        return root.put("evidence", "U1").put("publicationCount", 2).toString();
     }
 }
