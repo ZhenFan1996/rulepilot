@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Coordinates bounded catalog hydration across API and worker processes. */
+/** Coordinates worker leases, including hot-game refreshes after ranked hydration completes. */
 public interface BggPopularMetadataPrewarmProgress {
 
     int MAX_TARGET_COUNT = 10_000;

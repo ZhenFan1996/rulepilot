@@ -343,6 +343,28 @@ describe('GameDiscoveryView', () => {
       String(input).includes('/import') && options?.method === 'POST')).toBe(false)
   })
 
+  it('labels the original description when no stored Chinese translation is available', async () => {
+    let resolveLocalized!: (response: Response) => void
+    const localized = new Promise<Response>(resolve => { resolveLocalized = resolve })
+    const source = { ...details, description: 'Original BGG description.', descriptionTranslated: false }
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      if (String(input).includes('translate=true')) return localized
+      return Promise.resolve(Response.json(source))
+    }))
+
+    const { wrapper } = await mountDiscovery()
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在读取中文简介')
+    expect(wrapper.text()).toContain(source.description)
+
+    resolveLocalized(Response.json(source))
+    await flushPromises()
+    expect(wrapper.text()).toContain('暂无中文译文，以下为 BGG 原文。')
+    expect(wrapper.text()).toContain(source.description)
+    expect(wrapper.text()).not.toContain('正在读取中文简介')
+    expect(wrapper.text()).not.toContain('译自 BGG 原文')
+  })
+
   it('aborts pending localization and selection work when the view unmounts', async () => {
     let resolveLocalized!: (response: Response) => void
     const localized = new Promise<Response>(resolve => { resolveLocalized = resolve })

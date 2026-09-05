@@ -28,7 +28,7 @@ import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Low-priority hydration of metadata, translations, and profiled covers for ranked BGG games. */
+/** Prioritizes hot-game translations before resuming ranked metadata and cover hydration. */
 @Component
 @Profile("!test")
 @ConditionalOnProperty(name = "rulepilot.runtime.worker-enabled", havingValue = "true")
@@ -144,11 +144,6 @@ class BggPopularMetadataPrewarmer {
         BggRankedCatalog.Snapshot snapshot = rankedCatalog.findSnapshot().orElse(null);
         if (snapshot == null || snapshot.gameCount() == 0) return;
         int target = Math.min(targetGameCount, snapshot.gameCount());
-        try {
-            prewarmCovers(snapshot.sha256(), target);
-        } catch (RuntimeException exception) {
-            LOGGER.warn("BGG catalog cover prewarm could not be claimed; metadata prewarm will continue");
-        }
         Cohort cohort = progress.claim(
                         snapshot.sha256(),
                         target,
@@ -157,10 +152,20 @@ class BggPopularMetadataPrewarmer {
                         clock.instant(),
                         leaseDuration)
                 .orElse(null);
-        if (cohort == null) return;
+        if (cohort != null) prewarmMetadata(cohort, target);
+        try {
+            prewarmCovers(snapshot.sha256(), target);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("BGG catalog cover prewarm could not be claimed");
+        }
+    }
 
+    private void prewarmMetadata(Cohort cohort, int target) {
+        boolean hotTranslationsReady = translateHotGames();
         int metadataNext = hydrate(cohort.metadataStart(), cohort.metadataEnd());
-        int translationNext = translate(cohort.translationStart(), cohort.translationEnd());
+        int translationNext = hotTranslationsReady
+                ? translate(cohort.translationStart(), cohort.translationEnd())
+                : cohort.translationStart();
         try {
             progress.complete(cohort, metadataNext, translationNext, clock.instant());
             LOGGER.info(
@@ -172,6 +177,22 @@ class BggPopularMetadataPrewarmer {
         } catch (RuntimeException exception) {
             LOGGER.warn("BGG popular metadata prewarm progress could not be persisted; the lease will be retried");
         }
+    }
+
+    private boolean translateHotGames() {
+        try {
+            for (DiscoveryGame game : bgg.hotGameDetails()) {
+                PrewarmResult result = localization.prewarm(game);
+                if (!result.advanceCursor()) {
+                    LOGGER.info("BGG hot game translation paused for game {} with status {}",
+                            game.bggId(), result.status());
+                    return false;
+                }
+            }
+        } catch (RuntimeException exception) {
+            LOGGER.warn("BGG hot game metadata unavailable; ranked prewarm will continue");
+        }
+        return true;
     }
 
     private void prewarmCovers(String snapshotSha256, int target) {

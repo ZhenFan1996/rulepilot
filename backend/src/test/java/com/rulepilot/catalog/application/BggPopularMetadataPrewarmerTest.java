@@ -112,14 +112,7 @@ class BggPopularMetadataPrewarmerTest {
 
         prewarmer.prewarm();
 
-        assertThat(bgg.batches).hasSize(7);
-        assertThat(bgg.batches.get(0)).containsExactlyElementsOf(ids(1, 20));
-        assertThat(bgg.batches.get(1)).containsExactlyElementsOf(ids(21, 40));
-        assertThat(bgg.batches.get(2)).containsExactlyElementsOf(ids(41, 45));
-        assertThat(bgg.batches.get(3)).containsExactlyElementsOf(ids(1, 20));
-        assertThat(bgg.batches.get(4)).containsExactlyElementsOf(ids(21, 40));
-        assertThat(bgg.batches.get(5)).containsExactlyElementsOf(ids(41, 45));
-        assertThat(bgg.batches.get(6)).containsExactly(1, 2, 3);
+        assertThat(bgg.batches).contains(ids(1, 20), ids(21, 40), ids(41, 45), ids(1, 3));
         assertThat(translations.translatedIds).containsExactly(1, 2, 3);
         assertThat(covers.requests).hasSize(90);
         assertThat(covers.requests.getFirst()).isEqualTo("1:COMPACT");
@@ -295,6 +288,48 @@ class BggPopularMetadataPrewarmerTest {
         assertThat(progress.translationNext).isEqualTo(3);
     }
 
+    @Test
+    void translatesNewHotGamesAfterRankedSweepHasFinished() {
+        var bgg = new RecordingBgg();
+        bgg.hotIds = List.of(99, 100);
+        var translations = new RecordingTranslation(-1);
+        var progress = new RecordingProgress(new Cohort(
+                UUID.randomUUID(), "a".repeat(64), 20, 20, 20, 20));
+        var prewarmer = new BggPopularMetadataPrewarmer(
+                new MemoryRankedCatalog(20), bgg, new BggMetadataLocalizationService(translations),
+                progress, new RecordingCoverProgress(null), new SyncTaskExecutor(),
+                new RecordingCoverImages(), new SyncTaskExecutor(), CLOCK, true, 20, 20, 3,
+                Duration.ofMinutes(30));
+
+        prewarmer.prewarm();
+
+        assertThat(translations.translatedIds).containsExactly(99, 100);
+        assertThat(progress.metadataNext).isEqualTo(20);
+        assertThat(progress.translationNext).isEqualTo(20);
+    }
+
+    @Test
+    void prioritizesHotTranslationsAndPreservesRankedWorkWhenProviderIsUnavailable() {
+        var bgg = new RecordingBgg();
+        bgg.hotIds = List.of(99, 100);
+        var translations = new RecordingTranslation(100);
+        var progress = new RecordingProgress(new Cohort(
+                UUID.randomUUID(), "a".repeat(64), 0, 20, 0, 3));
+        var covers = new RecordingCoverProgress(new CoverCohort(
+                UUID.randomUUID(), "a".repeat(64), "test-profiled-cover-v1", 0, 20));
+        var prewarmer = new BggPopularMetadataPrewarmer(
+                new MemoryRankedCatalog(20), bgg, new BggMetadataLocalizationService(translations),
+                progress, covers, new SyncTaskExecutor(), new RecordingCoverImages(),
+                new SyncTaskExecutor(), CLOCK, true, 20, 20, 3, Duration.ofMinutes(30));
+
+        prewarmer.prewarm();
+
+        assertThat(translations.translatedIds).containsExactly(99, 100);
+        assertThat(progress.metadataNext).isEqualTo(20);
+        assertThat(progress.translationNext).isZero();
+        assertThat(covers.next).isEqualTo(20);
+    }
+
     private static List<Integer> ids(int first, int last) {
         return java.util.stream.IntStream.rangeClosed(first, last).boxed().toList();
     }
@@ -348,6 +383,7 @@ class BggPopularMetadataPrewarmerTest {
 
     private static final class RecordingBgg implements BoardGameGeekCatalog {
         private final List<List<Integer>> batches = new ArrayList<>();
+        private List<Integer> hotIds = List.of();
 
         @Override
         public boolean configured() {
@@ -371,7 +407,7 @@ class BggPopularMetadataPrewarmerTest {
 
         @Override
         public List<DiscoveryGame> hotGameDetails() {
-            return List.of();
+            return hotIds.isEmpty() ? List.of() : gameDetails(hotIds);
         }
 
         @Override

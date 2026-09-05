@@ -58,7 +58,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '桌游资料', unknownYear: '发行年份未知', stats: '游戏信息',
   evidenceBoundary: 'BGG 资料仅用于推荐、识别游戏和展示封面。后续讲解与答疑只会引用你确认的规则书。',
   select: '选择这款桌游并找规则书', selecting: '正在准备…', source: '查看 BGG 原始资料', retry: '重新读取',
-  translation: '译自 BGG 原文', translating: '原文已就绪，中文版本正在补齐…',
+  translation: '译自 BGG 原文', translating: '正在读取中文简介…', untranslated: '暂无中文译文，以下为 BGG 原文。',
   officialName: 'BGG 版本资料收录的官方中文名', metadataTranslation: '中文对照',
   cover: (gameName: string) => `${gameName} 封面`, players: (min: number, max: number) => `${min}–${max} 人`,
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
@@ -73,7 +73,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: 'Game details', unknownYear: 'Publication year unavailable', stats: 'Game details',
   evidenceBoundary: 'BGG data is used only for recommendations, game identification, and cover art. Teaching and Q&A cite only the rulebook you confirm.',
   select: 'Choose this game and find its rulebook', selecting: 'Preparing…', source: 'View original BGG data', retry: 'Try again',
-  translation: 'Translated from the BGG source', translating: 'Source details are ready; localized metadata is being added…',
+  translation: 'Translated from the BGG source', translating: 'Loading localized details…', untranslated: 'A translation is unavailable. The BGG source is shown below.',
   officialName: 'Official Chinese name recorded by a BGG edition', metadataTranslation: 'Localized terms',
   cover: (gameName: string) => `${gameName} cover`, players: (min: number, max: number) => `${min}–${max} players`,
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
@@ -315,7 +315,8 @@ onBeforeUnmount(() => {
         <div v-if="game" data-testid="game-long-details" class="min-w-0 border-t border-ink/10 pt-6">
           <p v-if="translating" class="text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
           <p v-else-if="game.descriptionTranslated" class="text-xs font-semibold text-copper">{{ copy.translation }}</p>
-          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68 [overflow-wrap:anywhere]">{{ game.description }}</p>
+          <p v-else-if="locale === 'zh-CN' && game.description" class="text-xs font-semibold text-copper" role="status">{{ copy.untranslated }}</p>
+          <p v-if="game.description" :class="locale === 'zh-CN' ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68 [overflow-wrap:anywhere]">{{ game.description }}</p>
           <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
             <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ game.designers.join('、') }}</dd></div>
             <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ game.publishers.join('、') }}</dd></div>

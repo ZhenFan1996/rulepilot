@@ -84,22 +84,23 @@ class PostgresBggPopularMetadataPrewarmProgressTest {
     }
 
     @Test
-    void acceptsTheTenThousandGameTargetUsedByTheProductionWorker() {
+    void keepsAnExclusiveLeaseForHotGamesAfterRankedWorkFinishesOrTargetShrinks() {
         Instant now = Instant.parse("2026-08-20T08:00:00Z");
+        String snapshot = "c".repeat(64);
+        var first = progress.claim(snapshot, 20, 20, 20, now, Duration.ofMinutes(30)).orElseThrow();
+        progress.complete(first, 20, 20, now.plusSeconds(1));
 
-        var cohort = progress.claim(
-                        "c".repeat(64),
-                        10_000,
-                        500,
-                        60,
-                        now,
-                        Duration.ofMinutes(30))
+        var hot = progress.claim(snapshot, 10, 20, 20, now.plusSeconds(2), Duration.ofMinutes(30))
                 .orElseThrow();
-
-        assertThat(cohort.metadataStart()).isZero();
-        assertThat(cohort.metadataEnd()).isEqualTo(500);
-        assertThat(cohort.translationStart()).isZero();
-        assertThat(cohort.translationEnd()).isEqualTo(60);
+        assertThat(hot.metadataStart()).isEqualTo(20);
+        assertThat(hot.metadataEnd()).isEqualTo(20);
+        assertThat(hot.translationStart()).isEqualTo(20);
+        assertThat(hot.translationEnd()).isEqualTo(20);
+        assertThat(progress.claim(snapshot, 10, 20, 20, now.plusSeconds(3), Duration.ofMinutes(30)))
+                .isEmpty();
+        progress.complete(hot, 20, 20, now.plusSeconds(4));
+        assertThat(progress.claim(snapshot, 10, 20, 20, now.plusSeconds(5), Duration.ofMinutes(30)))
+                .isPresent();
     }
 
     private static void enableProductionExtensions() {

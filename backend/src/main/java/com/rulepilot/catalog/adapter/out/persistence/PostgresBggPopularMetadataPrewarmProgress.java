@@ -66,7 +66,6 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
         UUID leaseId = UUID.randomUUID();
         MapSqlParameterSource claim = new MapSqlParameterSource()
                 .addValue("snapshotSha256", snapshotSha256)
-                .addValue("targetCount", targetCount)
                 .addValue("leaseId", leaseId)
                 .addValue("claimedAt", Timestamp.from(claimedAt))
                 .addValue("leaseUntil", Timestamp.from(claimedAt.plus(leaseDuration)));
@@ -76,7 +75,6 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
                         SET lease_id = :leaseId, lease_until = :leaseUntil, updated_at = :claimedAt
                         WHERE singleton
                           AND snapshot_sha256 = :snapshotSha256
-                          AND (metadata_next_offset < :targetCount OR translation_next_offset < :targetCount)
                           AND (lease_until IS NULL OR lease_until <= :claimedAt)
                         RETURNING metadata_next_offset, translation_next_offset
                         """,
@@ -88,9 +86,9 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
                                     leaseId,
                                     snapshotSha256,
                                     metadataStart,
-                                    Math.min(targetCount, metadataStart + metadataCohortSize),
+                                    Math.max(metadataStart, Math.min(targetCount, metadataStart + metadataCohortSize)),
                                     translationStart,
-                                    Math.min(targetCount, translationStart + translationCohortSize));
+                                    Math.max(translationStart, Math.min(targetCount, translationStart + translationCohortSize)));
                         })
                 .stream()
                 .findFirst();
