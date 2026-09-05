@@ -87,7 +87,6 @@ class RecommendationReActContractTest {
                 ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(streamed).hasSizeGreaterThan(20);
         assertThat(streamed.getFirst())
                 .contains("**我对这次请求的判断**")
                 .doesNotContain("**下一步会核对什么**");
@@ -132,11 +131,11 @@ class RecommendationReActContractTest {
                         "stream-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"这两款都通过了核对。\",\"selections\":["
-                                + "{\"bggId\":451,\"whyFit\":\"第一款支持两到四人。\",\"internalEvidenceIds\":[\"B451:playerCount\"]},"
+                                + "{\"bggId\":451,\"whyFit\":\"第一款支持两到四人。\",\"tradeoff\":false,\"internalEvidenceIds\":[\"B451:playerCount\"]},"
                                 + "{\"bggId\":999,\"whyFit\":\"不能显示。\",\"internalEvidenceIds\":[\"B451:playerCount\"]},"
                                 + "{\"bggId\":452,\"whyFit\":\"第二款也支持两到四人。\",\"internalEvidenceIds\":[\"B452:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
-        List<Integer> streamed = new ArrayList<>();
+        List<BoardGameRecommendationAgent.RecommendedGame> streamed = new ArrayList<>();
 
         var response = loop.converse(
                 new ConversationRequest(RecommendationProfile.empty(), "推荐两款两到四人的策略游戏。"),
@@ -144,9 +143,12 @@ class RecommendationReActContractTest {
                 "player",
                 ignored -> {},
                 ignored -> {},
-                part -> streamed.add(part.game().game().ranking().bggId()));
+                part -> streamed.add(part.game()));
 
-        assertThat(streamed).containsExactly(451, 452);
+        assertThat(streamed).extracting(game -> game.game().ranking().bggId()).containsExactly(451, 452);
+        assertThat(streamed.getFirst().replyParts()).extracting(part -> part.claim().text())
+                .containsExactly("第一款支持两到四人。");
+        assertThat(streamed).containsExactlyElementsOf(response.games());
         assertThat(response.games())
                 .extracting(game -> game.game().ranking().bggId())
                 .containsExactly(451, 452);
@@ -154,6 +156,55 @@ class RecommendationReActContractTest {
                         "{\"selections\":[{\"bggId\":1,\"whyFit\":\"含有 } 和 \\\"引号\\\"\"},"
                                 + "{\"bggId\":2"))
                 .containsExactly("{\"bggId\":1,\"whyFit\":\"含有 } 和 \\\"引号\\\"\"}");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void preservesCompleteEvidenceBackedNarrativeInStreamedAndFinalRecommendations() throws Exception {
+        String introduction = """
+                I have checked the available player information before selecting this game. The recommendation
+                keeps the verified facts separate from the practical judgment about whether the game suits your
+                table. You can use the supported player range as a starting point, then decide whether the group
+                wants to explore the game further. A range tells us which group sizes the catalog supports; it
+                does not establish that every supported size feels identical. If your group is flexible, that
+                distinction can help you decide what to ask next. The explanation below keeps that uncertainty
+                visible while preserving the evidence that is already useful for making a choice.
+                """;
+        String whyFit = """
+                The verified player range includes two, three, and four players, so the same candidate can stay
+                on your shortlist when the number of people at the table changes within that range. That is a
+                practical reason to consider it for a group whose attendance varies. This recommendation uses
+                the catalog's supported range as its evidence and treats flexibility as an inference about your
+                needs. It does not assume that a two-player session and a four-player session have the same pace,
+                interaction, or feel; those are separate questions to investigate before choosing.
+                """;
+        String tradeoff = """
+                The player range alone cannot tell us which supported count your group will enjoy most. Keep
+                the candidate if flexibility matters, but treat the experience at a particular count as an open
+                question. A supported count establishes eligibility and leaves room for a more specific follow-up.
+                """;
+        String arguments = new ObjectMapper().writeValueAsString(java.util.Map.of(
+                "playerReply", introduction,
+                "selections", List.of(java.util.Map.of(
+                        "bggId", 451, "whyFit", whyFit, "tradeoff", tradeoff,
+                        "internalEvidenceIds", List.of("B451:playerCount")))));
+        ScriptedModel model = new ScriptedModel(
+                action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL, arguments));
+        RecommendationReActLoop loop = loop(model, new RecordingCatalog(
+                game(451, "First Signal", BggGameType.STRATEGY, 2, 4, 60, "2.2")));
+        List<BoardGameRecommendationAgent.RecommendationPart> streamed = new ArrayList<>();
+
+        var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(),
+                "Explain one option for our changing group size, including the limits of the evidence."),
+                "en", "player", ignored -> {}, ignored -> {}, streamed::add);
+
+        assertThat(response.assistantMessage()).isEqualTo(introduction);
+        assertThat(response.games().getFirst().replyParts()).extracting(part -> part.claim().text())
+                .containsExactly(whyFit, tradeoff);
+        assertThat(streamed).singleElement().satisfies(part -> assertThat(part.game())
+                .isEqualTo(response.games().getFirst()));
         loop.stopBoundedCalls();
     }
 
@@ -330,16 +381,6 @@ class RecommendationReActContractTest {
         assertThat(publicationSchema.toString())
                 .contains("whyFit", "candidate-specific synthesis")
                 .doesNotContain("cardText");
-        assertThat(publicationSchema.path("properties").path("playerReply").path("maxLength").asInt())
-                .isEqualTo(RecommendationPublication.PLAYER_REPLY_MAX_CODE_POINTS);
-        assertThat(publicationSchema.path("properties")
-                        .path("selections")
-                        .path("items")
-                        .path("properties")
-                        .path("whyFit")
-                        .path("maxLength")
-                        .asInt())
-                .isEqualTo(RecommendationPublication.WHY_FIT_MAX_CODE_POINTS);
         assertThat(publicationSchema.path("properties")
                         .path("selections")
                         .path("items")
@@ -1547,14 +1588,15 @@ class RecommendationReActContractTest {
         public Turn nextStreaming(
                 Request request,
                 String ownerUsername,
-                java.util.function.Consumer<String> accumulatedArgumentsListener) {
+                java.util.function.Consumer<ToolCall> accumulatedActionListener) {
             Turn turn = next(request);
             if (turn.toolCalls().size() != 1) return turn;
             String arguments = turn.toolCalls().getFirst().argumentsJson();
+            ToolCall call = turn.toolCalls().getFirst();
             StringBuilder accumulated = new StringBuilder();
             arguments.codePoints().forEach(codePoint -> {
                 accumulated.appendCodePoint(codePoint);
-                accumulatedArgumentsListener.accept(accumulated.toString());
+                accumulatedActionListener.accept(new ToolCall(call.id(), call.name(), accumulated.toString()));
             });
             return turn;
         }

@@ -68,8 +68,9 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
     public String description() {
         return "Use after search when an excerpt may omit an adjacent condition, list continuation, or exception. "
                 + "Expand the relevant handles by the smallest useful radius; never use it first or to roam the active immutable "
-                + "rulebook. Neighboring text is candidate context, not an automatic ruling. Read the resulting exact "
-                + "pages before deciding, and stop once the missing boundary is visible.";
+                + "rulebook. The returned canonical text is source-bearing; cite it directly when it contains the "
+                + "needed condition and applicability. Adjacency alone does not establish a ruling. Read exact pages "
+                + "only when the missing boundary remains unresolved.";
     }
 
     @Override
@@ -79,7 +80,7 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
 
     @Override
     public String schemaVersion() {
-        return "3";
+        return "4";
     }
 
     @Override
@@ -255,12 +256,10 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
         data.put("requestedAnchorCount", requestedAnchorCount);
         data.put("anchorBatchCount", anchorBatchCount);
         data.put("returnedAnchorCount", anchors.size());
-        data.put("anchors", anchors);
-        data.put("surroundingEvidence", surrounding);
+        data.put("evidence", java.util.stream.Stream.concat(anchors.stream(), surrounding.stream()).toList());
         data.put("hasMore", hasMore);
         data.put("nextCursor", nextCursor);
         data.put("contextApplicabilityAuthority", false);
-        data.put("nextAction", "READ_EXACT_PAGES_AND_CHECK_APPLICABILITY");
         int evidenceCount = anchors.size() + surrounding.size();
         if (budgetBlocked) {
             return ToolObservation.partial("OBSERVATION_BUDGET_EXHAUSTED", data, 0);

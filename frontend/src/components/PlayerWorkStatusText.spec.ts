@@ -15,7 +15,7 @@ describe('PlayerWorkStatusText', () => {
     })
 
     expect(wrapper.element.tagName).toBe('STRONG')
-    expect(wrapper.text()).toBe('基础讲解可读')
+    expect(wrapper.text()).toBe('已有章节可读')
     expect(wrapper.attributes()).toMatchObject({
       'data-player-work-stage': 'GUIDE_READABLE',
       'data-player-work-capability': 'guide',

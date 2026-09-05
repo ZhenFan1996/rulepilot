@@ -343,7 +343,7 @@ final class RecommendationReActLoop {
                                         currentActions.stream().map(ToolSpec::name).collect(java.util.stream.Collectors.toSet()),
                                         answerPartListener)
                                 : null;
-                Consumer<String> publicationStream = state.pendingPublicationSeed == null
+                Consumer<ToolCall> publicationStream = state.pendingPublicationSeed == null
                         || currentActions.size() != 1
                         || !RECOMMEND_TOOL.equals(currentActions.getFirst().name())
                         ? null
@@ -351,7 +351,7 @@ final class RecommendationReActLoop {
                                 state,
                                 locale,
                                 recommendationPartListener);
-                Consumer<String> argumentStream = decisionStream == null
+                Consumer<ToolCall> argumentStream = decisionStream == null
                         ? publicationStream
                         : publicationStream == null
                                 ? decisionStream

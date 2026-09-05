@@ -40,14 +40,19 @@ describe('LessonAnswerPanel reliability boundary', () => {
     expect(wrapper.emitted('ask')).toHaveLength(1)
   })
 
-  it('keeps a cited answer visible while a new answer can be cancelled', async () => {
+  it('keeps the supported answer and its unresolved clarification visible while a follow-up can be cancelled', async () => {
+    const partial = {
+      ...answered,
+      confidence: 'MEDIUM' as const,
+      clarification: '这次触发的是哪张卡牌的效果？',
+    }
     const wrapper = mount(LessonAnswerPanel, {
       props: {
         ...baseProps,
         question: '新的问题',
-        answer: answered,
+        answer: partial,
         answeredQuestion: '什么时候结算？',
-        answerTurns: [{ question: '什么时候结算？', answer: answered, learningIntent: null }],
+        answerTurns: [{ question: '什么时候结算？', answer: partial, learningIntent: null }],
         answerLoading: true,
       },
       global,
@@ -55,8 +60,14 @@ describe('LessonAnswerPanel reliability boundary', () => {
 
     expect(wrapper.text()).toContain(answered.shortVerdict)
     expect(wrapper.text()).toContain('回合结束')
+    expect(wrapper.text()).toContain(partial.clarification)
+    expect(wrapper.get('[data-confidence]').attributes('data-confidence')).toBe('MEDIUM')
     await wrapper.findAll('button').find(button => button.text() === '停止等待')!.trigger('click')
     expect(wrapper.emitted('cancelAnswer')).toHaveLength(1)
+    await wrapper.setProps({ answer: null, answerLoading: false })
+    const history = wrapper.get('details')
+    expect(history.text()).toContain(partial.explanation)
+    expect(history.text()).toContain(partial.clarification)
   })
 
   it('shows a retry-preserved transport stop with its real code and allows unchanged retry', async () => {

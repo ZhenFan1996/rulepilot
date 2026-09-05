@@ -30,16 +30,12 @@ describe('useLessonGenerationPresentation', () => {
     setLocale('en')
     const presentation = useLessonGenerationPresentation({
       plan: ref({ sections: [{ position: 1, title: 'Setup', visualEvidenceRecommended: true }, { position: 2, title: 'Scoring', visualEvidenceRecommended: true }] }),
-      lesson: ref({ status: 'INCOMPLETE' as const, sections: [{}] }),
-      currentSectionIndex: ref(0),
       generationRun: ref(run('COMPOSING', [publishActivity])),
       generationStatusUnknown: ref(false),
       now: ref(new Date('2026-07-24T00:03:30Z').getTime()),
     })
 
     expect(presentation.generationActive.value).toBe(true)
-    expect(presentation.lessonStillGrowing.value).toBe(true)
-    expect(presentation.readingCurrentLastChapter.value).toBe(true)
     expect(presentation.processedGenerationChapters.value).toBe(1)
     expect(presentation.generationProgressWidth.value).toBe('50%')
     expect(presentation.currentGenerationText.value).toContain('chapter 1 “Setup” is now readable')
@@ -49,8 +45,6 @@ describe('useLessonGenerationPresentation', () => {
   it('keeps only unresolved player-facing local failures for the terminal explanation', () => {
     const presentation = useLessonGenerationPresentation({
       plan: ref({ sections: [{ position: 1, title: '开局', visualEvidenceRecommended: true }, { position: 2, title: '计分', visualEvidenceRecommended: true }] }),
-      lesson: ref({ status: 'DRAFT_READY' as const, sections: [{}] }),
-      currentSectionIndex: ref(0),
       generationRun: ref(run('FAILED', [
         { ...publishActivity, sequence: 1, operation: 'publishTeachingSection|1', outcome: 'REJECTED' },
         { ...publishActivity, sequence: 2, operation: 'publishTeachingSection|1', outcome: 'SUCCEEDED' },

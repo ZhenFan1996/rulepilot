@@ -426,7 +426,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             public Turn nextStreaming(
                     BoardGameRecommendationModel.Request request,
                     String ownerUsername,
-                    java.util.function.Consumer<String> accumulatedArgumentsListener) {
+                    java.util.function.Consumer<ToolCall> accumulatedActionListener) {
                 String selectedModel = request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
                                 && request.tools().size() == 1
                         ? selectedPublicationModelName
@@ -435,12 +435,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 int callIndex = capture.begin("react_stream", selectedModel, request);
                 AtomicLong firstOutputMs = new AtomicLong(-1);
                 try {
-                    Turn result = delegate.nextStreaming(request, null, arguments -> {
+                    Turn result = delegate.nextStreaming(request, null, action -> {
                         long observed = elapsed(started);
                         if (firstOutputMs.compareAndSet(-1, observed)) {
                             capture.firstStreamOutput(callIndex, observed);
                         }
-                        accumulatedArgumentsListener.accept(arguments);
+                        accumulatedActionListener.accept(action);
                     });
                     capture.complete(callIndex, result, elapsed(started));
                     return result;

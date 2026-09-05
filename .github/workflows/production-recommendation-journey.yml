@@ -493,6 +493,9 @@ jobs:
                 . == null or is_integer($minimum; $maximum);
               def is_elapsed_array:
                 type == "array" and all(.[]; is_integer(0; 120000));
+              # Browser millisecond telemetry uses Number.MAX_SAFE_INTEGER, not a latency acceptance ceiling.
+              def is_stream_timing:
+                is_integer_or_null(0; 9007199254740991);
               def is_boolean_or_null:
                 . == null or type == "boolean";
               def is_sha256:
@@ -584,6 +587,9 @@ jobs:
                   and (.naturalReply.domMatched | is_boolean_or_null)
                   and (.naturalReply.agentElapsedMs | is_integer_or_null(0; 120000))
                   and (.naturalReply.modelCallElapsedMs | is_elapsed_array)
+                  and (.naturalReply.firstAnswerPartMs | is_stream_timing)
+                  and (.naturalReply.firstRecommendationPartMs | is_stream_timing)
+                  and (.naturalReply.terminalMs | is_stream_timing)
                   and (.naturalReply.failure | is_failure_or_null)
                   and (.recommendation | type) == "object"
                   and (.recommendation.promptSha256 | is_sha256)
@@ -610,6 +616,9 @@ jobs:
                   and (.recommendation.domMatched | is_boolean_or_null)
                   and (.recommendation.agentElapsedMs | is_integer_or_null(0; 120000))
                   and (.recommendation.modelCallElapsedMs | is_elapsed_array)
+                  and (.recommendation.firstAnswerPartMs | is_stream_timing)
+                  and (.recommendation.firstRecommendationPartMs | is_stream_timing)
+                  and (.recommendation.terminalMs | is_stream_timing)
                   and (.recommendation.failure | is_failure_or_null)
                   and (.handoff | type) == "object"
                   and (.handoff.selectedBggId | is_integer_or_null(1; 1000000000))
@@ -751,6 +760,9 @@ jobs:
                     domMatched: null,
                     agentElapsedMs: null,
                     modelCallElapsedMs: [],
+                    firstAnswerPartMs: null,
+                    firstRecommendationPartMs: null,
+                    terminalMs: null,
                     failure: null
                   },
                   recommendation: {
@@ -770,6 +782,9 @@ jobs:
                     domMatched: null,
                     agentElapsedMs: null,
                     modelCallElapsedMs: [],
+                    firstAnswerPartMs: null,
+                    firstRecommendationPartMs: null,
+                    terminalMs: null,
                     failure: null
                   },
                   handoff: {
@@ -844,6 +859,9 @@ jobs:
                       domMatched: .naturalReply.domMatched,
                       agentElapsedMs: .naturalReply.agentElapsedMs,
                       modelCallElapsedMs: .naturalReply.modelCallElapsedMs,
+                      firstAnswerPartMs: .naturalReply.firstAnswerPartMs,
+                      firstRecommendationPartMs: .naturalReply.firstRecommendationPartMs,
+                      terminalMs: .naturalReply.terminalMs,
                       failure: .naturalReply.failure
                     },
                     recommendation: {
@@ -865,6 +883,9 @@ jobs:
                       domMatched: .recommendation.domMatched,
                       agentElapsedMs: .recommendation.agentElapsedMs,
                       modelCallElapsedMs: .recommendation.modelCallElapsedMs,
+                      firstAnswerPartMs: .recommendation.firstAnswerPartMs,
+                      firstRecommendationPartMs: .recommendation.firstRecommendationPartMs,
+                      terminalMs: .recommendation.terminalMs,
                       failure: .recommendation.failure
                     },
                     handoff: {

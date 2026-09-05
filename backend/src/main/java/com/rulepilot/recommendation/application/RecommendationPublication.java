@@ -1,5 +1,7 @@
 package com.rulepilot.recommendation.application;
 
+import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RECOMMEND_TOOL;
+
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -8,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.HarnessTrace;
@@ -28,10 +31,6 @@ import java.util.function.Consumer;
 
 /** The single structure, candidate, evidence-ownership, and publication boundary for recommendation prose. */
 final class RecommendationPublication {
-
-    static final int PLAYER_REPLY_MAX_CODE_POINTS = 600;
-    static final int WHY_FIT_MAX_CODE_POINTS = 400;
-    static final int TRADEOFF_MAX_CODE_POINTS = 240;
 
     private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("playerReply", "selections");
     private static final Set<String> FOLLOW_UP_PUBLICATION_FIELDS =
@@ -130,31 +129,7 @@ final class RecommendationPublication {
                 localizedFailures.add(failure.code());
                 continue;
             }
-            Map<String, CandidateObservation> availableEvidence =
-                    observations.narrativeObservations(game, state.research);
-            String whyFit = null;
-            String tradeoff = null;
-            List<String> evidenceIds = List.of();
-            try {
-                whyFit = playerText(selection.path("whyFit"), WHY_FIT_MAX_CODE_POINTS);
-                evidenceIds = evidenceIds(
-                        selection.path("internalEvidenceIds"),
-                        1,
-                        availableEvidence.keySet());
-                if (selection.has("tradeoff")) {
-                    try {
-                        tradeoff = playerText(selection.path("tradeoff"), TRADEOFF_MAX_CODE_POINTS);
-                    } catch (InvalidPublication failure) {
-                        localizedFailures.add(failure.code());
-                    }
-                }
-            } catch (InvalidPublication failure) {
-                localizedFailures.add(failure.code());
-                whyFit = null;
-                tradeoff = null;
-                evidenceIds = List.of();
-            }
-            candidates.add(new CandidateReplyDraft(bggId, whyFit, tradeoff, evidenceIds));
+            candidates.add(candidateReply(state, game, selection, localizedFailures));
             selectedGames.add(game);
         }
 
@@ -166,7 +141,7 @@ final class RecommendationPublication {
         String playerReply = null;
         if (!candidateSetChanged) {
             try {
-                playerReply = playerText(root.path("playerReply"), PLAYER_REPLY_MAX_CODE_POINTS);
+                playerReply = playerText(root.path("playerReply"));
             } catch (InvalidPublication failure) {
                 localizedFailures.add(failure.code());
                 playerReply = null;
@@ -183,7 +158,7 @@ final class RecommendationPublication {
                 List.copyOf(localizedFailures));
     }
 
-    Consumer<String> previewPublisher(
+    Consumer<ToolCall> previewPublisher(
             RecommendationAgentState state,
             String locale,
             Consumer<BoardGameRecommendationAgent.RecommendationPart> listener) {
@@ -202,27 +177,9 @@ final class RecommendationPublication {
             PublicationSeed pending = Objects.requireNonNull(
                     state.pendingPublicationSeed, "pending recommendation publication is required");
             Game game = validatedCandidate(state, pending, runtime.recommendableIds(state), bggId);
-            Map<String, CandidateObservation> availableEvidence =
-                    observations.narrativeObservations(game, state.research);
-            String whyFit = null;
-            String tradeoff = null;
-            List<String> evidenceIds = List.of();
-            try {
-                whyFit = playerText(selection.path("whyFit"), WHY_FIT_MAX_CODE_POINTS);
-                evidenceIds = evidenceIds(
-                        selection.path("internalEvidenceIds"), 1, availableEvidence.keySet());
-                if (selection.has("tradeoff")) {
-                    tradeoff = playerText(selection.path("tradeoff"), TRADEOFF_MAX_CODE_POINTS);
-                }
-            } catch (InvalidPublication ignored) {
-                // The final publication keeps a valid candidate while localizing optional narrative failure.
-                whyFit = null;
-                tradeoff = null;
-                evidenceIds = List.of();
-            }
             RecommendedGame preview = projectModelReply(
                     game,
-                    new CandidateReplyDraft(bggId, whyFit, tradeoff, evidenceIds),
+                    candidateReply(state, game, selection, new LinkedHashSet<>()),
                     state,
                     locale);
             Set<String> publishedEvidenceIds = new LinkedHashSet<>();
@@ -238,6 +195,33 @@ final class RecommendationPublication {
         } catch (InvalidPublication | IllegalArgumentException ignored) {
             return null;
         }
+    }
+
+    private CandidateReplyDraft candidateReply(
+            RecommendationAgentState state,
+            Game game,
+            JsonNode selection,
+            Set<Code> localizedFailures) {
+        Map<String, CandidateObservation> availableEvidence =
+                observations.narrativeObservations(game, state.research);
+        String whyFit;
+        List<String> evidenceIds;
+        try {
+            whyFit = playerText(selection.path("whyFit"));
+            evidenceIds = evidenceIds(selection.path("internalEvidenceIds"), 1, availableEvidence.keySet());
+        } catch (InvalidPublication failure) {
+            localizedFailures.add(failure.code());
+            return new CandidateReplyDraft(game.ranking().bggId(), null, null, List.of());
+        }
+        String tradeoff = null;
+        if (selection.has("tradeoff")) {
+            try {
+                tradeoff = playerText(selection.path("tradeoff"));
+            } catch (InvalidPublication failure) {
+                localizedFailures.add(failure.code());
+            }
+        }
+        return new CandidateReplyDraft(game.ranking().bggId(), whyFit, tradeoff, evidenceIds);
     }
 
     private final class PreviewPublisher {
@@ -256,7 +240,9 @@ final class RecommendationPublication {
             this.listener = listener;
         }
 
-        private void accept(String accumulatedArguments) {
+        private void accept(ToolCall call) {
+            if (!RECOMMEND_TOOL.equals(call.name())) return;
+            String accumulatedArguments = call.argumentsJson();
             List<String> complete = completeSelectionObjects(accumulatedArguments);
             int limit = previewLimit(state, accumulatedArguments);
             for (int index = inspectedObjects; index < complete.size(); index++) {
@@ -456,15 +442,11 @@ final class RecommendationPublication {
         }
     }
 
-    private String playerText(JsonNode value, int maximumCodePoints) {
+    private String playerText(JsonNode value) {
         if (value == null || !value.isTextual() || value.asText().isBlank()) {
             throw invalid(Code.RECOMMENDATION_REPLY_INVALID);
         }
-        String text = value.asText();
-        if (text.codePointCount(0, text.length()) > maximumCodePoints) {
-            throw invalid(Code.RECOMMENDATION_REPLY_INVALID);
-        }
-        return text;
+        return value.asText();
     }
 
     private int positiveInteger(JsonNode value) {

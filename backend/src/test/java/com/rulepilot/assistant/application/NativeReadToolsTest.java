@@ -48,8 +48,7 @@ class NativeReadToolsTest {
         assertThat(result.data())
                 .containsEntry("requestedAnchorCount", 1)
                 .containsEntry("returnedAnchorCount", 1)
-                .containsEntry("contextApplicabilityAuthority", false)
-                .containsEntry("nextAction", "READ_EXACT_PAGES_AND_CHECK_APPLICABILITY");
+                .containsEntry("contextApplicabilityAuthority", false);
         assertThat(result.data().toString())
                 .contains(anchorId.toString(), neighborId.toString(), "You may choose each action only once.")
                 .doesNotContain(documentVersionId.toString());
@@ -140,9 +139,7 @@ class NativeReadToolsTest {
                 });
         assertThat(result.code()).isEqualTo("RELATIONSHIP_CANDIDATES_FOUND");
         assertThat(result.evidenceCount()).isEqualTo(1);
-        assertThat(result.data())
-                .containsEntry("relationshipClassificationAuthority", false)
-                .containsEntry("nextAction", "READ_EXACT_PAGES_AND_COMPARE_APPLICABILITY");
+        assertThat(result.data()).containsEntry("relationshipClassificationAuthority", false);
         assertThat(result.data().toString())
                 .contains("Move one space.")
                 .contains("classificationAuthority=false", "evidenceMechanicalAuthority=true")

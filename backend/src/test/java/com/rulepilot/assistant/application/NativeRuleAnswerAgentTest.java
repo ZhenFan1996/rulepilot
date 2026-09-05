@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContext;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool;
 import com.rulepilot.assistant.NativeAgentTool.ObservationStatus;
@@ -25,7 +26,10 @@ import com.rulepilot.assistant.NativeToolModel.ModelToolCall;
 import com.rulepilot.assistant.NativeToolModel.ModelTurn;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
+import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import com.rulepilot.assistant.domain.AnswerBasis;
+import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -36,6 +40,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class NativeRuleAnswerAgentTest {
 
@@ -63,8 +70,10 @@ class NativeRuleAnswerAgentTest {
         assertThat(nativeAgent.request.systemPrompt()).contains("\"CHAT\"", "additionalProperties");
     }
 
-    @Test
-    void publishesCanonicalExactReadEvidenceAndKeepsACompletedSiblingWhenAnotherReadFailed() {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = "Which card changes the scoring in your situation?")
+    void publishesSupportedContentAndLocalizesAnUnresolvedPartWhenAnotherReadFailed(String clarification) throws Exception {
         UUID evidenceId = UUID.randomUUID();
         String excerpt = "The game is played in 5 rounds. At the end of round 5, the player with the most points wins.";
         RuleEvidenceHit evidence = new RuleEvidenceHit(
@@ -87,7 +96,10 @@ class NativeRuleAnswerAgentTest {
                   "presentationHint":"concise"
                 }
                 """.formatted(evidenceId, evidenceId);
-        StubNativeAgent nativeAgent = new StubNativeAgent(terminal, observations, 2);
+        var candidate = JsonMapper.builder().build().readTree(terminal);
+        if (clarification != null) ((com.fasterxml.jackson.databind.node.ObjectNode) candidate)
+                .put("clarification", clarification);
+        StubNativeAgent nativeAgent = new StubNativeAgent(candidate.toString(), observations, 2);
         NativeRuleAnswerAgent answers = answers(nativeAgent, lookup(evidence));
 
         var outcome = answers.answer(
@@ -106,6 +118,9 @@ class NativeRuleAnswerAgentTest {
         });
         assertThat(outcome.answer().shortVerdict()).isEqualTo("游戏共 5 轮。");
         assertThat(outcome.answer().explanation()).isEqualTo("第 5 轮结束后计算最终得分，得分最高者获胜。");
+        assertThat(outcome.answer().clarification()).isEqualTo(clarification);
+        assertThat(outcome.answer().confidence())
+                .isEqualTo(clarification == null ? AnswerConfidence.HIGH : AnswerConfidence.MEDIUM);
     }
 
     @Test
@@ -130,8 +145,9 @@ class NativeRuleAnswerAgentTest {
         assertThat(result.allowedEvidenceIds()).containsExactly(allowed.toString());
     }
 
-    @Test
-    void publishesSourceBearingSearchEvidenceWithOptionalExplanationAfterTwoModelDecisions() {
+    @ParameterizedTest
+    @ValueSource(strings = {"search_rule_evidence", "search_rule_relationships", "expand_rule_evidence_context"})
+    void publishesCompleteCanonicalEvidenceWithoutAConfirmationRead(String sourceTool) {
         UUID evidenceId = UUID.randomUUID();
         String excerpt = "Pay 2 fuel to move one space.";
         RuleEvidenceHit evidence = new RuleEvidenceHit(
@@ -141,17 +157,17 @@ class NativeRuleAnswerAgentTest {
                  "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
                 """.formatted(evidenceId, evidenceId).strip();
         AtomicInteger decisions = new AtomicInteger();
-        NativeRuleAnswerAgent answers = answers(twoDecisionSearchAgent(evidence, terminal, decisions), lookup(evidence));
+        NativeRuleAnswerAgent answers = answers(sourceBearingAgent(sourceTool, evidence, terminal, decisions), lookup(evidence));
 
         var outcome = answers.answer(
                 "How does fuel movement work?",
-                new QuestionContext(versionId),
+                new QuestionContext(versionId, null, null, PlayerLocale.EN,
+                        new PriorTurnReference(versionId, "Where is movement described?", "The movement rule is on this page.",
+                                List.of(new PriorCitationReference(evidenceId, versionId, 6, 6)))),
                 "player",
                 null,
                 runId);
 
-        assertThat(decisions).hasValue(2);
-        assertThat(outcome.toolCalls()).isOne();
         assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(outcome.answer().shortVerdict()).isEqualTo("Pay 2 fuel, then move one space.");
         assertThat(outcome.answer().explanation()).isEmpty();
@@ -194,8 +210,9 @@ class NativeRuleAnswerAgentTest {
         assertThat(result.path()).isEqualTo("/explanation");
     }
 
-    @Test
-    void rejectsASearchIdentityThatWasNotObserved() {
+    @ParameterizedTest
+    @ValueSource(strings = {"search_rule_evidence", "search_rule_relationships", "expand_rule_evidence_context"})
+    void rejectsAnIdentityThatWasNotObservedByTheCanonicalTextTool(String sourceTool) {
         UUID observed = UUID.randomUUID();
         UUID outside = UUID.randomUUID();
         RuleEvidenceHit evidence = new RuleEvidenceHit(
@@ -207,7 +224,7 @@ class NativeRuleAnswerAgentTest {
                 {"kind":"RULE_ANSWER","shortVerdict":"Pay fuel and move.","explanation":"",
                  "citationIds":["%s"]}
                 """.formatted(outside),
-                List.of(searchObservation(observed, evidence.excerpt(), 6)),
+                List.of(sourceObservation(sourceTool, observed, evidence.excerpt(), 6)),
                 new QuestionContext(versionId));
 
         assertThat(result.valid()).isFalse();
@@ -215,8 +232,9 @@ class NativeRuleAnswerAgentTest {
         assertThat(result.allowedEvidenceIds()).containsExactly(observed.toString());
     }
 
-    @Test
-    void rejectsSearchEvidenceWhoseCanonicalDocumentVersionDiffers() {
+    @ParameterizedTest
+    @ValueSource(strings = {"search_rule_evidence", "search_rule_relationships", "expand_rule_evidence_context"})
+    void rejectsCanonicalTextEvidenceWhoseDocumentVersionDiffers(String sourceTool) {
         UUID evidenceId = UUID.randomUUID();
         RuleEvidenceHit crossVersion = new RuleEvidenceHit(
                 evidenceId,
@@ -234,15 +252,16 @@ class NativeRuleAnswerAgentTest {
                 {"kind":"RULE_ANSWER","shortVerdict":"Pay 2 fuel, then move one space.","explanation":"",
                  "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
                 """.formatted(evidenceId, evidenceId),
-                List.of(searchObservation(evidenceId, crossVersion.excerpt(), 6)),
+                List.of(sourceObservation(sourceTool, evidenceId, crossVersion.excerpt(), 6)),
                 new QuestionContext(versionId));
 
         assertThat(result.valid()).isFalse();
         assertThat(result.code()).isEqualTo("CITATION_DOCUMENT_CONFLICT");
     }
 
-    @Test
-    void rejectsSearchEvidenceWhoseObservedPageDiffersFromTheCanonicalSnapshot() {
+    @ParameterizedTest
+    @ValueSource(strings = {"search_rule_evidence", "search_rule_relationships", "expand_rule_evidence_context"})
+    void rejectsCanonicalTextEvidenceWhoseObservedPageDiffersFromTheSnapshot(String sourceTool) {
         UUID evidenceId = UUID.randomUUID();
         RuleEvidenceHit canonical = new RuleEvidenceHit(
                 evidenceId,
@@ -260,15 +279,16 @@ class NativeRuleAnswerAgentTest {
                 {"kind":"RULE_ANSWER","shortVerdict":"Pay 2 fuel, then move one space.","explanation":"",
                  "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
                 """.formatted(evidenceId, evidenceId),
-                List.of(searchObservation(evidenceId, canonical.excerpt(), 6)),
+                List.of(sourceObservation(sourceTool, evidenceId, canonical.excerpt(), 6)),
                 new QuestionContext(versionId));
 
         assertThat(result.valid()).isFalse();
         assertThat(result.code()).isEqualTo("CITATION_SNAPSHOT_CONFLICT");
     }
 
-    @Test
-    void rejectsATypedHardNumberAbsentFromItsCitedEvidence() {
+    @ParameterizedTest
+    @ValueSource(strings = {"read_rule_pages", "search_rule_evidence", "search_rule_relationships", "expand_rule_evidence_context"})
+    void rejectsATypedHardNumberAbsentFromItsCitedEvidence(String sourceTool) {
         UUID evidenceId = UUID.randomUUID();
         RuleEvidenceHit evidence = new RuleEvidenceHit(
                 evidenceId, versionId, "LIMIT", "Hand limit", "Keep at most 4 cards.", 9, 9, 1.0);
@@ -280,7 +300,7 @@ class NativeRuleAnswerAgentTest {
                 """.formatted(evidenceId, evidenceId);
 
         TerminalValidation result = answers.validateTerminal(
-                candidate, List.of(exactRead(evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId));
+                candidate, List.of(sourceObservation(sourceTool, evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId));
 
         assertThat(result.valid()).isFalse();
         assertThat(result.code()).isEqualTo("NUMERIC_VALUE_UNSUPPORTED");
@@ -385,10 +405,10 @@ class NativeRuleAnswerAgentTest {
                         1));
     }
 
-    private ObservationRecord searchObservation(UUID evidenceId, String excerpt, int page) {
+    private ObservationRecord sourceObservation(String toolName, UUID evidenceId, String excerpt, int page) {
         return new ObservationRecord(
                 1,
-                "search_rule_evidence",
+                toolName,
                 "search-schema",
                 ToolObservation.success(
                         "EVIDENCE_FOUND",
@@ -400,36 +420,25 @@ class NativeRuleAnswerAgentTest {
                         1));
     }
 
-    private NativeToolAgent twoDecisionSearchAgent(
-            RuleEvidenceHit evidence, String terminal, AtomicInteger decisions) {
+    private NativeToolAgent sourceBearingAgent(
+            String sourceTool, RuleEvidenceHit evidence, String terminal, AtomicInteger decisions) {
+        String arguments = switch (sourceTool) {
+            case "search_rule_evidence" -> "{\"query\":\"fuel movement\",\"limit\":1}";
+            case "search_rule_relationships" -> "{\"topic\":\"fuel movement condition\",\"limit\":1}";
+            case "expand_rule_evidence_context" -> "{\"evidenceIds\":[\"" + evidence.chunkId() + "\"],\"radius\":1}";
+            default -> throw new IllegalArgumentException("unknown source tool");
+        };
         NativeToolModel model = new NativeToolModel() {
             @Override
             public ModelTurn next(ModelRequest request) {
                 int decision = decisions.incrementAndGet();
-                if (decision == 1) {
-                    assertThat(request.conversation().getFirst().content())
-                            .contains(
-                                    "only the unresolved obligations",
-                                    "without repeating or reconfirming the read",
-                                    "Call mutually independent read-only tools together in one decision",
-                                    "Use read_rule_pages",
-                                    "only when the search excerpt needs fuller page context");
-                    assertThat(request.tools())
-                            .filteredOn(tool -> "search_rule_evidence".equals(tool.name()))
-                            .singleElement()
-                            .satisfies(tool -> assertThat(tool.description())
-                                    .contains(
-                                            "It may support a citation directly",
-                                            "Read the exact page only when fuller page context",
-                                            "Never read an exact page merely to reconfirm"));
-                }
                 return switch (decision) {
                     case 1 -> new ModelTurn(
                             "",
                             List.of(new ModelToolCall(
                                     "search-1",
-                                    "search_rule_evidence",
-                                    "{\"query\":\"fuel movement\",\"limit\":1}")),
+                                    sourceTool,
+                                    arguments)),
                             10,
                             5);
                     case 2 -> new ModelTurn(terminal, List.of(), 10, 5);
@@ -438,17 +447,33 @@ class NativeRuleAnswerAgentTest {
             }
         };
         var mapper = JsonMapper.builder().findAndAddModules().build();
-        AssistantReadTools reads = request -> List.of(new RuleEvidence(
+        RuleEvidence source = new RuleEvidence(
                 evidence.chunkId(),
                 evidence.documentVersionId(),
                 evidence.sectionType(),
                 evidence.heading(),
                 evidence.excerpt(),
                 evidence.pageFrom(),
-                evidence.pageTo()));
-        NativeAgentTool search = new SearchRuleEvidenceNativeTool(reads, mapper);
+                evidence.pageTo());
+        AssistantReadTools reads = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                return List.of(source);
+            }
+
+            @Override
+            public RuleEvidenceContext readRuleEvidenceContext(UUID document, Set<UUID> ids, int radius) {
+                return new RuleEvidenceContext(List.of(source), List.of());
+            }
+        };
+        NativeAgentTool selected = switch (sourceTool) {
+            case "search_rule_evidence" -> new SearchRuleEvidenceNativeTool(reads, mapper);
+            case "search_rule_relationships" -> new SearchRuleRelationshipsNativeTool(reads, mapper);
+            case "expand_rule_evidence_context" -> new ExpandRuleEvidenceContextNativeTool(reads, mapper);
+            default -> throw new IllegalArgumentException("unknown source tool");
+        };
         List<NativeAgentTool> tools = NativeRuleAnswerAgent.READ_TOOLS.stream()
-                .map(name -> search.name().equals(name) ? search : testTool(name))
+                .map(name -> selected.name().equals(name) ? selected : testTool(name))
                 .toList();
         return new BoundedNativeToolAgent(
                 model,

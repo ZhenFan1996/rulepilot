@@ -247,19 +247,12 @@ describe('useLessonAnswers', () => {
       }
       if (path.includes('/answers') && init?.method === 'POST') {
         answerSignal = init.signal ?? undefined
-        return new Promise<Response>((_resolve, reject) => {
-          answerSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
-        })
-      }
-      if (path.includes('/assistant-runs/latest')) {
-        return Promise.resolve(Response.json({
-          ...answerRunDetails('document-1', 'readRulePages'),
-          run: {
-            ...answerRunDetails('document-1', 'readRulePages').run,
-            id: runId,
-            createdAt: new Date().toISOString(),
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`event: run\ndata: ${JSON.stringify({ runId })}\n\n`))
+            answerSignal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')))
           },
-        }))
+        }), { headers: { 'Content-Type': 'text/event-stream' } }))
       }
       if (path === `/api/v1/assistant-runs/${runId}/cancellation`) {
         return Promise.resolve(new Response(null, { status: 202 }))
@@ -439,37 +432,39 @@ describe('useLessonAnswers', () => {
     expect(answers.agentTrace.value).toEqual([])
   })
 
-  it('aborts an active progress read and prevents a late poll from rescheduling after reset', async () => {
+  it('never cancels another answer to the same rulebook while this stream has no run identity', async () => {
     vi.useFakeTimers()
-    let traceSignal: AbortSignal | undefined
-    let resolveTrace!: (response: Response) => void
+    let answerSignal: AbortSignal | undefined
+    const otherRunId = '22222222-2222-4222-8222-222222222222'
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input)
       if (path === '/api/auth/csrf') {
         return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
       }
-      if (path.includes('/answers')) return new Promise<Response>(() => undefined)
-      return new Promise<Response>((resolve) => {
-        traceSignal = init?.signal ?? undefined
-        resolveTrace = resolve
-      })
+      if (path.includes('/answers')) {
+        answerSignal = init?.signal ?? undefined
+        return new Promise<Response>((_resolve, reject) => {
+          answerSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      if (path.includes('/assistant-runs/latest')) {
+        return Promise.resolve(Response.json({
+          run: { id: otherRunId, subjectId: 'document-1' }, activities: [],
+        }))
+      }
+      return Promise.resolve(new Response(null, { status: 202 }))
     }))
     const answers = createAnswers()
-    void answers.submitQuestion('When does this resolve?', null)
-    await vi.advanceTimersByTimeAsync(250)
-    expect(traceSignal).toBeDefined()
+    answers.question.value = 'When does this resolve?'
+    const pending = answers.submitQuestion(answers.question.value, null)
+    await vi.advanceTimersByTimeAsync(1_000)
 
-    answers.resetConversation(false)
-    expect(traceSignal?.aborted).toBe(true)
-    resolveTrace(Response.json(answerRunDetails('document-1', 'nativeModelTurn|1')))
-    await Promise.resolve()
-    await vi.advanceTimersByTimeAsync(2_000)
-
-    const traceReads = vi.mocked(fetch).mock.calls
-      .filter(([input]) => String(input).includes('/assistant-runs/latest'))
-    expect(traceReads).toHaveLength(1)
+    answers.cancelAnswer()
+    await pending
+    expect(answerSignal?.aborted).toBe(true)
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/cancellation'))).toEqual([])
+    expect(answers.question.value).toBe('When does this resolve?')
     expect(answers.agentTrace.value).toEqual([])
-    vi.useRealTimers()
   })
 
   it('does not fetch completed audit details after the player answer arrives', async () => {
@@ -542,19 +537,5 @@ function answerCreation(answer: ReturnType<typeof answerFixture> | Record<string
     },
     rulingReference: emptyRulingReference(),
     conversationTurnId: null,
-  }
-}
-
-function answerRunDetails(subjectId: string, operation: string) {
-  return {
-    run: { id: '11111111-1111-4111-8111-111111111111', subjectId, createdAt: '2026-08-03T00:00:00Z' },
-    activities: [{
-      sequence: 1,
-      type: 'MODEL',
-      operation,
-      outcome: 'SUCCEEDED',
-      latencyMs: 10,
-      occurredAt: '2026-08-03T00:00:00Z',
-    }],
   }
 }

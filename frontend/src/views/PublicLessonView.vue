@@ -415,7 +415,7 @@ function hasValidPublicOutcomeShape(answer: PublicAnswer['answer']) {
   if (publishes) {
     return answer.citations.length > 0
       && (answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
-      && answer.clarification === null
+      && (answer.clarification === null || Boolean(answer.clarification.trim()))
   }
   if (answer.status === 'CLARIFICATION_REQUIRED') return Boolean(answer.clarification?.trim())
   return true
@@ -1149,7 +1149,7 @@ onUnmounted(() => {
                     <div v-if="turn.answer.answer.conceptComparisons?.length" class="mt-3 rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2"><p class="font-semibold text-ink">{{ t('lesson.answer.comparison.title') }}</p><div v-for="item in turn.answer.answer.conceptComparisons" :key="`${item.leftConcept}-${item.rightConcept}`" class="mt-2 rounded-lg bg-paper px-3 py-2"><div class="grid gap-2 sm:grid-cols-2"><p><span class="font-semibold text-indigo">{{ item.leftConcept }}：</span>{{ item.leftDefinition }}</p><p><span class="font-semibold text-indigo">{{ item.rightConcept }}：</span>{{ item.rightDefinition }}</p></div><p class="mt-2"><span class="font-semibold">{{ t('lesson.answer.comparison.common') }}：</span>{{ item.commonGround }}</p><p><span class="font-semibold">{{ t('lesson.answer.comparison.keyDifference') }}：</span>{{ item.keyDifference }}</p><p><span class="font-semibold">{{ t('lesson.answer.comparison.boundary') }}：</span>{{ item.practicalBoundary }}</p></div></div>
                     <div v-if="turn.answer.answer.ruleOptions?.length" class="mt-3 rounded-xl border border-copper/20 bg-copper/[0.05] px-3 py-2"><p class="font-semibold text-ink">{{ t('lesson.answer.options.title') }}</p><p class="mt-1 text-xs text-ink/55"><span class="font-semibold">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ turn.answer.answer.ruleOptions[0]?.selectionRule }}</p><ol class="mt-2 grid gap-2 sm:grid-cols-2"><li v-for="(item, optionIndex) in turn.answer.answer.ruleOptions" :key="`${item.optionName}-${optionIndex}`" class="rounded-lg bg-paper px-3 py-2"><p class="font-semibold text-copper">{{ optionIndex + 1 }}. {{ item.optionName }}</p><p><span class="font-semibold">{{ t('lesson.answer.options.availability') }}：</span>{{ item.availabilityCondition }}</p><p><span class="font-semibold">{{ t('lesson.answer.options.result') }}：</span>{{ item.result }}</p></li></ol></div>
                   </div>
-                  <p v-else-if="turn.answer.answer.status === 'CLARIFICATION_REQUIRED'" class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ turn.answer.answer.clarification || t('public.answer.clarify') }}</p>
+                  <p v-if="turn.answer.answer.clarification" class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ turn.answer.answer.clarification }}</p>
                   <div v-if="index === publicAnswerTurns.length - 1 && !publishesConclusion(turn.answer.answer.status)" class="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 text-sm leading-6 text-amber-950">
                     <p v-if="publicRecoveryCopy(turn).message">{{ publicRecoveryCopy(turn).message }}</p>
                     <PlayerFailureDetails

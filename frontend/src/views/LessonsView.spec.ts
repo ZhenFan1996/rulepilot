@@ -178,15 +178,15 @@ describe('LessonsView', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="pending-guide-journey"] [data-testid="player-work-status"]').text()).toBe('正在组织讲解')
     expect(runReads).toBe(1)
-    expect(wrapper.text()).not.toContain('立即阅读完整讲解')
+    expect(wrapper.text()).not.toContain('阅读已完成章节')
 
     await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
     expect(runReads).toBe(2)
     expect(lessonReads).toBe(2)
     expect(wrapper.find('[data-testid="pending-guide-journey"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('正在补充图片或核对细节')
-    expect(wrapper.text()).toContain('立即阅读完整讲解')
+    expect(wrapper.text()).toContain('已有章节可读')
+    expect(wrapper.text()).toContain('阅读已完成章节')
     wrapper.unmount()
   })
 
@@ -402,7 +402,7 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
-  it('opens a complete cited draft immediately while its generation run continues', async () => {
+  it('opens published chapters without claiming the full guide is ready while generation continues', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T10:02:05Z'))
     let lessonReads = 0
@@ -464,18 +464,18 @@ describe('LessonsView', () => {
 
     expect(wrapper.text()).toContain('任务已经交给后台')
     const status = wrapper.get('[data-testid="player-work-status"]')
-    expect(status.text()).toBe('正在补充图片或核对细节')
+    expect(status.attributes('data-player-work-stage')).toBe('GUIDE_READABLE')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(wrapper.text()).toContain('同一章节 Agent 正在依据完整候选和准确校验原因，重新生成第 1 章“完成开局设置”')
     expect(wrapper.text()).toContain('已处理 1/1 节')
     expect(wrapper.text()).not.toMatch(/模型调用|model calls|次内容处理/)
-    expect(wrapper.text()).toContain('完整基础讲解已经可读')
-    expect(wrapper.text()).toContain('立即阅读完整讲解')
+    expect(wrapper.text()).not.toContain('完整基础讲解已经可读')
+    expect(wrapper.get('a[href="/lesson/plan-1"]').text()).toBe('阅读已完成章节')
     expect(wrapper.text()).not.toContain('目录已生成')
     await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
-    expect(wrapper.text()).toContain('正在补充图片或核对细节')
-    expect(wrapper.text()).toContain('立即阅读完整讲解')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-stage')).toBe('GUIDE_READABLE')
+    expect(wrapper.get('a[href="/lesson/plan-1"]').text()).toBe('阅读已完成章节')
     const progressPaths = fetchMock.mock.calls
       .map(([input]) => String(input))
       .filter((path) => path.includes('/api/v1/assistant-runs/latest'))
@@ -567,12 +567,12 @@ describe('LessonsView', () => {
 
     expect(launchAttempts).toBe(2)
     expect(wrapper.find('[data-testid="lesson-launch-error"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在补充图片或核对细节')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('已有章节可读')
     expect(wrapper.text()).not.toContain('次内容处理')
 
     await vi.advanceTimersByTimeAsync(1000)
     await flushPromises()
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在补充图片或核对细节')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('已有章节可读')
     expect(wrapper.text()).not.toContain('次内容处理')
     expect(runReads).toBeGreaterThanOrEqual(4)
     wrapper.unmount()

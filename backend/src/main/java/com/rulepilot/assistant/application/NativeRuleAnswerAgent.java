@@ -58,7 +58,7 @@ public class NativeRuleAnswerAgent {
                 "kind": {"type": "string", "enum": ["CHAT", "RULE_ANSWER", "CLARIFICATION"]},
                 "shortVerdict": {"type": "string"},
                 "explanation": {"type": ["string", "null"], "description": "Optional additional player-facing explanation. Leave empty when shortVerdict already gives the complete useful answer."},
-                "clarification": {"type": ["string", "null"]},
+                "clarification": {"type": ["string", "null"], "description": "One useful question for the unresolved part, if needed. A RULE_ANSWER still publishes its supported verdict and citations."},
                 "citationIds": {
                   "type": "array",
                   "items": {"type": "string", "format": "uuid"},
@@ -193,7 +193,7 @@ public class NativeRuleAnswerAgent {
             if (!allowedEvidence.containsKey(id)) {
                 return rejected(
                         "CITATION_NOT_OBSERVED", "/citationIds/" + index,
-                        "The citation identity was not returned by a source-bearing search or exact page read in this Agent run.",
+                        "The citation identity was not returned by a source-bearing canonical text tool in this Agent run.",
                         allowedIds);
             }
         }
@@ -276,7 +276,8 @@ public class NativeRuleAnswerAgent {
         return answer(
                 context.documentVersionId(), AnswerStatus.ANSWERED,
                 candidate.shortVerdict, candidate.explanation, citations, candidate.exceptions,
-                AnswerConfidence.HIGH, AnswerBasis.DIRECT_RULE, null);
+                candidate.clarification == null ? AnswerConfidence.HIGH : AnswerConfidence.MEDIUM,
+                AnswerBasis.DIRECT_RULE, candidate.clarification);
     }
 
     private StructuredRuleAnswer answer(
@@ -334,11 +335,12 @@ public class NativeRuleAnswerAgent {
             throw new CandidateFailure(
                     "TERMINAL_VALUE_INVALID", "/kind", "kind must be CHAT, RULE_ANSWER, or CLARIFICATION.");
         }
+        String clarification = optionalString(root, "clarification");
         return new Candidate(
                 kind,
                 requiredString(root, "shortVerdict", true),
                 optionalStringOrEmpty(root, "explanation"),
-                optionalString(root, "clarification"),
+                clarification == null || clarification.isBlank() ? null : clarification,
                 stringArray(root, "citationIds"),
                 stringArray(root, "exceptions"),
                 numericClaims(root));
@@ -426,6 +428,8 @@ public class NativeRuleAnswerAgent {
         Map<String, ObservedEvidence> allowed = new LinkedHashMap<>();
         for (ObservationRecord observation : observations) {
             if (!("search_rule_evidence".equals(observation.toolName())
+                            || "search_rule_relationships".equals(observation.toolName())
+                            || "expand_rule_evidence_context".equals(observation.toolName())
                             || "read_rule_pages".equals(observation.toolName()))
                     || observation.observation().status() == ObservationStatus.ERROR) {
                 continue;
@@ -463,12 +467,13 @@ public class NativeRuleAnswerAgent {
                 Answer only the unresolved obligations in the player's request. Do not broaden into related rules that
                 are unnecessary to make the verdict correct. Prefer the smallest complete supported ruling; every
                 included claim must earn its evidence and numeric-validation cost.
-                For a rule claim, search only when needed. A search_rule_evidence result is source-bearing when its
+                For a rule claim, search only when needed. Text returned by search_rule_evidence,
+                search_rule_relationships, expand_rule_evidence_context, or read_rule_pages is source-bearing when its
                 excerpt directly contains enough subject, condition, exception, and applicability context for the
                 answer; cite that observed evidenceId without repeating or reconfirming the read. Use read_rule_pages
                 only when the search excerpt needs fuller page context, a crossed chunk boundary, a condition, an
-                exception, a list continuation, or an applicability check. Relationship results remain candidates and
-                cannot be cited.
+                exception, a list continuation, or an applicability check. A relationship label or adjacent location
+                never establishes which rule applies; the canonical text must support that conclusion.
                 Use search_visual_page_facts only to locate a visible printed label, icon, table, diagram, or board
                 location that canonical text search did not locate. Its observations have no mechanical-rule
                 authority and are never citation-bearing; use the returned page-bound handle for a dependent visual
@@ -477,7 +482,7 @@ public class NativeRuleAnswerAgent {
                 observing its prerequisite. Preserve supported portions when one sibling read fails and localize only
                 what remains unresolved.
                 Every terminal response must be one complete JSON object satisfying the schema below. Cite only
-                evidenceId values observed from source-bearing search_rule_evidence or read_rule_pages results in this
+                evidenceId values observed from the source-bearing text tools above in this
                 run. Do not print raw evidence IDs or page excerpts in player prose; the application publishes
                 citations separately. Declare every numeric
                 literal used as a hard rule fact in numericClaims with the exact literal and its evidenceId. Unknown
@@ -562,9 +567,6 @@ public class NativeRuleAnswerAgent {
             case "COMPLETION_NO_PROGRESS" -> english
                     ? "The Agent repeated the same complete response after a typed JSON or evidence-identity rejection, so correction stopped."
                     : "Agent 在收到 JSON 或证据身份校验结果后仍重复同一份完整回复，因此已停止修正。";
-            case "TERMINAL_REPAIR_EXHAUSTED" -> english
-                    ? "The replacement answer still failed the typed publication boundary, so correction stopped after one targeted repair."
-                    : "替换答案仍未通过类型化发布边界，因此一次定向修正后已停止。";
             case "ACTION_NO_PROGRESS" -> english
                     ? "The Agent repeated the same rejected tool action, so the read loop stopped without replaying it again."
                     : "Agent 重复了同一项已拒绝的工具动作，因此只读循环已停止且不会再次重放。";

@@ -333,14 +333,11 @@ final class RecommendationToolCatalog {
                         + maximumSelections
                         + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":"
                         + candidateIds
-                        + "},\"whyFit\":{\"type\":\"string\",\"description\":\"A concise, candidate-specific synthesis of the player's request and cited observations.\",\"minLength\":1,\"maxLength\":"
-                        + RecommendationPublication.WHY_FIT_MAX_CODE_POINTS
-                        + "},\"tradeoff\":{\"type\":\"string\",\"description\":\"A concise supported limitation or uncertainty; omit when none matters.\",\"minLength\":1,\"maxLength\":"
-                        + RecommendationPublication.TRADEOFF_MAX_CODE_POINTS
+                        + "},\"whyFit\":{\"type\":\"string\",\"description\":\"A concise, candidate-specific synthesis of the player's request and cited observations.\",\"minLength\":1"
+                        + "},\"tradeoff\":{\"type\":\"string\",\"description\":\"A concise supported limitation or uncertainty; omit when none matters.\",\"minLength\":1"
                         + "},\"internalEvidenceIds\":{\"type\":\"array\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(replyEvidenceIds)
-                        + "}}},\"required\":[\"bggId\",\"whyFit\",\"internalEvidenceIds\"]}},\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":"
-                        + RecommendationPublication.PLAYER_REPLY_MAX_CODE_POINTS
+                        + "}}},\"required\":[\"bggId\",\"whyFit\",\"internalEvidenceIds\"]}},\"playerReply\":{\"type\":\"string\",\"minLength\":1"
                         + "}},\"required\":"
                         + requiredFields
                         + "}");

@@ -868,7 +868,7 @@ describe('RecommendationRulebookHandoff', () => {
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('本次属于：局部降级：可用内容保留'))
     const status = wrapper.get('[data-testid="player-work-status"]')
-    expect(status.text()).toBe('基础讲解可读')
+    expect(status.text()).toBe('已有章节可读')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(status.attributes('data-player-work-outcome')).toBe('none')
     expect(wrapper.text()).toContain('REVIEW_UNAVAILABLE')

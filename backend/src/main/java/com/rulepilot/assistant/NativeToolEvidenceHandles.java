@@ -29,8 +29,6 @@ public final class NativeToolEvidenceHandles {
 
     private static void add(NativeToolAgent.ObservationRecord record, LinkedHashSet<UUID> ids) {
         addValues(record.observation().data().get("evidence"), ids);
-        addValues(record.observation().data().get("anchors"), ids);
-        addValues(record.observation().data().get("surroundingEvidence"), ids);
     }
 
     private static void addValues(Object evidence, LinkedHashSet<UUID> ids) {

@@ -19,8 +19,8 @@ describe('player-facing work status', () => {
     const active = playerWorkStatus('GUIDE_READABLE', activeFacts, 'zh-CN')
     const stopped = playerWorkStatus('GUIDE_READABLE', stoppedFacts, 'zh-CN')
 
-    expect(active.label).toBe('基础讲解可读')
-    expect(stopped.label).toBe('基础讲解可读')
+    expect(active.label).toBe('已有章节可读')
+    expect(stopped.label).toBe('已有章节可读')
     expect(active).toMatchObject(activeFacts)
     expect(stopped).toMatchObject(stoppedFacts)
   })
@@ -28,9 +28,6 @@ describe('player-facing work status', () => {
   it('derives guide generation facts consistently for active, readable, and stopped work', () => {
     expect(guideWorkStatus('organizing', 0, 'zh-CN')).toMatchObject({
       stage: 'ORGANIZING_GUIDE', capability: 'rulebook', readiness: 'usable', terminality: 'active', outcome: 'none',
-    })
-    expect(guideWorkStatus('reviewing', 2, 'zh-CN')).toMatchObject({
-      stage: 'REVIEWING_GUIDE', capability: 'guide', readiness: 'usable', terminality: 'active', outcome: 'none',
     })
     expect(guideWorkStatus('readable', 1, 'zh-CN')).toMatchObject({
       stage: 'GUIDE_READABLE', capability: 'guide', readiness: 'usable', terminality: 'active', outcome: 'none',

@@ -130,12 +130,6 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('正在确认后台生成状态')
     expect(wrapper.text()).toContain('先摆主板')
     expect(wrapper.text()).toContain('我的图文讲解')
-    const failureBoundary = wrapper.get('[data-testid="lesson-generation-failure-boundary"]')
-    expect(failureBoundary.text()).toContain('单页、单章或配图失败只影响对应局部')
-    expect(failureBoundary.text()).toContain('模型服务、排队、超时、传输或取消可保留进度原样重试')
-    expect(failureBoundary.text()).toContain('认证、输入、来源、所有权、版本、保存、身份或引用问题需修复后重试')
-    expect(failureBoundary.text()).toContain('结构化格式错误由同一 Agent')
-    expect(failureBoundary.text()).toContain('完全重复、无进展或资源停止')
     expect(wrapper.text()).toContain('目录桌游')
     expect(wrapper.text()).toContain('SETI')
     expect(wrapper.text()).toContain('1–5 人')
@@ -287,7 +281,7 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
-  it('lets the player use a complete cited draft while its generation run remains active', async () => {
+  it('lets the player read published chapters while the rest of the guide is still generating', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
@@ -333,8 +327,8 @@ describe('LessonView progressive reading', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('完整基础讲解已经可用')
-    expect(wrapper.text()).toContain('后台只是在核对和修正细节')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-stage')).toBe('GUIDE_READABLE')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-terminality')).toBe('active')
     expect(wrapper.text()).toContain('我的图文讲解')
     expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('4 人 ·')
@@ -369,7 +363,7 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     const status = wrapper.get('[data-testid="player-work-status"]')
-    expect(status.text()).toBe('Base guide ready')
+    expect(status.text()).toBe('Chapters available')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(status.attributes('data-player-work-outcome')).toBe('none')
     expect(wrapper.text()).toContain('readable guide draft')
@@ -417,7 +411,7 @@ describe('LessonView progressive reading', () => {
     expect(terminal.text()).toContain('这不是可以安全原样重试的失败')
     expect(wrapper.text()).not.toContain('请在“我的讲解”中重试')
     expect(wrapper.text()).not.toContain('可以安全地为这一步启动')
-    expect(wrapper.text()).not.toContain('基础讲解可读')
+    expect(wrapper.text()).not.toContain('已有章节可读')
     wrapper.unmount()
   })
 
@@ -494,7 +488,7 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     const status = wrapper.get('[data-testid="player-work-status"]')
-    expect(status.text()).toBe('基础讲解可读')
+    expect(status.text()).toBe('已有章节可读')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(status.attributes('data-player-work-outcome')).toBe('none')
     expect(wrapper.text()).toContain('已保留 1 章可读讲解草稿')
@@ -551,7 +545,7 @@ describe('LessonView progressive reading', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('完整基础讲解已经可用')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-terminality')).toBe('active')
     await vi.advanceTimersByTimeAsync(1_500)
     await flushPromises()
 
@@ -591,7 +585,7 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     expect(launchAttempts).toBe(2)
-    expect(wrapper.text()).toContain('正在补充图片或核对细节')
+    expect(wrapper.text()).toContain('已有章节可读')
     expect(restartAction()).toBeUndefined()
 
     await vi.advanceTimersByTimeAsync(0)
@@ -881,12 +875,6 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('My illustrated guide')
-    const failureBoundary = wrapper.get('[data-testid="lesson-generation-failure-boundary"]')
-    expect(failureBoundary.text()).toContain('A failed page, chapter, or visual affects only that item')
-    expect(failureBoundary.text()).toContain('preserve progress for an unchanged retry')
-    expect(failureBoundary.text()).toContain('errors require repair first')
-    expect(failureBoundary.text()).toContain('Typed-format errors are corrected internally by the same Agent')
-    expect(failureBoundary.text()).toContain('only exact repetition, no progress, or a resource stop ends that step')
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('Rule Q&A')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.text()).toContain('Source: page 1')

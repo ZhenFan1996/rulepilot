@@ -21,6 +21,7 @@ class PlayerFacingAnswerPresenterTest {
         UUID evidenceId = UUID.randomUUID();
         String verdict = "【裁决】可以——但要先满足条件。";
         String explanation = "【理由】**原规则**明确写出了条件。\n【边界】不扩写别的情况。";
+        String clarification = "尚未确认的部分发生在哪个时机？";
         StructuredRuleAnswer answer = new StructuredRuleAnswer(
                 versionId,
                 AnswerStatus.ANSWERED,
@@ -29,12 +30,12 @@ class PlayerFacingAnswerPresenterTest {
                 List.of(new RuleCitation(
                         evidenceId, versionId, "RULE", "条件", "满足条件后可以执行。", 4, 4)),
                 List.of("只适用于当前时机。"),
-                AnswerConfidence.HIGH,
+                AnswerConfidence.MEDIUM,
                 AnswerBasis.DIRECT_RULE,
                 false,
                 null,
                 null,
-                null);
+                clarification);
 
         PlayerFacingRuleAnswer presented = PlayerFacingAnswerPresenter.present(
                 answer, "这个局面可以吗？", PlayerLocale.ZH_CN);
@@ -42,6 +43,7 @@ class PlayerFacingAnswerPresenterTest {
 
         assertThat(presented.shortVerdict()).isEqualTo(verdict);
         assertThat(presented.explanation()).isEqualTo(explanation);
+        assertThat(presented.clarification()).isEqualTo(clarification);
         assertThat(presented.exceptions()).containsExactly("只适用于当前时机。");
         assertThat(presented.citations()).singleElement().satisfies(citation -> {
             assertThat(citation.heading()).isEqualTo("条件");

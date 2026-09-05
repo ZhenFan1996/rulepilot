@@ -62,8 +62,9 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
         return "Use when a plan needs the relationship between a general rule and a possible exception, replacement, "
                 + "conflict, precedence, or condition. Search one topic in the active immutable rulebook; do not use "
                 + "it for a direct-rule lookup. Passages are authoritative source text, but cue labels do not decide "
-                + "which rule wins or applies. Read exact pages and compare scope. Stop when both sides are covered or "
-                + "no independent candidate remains.";
+                + "which rule wins or applies. Cite the source-bearing excerpts directly when both sides and their "
+                + "applicability are complete; read exact pages only for missing context. Stop when both sides are "
+                + "covered or no independent candidate remains.";
     }
 
     @Override
@@ -73,7 +74,7 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
 
     @Override
     public String schemaVersion() {
-        return "4";
+        return "5";
     }
 
     @Override
@@ -185,7 +186,6 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
         data.put("hasMore", hasMore);
         data.put("nextCursor", nextCursor);
         data.put("relationshipClassificationAuthority", false);
-        data.put("nextAction", "READ_EXACT_PAGES_AND_COMPARE_APPLICABILITY");
         if (sourceAvailability == SourceAvailability.PARTIAL) {
             data.put("sourceAvailability", sourceAvailability.name());
         }

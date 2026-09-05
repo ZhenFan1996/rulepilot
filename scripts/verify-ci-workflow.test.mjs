@@ -534,6 +534,9 @@ function productionRecommendationRawReport(overrides = {}) {
       domMatched: true,
       agentElapsedMs: 3_400,
       modelCallElapsedMs: [900, 2_300],
+      firstAnswerPartMs: 450,
+      firstRecommendationPartMs: 2_100,
+      terminalMs: 3_600,
       failure: null,
     },
     handoff: {
@@ -1044,9 +1047,15 @@ test('production recommendation sanitizer publishes a nested allowlisted success
     assert.equal(sanitized.naturalReply.noExternalWork, true)
     assert.equal(sanitized.naturalReply.agentElapsedMs, 1_200)
     assert.deepEqual(sanitized.naturalReply.modelCallElapsedMs, [1_150])
+    assert.equal(sanitized.naturalReply.firstAnswerPartMs, null)
+    assert.equal(sanitized.naturalReply.firstRecommendationPartMs, null)
+    assert.equal(sanitized.naturalReply.terminalMs, null)
     assert.equal(sanitized.recommendation.cards.length, 3)
     assert.equal(sanitized.recommendation.agentElapsedMs, 3_400)
     assert.deepEqual(sanitized.recommendation.modelCallElapsedMs, [900, 2_300])
+    assert.equal(sanitized.recommendation.firstAnswerPartMs, 450)
+    assert.equal(sanitized.recommendation.firstRecommendationPartMs, 2_100)
+    assert.equal(sanitized.recommendation.terminalMs, 3_600)
     assert.deepEqual(sanitized.recommendation.publicationErrors, [])
     assert.equal(sanitized.handoff.terminal, 'SOURCE_REVIEW')
     assert.equal(sanitized.handoff.editionBelongsToGame, true)
@@ -1176,7 +1185,9 @@ test('production recommendation sanitizer preserves bounded fatal diagnostics', 
 })
 
 test('production recommendation sanitizer emits a safe fallback without a valid raw report', async () => {
-  for (const rawReport of [undefined, '{not-json']) {
+  for (const rawReport of [undefined, '{not-json', productionRecommendationRawReport({
+    recommendation: { firstAnswerPartMs: 'player-secret-marker' },
+  })]) {
     const fixture = await productionRecommendationSanitizerFixture(rawReport)
     try {
       await runProductionRecommendationSanitizer(fixture.root)

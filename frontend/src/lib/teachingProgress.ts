@@ -339,11 +339,7 @@ export function processedTeachingChapterCount(run: TeachingRunProgress | null) {
 
 export function supportedTeachingChapterCount(run: TeachingRunProgress | null) {
   return publishedPositions([...latestPublicationActivities(run?.activities ?? []).values()].filter((activity) =>
-    activity.outcome === 'SUCCEEDED'
-      && (activity.summary.includes('POST_PUBLICATION_REVIEW_ACCEPTED')
-        || activity.summary.includes('REUSED_VERIFIED_SECTION')
-        || activity.summary.includes('CITED_BASE_SECTION_PUBLISHED')
-        || activity.summary.includes('DRAFT_ACCEPTED')),
+    activity.outcome === 'SUCCEEDED',
   )).size
 }
 
@@ -483,8 +479,8 @@ export function teachingRemainingTimeText(
     ? 'After the first chapter is ready, we will estimate the remaining time from this rulebook’s actual pace.'
     : '第一节完成后，会按这本规则书的真实速度估算剩余时间。'
   if (completed >= total) return locale === 'en'
-    ? 'The complete starter guide is readable. Every publishable chapter has completed its text, citation checks, and synchronous optional visual step; final review may still be settling.'
-    : '完整基础讲解已经可读；所有可发布章节都已完成正文、引用校验与同步可选配图，最终复核可能仍在收尾。'
+    ? 'Chapter processing has finished; open the guide to see the published content and any remaining gaps.'
+    : '章节处理已结束；可阅读的内容与待补全部分见讲解。'
   const startedAt = run?.run.createdAt
   if (!startedAt) return locale === 'en'
     ? 'Some chapters are ready; the remaining content is still being processed.'

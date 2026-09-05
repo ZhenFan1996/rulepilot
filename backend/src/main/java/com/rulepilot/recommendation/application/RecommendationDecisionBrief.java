@@ -145,7 +145,7 @@ final class RecommendationDecisionBrief {
         output.append("\n");
     }
 
-    final class StreamingPublisher implements Consumer<String> {
+    final class StreamingPublisher implements Consumer<ToolCall> {
         private final boolean chinese;
         private final Set<String> allowedActions;
         private final Consumer<String> listener;
@@ -161,18 +161,21 @@ final class RecommendationDecisionBrief {
         }
 
         @Override
-        public void accept(String accumulatedArguments) {
-            PartialDecision parsed = PartialDecision.parse(accumulatedArguments);
+        public void accept(ToolCall call) {
+            PartialDecision parsed = PartialDecision.parse(call.argumentsJson());
             if (!parsed.valid
                     || !parsed.completeText("chosenAction")
-                    || !allowedActions.contains(parsed.text("chosenAction"))) {
+                    || !allowedActions.contains(call.name())
+                    || !call.name().equals(parsed.text("chosenAction"))) {
                 return;
             }
             publish(partialMarkdown(parsed));
         }
 
         void finish(ToolCall call) {
-            render(call, chinese ? "zh-CN" : "en").ifPresent(this::publish);
+            if (allowedActions.contains(call.name())) {
+                render(call, chinese ? "zh-CN" : "en").ifPresent(this::publish);
+            }
         }
 
         private void publish(String snapshot) {

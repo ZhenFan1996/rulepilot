@@ -93,7 +93,7 @@ public class GroundedTeachingAgent {
     }
 
     /**
-     * Publishes each cited text section and assembles its optional visual evidence before moving to the next section.
+     * Publishes each cited chapter after its planned visual work settles; dependent prose can proceed earlier.
      * Image-only rulebooks still use their cited pages as primary evidence instead of guessing
      * from placeholder text.
      */
@@ -112,9 +112,8 @@ public class GroundedTeachingAgent {
     }
 
     /**
-     * Publishes through the first source-cited section before the remaining sections are queued.
-     * An evidence-insufficient early topic is persisted truthfully, then startup advances in plan order until useful
-     * cited content exists or every topic is known to be insufficient.
+     * Publishes all reusable cited sections immediately, or waits for the first newly grounded section.
+     * Only missing sections are scheduled; an independent chapter can publish when its evidence is ready.
      * The returned continuation is process-local on purpose: an application restart fails the owning Assistant Run,
      * while the already persisted first section remains readable and an explicit retry rebuilds from durable state.
      */
@@ -133,10 +132,16 @@ public class GroundedTeachingAgent {
                 lessonId,
                 createdAt,
                 reusable,
-                new ArrayList<>(),
+                new ArrayList<>(reusable.values().stream()
+                        .sorted(java.util.Comparator.comparingInt(LessonSection::position))
+                        .toList()),
                 AsyncContextPropagation.executorService(Executors.newVirtualThreadPerTaskExecutor()));
         scheduleSections(continuation);
-        settleNextPublishedSection(continuation, progressPublisher);
+        if (continuation.sections.isEmpty()) {
+            settleNextPublishedSection(continuation, progressPublisher);
+        } else {
+            publishProgress(progressPublisher, lessonId, plan, continuation.sections, createdAt);
+        }
         return continuation;
     }
 
@@ -157,7 +162,6 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException("lesson continuation and progress publisher are required");
         }
         TeachingPlan plan = continuation.plan;
-        UUID assistantRunId = continuation.assistantRunId;
         UUID lessonId = continuation.lessonId;
         Instant createdAt = continuation.createdAt;
         List<LessonSection> sections = continuation.sections;
@@ -216,12 +220,23 @@ public class GroundedTeachingAgent {
 
     private void scheduleSections(BaseLessonContinuation continuation) {
         Map<String, CompletableFuture<SectionOutcome>> byTopic = new java.util.LinkedHashMap<>();
+        Map<String, CompletableFuture<SectionOutcome>> publications = new java.util.LinkedHashMap<>();
         Map<String, List<String>> prerequisites = new java.util.LinkedHashMap<>();
         continuation.plan.wholeGameContext().topicDependencies().forEach(dependency -> prerequisites
                 .computeIfAbsent(dependency.dependentTopicKey(), ignored -> new ArrayList<>())
                 .add(dependency.prerequisiteTopicKey()));
-        continuation.unsettledSections = continuation.plan.sections().size();
         for (TeachingPlan.PlannedSection planned : continuation.plan.sections()) {
+            LessonSection reusable = continuation.reusableSections.get(planned.topicKey());
+            if (reusable != null) {
+                SectionOutcome outcome = new SectionOutcome(
+                        planned, reusable, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
+                byTopic.put(planned.topicKey(), CompletableFuture.completedFuture(outcome));
+                publications.put(planned.topicKey(), byTopic.get(planned.topicKey()));
+                recordPublication(
+                        continuation.assistantRunId, planned, outcome.publicationOutcome(), outcome.publicationCategory());
+                continue;
+            }
+            continuation.unsettledSections++;
             List<String> prerequisiteTopics = List.copyOf(
                     prerequisites.getOrDefault(planned.topicKey(), List.of()));
             List<CompletableFuture<SectionOutcome>> requiredFutures = prerequisiteTopics.stream()
@@ -232,47 +247,55 @@ public class GroundedTeachingAgent {
             }
             CompletableFuture<Void> ready = CompletableFuture.allOf(
                     requiredFutures.toArray(CompletableFuture[]::new));
-            CompletableFuture<SectionOutcome> future = ready.thenApplyAsync(ignored -> {
-                try {
-                    List<LessonSection> prerequisiteSections = requiredFutures.stream()
-                            .map(CompletableFuture::join)
-                            .map(SectionOutcome::section)
-                            .filter(java.util.Objects::nonNull)
-                            .sorted(java.util.Comparator.comparingInt(LessonSection::position))
-                            .toList();
-                    SectionOutcome outcome = baseSection(
-                            continuation.plan,
-                            planned,
-                            lessonAssembly.continuityContext(prerequisiteSections),
-                            continuation.reusableSections,
-                            continuation.assistantRunId);
-                    if (outcome.section() == null) return outcome;
-                    LessonSection enriched = enrichValidatedSection(
-                            continuation.plan,
-                            planned,
-                            outcome.section(),
-                            prerequisiteSections,
-                            continuation.assistantRunId);
-                    return outcome.withSection(enriched);
-                } catch (AgentExecutionStoppedException hardStop) {
-                    throw hardStop;
-                } catch (RuntimeException localFailure) {
-                    log.warn(
-                            "Teaching chapter {} became locally unavailable; independent chapters continue: {}",
-                            planned.topicKey(),
-                            localFailure.getMessage());
-                    return new SectionOutcome(
-                            planned,
-                            null,
-                            ActivityOutcome.REJECTED,
-                            "CHAPTER_LOCALLY_UNAVAILABLE");
-                }
-            }, continuation.sectionTasks);
-            future.whenComplete((outcome, failure) -> continuation.settledSections.add(
+            CompletableFuture<SectionOutcome> content = ready.thenApplyAsync(ignored -> baseSection(
+                    continuation.plan,
+                    planned,
+                    lessonAssembly.continuityContext(completedSections(requiredFutures)),
+                    continuation.assistantRunId), continuation.sectionTasks)
+                    .exceptionally(failure -> unavailableSection(planned, failure));
+            byTopic.put(planned.topicKey(), content);
+            CompletableFuture<SectionOutcome> publication = content;
+            if (planned.visualEvidenceRecommended()) {
+                // Only visual assembly needs prior visual results for duplicate-crop suppression. Dependent prose
+                // and chapters with no planned visual can already proceed from the validated text.
+                List<CompletableFuture<SectionOutcome>> priorPublications = prerequisiteTopics.stream()
+                        .map(publications::get)
+                        .toList();
+                publication = content.thenCombineAsync(
+                        CompletableFuture.allOf(priorPublications.toArray(CompletableFuture[]::new)),
+                        (outcome, ignored) -> outcome.section() == null ? outcome : outcome.withSection(enrichValidatedSection(
+                                continuation.plan,
+                                planned,
+                                outcome.section(),
+                                completedSections(priorPublications),
+                                continuation.assistantRunId)),
+                        continuation.sectionTasks)
+                        .exceptionally(failure -> unavailableSection(planned, failure));
+            }
+            publication.whenComplete((outcome, failure) -> continuation.settledSections.add(
                     new SettledSection(planned, outcome, failure)));
-            byTopic.put(planned.topicKey(), future);
+            publications.put(planned.topicKey(), publication);
         }
         if (continuation.unsettledSections == 0) continuation.sectionTasks.shutdown();
+    }
+
+    private List<LessonSection> completedSections(List<CompletableFuture<SectionOutcome>> futures) {
+        return futures.stream()
+                .map(CompletableFuture::join)
+                .map(SectionOutcome::section)
+                .filter(java.util.Objects::nonNull)
+                .sorted(java.util.Comparator.comparingInt(LessonSection::position))
+                .toList();
+    }
+
+    private SectionOutcome unavailableSection(TeachingPlan.PlannedSection planned, Throwable failure) {
+        RuntimeException cause = propagateSectionFailure(failure);
+        if (cause instanceof AgentExecutionStoppedException) throw cause;
+        log.warn(
+                "Teaching chapter {} became locally unavailable; independent chapters continue: {}",
+                planned.topicKey(),
+                cause.getMessage());
+        return new SectionOutcome(planned, null, ActivityOutcome.REJECTED, "CHAPTER_LOCALLY_UNAVAILABLE");
     }
 
     /** Settles local failures as observations and publishes one fully prepared chapter snapshot at most. */
@@ -336,29 +359,7 @@ public class GroundedTeachingAgent {
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             List<PriorSectionContext> priorSections,
-            Map<String, LessonSection> reusableSections,
             UUID assistantRunId) {
-        return generateSection(
-                plan,
-                planned,
-                priorSections,
-                reusableSections,
-                assistantRunId,
-                planned.position() - 1);
-    }
-
-    private SectionOutcome generateSection(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<PriorSectionContext> priorSections,
-            Map<String, LessonSection> reusableSections,
-            UUID assistantRunId,
-            int sectionIndex) {
-        LessonSection reusable = reusableSections.get(planned.topicKey());
-        if (reusable != null) {
-            return new SectionOutcome(
-                    planned, reusable, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
-        }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
                 plan, planned, assistantRunId, true);
         return composeResolvedSection(
@@ -367,7 +368,7 @@ public class GroundedTeachingAgent {
                 priorSections,
                 assistantRunId,
                 resolution,
-                sectionIndex);
+                planned.position() - 1);
     }
 
     private SectionOutcome composeResolvedSection(

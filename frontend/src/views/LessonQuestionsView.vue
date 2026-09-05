@@ -86,7 +86,6 @@ const {
   answerElapsedSeconds,
   answerSoftBudgetReached,
   cancelAnswer,
-  cancelReadTransport: cancelAnswerReads,
   clearAnswerFeedback,
   resetConversation,
   restoreConversation,
@@ -102,7 +101,6 @@ const {
   },
   currentLessonRequest: () => latestWorkspaceLoad,
   isCurrentLessonLoad: isCurrentWorkspaceLoad,
-  canRead: () => online.value,
   requestLogin: async () => notifyLoginRequired(),
   onReceived: (context, text, received, reference) => {
     rememberCurrentAnswerThread()
@@ -264,7 +262,6 @@ function updateSessionIdentity(username: string) {
 function cancelWorkspaceReads() {
   activeWorkspaceController?.abort()
   activeWorkspaceController = null
-  cancelAnswerReads()
   cancelRulingReads()
 }
 

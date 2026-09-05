@@ -20,17 +20,17 @@ public interface BoardGameRecommendationModel {
     }
 
     /**
-     * Streams the accumulated arguments of the first action while retaining the complete
+     * Streams the identified first action with accumulated arguments while retaining the complete
      * provider-neutral turn as the only commit input. Implementations that cannot stream remain correct,
      * but expose the complete arguments only after the call finishes.
      */
     default Turn nextStreaming(
             Request request,
             String ownerUsername,
-            Consumer<String> accumulatedArgumentsListener) {
+            Consumer<ToolCall> accumulatedActionListener) {
         Turn turn = next(request, ownerUsername);
         if (turn.toolCalls().size() == 1) {
-            accumulatedArgumentsListener.accept(turn.toolCalls().getFirst().argumentsJson());
+            accumulatedActionListener.accept(turn.toolCalls().getFirst());
         }
         return turn;
     }

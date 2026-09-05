@@ -1056,8 +1056,8 @@ test('advances My Guides from plan startup to the first readable chapter without
 
   preparation.completePreparation()
   preparation.publishFirstLesson()
-  await expect(page.getByText('正在补充图片或核对细节')).toBeVisible({ timeout: 12_000 })
-  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toBeVisible()
+  await expect(page.getByText('已有章节可读', { exact: true })).toBeVisible({ timeout: 12_000 })
+  await expect(page.getByRole('link', { name: '阅读已完成章节' })).toBeVisible()
   await expect(pending).toHaveCount(0)
 })
 
@@ -1182,7 +1182,7 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   await expect(continuation).toBeVisible()
   expect(await continuation.evaluate(element =>
     element.closest('[data-testid="recommendation-chat-workspace"]') !== null)).toBe(true)
-  await expect(readGuide).toContainText('基础讲解可读', { timeout: 8_000 })
+  await expect(readGuide).toContainText('已有章节可读', { timeout: 8_000 })
   await expect(readGuide).toContainText('打开讲解')
   await expect(viewProgress).toHaveText('查看详细进度')
 

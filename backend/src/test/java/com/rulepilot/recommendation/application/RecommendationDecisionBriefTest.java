@@ -17,7 +17,14 @@ class RecommendationDecisionBriefTest {
     @Test
     void rejectsAPlayerSummaryThatDoesNotDescribeTheChosenAction() {
         ToolCall call = call("research_game_fit", validBrief("search_bgg_catalog"));
+        List<String> snapshots = new ArrayList<>();
+        var publisher = decisions.streamingPublisher(
+                "zh-CN", Set.of("search_bgg_catalog", "research_game_fit"), snapshots::add);
 
+        publisher.accept(call);
+        publisher.finish(call);
+
+        assertThat(snapshots).isEmpty();
         assertThat(decisions.render(call, "zh-CN")).isEmpty();
     }
 
@@ -47,11 +54,10 @@ class RecommendationDecisionBriefTest {
 
         arguments.codePoints().forEach(codePoint -> {
             accumulated.appendCodePoint(codePoint);
-            publisher.accept(accumulated.toString());
+            publisher.accept(call("search_bgg_catalog", accumulated.toString()));
         });
         publisher.finish(call("search_bgg_catalog", arguments));
 
-        assertThat(snapshots).hasSizeGreaterThan(20);
         assertThat(snapshots.getFirst())
                 .contains("我对这次请求的判断")
                 .doesNotContain("下一步会核对什么");
@@ -68,7 +74,9 @@ class RecommendationDecisionBriefTest {
         var publisher = decisions.streamingPublisher(
                 "zh-CN", Set.of("research_game_fit"), snapshots::add);
 
-        publisher.accept(validBrief("search_bgg_catalog"));
+        ToolCall call = call("search_bgg_catalog", validBrief("search_bgg_catalog"));
+        publisher.accept(call);
+        publisher.finish(call);
 
         assertThat(snapshots).isEmpty();
     }

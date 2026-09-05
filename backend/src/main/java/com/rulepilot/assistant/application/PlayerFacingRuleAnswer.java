@@ -79,7 +79,8 @@ public record PlayerFacingRuleAnswer(
                 || !conceptComparisons.isEmpty()
                 || !ruleOptions.isEmpty();
         if (publishesConclusion
-                && ((citations.isEmpty() != (answerBasis == null)) || clarification != null || recovery != null
+                && ((citations.isEmpty() != (answerBasis == null)) || recovery != null
+                        || clarification != null && clarification.isBlank()
                         || (status == AnswerStatus.ANSWERED_WITH_WARNING) != !warnings.isEmpty())) {
             throw new IllegalArgumentException("player-facing conclusion is invalid");
         }

@@ -46,11 +46,12 @@ class SpringAiBoardGameRecommendationModelTest {
                 .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
                         chatModel, "qwen", "qwen3.7-plus", false, false, true));
         when(chatModel.streamToolCallChunks(any(Prompt.class))).thenReturn(Flux.just(
-                chunk("call-1", "recommend_games", "{\"selections\":[{", ""),
+                chunk("", "", "{\"selections\":[{", ""),
+                chunk("call-1", "recommend_games", "", ""),
                 chunk("", "", "\"bggId\":1}]", ""),
                 chunk("", "", ",\"playerReply\":\"好了\"}", "tool_calls")));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0, "qwen-turbo");
-        List<String> accumulated = new ArrayList<>();
+        List<ToolCall> accumulated = new ArrayList<>();
 
         var turn = adapter.nextStreaming(
                 request(
@@ -60,7 +61,11 @@ class SpringAiBoardGameRecommendationModelTest {
                 null,
                 accumulated::add);
 
-        assertThat(accumulated).containsExactly(
+        assertThat(accumulated).allSatisfy(call -> {
+            assertThat(call.id()).isEqualTo("call-1");
+            assertThat(call.name()).isEqualTo("recommend_games");
+        });
+        assertThat(accumulated).extracting(ToolCall::argumentsJson).containsExactly(
                 "{\"selections\":[{",
                 "{\"selections\":[{\"bggId\":1}]",
                 "{\"selections\":[{\"bggId\":1}],\"playerReply\":\"好了\"}");
@@ -90,7 +95,7 @@ class SpringAiBoardGameRecommendationModelTest {
                 chunk(1, "research", "research_fit", "{\"bggIds\":[1]}", ""),
                 chunk(0, "", "", "\"chosenAction\":\"search_bgg\"}}", "tool_calls")));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0, "");
-        List<String> accumulated = new ArrayList<>();
+        List<ToolCall> accumulated = new ArrayList<>();
 
         var turn = adapter.nextStreaming(
                 request(List.of(
@@ -100,7 +105,11 @@ class SpringAiBoardGameRecommendationModelTest {
                 null,
                 accumulated::add);
 
-        assertThat(accumulated).containsExactly(
+        assertThat(accumulated).allSatisfy(call -> {
+            assertThat(call.id()).isEqualTo("search");
+            assertThat(call.name()).isEqualTo("search_bgg");
+        });
+        assertThat(accumulated).extracting(ToolCall::argumentsJson).containsExactly(
                 "{\"decisionBrief\":{",
                 "{\"decisionBrief\":{\"chosenAction\":\"search_bgg\"}}");
         assertThat(turn.toolCalls()).containsExactly(
@@ -132,7 +141,7 @@ class SpringAiBoardGameRecommendationModelTest {
                                 "", "function", "", ",\"playerReply\":\"好了\"}"))));
         var adapter = new SpringAiBoardGameRecommendationModel(
                 configuration, 0.0, "qwen-turbo");
-        List<String> accumulated = new ArrayList<>();
+        List<ToolCall> accumulated = new ArrayList<>();
 
         var turn = adapter.nextStreaming(
                 request(
@@ -142,7 +151,11 @@ class SpringAiBoardGameRecommendationModelTest {
                 null,
                 accumulated::add);
 
-        assertThat(accumulated).containsExactly(
+        assertThat(accumulated).allSatisfy(call -> {
+            assertThat(call.id()).isEqualTo("call-1");
+            assertThat(call.name()).isEqualTo("recommend_games");
+        });
+        assertThat(accumulated).extracting(ToolCall::argumentsJson).containsExactly(
                 "{\"selections\":[{",
                 "{\"selections\":[{\"bggId\":1}]",
                 "{\"selections\":[{\"bggId\":1}],\"playerReply\":\"好了\"}");

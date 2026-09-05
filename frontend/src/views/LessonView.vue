@@ -149,7 +149,6 @@ const {
 })
 const {
   generationActive,
-  draftReady,
   currentGenerationText,
   generationElapsed,
   processedGenerationChapters,
@@ -160,8 +159,6 @@ const {
   terminalGenerationIssues,
 } = useLessonGenerationPresentation({
   plan,
-  lesson,
-  currentSectionIndex: computed(() => progress.value.currentIndex),
   generationRun: teachingRun,
   generationStatusUnknown,
   now: generationNow,
@@ -796,7 +793,6 @@ onUnmounted(() => {
         :data-failure-recovery="generationFailurePolicy?.failureRecovery ?? undefined"
         :status-unknown="generationStatusUnknown"
         :status-text="currentGenerationText"
-        :draft-ready="draftReady"
         :available-section-count="readableLessonSectionCount"
         :total-section-count="plan?.sections.length ?? null"
         :elapsed="generationElapsed"
@@ -828,14 +824,6 @@ onUnmounted(() => {
           </button>
         </div>
       </section>
-      <p
-        v-if="lesson"
-        data-testid="lesson-generation-failure-boundary"
-        class="border-b border-ink/8 bg-paper/55 px-5 py-2 text-center text-xs leading-5 text-ink/55"
-      >
-        {{ t('lesson.generation.failureBoundary') }}
-      </p>
-
       <section
         v-if="generationIdentityBlocked"
         data-testid="lesson-generation-auth-stopped"

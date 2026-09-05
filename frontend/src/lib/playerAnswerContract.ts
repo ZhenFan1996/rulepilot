@@ -285,7 +285,7 @@ function hasValidOutcomeShape(answer: PlayerFacingRuleAnswer) {
   if (publishesConclusion) {
     return answer.citations.length > 0
       && (answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
-      && answer.clarification === null
+      && (answer.clarification === null || Boolean(answer.clarification.trim()))
       && answer.recovery === null
   }
   if (answer.status === 'CLARIFICATION_REQUIRED') return Boolean(answer.clarification?.trim())
