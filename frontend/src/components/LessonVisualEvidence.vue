@@ -281,7 +281,7 @@ function isReliableDetailViewport(focus: VisualFocus) {
         class="px-4 py-10 text-center"
         :class="compact ? 'min-h-36' : 'min-h-48'"
       >
-        <p class="text-xs leading-5 text-ink/65">{{ detailRetryMessage }}</p>
+        <p class="text-xs leading-5 text-muted">{{ detailRetryMessage }}</p>
       </div>
       <div
         v-else-if="detailLoading"
@@ -296,7 +296,7 @@ function isReliableDetailViewport(focus: VisualFocus) {
         data-testid="lesson-visual-image-failure"
         class="min-h-40 border-b border-dashed border-indigo/15 px-4 py-10 text-center"
       >
-        <p class="text-xs leading-5 text-ink/60">{{ detailFailureMessage }}</p>
+        <p class="text-xs leading-5 text-muted">{{ detailFailureMessage }}</p>
         <button
           v-if="detailCanRetry"
           type="button"
@@ -311,7 +311,7 @@ function isReliableDetailViewport(focus: VisualFocus) {
 
     <div v-else data-testid="lesson-visual-image-unreliable" class="border-b border-dashed border-copper/25 bg-canvas px-4 py-8 text-center">
       <p class="text-sm font-semibold text-ink">{{ t('lesson.visualEvidence.protectedTitle') }}</p>
-      <p class="mt-2 text-xs leading-5 text-ink/60">{{ t('lesson.visualEvidence.protectedBody') }}</p>
+      <p class="mt-2 text-xs leading-5 text-muted">{{ t('lesson.visualEvidence.protectedBody') }}</p>
     </div>
 
     <figcaption class="border-t border-indigo/10 px-4 py-4 sm:px-5">
@@ -319,14 +319,14 @@ function isReliableDetailViewport(focus: VisualFocus) {
         <p class="text-[11px] font-bold uppercase tracking-[0.12em] text-indigo">
           {{ t('lesson.visualEvidence.figure', { current: visualOrdinal, total: visualTotal }) }}
         </p>
-        <span class="text-xs font-semibold text-ink/45">{{ t('lesson.chapter.page', { page: focus.pageNumber }) }}</span>
+        <span class="text-xs font-semibold text-muted">{{ t('lesson.chapter.page', { page: focus.pageNumber }) }}</span>
       </div>
       <p class="mt-1 font-display text-lg font-semibold text-ink">{{ focus.label }}</p>
       <p class="mt-2 text-sm leading-6 text-ink/70">
         <span class="font-semibold text-copper">{{ t('lesson.visualEvidence.lookFor') }}</span>
         {{ focus.visibleDescription || focus.label }}
       </p>
-      <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-ink/50">
+      <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted">
         <span>{{ t('lesson.visualEvidence.boundary') }}</span>
         <a :href="originalPageUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo hover:underline">{{ t('lesson.visualEvidence.openOriginal') }} ↗</a>
       </div>

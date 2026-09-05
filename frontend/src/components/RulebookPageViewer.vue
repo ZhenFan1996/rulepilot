@@ -269,7 +269,7 @@ onBeforeUnmount(() => {
         <p
           v-if="imageLoading && requestedImage"
           data-testid="rulebook-page-status"
-          class="rounded-xl bg-canvas/95 px-5 py-4 text-center text-sm font-semibold text-ink/60"
+          class="rounded-xl bg-canvas/95 px-5 py-4 text-center text-sm font-semibold text-muted"
           :class="displayedImage ? 'absolute bottom-3 left-3 right-3 shadow-lg' : ''"
           role="status"
         >
@@ -301,7 +301,7 @@ onBeforeUnmount(() => {
       <p
         v-if="displayedImage && !imageLoading && !imageFailed"
         data-testid="rulebook-page-status"
-        class="mx-auto mt-3 max-w-5xl text-center text-xs text-ink/50"
+        class="mx-auto mt-3 max-w-5xl text-center text-xs text-muted"
         role="status"
       >
         {{ copy.displayed(displayedImage.pageNumber) }}<template v-if="hint"> · {{ hint }}</template>

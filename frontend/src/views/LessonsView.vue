@@ -1090,57 +1090,56 @@ onBeforeUnmount(() => {
 <template>
   <AppShell :login-action-owned="loginRequired" @session-identity="updateSessionIdentity">
     <section class="tabletop-page max-w-6xl">
-      <p class="tabletop-kicker">{{ t('lessons.eyebrow') }}</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 ref="pageHeading" tabindex="-1" class="font-display text-4xl font-semibold tracking-tight outline-none">{{ loginRequired ? signedOutCopy.pageTitle : t('lessons.title') }}</h1>
-          <p class="mt-4 max-w-2xl leading-7 text-ink/55">{{ loginRequired ? signedOutCopy.pageDescription : t('lessons.description') }}</p>
+          <h1 ref="pageHeading" tabindex="-1" class="tabletop-title outline-none">{{ loginRequired ? signedOutCopy.pageTitle : t('lessons.title') }}</h1>
+          <p class="mt-4 max-w-2xl leading-7 text-muted">{{ loginRequired ? signedOutCopy.pageDescription : t('lessons.description') }}</p>
         </div>
         <div class="flex flex-wrap gap-2">
           <button v-if="!loginRequired && visiblePlans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
-          <RouterLink v-if="!loginRequired" :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">{{ t('lessons.upload') }}</RouterLink>
+          <RouterLink v-if="!loginRequired" :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-on-accent">{{ t('lessons.upload') }}</RouterLink>
         </div>
       </div>
 
       <p v-if="!loginRequired && startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">{{ t('lessons.started') }}</p>
       <p v-if="!loginRequired && cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
-      <div v-if="visiblePlans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
+      <div v-if="visiblePlans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
         <p>{{ t('lessons.summary', { versions: visiblePlans.length, rulebooks: planGroups.length, readable: readableGroupCount }) }}</p>
         <button v-if="visiblePlans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-4 " @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: visiblePlans.length }) }}</button>
       </div>
 
       <div v-if="visiblePlans.length" class="mt-5 flex flex-wrap gap-2" role="group" :aria-label="t('lessons.filter.aria')">
-        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'READABLE' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'READABLE'" @click="planFilter = 'READABLE'">{{ t('lessons.filter.readable', { count: readableGroupCount }) }}</button>
-        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'PENDING' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'PENDING'" @click="planFilter = 'PENDING'">{{ t('lessons.filter.pending', { count: pendingGroupCount }) }}</button>
-        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'ALL' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'ALL'" @click="planFilter = 'ALL'">{{ t('lessons.filter.all', { count: planGroups.length }) }}</button>
+        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'READABLE' ? 'bg-ink text-paper' : 'border border-ink/15 text-muted hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'READABLE'" @click="planFilter = 'READABLE'">{{ t('lessons.filter.readable', { count: readableGroupCount }) }}</button>
+        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'PENDING' ? 'bg-ink text-paper' : 'border border-ink/15 text-muted hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'PENDING'" @click="planFilter = 'PENDING'">{{ t('lessons.filter.pending', { count: pendingGroupCount }) }}</button>
+        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'ALL' ? 'bg-ink text-paper' : 'border border-ink/15 text-muted hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'ALL'" @click="planFilter = 'ALL'">{{ t('lessons.filter.all', { count: planGroups.length }) }}</button>
       </div>
 
       <section v-if="!loginRequired && !loading && !errorMessage && pendingJourneys.length" class="mt-8 rounded-2xl border border-indigo/20 bg-indigo/[0.035] p-5 sm:p-6" aria-live="polite" data-testid="pending-guide-journeys">
         <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ pendingCopy.eyebrow }}</p>
         <h2 class="mt-1 font-display text-2xl font-semibold">{{ pendingCopy.title }}</h2>
-        <p class="mt-2 max-w-3xl text-sm leading-6 text-ink/55">{{ pendingCopy.detail }}</p>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">{{ pendingCopy.detail }}</p>
         <ol class="mt-5 grid gap-4 md:grid-cols-2">
           <li v-for="journey in pendingJourneys" :key="journey.id" data-testid="pending-guide-journey" :data-failure-classification="journey.failureClassification ?? undefined" :data-failure-recovery="journey.failureRecovery ?? undefined" class="rounded-xl border bg-paper p-4" :class="journey.state === 'failed' ? 'border-red-200' : 'border-indigo/15'">
             <div class="flex items-start justify-between gap-4">
               <div class="min-w-0">
                 <h3 class="truncate font-display text-xl font-semibold">{{ journey.title }}</h3>
-                <p v-if="journey.rulebookTitle" class="mt-1 truncate text-xs text-ink/45">{{ pendingCopy.rulebook }}：{{ journey.rulebookTitle }}</p>
+                <p v-if="journey.rulebookTitle" class="mt-1 truncate text-xs text-muted">{{ pendingCopy.rulebook }}：{{ journey.rulebookTitle }}</p>
                 <PlayerWorkStatusText
                   :status="pendingWorkStatus(journey)"
                   class="mt-3 text-sm font-semibold"
                   :class="journey.state === 'failed' ? 'text-red-700' : 'text-indigo'"
                 />
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ pendingPhaseDetail(journey) }}</p>
+                <p class="mt-1 text-xs leading-5 text-muted">{{ pendingPhaseDetail(journey) }}</p>
               </div>
               <span v-if="journey.state === 'active'" class="mt-1 size-3 shrink-0 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
             </div>
             <div v-if="journey.progress !== null" class="mt-4">
-              <div class="flex justify-between text-xs text-ink/45"><span>{{ pendingCopy.progress }}</span><span class="font-mono">{{ journey.progress }}%</span></div>
+              <div class="flex justify-between text-xs text-muted"><span>{{ pendingCopy.progress }}</span><span class="font-mono">{{ journey.progress }}%</span></div>
               <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10"><div class="h-full rounded-full bg-indigo" :style="{ width: `${journey.progress}%` }" /></div>
             </div>
             <div class="mt-4 flex flex-wrap gap-4 text-sm font-semibold text-indigo">
               <button v-if="journey.retryAction === 'PREPARE_TEACHING'" type="button" :disabled="Boolean(retryingJourneyId)" class="inline-flex min-h-10 items-center rounded-lg bg-indigo px-4 text-white disabled:opacity-40" @click="retryPendingJourney(journey)">{{ retryingJourneyId === journey.id ? pendingCopy.retryingPreparation : pendingCopy.retryPreparation }}</button>
-              <button v-if="journey.state === 'failed' && (journey.importJobId || journey.uploadHandoffId)" type="button" data-testid="delete-failed-guide-attempt" :disabled="destructivePending" class="inline-flex min-h-10 items-center rounded-lg px-2 text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeleteFailedPreparation(journey)">{{ deletingJourneyId === journey.id ? (locale === 'zh-CN' ? '正在删除…' : 'Deleting…') : (locale === 'zh-CN' ? '删除失败记录' : 'Delete failed attempt') }}</button>
+              <button v-if="journey.state === 'failed' && (journey.importJobId || journey.uploadHandoffId)" type="button" data-testid="delete-failed-guide-attempt" :disabled="destructivePending" class="inline-flex min-h-10 items-center rounded-lg px-2 text-muted hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeleteFailedPreparation(journey)">{{ deletingJourneyId === journey.id ? (locale === 'zh-CN' ? '正在删除…' : 'Deleting…') : (locale === 'zh-CN' ? '删除失败记录' : 'Delete failed attempt') }}</button>
               <RouterLink v-if="journey.documentVersionId && journey.canReadRulebook" :to="{ name: 'rulebook-reader', params: { versionId: journey.documentVersionId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openRulebook }}</RouterLink>
               <RouterLink v-if="journey.importJobId" :to="{ name: 'teach', query: { importJob: journey.importJobId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
               <RouterLink v-else-if="journey.state === 'failed'" :to="{ name: 'teach' }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
@@ -1152,11 +1151,11 @@ onBeforeUnmount(() => {
 
       <section v-if="loginRequired" class="mt-8 rounded-2xl border border-indigo/20 bg-paper p-6 sm:p-8" data-testid="signed-out-guides-gate" aria-labelledby="signed-out-guides-title">
         <h2 id="signed-out-guides-title" class="font-display text-2xl font-semibold">{{ signedOutCopy.title }}</h2>
-        <p class="mt-3 max-w-2xl text-sm leading-6 text-ink/60">{{ signedOutCopy.description }}</p>
+        <p class="mt-3 max-w-2xl text-sm leading-6 text-muted">{{ signedOutCopy.description }}</p>
         <RouterLink :to="loginTarget" class="mt-5 inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo px-5 font-semibold text-white">{{ signedOutCopy.action }}</RouterLink>
       </section>
 
-      <div v-else-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ t('lessons.loading') }}</div>
+      <div v-else-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-muted" role="status">{{ t('lessons.loading') }}</div>
 
       <div v-else-if="errorMessage" class="mt-10 rounded-3xl border border-red-200 bg-red-50 p-6 text-red-800" role="alert">
         <p>{{ errorMessage }}</p>
@@ -1165,13 +1164,13 @@ onBeforeUnmount(() => {
 
       <div v-else-if="visiblePlans.length === 0 && pendingJourneys.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.empty.title') }}</h2>
-        <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.empty.description') }}</p>
-        <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-white">{{ t('lessons.empty.action') }}</RouterLink>
+        <p class="mx-auto mt-3 max-w-lg leading-7 text-muted">{{ t('lessons.empty.description') }}</p>
+        <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-on-accent">{{ t('lessons.empty.action') }}</RouterLink>
       </div>
 
       <div v-else-if="visiblePlans.length > 0 && displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.noReadable.title') }}</h2>
-        <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.noReadable.description') }}</p>
+        <p class="mx-auto mt-3 max-w-lg leading-7 text-muted">{{ t('lessons.noReadable.description') }}</p>
         <button type="button" class="mt-6 text-sm font-semibold text-indigo underline underline-offset-4" @click="planFilter = 'PENDING'">{{ t('lessons.noReadable.action') }}</button>
       </div>
 
@@ -1181,7 +1180,7 @@ onBeforeUnmount(() => {
             <div class="flex min-w-0 items-start gap-3">
               <span class="score-token shrink-0" aria-hidden="true" />
               <div class="min-w-0">
-                <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
+                <p class="text-xs font-medium text-muted">{{ createdLabel(plan.createdAt) }}</p>
                 <h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ displayPlanTitle(plan) }}</h2>
               </div>
             </div>
@@ -1196,27 +1195,27 @@ onBeforeUnmount(() => {
             <div class="flex items-start justify-between gap-4">
               <div>
                 <p class="text-sm font-semibold text-indigo">{{ activityText(plan, currentActivity(plan)) }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lessons.live.activityHint') }}</p>
+                <p class="mt-1 text-xs leading-5 text-muted">{{ t('lessons.live.activityHint') }}</p>
               </div>
               <span class="shrink-0 font-mono text-sm font-semibold text-indigo">{{ elapsedLabel(plan) }}</span>
             </div>
             <div class="mt-4 h-2 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="processedChapterCount(plan)" :aria-label="t('lessons.live.progressAria', { processed: processedChapterCount(plan), total: plan.sections.length })">
               <div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: chapterProgressWidth(plan) }" />
             </div>
-            <div class="mt-2 text-xs text-ink/55">
+            <div class="mt-2 text-xs text-muted">
               <span>{{ t('lessons.live.processed', { processed: processedChapterCount(plan), total: plan.sections.length, supported: supportedChapterCount(plan) }) }}</span>
             </div>
-            <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} {{ t('lessons.live.background') }}</p>
+            <p class="mt-3 text-xs leading-5 text-muted">{{ remainingTimeText(plan) }} {{ t('lessons.live.background') }}</p>
             <ol v-if="recentActivities(plan).length" class="mt-4 stack-y-sm border-t border-indigo/10 pt-3" :aria-label="t('lessons.live.recent')">
-              <li v-for="activity in recentActivities(plan)" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
+              <li v-for="activity in recentActivities(plan)" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-muted">
                 <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
                 <span>{{ activityText(plan, activity) }}</span>
               </li>
             </ol>
           </div>
-          <p v-else class="mt-4 min-h-12 text-sm leading-6 text-ink/60" aria-live="polite">{{ progressText(plan) }}</p>
+          <p v-else class="mt-4 min-h-12 text-sm leading-6 text-muted" aria-live="polite">{{ progressText(plan) }}</p>
           <p v-if="progressErrors[plan.id]" class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800" role="status">{{ t('lessons.live.retrying') }}</p>
-          <p v-if="!showingAllVersions && versionCount(plan.id) > 1" class="mt-3 text-xs leading-5 text-ink/45">{{ t('lessons.history.hidden', { count: versionCount(plan.id) - 1 }) }}</p>
+          <p v-if="!showingAllVersions && versionCount(plan.id) > 1" class="mt-3 text-xs leading-5 text-muted">{{ t('lessons.history.hidden', { count: versionCount(plan.id) - 1 }) }}</p>
           <div class="mt-6 flex flex-wrap items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">{{ t('lessons.lastOpened') }}</span>
             <span v-else class="text-xs text-ink/35">{{ t('lessons.chapterCount', { count: plan.sections.length }) }}</span>
@@ -1224,7 +1223,7 @@ onBeforeUnmount(() => {
               <RouterLink v-if="hasReadableLesson(progress[plan.id]?.lesson)" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'DRAFT_READY' || stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
               <button v-if="canLaunchPlan(plan.id)" type="button" :disabled="Boolean(launchingPlanId) || Boolean(deletingPlanId)" :aria-busy="launchingPlanId === plan.id" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="launch(plan.id)">{{ planLaunchLabel(plan.id) }}</button>
               <span v-else-if="stateOf(plan.id) === 'GENERATING'" class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />{{ t('lessons.action.background') }}</span>
-              <button type="button" :disabled="Boolean(launchingPlanId) || Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
+              <button type="button" :disabled="Boolean(launchingPlanId) || Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-muted hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
             </div>
           </div>
           <p v-if="launchErrors[plan.id]" data-testid="lesson-launch-error" class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs leading-5 text-red-800" role="alert">{{ launchErrors[plan.id] }}</p>

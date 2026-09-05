@@ -324,22 +324,18 @@ onBeforeUnmount(() => {
 <template>
   <AppShell @session-identity="updateSessionIdentity">
     <div class="shelf-page tabletop-page">
-      <section class="player-board relative grid overflow-hidden border border-ink/10 bg-ink text-canvas shelf-hero-shadow lg:grid-cols-[minmax(0,0.85fr)_minmax(24rem,1.15fr)]">
-        <div class="relative z-10 px-6 py-8 sm:px-9 sm:py-10 lg:py-14">
-          <p class="text-xs font-bold uppercase tracking-[0.2em] text-copper">{{ t('shelf.eyebrow') }}</p>
-          <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('shelf.title') }}</h1>
-          <p class="mt-4 max-w-xl text-base leading-7 text-canvas/70">{{ t('shelf.description') }}</p>
+      <section class="border-b border-ink/10 pb-7">
+        <div class="tabletop-heading">
+          <h1 class="tabletop-title">{{ t('shelf.title') }}</h1>
+          <p class="tabletop-lede">{{ t('shelf.description') }}</p>
           <div class="mt-7 flex flex-wrap gap-3">
-            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-white transition hover:bg-copper-dark">
+            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-on-accent transition hover:bg-copper-dark">
               <TabletopGlyph name="plus" :size="18" /> {{ t('shelf.addRulebook') }}
             </RouterLink>
-            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-canvas/25 px-5 text-sm font-bold text-canvas transition hover:bg-canvas/10">
+            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-ink/15 px-5 text-sm font-semibold text-indigo transition hover:bg-ink/5">
               <TabletopGlyph name="library" :size="18" /> {{ t('shelf.publicGuides') }}
             </RouterLink>
           </div>
-        </div>
-        <div class="relative min-h-64 overflow-hidden border-t border-canvas/10 lg:min-h-full lg:border-l lg:border-t-0" aria-hidden="true">
-          <img src="/illustrations/game-library.webp" alt="" width="1600" height="900" loading="eager" class="absolute inset-0 h-full w-full object-cover object-right">
         </div>
       </section>
 
@@ -347,11 +343,11 @@ onBeforeUnmount(() => {
         <div>
           <p class="text-sm font-semibold text-copper">{{ t('shelf.collection') }}</p>
           <h2 class="mt-1 font-display text-3xl font-semibold tracking-tight">{{ t('shelf.playing') }}</h2>
-          <p class="mt-2 text-sm leading-6 text-ink/55">{{ t('shelf.summary', { games: shelf.length, rulebooks: documents.length, guides: readyLessons }) }}</p>
+          <p class="mt-2 text-sm leading-6 text-muted">{{ t('shelf.summary', { games: shelf.length, rulebooks: documents.length, guides: readyLessons }) }}</p>
         </div>
         <label class="relative block w-full lg:w-72">
           <span class="sr-only">{{ t('shelf.searchLabel') }}</span>
-          <TabletopGlyph name="compass" :size="18" class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/45" />
+          <TabletopGlyph name="compass" :size="18" class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted" />
           <input v-model="search" type="search" :placeholder="t('shelf.searchPlaceholder')" class="min-h-11 w-full rounded-xl border border-ink/12 bg-paper py-3 pl-11 pr-4 text-sm outline-none transition placeholder:text-ink/40 focus:border-indigo focus:ring-2 focus:ring-indigo/15">
         </label>
       </section>
@@ -374,8 +370,8 @@ onBeforeUnmount(() => {
       <section v-else-if="shelf.length === 0" class="mt-7 overflow-hidden rounded-[1.75rem] border border-dashed border-ink/25 bg-paper px-6 py-12 text-center sm:px-10">
         <div class="mx-auto grid size-16 place-items-center rounded-2xl bg-copper/10 text-copper"><TabletopGlyph name="rulebook" :size="32" /></div>
         <h2 class="mt-5 font-display text-3xl font-semibold">{{ t('shelf.empty.title') }}</h2>
-        <p class="mx-auto mt-3 max-w-md leading-7 text-ink/60">{{ t('shelf.empty.description') }}</p>
-        <RouterLink :to="{ name: 'teach' }" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-white transition hover:bg-copper-dark">
+        <p class="mx-auto mt-3 max-w-md leading-7 text-muted">{{ t('shelf.empty.description') }}</p>
+        <RouterLink :to="{ name: 'teach' }" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-on-accent transition hover:bg-copper-dark">
           <TabletopGlyph name="plus" :size="18" /> {{ t('shelf.empty.action') }}
         </RouterLink>
       </section>
@@ -387,14 +383,14 @@ onBeforeUnmount(() => {
       <section v-else class="mt-7 rounded-[1.5rem] border border-ink/10 bg-paper p-8 text-center">
         <TabletopGlyph name="compass" :size="30" class="mx-auto text-indigo" />
         <h2 class="mt-4 font-display text-2xl font-semibold">{{ t('shelf.noResults.title') }}</h2>
-        <p class="mt-2 text-sm text-ink/55">{{ t('shelf.noResults.description') }}</p>
+        <p class="mt-2 text-sm text-muted">{{ t('shelf.noResults.description') }}</p>
         <button type="button" class="mt-4 min-h-11 text-sm font-bold text-indigo" @click="search = ''">{{ t('shelf.noResults.action') }}</button>
       </section>
 
       <aside class="mt-10 flex flex-col gap-4 rounded-[1.5rem] border border-ink/10 bg-paper p-5 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex items-center gap-3">
           <span class="grid size-11 place-items-center rounded-xl bg-indigo/10 text-indigo"><TabletopGlyph name="cards" :size="23" /></span>
-          <div><h2 class="font-semibold">{{ t('shelf.manage.title') }}</h2><p class="mt-1 text-sm text-ink/55">{{ t('shelf.manage.description') }}</p></div>
+          <div><h2 class="font-semibold">{{ t('shelf.manage.title') }}</h2><p class="mt-1 text-sm text-muted">{{ t('shelf.manage.description') }}</p></div>
         </div>
         <RouterLink :to="{ name: 'catalog-manage' }" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-ink/12 px-4 text-sm font-bold text-ink/75 transition hover:border-indigo hover:text-indigo">
           {{ t('shelf.manage.action') }} <TabletopGlyph name="arrow" :size="17" />

@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Coordinates bounded catalog hydration across API and worker processes. */
+/** Coordinates worker leases, including hot-game refreshes after ranked hydration completes. */
 public interface BggPopularMetadataPrewarmProgress {
 
     int MAX_TARGET_COUNT = 10_000;
@@ -15,27 +15,22 @@ public interface BggPopularMetadataPrewarmProgress {
             String snapshotSha256,
             int targetCount,
             int metadataCohortSize,
-            int translationCohortSize,
             Instant claimedAt,
             Duration leaseDuration);
 
-    void complete(Cohort cohort, int metadataNextOffset, int translationNextOffset, Instant completedAt);
+    void complete(Cohort cohort, int metadataNextOffset, Instant completedAt);
 
     record Cohort(
             UUID leaseId,
             String snapshotSha256,
             int metadataStart,
-            int metadataEnd,
-            int translationStart,
-            int translationEnd) {
+            int metadataEnd) {
         public Cohort {
             if (leaseId == null
                     || snapshotSha256 == null
                     || snapshotSha256.isBlank()
                     || metadataStart < 0
-                    || metadataEnd < metadataStart
-                    || translationStart < 0
-                    || translationEnd < translationStart) {
+                    || metadataEnd < metadataStart) {
                 throw new IllegalArgumentException("BGG prewarm cohort is invalid");
             }
         }

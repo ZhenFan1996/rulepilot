@@ -1425,31 +1425,31 @@ function safelyStore(key: string, value: unknown) {
           <div>
             <p class="tabletop-kicker">RulePilot</p>
             <h2 class="mt-1 font-display text-2xl font-semibold">{{ copy.title }}</h2>
-            <p class="mt-1 text-sm leading-6 text-ink/55">{{ copy.safe }}</p>
+            <p class="mt-1 text-sm leading-6 text-muted">{{ copy.safe }}</p>
           </div>
-          <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="open = false">×</button>
+          <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-muted hover:bg-ink/5" :aria-label="copy.close" @click="open = false">×</button>
         </header>
 
         <div class="flex-1 overflow-y-auto px-4 py-5 sm:px-5">
           <p v-if="unavailable" class="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{{ copy.retrying }}</p>
           <p v-if="dismissError" class="mb-3 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{{ dismissError }}</p>
-          <p v-if="loading" class="py-8 text-center text-sm text-ink/45">{{ copy.title }}…</p>
-          <p v-else-if="workItems.length === 0" class="rounded-xl border border-dashed border-ink/18 bg-paper px-5 py-10 text-center text-sm text-ink/50">{{ copy.empty }}</p>
+          <p v-if="loading" class="py-8 text-center text-sm text-muted">{{ copy.title }}…</p>
+          <p v-else-if="workItems.length === 0" class="rounded-xl border border-dashed border-ink/18 bg-paper px-5 py-10 text-center text-sm text-muted">{{ copy.empty }}</p>
           <ol v-else class="stack-y-md">
             <li v-for="item in workItems" :key="item.id" class="tabletop-panel p-4">
               <div class="flex items-start gap-3">
-                <span class="mt-0.5 grid size-9 shrink-0 place-items-center rounded-full" :class="item.state === 'failed' ? 'bg-red-100 text-red-700' : item.state === 'complete' ? 'bg-emerald-100 text-emerald-800' : item.state === 'cancelled' ? 'bg-ink/8 text-ink/55' : 'bg-copper/12 text-copper'">
+                <span class="mt-0.5 grid size-9 shrink-0 place-items-center rounded-full" :class="item.state === 'failed' ? 'bg-red-100 text-red-700' : item.state === 'complete' ? 'bg-emerald-100 text-emerald-800' : item.state === 'cancelled' ? 'bg-ink/8 text-muted' : 'bg-copper/12 text-copper'">
                   <TabletopGlyph :name="item.kind === 'download' ? 'arrow' : item.kind === 'rulebook' ? 'rulebook' : 'cards'" :size="18" />
                 </span>
                 <div class="min-w-0 flex-1">
-                  <p class="text-xs font-bold uppercase tracking-[0.1em] text-ink/40">{{ item.kind === 'download' ? copy.download : item.kind === 'rulebook' ? copy.rulebook : copy.lesson }}</p>
+                  <p class="text-xs font-bold uppercase tracking-[0.1em] text-muted">{{ item.kind === 'download' ? copy.download : item.kind === 'rulebook' ? copy.rulebook : copy.lesson }}</p>
                   <p class="mt-1 truncate font-semibold">{{ item.title }}</p>
                   <PlayerWorkStatusText
                     :status="item.status"
                     class="mt-1 text-sm font-semibold text-ink/70"
                   />
-                  <p v-if="item.detail" class="mt-1 text-xs leading-5 text-ink/50">{{ item.detail }}</p>
-                  <p v-if="item.context" class="mt-1 text-xs text-ink/45">{{ item.context }}</p>
+                  <p v-if="item.detail" class="mt-1 text-xs leading-5 text-muted">{{ item.detail }}</p>
+                  <p v-if="item.context" class="mt-1 text-xs text-muted">{{ item.context }}</p>
                   <PlayerFailureDetails
                     v-if="item.failure"
                     class="mt-3"
@@ -1467,7 +1467,7 @@ function safelyStore(key: string, value: unknown) {
           </ol>
         </div>
         <footer v-if="finishedCount" class="border-t border-ink/10 bg-paper px-5 py-3 text-right">
-          <button type="button" class="min-h-11 text-sm font-semibold text-ink/55 hover:text-ink disabled:cursor-wait disabled:opacity-55" :disabled="clearingFinished" @click="dismissFinished">{{ clearingFinished ? copy.clearing : locale === 'zh-CN' ? '清除已结束任务' : 'Clear finished work' }}</button>
+          <button type="button" class="min-h-11 text-sm font-semibold text-muted hover:text-ink disabled:cursor-wait disabled:opacity-55" :disabled="clearingFinished" @click="dismissFinished">{{ clearingFinished ? copy.clearing : locale === 'zh-CN' ? '清除已结束任务' : 'Clear finished work' }}</button>
         </footer>
       </aside>
     </div>

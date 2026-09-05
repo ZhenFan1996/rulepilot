@@ -416,7 +416,7 @@ onUnmounted(() => {
 
         <section v-else-if="errorMessage || !lesson" class="rounded-3xl border border-red-200 bg-paper p-7 text-center elevation-sm" role="alert">
           <p class="font-display text-2xl font-semibold">{{ t('questions.errorTitle') }}</p>
-          <p class="mt-3 text-sm leading-6 text-ink/60">{{ errorMessage || t('questions.error') }}</p>
+          <p class="mt-3 text-sm leading-6 text-muted">{{ errorMessage || t('questions.error') }}</p>
           <button type="button" class="mt-5 min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white" @click="loadWorkspace">{{ t('lesson.reader.state.error.retry') }}</button>
         </section>
 
@@ -434,7 +434,7 @@ onUnmounted(() => {
             @cover-error="catalogCoverUnavailable = true"
           >
             <template v-if="catalogPresentation" #actions>
-              <a :href="catalogPresentation.bggUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-10 items-center rounded-xl border border-[rgba(248,239,223,0.2)] bg-[rgba(248,239,223,0.08)] px-3 text-xs font-semibold text-[rgba(248,239,223,0.78)] underline decoration-[rgba(248,239,223,0.3)] underline-offset-2">
+              <a :href="catalogPresentation.bggUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-10 items-center rounded-xl border border-indigo/20 bg-indigo/5 px-3 text-xs font-semibold text-indigo underline decoration-indigo/30 underline-offset-2">
                 {{ t('lesson.catalog.attribution') }} ↗
               </a>
             </template>

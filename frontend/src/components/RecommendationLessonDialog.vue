@@ -520,17 +520,17 @@ onBeforeUnmount(() => {
       <section ref="dialog" data-testid="recommendation-lesson-surface" tabindex="-1" class="relative isolate mx-auto min-h-screen w-full max-w-[100rem] text-ink outline-none sm:my-5 sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-gold/25 sm:shadow-2xl" style="background-color: var(--color-canvas); opacity: 1" role="dialog" aria-modal="true" :aria-label="copy.dialog">
         <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-paper/95 px-4 py-4 backdrop-blur sm:px-6">
           <div class="flex items-start justify-between gap-4">
-            <div class="min-w-0"><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ plan?.gameTitle ?? copy.dialog }}</h2><p v-if="plan?.premise" class="mt-1 max-w-3xl text-xs leading-5 text-ink/50">{{ plan.premise }}</p></div>
-            <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
+            <div class="min-w-0"><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ plan?.gameTitle ?? copy.dialog }}</h2><p v-if="plan?.premise" class="mt-1 max-w-3xl text-xs leading-5 text-muted">{{ plan.premise }}</p></div>
+            <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-muted hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
           </div>
           <div v-if="plan && lesson" class="mt-3">
             <div data-testid="recommendation-lesson-teaching-status" :data-failure-classification="teachingFailurePolicy?.failureClassification ?? undefined" :data-failure-recovery="teachingFailurePolicy?.failureRecovery ?? undefined" role="status" aria-live="polite" aria-atomic="true">
-              <div class="flex items-center justify-between gap-3 text-xs"><p data-testid="recommendation-lesson-teaching-status-text" class="font-semibold" :class="teachingStatusClass">{{ teachingStatusPresentation.text }}</p><span class="font-mono font-semibold text-ink/50">{{ supportedChapterCount }} / {{ plan.sections.length }}</span></div>
-              <p v-if="citedDraftChapterCount" data-testid="recommendation-lesson-cited-draft-status" class="mt-2 text-xs leading-5 text-ink/55">{{ copy.citedDraft(citedDraftChapterCount) }}</p>
+              <div class="flex items-center justify-between gap-3 text-xs"><p data-testid="recommendation-lesson-teaching-status-text" class="font-semibold" :class="teachingStatusClass">{{ teachingStatusPresentation.text }}</p><span class="font-mono font-semibold text-muted">{{ supportedChapterCount }} / {{ plan.sections.length }}</span></div>
+              <p v-if="citedDraftChapterCount" data-testid="recommendation-lesson-cited-draft-status" class="mt-2 text-xs leading-5 text-muted">{{ copy.citedDraft(citedDraftChapterCount) }}</p>
             </div>
             <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="supportedChapterCount" :aria-label="copy.progressAria(supportedChapterCount, plan.sections.length)"><div data-testid="recommendation-lesson-progress" class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
-            <p v-if="activityText" class="mt-2 text-xs text-ink/50">{{ activityText }}</p>
-            <p data-testid="recommendation-lesson-failure-boundary" class="mt-2 text-xs leading-5 text-ink/50">{{ copy.failureBoundary }}</p>
+            <p v-if="activityText" class="mt-2 text-xs text-muted">{{ activityText }}</p>
+            <p data-testid="recommendation-lesson-failure-boundary" class="mt-2 text-xs leading-5 text-muted">{{ copy.failureBoundary }}</p>
             <PlayerFailureDetails
               v-if="visibleFailureDetails"
               class="mt-3"
@@ -556,10 +556,10 @@ onBeforeUnmount(() => {
         </section>
 
         <div class="mx-auto max-w-7xl px-4 py-5 sm:px-7 sm:py-7">
-          <p v-if="loading" class="rounded-xl bg-paper p-10 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
+          <p v-if="loading" class="rounded-xl bg-paper p-10 text-center text-sm text-muted" role="status">{{ copy.loading }}</p>
           <section v-else-if="error || !plan || !lesson" class="rounded-xl border border-red-200 bg-paper p-10 text-center" role="alert"><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></section>
           <template v-else>
-            <p class="rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/55">{{ copy.source }}</p>
+            <p class="rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-muted">{{ copy.source }}</p>
             <div v-if="plan.unresolvedTopics?.length" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950">
               <p class="font-semibold">{{ locale === 'en' ? 'Locally unavailable topics' : '局部未完成主题' }}</p>
               <ul class="mt-1 list-disc pl-5"><li v-for="topic in plan.unresolvedTopics" :key="topic">{{ topic }}</li></ul>

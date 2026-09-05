@@ -541,7 +541,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await mockPublicDiscovery(page, true)
   await page.goto('/discover/catalog')
 
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('按自己的节奏慢慢挑')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('桌游目录')
   await expect(page.getByText('BGG 收录 162,686 条')).toBeVisible()
   await expect(page.locator('#game-catalog').getByRole('heading', { level: 3, name: '展翅翱翔' })).toBeVisible()
   await expect(page.locator('#game-catalog').getByText('Wingspan')).toBeVisible()
@@ -566,7 +566,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
 
   await page.getByRole('link', { name: /让推荐助手帮我挑/ }).click()
   await expect(page).toHaveURL('/discover')
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('先聊聊今晚想玩什么')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('找桌游')
   await expect(page.locator('#game-catalog')).toHaveCount(0)
 
   const firstAgentRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/recommendation-agent')
@@ -671,7 +671,7 @@ test('restores the server conversation and unsent draft after sign-in and browse
   await expect(page.getByText('服务端保存了完整对话和候选。')).toBeVisible()
   await expectWingspanRecommendationReady(page)
   await composer.fill('这句草稿尚未发送')
-  await page.getByRole('link', { name: /打开完整桌游目录/ }).click()
+  await page.getByRole('link', { name: /浏览目录/ }).click()
   await expect(page).toHaveURL('/discover/catalog')
   await page.evaluate(() => {
     for (const key of Object.keys(sessionStorage)) {

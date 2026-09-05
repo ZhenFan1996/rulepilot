@@ -30,9 +30,6 @@ public interface BggMetadataTranslation {
             if (status == null) throw new IllegalArgumentException("BGG translation prewarm status is required");
         }
 
-        public boolean advanceCursor() {
-            return status == PrewarmStatus.READY || status == PrewarmStatus.SKIPPED_INVALID_SOURCE;
-        }
     }
 
     record Request(

@@ -134,7 +134,7 @@ describe('GameRecommendationsView', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/v1/bgg/catalog/covers?'))).toBe(false)
   })
 
-  it('loads only the first four catalog thumbnails eagerly and never upgrades list cards', async () => {
+  it('loads visible catalog covers first while deferring offscreen cards', async () => {
     const games = Array.from({ length: 5 }, (_, index) => ({
       ...catalog.games[0],
       bggId: index + 1,
@@ -161,7 +161,7 @@ describe('GameRecommendationsView', () => {
     expect(thumbnails[4]!.attributes('fetchpriority')).toBe('auto')
 
     await Promise.all(thumbnails.map(image => image.trigger('load')))
-    expect(wrapper.find('[data-cover-kind="display"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-cover-kind="display"]')).toHaveLength(4)
   })
 
   it('sends rating and BGG type filters to the server-side catalog query', async () => {

@@ -865,7 +865,7 @@ onUnmounted(() => {
           @cover-error="catalogCoverUnavailable = true"
         >
           <template #actions>
-            <RouterLink :to="{ name: 'public-lesson', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl border border-[rgba(248,239,223,0.25)] bg-[rgba(248,239,223,0.1)] px-4 text-sm font-semibold text-[#f8efdf]">{{ t('lesson.reader.public') }}</RouterLink>
+            <RouterLink :to="{ name: 'public-lesson', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl border border-ink/15 bg-paper px-4 text-sm font-semibold text-indigo">{{ t('lesson.reader.public') }}</RouterLink>
           </template>
         </LessonGuideHero>
 

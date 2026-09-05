@@ -179,9 +179,9 @@ onMounted(load)
     <section class="tabletop-page max-w-7xl">
       <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
       <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">{{ copy.title }}</h1>
-      <p class="mt-3 max-w-3xl leading-7 text-ink/55">{{ copy.description }}</p>
+      <p class="mt-3 max-w-3xl leading-7 text-muted">{{ copy.description }}</p>
       <p v-if="message" class="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ message }}</p>
-      <div v-if="loading" class="mt-8 rounded-2xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ copy.loading }}</div>
+      <div v-if="loading" class="mt-8 rounded-2xl border border-ink/10 bg-paper p-8 text-muted" role="status">{{ copy.loading }}</div>
       <div v-else-if="error && !snapshot" class="mt-8 rounded-2xl border border-red-200 bg-red-50 p-6 text-red-800" role="alert"><p>{{ error }}</p><button class="mt-4 min-h-11 font-semibold underline" @click="load">{{ copy.retry }}</button></div>
       <template v-else-if="snapshot">
         <p v-if="error" class="mt-5 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{{ error }}</p>
@@ -191,11 +191,11 @@ onMounted(load)
             <button v-for="provider in snapshot.providers" :key="provider.id" type="button" class="min-h-11 rounded-full border px-4 text-sm font-semibold" :class="provider.id === selectedProvider ? 'border-ink bg-ink text-paper' : 'border-ink/15'" @click="selectedProvider = provider.id">{{ provider.id }} · {{ provider.configured ? copy.configured : copy.missing }}</button>
           </div>
           <form v-if="currentProvider && currentDraft" class="mt-6 grid gap-4 md:grid-cols-2" @submit.prevent="saveProvider">
-            <label class="md:col-span-2"><span class="text-sm font-semibold">{{ copy.key }}</span><input v-model="currentDraft.apiKey" type="password" autocomplete="new-password" class="mt-2 min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4"><span class="mt-1 block text-xs text-ink/45">{{ copy.keyHint }}</span></label>
+            <label class="md:col-span-2"><span class="text-sm font-semibold">{{ copy.key }}</span><input v-model="currentDraft.apiKey" type="password" autocomplete="new-password" class="mt-2 min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4"><span class="mt-1 block text-xs text-muted">{{ copy.keyHint }}</span></label>
             <label><span class="text-sm font-semibold">{{ copy.baseUrl }}</span><input v-model="currentDraft.baseUrl" :disabled="selectedProvider === 'gemini'" class="mt-2 min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4 disabled:opacity-45"></label>
             <label><span class="text-sm font-semibold">{{ copy.model }}</span><input v-model="currentDraft.model" required class="mt-2 min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4"></label>
             <label class="flex min-h-12 items-center gap-3"><input v-model="currentDraft.visionCapable" type="checkbox" class="size-5"><span class="text-sm font-semibold">{{ copy.vision }}</span></label>
-            <div class="md:text-right"><button type="submit" :disabled="!currentDraft.apiKey.trim() || Boolean(saving)" class="min-h-12 rounded-xl bg-copper px-5 font-semibold text-white disabled:opacity-40">{{ copy.saveProvider }}</button></div>
+            <div class="md:text-right"><button type="submit" :disabled="!currentDraft.apiKey.trim() || Boolean(saving)" class="min-h-12 rounded-xl bg-copper px-5 font-semibold text-on-accent disabled:opacity-40">{{ copy.saveProvider }}</button></div>
           </form>
         </section>
 
@@ -211,9 +211,9 @@ onMounted(load)
           <div class="p-5 sm:p-7"><h2 class="font-display text-2xl font-semibold">{{ copy.accounts }}</h2></div>
           <div class="overflow-x-auto">
             <table class="w-full min-w-[58rem] border-collapse text-left text-sm">
-              <thead class="bg-canvas text-ink/50"><tr><th class="px-5 py-3">{{ copy.account }}</th><th class="px-5 py-3">{{ copy.access }}</th><th class="px-5 py-3">{{ copy.limit }}</th><th class="px-5 py-3">{{ copy.used }}</th><th class="px-5 py-3">{{ copy.personal }}</th><th class="px-5 py-3">{{ copy.remaining }}</th><th class="px-5 py-3" /></tr></thead><tbody>
+              <thead class="bg-canvas text-muted"><tr><th class="px-5 py-3">{{ copy.account }}</th><th class="px-5 py-3">{{ copy.access }}</th><th class="px-5 py-3">{{ copy.limit }}</th><th class="px-5 py-3">{{ copy.used }}</th><th class="px-5 py-3">{{ copy.personal }}</th><th class="px-5 py-3">{{ copy.remaining }}</th><th class="px-5 py-3" /></tr></thead><tbody>
                 <tr v-for="account in accounts" :key="account.username" class="border-t border-ink/8">
-                  <td class="px-5 py-4"><p class="font-semibold">{{ account.username }}</p><p v-if="account.email" class="mt-1 text-xs text-ink/55">{{ account.email }}</p><p class="mt-1 text-xs text-ink/40">{{ account.authorities.join(' · ') }}</p></td>
+                  <td class="px-5 py-4"><p class="font-semibold">{{ account.username }}</p><p v-if="account.email" class="mt-1 text-xs text-muted">{{ account.email }}</p><p class="mt-1 text-xs text-muted">{{ account.authorities.join(' · ') }}</p></td>
                   <td class="px-5 py-4"><label class="inline-flex items-center gap-2"><input v-model="quotaDrafts[account.username]!.enabled" type="checkbox" class="size-5"><span>{{ quotaDrafts[account.username]!.enabled ? copy.enabled : copy.paused }}</span></label></td>
                   <td class="px-5 py-4"><input v-model.number="quotaDrafts[account.username]!.limit" type="number" min="0" step="1000" class="min-h-11 w-40 rounded-lg border border-ink/15 bg-canvas px-3 font-mono"></td>
                   <td class="px-5 py-4 font-mono">{{ account.usage.platformTokensCharged.toLocaleString() }}</td><td class="px-5 py-4 font-mono">{{ account.usage.personalTokensUsed.toLocaleString() }}</td><td class="px-5 py-4 font-mono">{{ account.usage.platformTokensRemaining.toLocaleString() }}</td>

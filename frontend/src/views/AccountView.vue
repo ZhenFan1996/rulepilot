@@ -262,7 +262,7 @@ onBeforeUnmount(() => {
   <AppShell>
     <section class="tabletop-page max-w-5xl">
       <p class="text-sm font-medium text-copper">{{ t('account.title') }}</p>
-      <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ t('account.loading') }}</div>
+      <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-muted" role="status">{{ t('account.loading') }}</div>
       <div v-else-if="errorMessage" class="mt-8 rounded-xl bg-red-50 p-6 text-red-800" role="alert">
         <p>{{ errorMessage }}</p>
         <button class="mt-4 font-semibold underline" @click="load">{{ t('account.retry') }}</button>
@@ -272,18 +272,18 @@ onBeforeUnmount(() => {
           <span class="grid h-16 w-16 place-items-center rounded-full bg-ink font-display text-2xl font-semibold text-canvas" aria-hidden="true">{{ initial }}</span>
           <div>
             <h1 class="font-display text-4xl font-semibold tracking-tight">{{ session.username }}</h1>
-            <p class="mt-2 text-sm text-ink/45">{{ session.roles.join(' · ') }}</p>
+            <p class="mt-2 text-sm text-muted">{{ session.roles.join(' · ') }}</p>
           </div>
         </header>
 
         <div class="mt-8 grid gap-5 sm:grid-cols-2">
           <RouterLink :to="{ name: 'work-status' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
-            <p class="text-sm text-ink/45">{{ t('account.guides') }}</p>
+            <p class="text-sm text-muted">{{ t('account.guides') }}</p>
             <p class="mt-2 font-display text-3xl font-semibold">{{ secondaryLoading ? '…' : t('account.guideCount', { count: plans.length }) }}</p>
             <p class="mt-4 text-sm text-indigo">{{ t('account.guideAction') }}</p>
           </RouterLink>
           <RouterLink :to="{ name: 'model-settings' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
-            <p class="text-sm text-ink/45">{{ t('account.models') }}</p>
+            <p class="text-sm text-muted">{{ t('account.models') }}</p>
             <p class="mt-2 font-display text-3xl font-semibold">{{ secondaryLoading ? '…' : t('account.modelCount', { count: connectedModels }) }}</p>
             <p class="mt-4 text-sm text-indigo">{{ t('account.modelAction') }}</p>
           </RouterLink>
@@ -294,9 +294,9 @@ onBeforeUnmount(() => {
             <div>
               <p class="text-xs font-bold uppercase tracking-[0.18em] text-copper">Board game nine</p>
               <h2 class="mt-2 font-display text-3xl font-semibold">{{ locale === 'zh-CN' ? '我的桌游九宫格' : 'My board game nine' }}</h2>
-              <p class="mt-2 max-w-2xl text-sm leading-6 text-ink/55">{{ locale === 'zh-CN' ? '九款游戏，九个角度。这些都是你亲自选择的桌游身份，不会从人数、难度或一次对话里替你猜。' : 'Nine games, nine facets of your taste. Every answer is chosen by you—never inferred from group size, weight, or a single chat.' }}</p>
+              <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">{{ locale === 'zh-CN' ? '九款游戏，九个角度。这些都是你亲自选择的桌游身份，不会从人数、难度或一次对话里替你猜。' : 'Nine games, nine facets of your taste. Every answer is chosen by you—never inferred from group size, weight, or a single chat.' }}</p>
             </div>
-            <span class="rounded-full bg-canvas px-3 py-1.5 text-xs font-semibold text-ink/55">{{ gridLoading ? '… / 9' : `${grid.length} / 9` }}</span>
+            <span class="rounded-full bg-canvas px-3 py-1.5 text-xs font-semibold text-muted">{{ gridLoading ? '… / 9' : `${grid.length} / 9` }}</span>
           </div>
           <div v-if="gridLoading" class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" role="status" :aria-label="locale === 'zh-CN' ? '正在读取桌游九宫格' : 'Loading board game nine'">
             <div v-for="index in 9" :key="index" class="aspect-[4/3] min-h-48 animate-pulse rounded-[1.35rem] border border-ink/10 bg-canvas" />
@@ -319,10 +319,10 @@ onBeforeUnmount(() => {
                 </div>
               </template>
               <div v-else class="flex h-full min-h-48 flex-col items-start justify-between bg-[radial-gradient(circle_at_top_right,rgba(185,82,57,0.08),transparent_50%)] p-5">
-                <span class="grid size-11 place-items-center rounded-full border border-dashed border-copper/45 bg-paper text-2xl text-copper transition group-hover:border-copper group-hover:bg-copper group-hover:text-white">＋</span>
+                <span class="grid size-11 place-items-center rounded-full border border-dashed border-copper/45 bg-paper text-2xl text-copper transition group-hover:border-copper group-hover:bg-copper group-hover:text-on-accent">＋</span>
                 <div class="max-w-[15rem]">
                   <p class="font-display text-xl font-semibold">{{ slotLabel(definition) }}</p>
-                  <p class="mt-1.5 text-sm leading-5 text-ink/45">{{ slotHint(definition) }}</p>
+                  <p class="mt-1.5 text-sm leading-5 text-muted">{{ slotHint(definition) }}</p>
                 </div>
               </div>
             </button>
@@ -331,21 +331,21 @@ onBeforeUnmount(() => {
 
         <section v-if="usage" class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
           <div class="flex items-center justify-between gap-4">
-            <div><h2 class="font-display text-2xl font-semibold">{{ locale === 'zh-CN' ? '本月模型额度' : 'Monthly model allowance' }}</h2><p class="mt-1 text-sm text-ink/50">{{ usage.platformAccessEnabled ? (locale === 'zh-CN' ? '正在使用平台额度；自己的 API Key 不扣这里。' : 'Platform allowance is active; BYOK usage is tracked separately.') : (locale === 'zh-CN' ? '平台额度已暂停，可使用自己的 API Key。' : 'Platform allowance is paused; BYOK remains available.') }}</p></div>
+            <div><h2 class="font-display text-2xl font-semibold">{{ locale === 'zh-CN' ? '本月模型额度' : 'Monthly model allowance' }}</h2><p class="mt-1 text-sm text-muted">{{ usage.platformAccessEnabled ? (locale === 'zh-CN' ? '正在使用平台额度；自己的 API Key 不扣这里。' : 'Platform allowance is active; BYOK usage is tracked separately.') : (locale === 'zh-CN' ? '平台额度已暂停，可使用自己的 API Key。' : 'Platform allowance is paused; BYOK remains available.') }}</p></div>
             <p class="font-display text-2xl font-semibold">{{ platformTokensRemaining.toLocaleString() }}</p>
           </div>
           <div class="mt-4 h-2 overflow-hidden rounded-full bg-canvas"><div class="h-full rounded-full bg-copper" :style="{ width: `${Math.min(100, usage.monthlyTokenLimit ? (usage.platformTokensCharged + usage.platformTokensReserved) / usage.monthlyTokenLimit * 100 : 100)}%` }" /></div>
-          <div class="mt-3 flex justify-between text-xs text-ink/45"><span>{{ locale === 'zh-CN' ? `已用 ${usage.platformTokensCharged.toLocaleString()}` : `${usage.platformTokensCharged.toLocaleString()} used` }}</span><span>{{ locale === 'zh-CN' ? `总额 ${usage.monthlyTokenLimit.toLocaleString()}` : `${usage.monthlyTokenLimit.toLocaleString()} total` }}</span></div>
+          <div class="mt-3 flex justify-between text-xs text-muted"><span>{{ locale === 'zh-CN' ? `已用 ${usage.platformTokensCharged.toLocaleString()}` : `${usage.platformTokensCharged.toLocaleString()} used` }}</span><span>{{ locale === 'zh-CN' ? `总额 ${usage.monthlyTokenLimit.toLocaleString()}` : `${usage.monthlyTokenLimit.toLocaleString()} total` }}</span></div>
         </section>
 
         <section v-if="models" class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
           <h2 class="font-display text-2xl font-semibold">{{ t('account.assignments') }}</h2>
           <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
-            <div><dt class="text-ink/45">{{ t('account.recommendation') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.recommendation }}</dd></div>
-            <div><dt class="text-ink/45">{{ t('account.teaching') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.teaching }}</dd></div>
-            <div><dt class="text-ink/45">{{ t('account.visual') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.visual }}</dd></div>
-            <div><dt class="text-ink/45">{{ t('account.answer') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.answer }}</dd></div>
-            <div><dt class="text-ink/45">{{ t('account.critic') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.critic }}</dd></div>
+            <div><dt class="text-muted">{{ t('account.recommendation') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.recommendation }}</dd></div>
+            <div><dt class="text-muted">{{ t('account.teaching') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.teaching }}</dd></div>
+            <div><dt class="text-muted">{{ t('account.visual') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.visual }}</dd></div>
+            <div><dt class="text-muted">{{ t('account.answer') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.answer }}</dd></div>
+            <div><dt class="text-muted">{{ t('account.critic') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.critic }}</dd></div>
           </dl>
         </section>
       </template>
@@ -357,18 +357,18 @@ onBeforeUnmount(() => {
           <div><p class="text-xs font-bold uppercase tracking-[0.16em] text-copper">{{ activeSlotDefinition ? slotLabel(activeSlotDefinition) : '' }}</p><h2 class="mt-2 font-display text-3xl font-semibold">{{ locale === 'zh-CN' ? '选一款代表你的桌游' : 'Choose the game that represents you' }}</h2></div>
           <button type="button" class="grid size-11 place-items-center rounded-full border border-ink/10 text-xl" :aria-label="locale === 'zh-CN' ? '关闭' : 'Close'" @click="closeGridPicker">×</button>
         </div>
-        <label class="relative mt-6 block"><span class="sr-only">{{ locale === 'zh-CN' ? '搜索桌游' : 'Search games' }}</span><span class="pointer-events-none absolute inset-y-0 left-4 grid place-items-center text-ink/35" aria-hidden="true">⌕</span><input ref="searchInput" v-model="searchQuery" type="search" autocomplete="off" class="min-h-14 w-full rounded-2xl border border-ink/15 bg-canvas py-3 pl-11 pr-12 text-base outline-none transition focus:border-indigo focus:bg-white focus:ring-4 focus:ring-indigo/10" :placeholder="locale === 'zh-CN' ? '输入简称、中文片段或英文名，例如：方舟、国家公园、Dune' : 'Type any part of an English or Chinese title'" @input="scheduleSearch"><button v-if="searchQuery" type="button" class="absolute inset-y-0 right-2 my-auto grid size-10 place-items-center rounded-full text-lg text-ink/45 hover:bg-ink/5" :aria-label="locale === 'zh-CN' ? '清空搜索' : 'Clear search'" @click="clearSearch">×</button></label>
-        <p class="mt-2 text-xs leading-5 text-ink/45">{{ locale === 'zh-CN' ? '不必输入全称；中文简称、任意连续片段和英文部分名称都可以。结果只查本地索引。' : 'No full title needed. Partial Chinese aliases and English fragments search the local index only.' }}</p>
-        <p v-if="searchLoading" class="mt-5 text-sm text-ink/50" role="status">{{ locale === 'zh-CN' ? '正在匹配…' : 'Matching…' }}</p>
+        <label class="relative mt-6 block"><span class="sr-only">{{ locale === 'zh-CN' ? '搜索桌游' : 'Search games' }}</span><span class="pointer-events-none absolute inset-y-0 left-4 grid place-items-center text-ink/35" aria-hidden="true">⌕</span><input ref="searchInput" v-model="searchQuery" type="search" autocomplete="off" class="min-h-14 w-full rounded-2xl border border-ink/15 bg-canvas py-3 pl-11 pr-12 text-base outline-none transition focus:border-indigo focus:bg-white focus:ring-4 focus:ring-indigo/10" :placeholder="locale === 'zh-CN' ? '输入简称、中文片段或英文名，例如：方舟、国家公园、Dune' : 'Type any part of an English or Chinese title'" @input="scheduleSearch"><button v-if="searchQuery" type="button" class="absolute inset-y-0 right-2 my-auto grid size-10 place-items-center rounded-full text-lg text-muted hover:bg-ink/5" :aria-label="locale === 'zh-CN' ? '清空搜索' : 'Clear search'" @click="clearSearch">×</button></label>
+        <p class="mt-2 text-xs leading-5 text-muted">{{ locale === 'zh-CN' ? '不必输入全称；中文简称、任意连续片段和英文部分名称都可以。结果只查本地索引。' : 'No full title needed. Partial Chinese aliases and English fragments search the local index only.' }}</p>
+        <p v-if="searchLoading" class="mt-5 text-sm text-muted" role="status">{{ locale === 'zh-CN' ? '正在匹配…' : 'Matching…' }}</p>
         <p v-if="gridError" class="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-800" role="alert">{{ gridError }}</p>
-        <p v-if="searchResults.length && !searchLoading" class="mt-5 text-xs font-semibold text-ink/45" aria-live="polite">{{ locale === 'zh-CN' ? `找到 ${searchResults.length} 款` : `${searchResults.length} matches` }}</p>
+        <p v-if="searchResults.length && !searchLoading" class="mt-5 text-xs font-semibold text-muted" aria-live="polite">{{ locale === 'zh-CN' ? `找到 ${searchResults.length} 款` : `${searchResults.length} matches` }}</p>
         <div v-if="searchResults.length" class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
           <button v-for="game in searchResults" :key="game.bggId" type="button" class="overflow-hidden rounded-xl border border-ink/10 bg-canvas text-left transition hover:border-copper/45 hover:shadow-md disabled:opacity-50" :disabled="gridSaving" @click="chooseGame(game)">
             <div class="aspect-[4/5] bg-ink/5"><img v-if="coverImage(game)" :src="coverImage(game)" :alt="catalogDisplayName(game)" class="size-full object-contain" loading="lazy" decoding="async" referrerpolicy="no-referrer"><div v-else class="grid size-full place-items-center px-3 text-center text-xs text-ink/35">{{ locale === 'zh-CN' ? '暂无封面' : 'No cover' }}</div></div>
-            <div class="p-3"><p class="line-clamp-2 font-semibold leading-tight">{{ catalogDisplayName(game) }}</p><p v-if="game.name && game.name !== catalogDisplayName(game)" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ game.name }}</p><p v-if="game.publicationYear" class="mt-1 text-[0.7rem] text-ink/35">{{ game.publicationYear }}</p></div>
+            <div class="p-3"><p class="line-clamp-2 font-semibold leading-tight">{{ catalogDisplayName(game) }}</p><p v-if="game.name && game.name !== catalogDisplayName(game)" class="mt-1 line-clamp-1 text-xs text-muted">{{ game.name }}</p><p v-if="game.publicationYear" class="mt-1 text-[0.7rem] text-ink/35">{{ game.publicationYear }}</p></div>
           </button>
         </div>
-        <p v-else-if="searchQuery.trim() && !searchLoading && !gridError" class="mt-6 rounded-xl border border-dashed border-ink/15 p-6 text-center text-sm text-ink/45">{{ locale === 'zh-CN' ? '没有找到。可以换一个中文名、英文名或简称。' : 'No match yet. Try another title or alias.' }}</p>
+        <p v-else-if="searchQuery.trim() && !searchLoading && !gridError" class="mt-6 rounded-xl border border-dashed border-ink/15 p-6 text-center text-sm text-muted">{{ locale === 'zh-CN' ? '没有找到。可以换一个中文名、英文名或简称。' : 'No match yet. Try another title or alias.' }}</p>
       </section>
     </div>
   </AppShell>

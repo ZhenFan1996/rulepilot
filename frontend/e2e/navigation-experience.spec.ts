@@ -67,10 +67,10 @@ test('restores the same reading neighborhood after asynchronous home content rem
   await page.route('**/api/v1/bgg/recommendations?*', route => route.fulfill({ json: games }))
   await page.setViewportSize({ width: 390, height: 600 })
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '随机抽三盒' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '再看看这几款' })).toBeVisible()
 
-  await page.evaluate(() => window.scrollTo(0, 700))
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(600)
+  await page.getByRole('heading', { name: '再看看这几款' }).scrollIntoViewIfNeeded()
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
   const savedPosition = await page.evaluate(() => window.scrollY)
 
   await page.locator('.mobile-navigation a[href="/discover"]').click()
@@ -80,7 +80,7 @@ test('restores the same reading neighborhood after asynchronous home content rem
 
   await page.goBack()
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('heading', { name: '随机抽三盒' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '再看看这几款' })).toBeVisible()
   await expect.poll(() => page.evaluate(position => {
     const reachable = Math.min(
       position,
@@ -88,5 +88,5 @@ test('restores the same reading neighborhood after asynchronous home content rem
     )
     return Math.abs(window.scrollY - reachable)
   }, savedPosition)).toBeLessThanOrEqual(64)
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(600)
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
 })

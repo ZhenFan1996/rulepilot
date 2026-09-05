@@ -251,16 +251,16 @@ onUnmounted(() => {
             <RouterLink :to="{ name: 'catalog' }" class="text-xs font-semibold text-indigo">← {{ copy.back }}</RouterLink>
             <div class="mt-1 flex min-w-0 items-baseline gap-3">
               <h1 class="truncate font-display text-xl font-semibold sm:text-2xl">{{ title || filename }}</h1>
-              <span v-if="pages.length" class="shrink-0 text-xs text-ink/45">{{ copy.pages }}</span>
+              <span v-if="pages.length" class="shrink-0 text-xs text-muted">{{ copy.pages }}</span>
             </div>
           </div>
-          <button ref="answerOpener" type="button" :disabled="loading || Boolean(errorMessage)" :aria-expanded="answersOpen" aria-controls="rulebook-questions" class="min-h-11 shrink-0 rounded-xl bg-copper px-4 text-sm font-semibold text-white" @click="answersOpen = true">{{ copy.answer }}</button>
+          <button ref="answerOpener" type="button" :disabled="loading || Boolean(errorMessage)" :aria-expanded="answersOpen" aria-controls="rulebook-questions" class="min-h-11 shrink-0 rounded-xl bg-copper px-4 text-sm font-semibold text-on-accent" @click="answersOpen = true">{{ copy.answer }}</button>
         </div>
       </header>
 
       <div class="mx-auto grid max-w-[100rem] gap-5 px-3 py-4 sm:px-6" :class="answersOpen ? 'lg:grid-cols-[minmax(0,1fr)_26rem]' : ''">
         <section class="min-w-0">
-          <p v-if="loading" class="rounded-xl bg-paper p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
+          <p v-if="loading" class="rounded-xl bg-paper p-8 text-center text-sm text-muted" role="status">{{ copy.loading }}</p>
           <section v-else-if="errorMessage" class="rounded-xl border border-red-200 bg-paper p-8 text-center" role="alert">
             <p class="font-semibold">{{ errorMessage }}</p>
             <button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 text-sm font-semibold text-white" @click="loadRulebook">{{ copy.retry }}</button>
@@ -271,8 +271,8 @@ onUnmounted(() => {
         <div v-if="answersOpen" class="fixed inset-0 z-50 bg-ink/40 backdrop-blur-[2px] lg:static lg:z-auto lg:min-w-0 lg:bg-transparent lg:backdrop-blur-none" @click.self="closeAnswers">
           <aside id="rulebook-questions" ref="answersDialog" tabindex="-1" class="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-ink/10 bg-canvas p-4 shadow-2xl outline-none sm:p-6 lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7rem)] lg:rounded-xl lg:border lg:p-4 lg:shadow-none" :role="wideReader ? 'complementary' : 'dialog'" :aria-modal="wideReader ? undefined : true" :aria-label="copy.answer">
             <div class="sticky top-0 z-10 flex items-center justify-between border-b border-ink/10 bg-canvas/95 pb-3 backdrop-blur">
-              <div><p class="font-semibold">{{ copy.answer }}</p><p class="mt-1 text-xs text-ink/45">{{ copy.hint }}</p></div>
-              <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="closeAnswers">×</button>
+              <div><p class="font-semibold">{{ copy.answer }}</p><p class="mt-1 text-xs text-muted">{{ copy.hint }}</p></div>
+              <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-muted hover:bg-ink/5" :aria-label="copy.close" @click="closeAnswers">×</button>
             </div>
             <LessonAnswerPanel
               ref="answerPanel"

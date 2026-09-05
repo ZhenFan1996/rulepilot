@@ -127,7 +127,7 @@ async function register() {
     <section class="w-full max-w-md border border-ink/10 bg-paper p-7 sm:p-9">
       <div class="flex items-center justify-between gap-4"><RouterLink :to="{ name: 'home' }" aria-label="RulePilot"><ProductMark /></RouterLink><LanguageSwitcher /></div>
       <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">{{ t('auth.register.title') }}</h1>
-      <p class="mt-3 leading-7 text-ink/55">{{ t('auth.register.description') }}</p>
+      <p class="mt-3 leading-7 text-muted">{{ t('auth.register.description') }}</p>
       <p v-if="returnPath" data-testid="auth-return-context" class="mt-3 rounded-lg bg-indigo/7 px-4 py-3 text-sm leading-6 text-indigo">
         {{ t('auth.register.return') }}
       </p>
@@ -135,15 +135,15 @@ async function register() {
       <form class="mt-8 stack-y-xl" :aria-busy="isSubmitting" @submit.prevent="register">
         <label class="block text-sm font-semibold">{{ t('auth.username') }}
           <input ref="usernameInput" v-model="username" name="username" autocomplete="username" required minlength="3" maxlength="40" :disabled="inputsLocked" :aria-invalid="usernameInvalid ? 'true' : undefined" :aria-describedby="usernameInvalid ? 'auth-register-username-hint auth-register-error' : 'auth-register-username-hint'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
-          <span id="auth-register-username-hint" class="mt-1.5 block font-normal text-ink/40">{{ t('auth.register.usernameHint') }}</span>
+          <span id="auth-register-username-hint" class="mt-1.5 block font-normal text-muted">{{ t('auth.register.usernameHint') }}</span>
         </label>
         <label class="block text-sm font-semibold">{{ t('auth.email') }}
           <input ref="emailInput" v-model="email" name="email" type="email" autocomplete="email" required maxlength="254" :disabled="inputsLocked" :aria-invalid="emailInvalid ? 'true' : undefined" :aria-describedby="emailInvalid ? 'auth-register-email-hint auth-register-error' : 'auth-register-email-hint'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
-          <span id="auth-register-email-hint" class="mt-1.5 block font-normal text-ink/40">{{ t('auth.register.emailHint') }}</span>
+          <span id="auth-register-email-hint" class="mt-1.5 block font-normal text-muted">{{ t('auth.register.emailHint') }}</span>
         </label>
         <label class="block text-sm font-semibold">{{ t('auth.password') }}
           <input v-model="password" name="password" type="password" autocomplete="new-password" required minlength="8" :disabled="inputsLocked" :aria-invalid="passwordInvalid ? 'true' : undefined" :aria-describedby="passwordInvalid ? 'auth-register-password-hint auth-register-error' : 'auth-register-password-hint'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
-          <span id="auth-register-password-hint" class="mt-1.5 block font-normal text-ink/40">{{ t('auth.register.passwordHint') }}</span>
+          <span id="auth-register-password-hint" class="mt-1.5 block font-normal text-muted">{{ t('auth.register.passwordHint') }}</span>
         </label>
         <label class="block text-sm font-semibold">{{ t('auth.register.confirm') }}
           <input ref="confirmationInput" v-model="confirmation" name="confirmation" type="password" autocomplete="new-password" required minlength="8" :disabled="inputsLocked" :aria-invalid="confirmationInvalid ? 'true' : undefined" :aria-describedby="confirmationInvalid ? 'auth-register-error' : undefined" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
@@ -155,7 +155,7 @@ async function register() {
         </button>
       </form>
 
-      <p class="mt-7 border-t border-ink/10 pt-6 text-center text-sm text-ink/55">
+      <p class="mt-7 border-t border-ink/10 pt-6 text-center text-sm text-muted">
         {{ t('auth.register.existing') }}
         <RouterLink replace :to="loginTarget" class="font-semibold text-indigo">{{ t('auth.register.signIn') }}</RouterLink>
       </p>

@@ -1848,16 +1848,10 @@ onBeforeUnmount(() => {
   <AppShell @session-identity="updateSessionIdentity">
     <div class="tabletop-page max-w-6xl">
       <section class="mx-auto max-w-5xl">
-        <div class="tabletop-illustrated-hero player-board grid lg:grid-cols-[1.08fr_0.92fr]">
-          <div class="relative min-h-64 overflow-hidden border-b border-ink/10 lg:min-h-full lg:border-b-0 lg:border-r" aria-hidden="true">
-            <img src="/illustrations/rulebook-reading.webp" alt="" width="1600" height="900" fetchpriority="high" class="absolute inset-0 h-full w-full object-cover object-left">
-          </div>
-          <div class="tabletop-heading self-center bg-paper/95 px-6 py-8 sm:px-9 sm:py-10 lg:min-h-full lg:justify-center">
-            <p class="tabletop-kicker">{{ t('documents.heading.eyebrow') }}</p>
-            <h1 class="tabletop-title !text-[clamp(2.2rem,4vw,3.8rem)]">{{ t('documents.heading.title') }}</h1>
-            <p class="tabletop-lede">{{ t('documents.heading.description') }}</p>
-          </div>
-        </div>
+        <header class="tabletop-heading mb-8">
+          <h1 class="tabletop-title">{{ t('documents.heading.title') }}</h1>
+          <p class="tabletop-lede">{{ t('documents.heading.description') }}</p>
+        </header>
 
         <RulebookSourceImportPanel
           :selected-edition="selectedEditionContext"

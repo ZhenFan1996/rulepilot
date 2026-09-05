@@ -80,22 +80,22 @@ const issues = computed(() => {
     <p class="mt-1 text-xs leading-5 text-amber-950/75">{{ copy.detail }}</p>
     <dl class="mt-3 grid gap-2 text-xs sm:grid-cols-3">
       <div data-testid="identity-target" class="rounded-md bg-paper px-3 py-2">
-        <dt class="font-semibold text-ink/50">{{ copy.target }}</dt>
+        <dt class="font-semibold text-muted">{{ copy.target }}</dt>
         <dd class="mt-1 font-semibold text-ink">{{ target.gameName }}</dd>
-        <dd class="mt-1 text-ink/60">{{ copy.edition }}: {{ target.editionName }} · {{ copy.language }}: {{ languageLabel(target.language, copy.notKnown) }}</dd>
+        <dd class="mt-1 text-muted">{{ copy.edition }}: {{ target.editionName }} · {{ copy.language }}: {{ languageLabel(target.language, copy.notKnown) }}</dd>
       </div>
       <div data-testid="identity-discovery" class="rounded-md bg-paper px-3 py-2">
-        <dt class="font-semibold text-ink/50">{{ copy.discovery }}</dt>
+        <dt class="font-semibold text-muted">{{ copy.discovery }}</dt>
         <template v-if="sourceContext">
           <dd class="mt-1 font-semibold text-ink">{{ sourceContext.gameName }}</dd>
-          <dd class="mt-1 text-ink/60">{{ copy.edition }}: {{ sourceContext.editionName }} · {{ copy.language }}: {{ languageLabel(sourceContext.language, copy.notKnown) }}</dd>
+          <dd class="mt-1 text-muted">{{ copy.edition }}: {{ sourceContext.editionName }} · {{ copy.language }}: {{ languageLabel(sourceContext.language, copy.notKnown) }}</dd>
         </template>
-        <dd v-else class="mt-1 text-ink/60">{{ copy.manual }}</dd>
+        <dd v-else class="mt-1 text-muted">{{ copy.manual }}</dd>
       </div>
       <div data-testid="identity-source" class="rounded-md bg-paper px-3 py-2">
-        <dt class="font-semibold text-ink/50">{{ copy.source }}</dt>
-        <dd class="mt-1 text-ink/60">{{ copy.edition }}: {{ source?.edition || copy.notStated }}</dd>
-        <dd class="mt-1 text-ink/60">{{ copy.language }}: {{ source?.language ? languageLabel(source.language, copy.notStated) : copy.notStated }}<template v-if="source?.language && !source.languageVerified"> ({{ copy.notVerified }})</template></dd>
+        <dt class="font-semibold text-muted">{{ copy.source }}</dt>
+        <dd class="mt-1 text-muted">{{ copy.edition }}: {{ source?.edition || copy.notStated }}</dd>
+        <dd class="mt-1 text-muted">{{ copy.language }}: {{ source?.language ? languageLabel(source.language, copy.notStated) : copy.notStated }}<template v-if="source?.language && !source.languageVerified"> ({{ copy.notVerified }})</template></dd>
       </div>
     </dl>
     <ul v-if="issues.length" class="mt-3 list-disc space-y-1 pl-5 text-xs leading-5 text-amber-950" role="alert">

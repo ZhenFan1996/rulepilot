@@ -6,6 +6,7 @@ import TabletopGlyph from '@/components/TabletopGlyph.vue'
 const props = withDefaults(defineProps<{
   bggId: number
   alt: string
+  sourceThumbnail?: string
   upgrade?: boolean
   loading?: 'eager' | 'lazy'
   fetchPriority?: 'high' | 'low' | 'auto'
@@ -21,6 +22,7 @@ const thumbnailUnavailable = ref(false)
 const displayUnavailable = ref(false)
 
 const thumbnailUrl = computed(() => {
+  if (thumbnailAttempt.value === 0 && props.sourceThumbnail) return props.sourceThumbnail
   const base = `/api/v1/bgg/catalog/covers/${props.bggId}/thumbnail`
   return thumbnailAttempt.value === 0 ? base : `${base}?retry=1`
 })

@@ -48,58 +48,70 @@ class PostgresBggPopularMetadataPrewarmProgressTest {
     }
 
     @Test
-    void claimsOneCrossProcessLeaseAndContinuesFromEachCompletedOffset() {
+    void claimsOneCrossProcessLeaseAndContinuesCompletedMetadata() {
         Instant now = Instant.parse("2026-08-20T08:00:00Z");
         String snapshot = "a".repeat(64);
-        var first = progress.claim(snapshot, 2_000, 500, 60, now, Duration.ofMinutes(30)).orElseThrow();
+        var first = progress.claim(snapshot, 2_000, 500, now, Duration.ofMinutes(30)).orElseThrow();
 
         assertThat(first.metadataStart()).isZero();
         assertThat(first.metadataEnd()).isEqualTo(500);
-        assertThat(first.translationStart()).isZero();
-        assertThat(first.translationEnd()).isEqualTo(60);
-        assertThat(progress.claim(snapshot, 2_000, 500, 60, now, Duration.ofMinutes(30))).isEmpty();
+        assertThat(progress.claim(snapshot, 2_000, 500, now, Duration.ofMinutes(30))).isEmpty();
 
-        progress.complete(first, 500, 41, now.plusSeconds(120));
+        progress.complete(first, 500, now.plusSeconds(120));
         var second = progress.claim(
-                        snapshot, 2_000, 500, 60, now.plusSeconds(121), Duration.ofMinutes(30))
+                        snapshot, 2_000, 500, now.plusSeconds(121), Duration.ofMinutes(30))
                 .orElseThrow();
         assertThat(second.metadataStart()).isEqualTo(500);
         assertThat(second.metadataEnd()).isEqualTo(1_000);
-        assertThat(second.translationStart()).isEqualTo(41);
-        assertThat(second.translationEnd()).isEqualTo(101);
     }
 
     @Test
-    void resetsBothOffsetsWhenTheRankedSnapshotChanges() {
+    void resetsMetadataWhenTheRankedSnapshotChanges() {
         Instant now = Instant.parse("2026-08-20T08:00:00Z");
-        var first = progress.claim("a".repeat(64), 2_000, 500, 60, now, Duration.ofMinutes(30)).orElseThrow();
-        progress.complete(first, 500, 60, now.plusSeconds(1));
+        var first = progress.claim("a".repeat(64), 2_000, 500, now, Duration.ofMinutes(30)).orElseThrow();
+        progress.complete(first, 500, now.plusSeconds(1));
 
         var changed = progress.claim(
-                        "b".repeat(64), 2_000, 500, 60, now.plusSeconds(2), Duration.ofMinutes(30))
+                        "b".repeat(64), 2_000, 500, now.plusSeconds(2), Duration.ofMinutes(30))
                 .orElseThrow();
 
         assertThat(changed.metadataStart()).isZero();
-        assertThat(changed.translationStart()).isZero();
     }
 
     @Test
-    void acceptsTheTenThousandGameTargetUsedByTheProductionWorker() {
+    void keepsAnExclusiveLeaseForHotGamesAfterRankedWorkFinishesOrTargetShrinks() {
         Instant now = Instant.parse("2026-08-20T08:00:00Z");
+        String snapshot = "c".repeat(64);
+        var first = progress.claim(snapshot, 20, 20, now, Duration.ofMinutes(30)).orElseThrow();
+        progress.complete(first, 20, now.plusSeconds(1));
 
-        var cohort = progress.claim(
-                        "c".repeat(64),
-                        10_000,
-                        500,
-                        60,
-                        now,
-                        Duration.ofMinutes(30))
+        var hot = progress.claim(snapshot, 10, 20, now.plusSeconds(2), Duration.ofMinutes(30))
                 .orElseThrow();
+        assertThat(hot.metadataStart()).isEqualTo(20);
+        assertThat(hot.metadataEnd()).isEqualTo(20);
+        assertThat(progress.claim(snapshot, 10, 20, now.plusSeconds(3), Duration.ofMinutes(30)))
+                .isEmpty();
+        progress.complete(hot, 20, now.plusSeconds(4));
+        assertThat(progress.claim(snapshot, 10, 20, now.plusSeconds(5), Duration.ofMinutes(30)))
+                .isPresent();
+    }
 
-        assertThat(cohort.metadataStart()).isZero();
-        assertThat(cohort.metadataEnd()).isEqualTo(500);
-        assertThat(cohort.translationStart()).isZero();
-        assertThat(cohort.translationEnd()).isEqualTo(60);
+    @Test
+    void leasesTranslationRefreshBeforeAnyRankedSnapshotExists() {
+        var lease = progress.claim("0".repeat(64), 0, 500,
+                Instant.parse("2026-09-05T08:00:00Z"), Duration.ofMinutes(30)).orElseThrow();
+        assertThat(lease.metadataStart()).isZero();
+        assertThat(lease.metadataEnd()).isZero();
+    }
+
+    @Test
+    void aChangedRankedSnapshotCannotStealAnActiveTranslationRefreshLease() {
+        Instant now = Instant.parse("2026-09-05T08:00:00Z");
+        var active = progress.claim("a".repeat(64), 20, 20, now, Duration.ofMinutes(30)).orElseThrow();
+        assertThat(progress.claim("b".repeat(64), 20, 20, now.plusSeconds(1), Duration.ofMinutes(30))).isEmpty();
+        progress.complete(active, 20, now.plusSeconds(2));
+        var next = progress.claim("b".repeat(64), 20, 20, now.plusSeconds(3), Duration.ofMinutes(30)).orElseThrow();
+        assertThat(next.metadataStart()).isZero();
     }
 
     private static void enableProductionExtensions() {

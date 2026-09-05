@@ -65,7 +65,7 @@ function requestConfirm() {
       >
         <div class="min-w-0">
           <h2 :id="titleId" class="font-display text-2xl font-semibold text-red-700">{{ title }}</h2>
-          <p :id="descriptionId" class="mt-2 text-sm leading-6 text-ink/60">{{ description }}</p>
+          <p :id="descriptionId" class="mt-2 text-sm leading-6 text-muted">{{ description }}</p>
         </div>
 
         <p v-if="error" class="mt-5 rounded-xl bg-red-50 px-4 py-3 text-sm leading-6 text-red-800" role="alert">
@@ -86,7 +86,7 @@ function requestConfirm() {
             type="button"
             :disabled="pending"
             :aria-busy="pending"
-            class="min-h-11 rounded-xl bg-copper px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+            class="min-h-11 rounded-xl bg-copper px-5 py-3 text-sm font-semibold text-on-accent disabled:opacity-50"
             @click="requestConfirm"
           >
             {{ pending ? pendingLabel : actionLabel }}

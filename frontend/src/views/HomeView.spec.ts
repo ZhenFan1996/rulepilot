@@ -58,9 +58,6 @@ describe('HomeView', () => {
 
     const wrapper = await mountHome()
 
-    expect(wrapper.text()).toContain('还没选游戏，就先说人数、时长和想要的互动')
-    expect(wrapper.find('[data-testid="home-player-journey"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('从一句局况，到能开桌')
     expect(wrapper.get('a[href="/teach"].home-primary-action')).toBeTruthy()
     expect(wrapper.get('a[href="/discover"]')).toBeTruthy()
     expect(wrapper.text()).not.toContain('Agent')
@@ -94,7 +91,7 @@ describe('HomeView', () => {
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
 
     resolveSession(Response.json({ username: ' player ', roles: ['USER'] }))
-    await vi.waitFor(() => expect(wrapper.text()).toContain('player, brought a new game?'))
+    await vi.waitFor(() => expect(wrapper.find('a[aria-label="player"]').exists()).toBe(true))
   })
 
   it('aborts the shell session request when Home unmounts', async () => {

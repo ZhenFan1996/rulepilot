@@ -373,7 +373,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
 
 <template>
   <section id="lesson-question-panel" class="mt-8 scroll-mt-6" aria-labelledby="lesson-question-title">
-    <div class="tabletop-panel player-board p-4 sm:p-7">
+    <div class="answer-workspace">
       <AgentWorkspaceHeader
         v-if="showHeader"
         :eyebrow="t('lesson.answer.eyebrow')"
@@ -383,14 +383,14 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
       />
 
       <div v-if="answerTurns.length" class="mt-5 flex flex-wrap items-center justify-between gap-2">
-        <p class="text-xs leading-5 text-ink/45">{{ t('lesson.answer.threadPrivacy') }}</p>
-        <button type="button" :disabled="answerLoading || clearThreadDisabled" class="min-h-11 rounded-xl px-3 text-sm font-semibold text-ink/55 hover:bg-ink/5 disabled:opacity-40" @click="emit('clearThread')">{{ t('lesson.answer.clearThread') }}</button>
+        <p class="text-xs leading-5 text-muted">{{ t('lesson.answer.threadPrivacy') }}</p>
+        <button type="button" :disabled="answerLoading || clearThreadDisabled" class="min-h-11 rounded-xl px-3 text-sm font-semibold text-muted hover:bg-ink/5 disabled:opacity-40" @click="emit('clearThread')">{{ t('lesson.answer.clearThread') }}</button>
       </div>
 
       <ol v-if="previousAnswerTurns.length" class="mt-3 stack-y-md" :aria-label="t('lesson.answer.thread')">
         <li v-for="(turn, index) in previousAnswerTurns" :key="`${index}-${turn.question}`" class="rounded-2xl border border-ink/8 bg-canvas p-4">
           <div class="flex flex-wrap items-center gap-2">
-            <p class="text-xs font-semibold text-ink/45">{{ turn.learningIntent ? learningIntentLabel(turn.learningIntent) : t('lesson.answer.youAsked') }}</p>
+            <p class="text-xs font-semibold text-muted">{{ turn.learningIntent ? learningIntentLabel(turn.learningIntent) : t('lesson.answer.youAsked') }}</p>
             <span v-if="turn.answer.status === 'ANSWERED_WITH_WARNING'" class="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">{{ t('lesson.answer.warning.badge') }}</span>
           </div>
           <p class="mt-1 text-sm leading-6">{{ turn.question }}</p>
@@ -400,7 +400,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
             class="mt-3 border-t border-ink/8 pt-3"
           >
             <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.history.open') }}</summary>
-            <div class="mt-3 stack-y-md text-sm leading-6 text-ink/65">
+            <div class="mt-3 stack-y-md text-sm leading-6 text-muted">
               <p v-if="turn.answer.clarification" class="rounded-xl bg-amber-50 px-3 py-2 text-amber-950">{{ turn.answer.clarification }}</p>
               <p v-if="turn.answer.explanation.trim()">{{ turn.answer.explanation.trim() }}</p>
               <div v-if="turn.answer.calculations?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
@@ -415,7 +415,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   <li v-for="check in turn.answer.situationChecks" :key="`${check.requirement}-${check.status}`">
                     <span :class="situationStatusClasses(check.status)" class="rounded-full px-2 py-0.5 text-xs font-semibold">{{ situationStatusLabel(check.status) }}</span>
                     <span class="ml-2">{{ check.requirement }}</span>
-                    <p v-if="check.playerFact" class="mt-1 text-xs text-ink/50">{{ check.playerFact }}</p>
+                    <p v-if="check.playerFact" class="mt-1 text-xs text-muted">{{ check.playerFact }}</p>
                   </li>
                 </ul>
               </div>
@@ -424,7 +424,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 <ol class="mt-2 stack-y-sm">
                   <li v-for="(step, stepIndex) in turn.answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-2">
                     <span class="font-semibold text-copper">{{ stepIndex + 1 }}.</span>
-                    <div><p class="font-medium text-ink">{{ step.instruction }}</p><p class="text-xs text-ink/50">{{ step.explanation }}</p></div>
+                    <div><p class="font-medium text-ink">{{ step.instruction }}</p><p class="text-xs text-muted">{{ step.explanation }}</p></div>
                   </li>
                 </ol>
               </div>
@@ -434,27 +434,27 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   <li v-for="branch in turn.answer.decisionBranches" :key="`${branch.condition}-${branch.outcome}`" class="rounded-lg bg-canvas px-3 py-2">
                     <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ decisionBasisLabel(branch.basis) }}</span>
                     <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：</span>{{ branch.condition }}</p>
-                    <p class="text-ink/60">→ {{ branch.outcome }}</p>
+                    <p class="text-muted">→ {{ branch.outcome }}</p>
                   </li>
                 </ul>
               </div>
               <div v-if="turn.answer.exceptionClauses?.length" class="rounded-xl border border-copper/20 bg-copper/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.exception.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.exception.description') }}</p>
+                <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.exception.description') }}</p>
                 <ul class="mt-2 stack-y-sm">
                   <li v-for="clause in turn.answer.exceptionClauses" :key="`${clause.condition}-${clause.effect}`" class="rounded-lg bg-canvas px-3 py-2">
                     <p><span class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：</span>{{ clause.condition }}</p>
-                    <p class="text-ink/60">→ {{ clause.effect }}</p>
+                    <p class="text-muted">→ {{ clause.effect }}</p>
                   </li>
                 </ul>
               </div>
               <div v-if="turn.answer.termDefinitions?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.definition.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.definition.description') }}</p>
+                <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.definition.description') }}</p>
                 <dl class="mt-2 stack-y-sm">
                   <div v-for="definition in turn.answer.termDefinitions" :key="definition.term" class="rounded-lg bg-canvas px-3 py-2">
                     <dt class="font-semibold text-indigo">{{ definition.term }}</dt><dd>{{ definition.definition }}</dd>
-                    <dd v-if="definition.boundary" class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.definition.boundary') }}：{{ definition.boundary }}</dd>
+                    <dd v-if="definition.boundary" class="mt-1 text-xs text-muted">{{ t('lesson.answer.definition.boundary') }}：{{ definition.boundary }}</dd>
                   </div>
                 </dl>
               </div>
@@ -511,12 +511,12 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   <div class="mt-2 grid gap-2 sm:grid-cols-2"><p><span class="font-semibold text-ink">{{ item.leftConcept }}：</span>{{ item.leftDefinition }}</p><p><span class="font-semibold text-ink">{{ item.rightConcept }}：</span>{{ item.rightDefinition }}</p></div>
                   <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.common') }}：</span>{{ item.commonGround }}</p>
                   <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.keyDifference') }}：</span>{{ item.keyDifference }}</p>
-                  <p class="text-ink/60"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.boundary') }}：</span>{{ item.practicalBoundary }}</p>
+                  <p class="text-muted"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.boundary') }}：</span>{{ item.practicalBoundary }}</p>
                 </div>
               </div>
               <div v-if="turn.answer.ruleOptions?.length" class="rounded-xl border border-copper/20 bg-copper/[0.05] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.options.title') }}</p>
-                <p class="mt-1 text-xs text-ink/55"><span class="font-semibold">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ turn.answer.ruleOptions[0]?.selectionRule }}</p>
+                <p class="mt-1 text-xs text-muted"><span class="font-semibold">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ turn.answer.ruleOptions[0]?.selectionRule }}</p>
                 <ol class="mt-2 stack-y-sm">
                   <li v-for="(item, optionIndex) in turn.answer.ruleOptions" :key="`${item.optionName}-${optionIndex}`" class="rounded-lg bg-canvas px-3 py-2">
                     <span class="text-xs font-semibold text-copper">{{ optionBasisLabel(item.basis) }}</span>
@@ -543,7 +543,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 <ol class="mt-2 stack-y-sm">
                   <li v-for="(citation, citationIndex) in turn.answer.citations" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-xl bg-paper px-3 py-2">
                     <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
-                    <p class="mt-1 text-xs leading-5 text-ink/55">{{ citation.excerpt }}</p>
+                    <p class="mt-1 text-xs leading-5 text-muted">{{ citation.excerpt }}</p>
                   </li>
                 </ol>
               </div>
@@ -557,7 +557,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
         :class="answer ? 'grid lg:grid-cols-[minmax(17rem,0.68fr)_minmax(0,1.32fr)] lg:items-start lg:gap-6' : 'mx-auto max-w-3xl'"
       >
         <div class="min-w-0 lg:sticky lg:top-24">
-          <form class="rounded-2xl border border-ink/10 bg-canvas p-4" @submit.prevent="submitQuestion">
+          <form class="rounded-xl border border-ink/15 bg-paper p-4 sm:p-6" @submit.prevent="submitQuestion">
             <div class="mb-3 flex flex-wrap items-start gap-3">
               <button
                 type="button"
@@ -577,10 +577,10 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               rows="3"
               :disabled="answerLoading || !online"
               :placeholder="t('lesson.answer.placeholder')"
-              class="w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
+              class="w-full resize-y rounded-lg border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
             />
             <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p class="text-xs text-ink/45">{{ t('lesson.answer.counter', { count: question.length }) }}</p>
+              <p class="text-xs text-muted">{{ t('lesson.answer.counter', { count: question.length }) }}</p>
               <button
                 type="submit"
                 :disabled="answerLoading || !online || !question.trim() || answerSubmissionBlocked"
@@ -657,31 +657,31 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   :status="answerWorkStatus"
                   class="text-sm font-semibold"
                 />
-                <p class="mt-0.5 text-xs leading-5 text-ink/55">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
+                <p class="mt-0.5 text-xs leading-5 text-muted">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
               </div>
             </div>
             <p v-if="answerSoftBudgetReached" data-testid="answer-soft-budget" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ softBudgetCopy }}</p>
-            <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-ink/60" :aria-label="t('lesson.answer.agentTrace')">
+            <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-muted" :aria-label="t('lesson.answer.agentTrace')">
               <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
                 <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
-                <span><strong v-if="item.actor" class="font-semibold text-ink/55">{{ item.actor }} · </strong>{{ item.label }}</span>
+                <span><strong v-if="item.actor" class="font-semibold text-muted">{{ item.actor }} · </strong>{{ item.label }}</span>
               </li>
             </ol>
-            <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ t('lesson.answer.waitingForTrace') }}</p>
+            <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-muted">{{ t('lesson.answer.waitingForTrace') }}</p>
             <div v-if="streamedAnswerParts.verdict || streamedAnswerParts.explanation" data-testid="validated-answer-preview" class="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs leading-5 text-emerald-950">
               <p class="font-semibold">{{ locale === 'en' ? 'Validated answer so far' : '已验证的回答' }}</p>
               <p v-if="streamedAnswerParts.verdict" class="mt-1 font-medium">{{ streamedAnswerParts.verdict }}</p>
               <p v-if="streamedAnswerParts.explanation" class="mt-1 text-emerald-900/75">{{ streamedAnswerParts.explanation }}</p>
             </div>
-            <p class="text-xs leading-5 text-ink/50">{{ t('lesson.answer.foreignLanguage') }}</p>
+            <p class="text-xs leading-5 text-muted">{{ t('lesson.answer.foreignLanguage') }}</p>
             <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
             <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
-            <button type="button" class="min-h-11 justify-self-start rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold text-ink/65 hover:bg-paper" @click="emit('cancelAnswer')">{{ t('lesson.answer.cancel') }}</button>
+            <button type="button" class="min-h-11 justify-self-start rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold text-muted hover:bg-paper" @click="emit('cancelAnswer')">{{ t('lesson.answer.cancel') }}</button>
           </div>
         </div>
         <div v-if="answer" class="min-w-0">
-          <details v-if="agentTrace.some(item => item.actor)" data-testid="answer-execution-process" class="mb-3 rounded-2xl border border-ink/8 bg-paper/70 px-4 py-3 text-xs leading-5 text-ink/55">
-            <summary class="cursor-pointer font-semibold text-ink/65">{{ executionProcessTitle }}</summary>
+          <details v-if="agentTrace.some(item => item.actor)" data-testid="answer-execution-process" class="mb-3 rounded-2xl border border-ink/8 bg-paper/70 px-4 py-3 text-xs leading-5 text-muted">
+            <summary class="cursor-pointer font-semibold text-muted">{{ executionProcessTitle }}</summary>
             <ol class="mt-3 stack-y-sm">
               <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
                 <span :class="item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
@@ -691,11 +691,11 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
           </details>
           <article v-if="answer" class="overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
             <div class="p-5 sm:p-6">
-              <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
+              <p class="text-xs font-semibold text-muted">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
               <div v-if="publishesConclusion(answer.status)" class="flex flex-wrap items-center gap-2 text-xs font-semibold">
                 <span :class="confidenceClasses(answer.confidence)" :data-confidence="answer.confidence" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
                 <span class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
-                <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.source === 'CONFIRMED' ? t('lesson.answer.source.confirmed') : answer.source === 'OFFICIAL' ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
+                <span class="rounded-full bg-ink/6 px-3 py-1.5 text-muted">{{ answer.source === 'CONFIRMED' ? t('lesson.answer.source.confirmed') : answer.source === 'OFFICIAL' ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
               </div>
               <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
               <p v-if="publishesConclusion(answer.status) && answer.explanation.trim()" class="mt-3 text-sm leading-7 text-ink/70">{{ answer.explanation.trim() }}</p>
@@ -727,71 +727,71 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 <ol class="stack-y-md text-sm leading-6 text-ink/70">
                   <li v-if="answer.calculations?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
                     <span class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}：</span>
-                    <span class="ml-1 text-xs text-ink/50">{{ t('lesson.answer.calculationDescription') }}</span>
+                    <span class="ml-1 text-xs text-muted">{{ t('lesson.answer.calculationDescription') }}</span>
                     <ul class="mt-2 stack-y-xs font-mono text-sm text-indigo">
                       <li v-for="calculation in answer.calculations" :key="`${calculation.expression}-${calculation.result}`">{{ calculation.expression }} = {{ calculation.result }}</li>
                     </ul>
                   </li>
                   <li v-if="answer.situationChecks?.length" class="rounded-2xl border border-ink/10 bg-paper p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.situation.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.situation.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.situation.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="check in answer.situationChecks" :key="`${check.requirement}-${check.status}`" class="rounded-xl bg-canvas px-3 py-2">
                         <div class="flex flex-wrap items-center gap-2">
                           <span :class="situationStatusClasses(check.status)" class="rounded-full px-2 py-0.5 text-xs font-semibold">{{ situationStatusLabel(check.status) }}</span>
                           <span class="font-medium text-ink">{{ check.requirement }}</span>
                         </div>
-                        <p v-if="check.playerFact" class="mt-1 text-xs text-ink/55">{{ t('lesson.answer.situation.playerFact') }}：{{ check.playerFact }}</p>
+                        <p v-if="check.playerFact" class="mt-1 text-xs text-muted">{{ t('lesson.answer.situation.playerFact') }}：{{ check.playerFact }}</p>
                         <button v-else type="button" class="mt-2 min-h-9 rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-900" @click="prepareSituationReply(check.requirement)">{{ t('lesson.answer.situation.addFact') }}</button>
                       </li>
                     </ul>
                   </li>
                   <li v-if="answer.walkthroughSteps?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.walkthrough.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.walkthrough.description') }}</p>
                     <ol class="mt-3 stack-y-md">
                       <li v-for="(step, stepIndex) in answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-3 rounded-xl bg-canvas px-3 py-3">
                         <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-copper/15 text-sm font-bold text-copper">{{ stepIndex + 1 }}</span>
                         <div>
-                          <div class="flex flex-wrap items-center gap-2"><p class="font-semibold text-ink">{{ step.instruction }}</p><span class="rounded-full bg-ink/6 px-2 py-0.5 text-[11px] font-semibold text-ink/55">{{ walkthroughBasisLabel(step.orderBasis) }}</span></div>
-                          <p class="mt-1 text-sm text-ink/60">{{ step.explanation }}</p>
+                          <div class="flex flex-wrap items-center gap-2"><p class="font-semibold text-ink">{{ step.instruction }}</p><span class="rounded-full bg-ink/6 px-2 py-0.5 text-[11px] font-semibold text-muted">{{ walkthroughBasisLabel(step.orderBasis) }}</span></div>
+                          <p class="mt-1 text-sm text-muted">{{ step.explanation }}</p>
                         </div>
                       </li>
                     </ol>
                   </li>
                   <li v-if="answer.decisionBranches?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.decision.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.decision.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.decision.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="branch in answer.decisionBranches" :key="`${branch.condition}-${branch.outcome}`" class="rounded-xl bg-canvas px-3 py-3">
                         <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ decisionBasisLabel(branch.basis) }}</span><p class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：{{ branch.condition }}</p></div>
-                        <p class="mt-2 border-l-2 border-indigo/30 pl-3 text-sm text-ink/65">{{ branch.outcome }}</p>
+                        <p class="mt-2 border-l-2 border-indigo/30 pl-3 text-sm text-muted">{{ branch.outcome }}</p>
                       </li>
                     </ul>
                   </li>
                   <li v-if="answer.exceptionClauses?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.exception.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.exception.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.exception.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="clause in answer.exceptionClauses" :key="`${clause.condition}-${clause.effect}`" class="rounded-xl bg-canvas px-3 py-3">
                         <p class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：{{ clause.condition }}</p>
-                        <p class="mt-2 border-l-2 border-copper/30 pl-3 text-sm text-ink/65">{{ clause.effect }}</p>
+                        <p class="mt-2 border-l-2 border-copper/30 pl-3 text-sm text-muted">{{ clause.effect }}</p>
                       </li>
                     </ul>
                   </li>
                   <li v-if="answer.termDefinitions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.definition.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.definition.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.definition.description') }}</p>
                     <dl class="mt-3 stack-y-md">
                       <div v-for="definition in answer.termDefinitions" :key="definition.term" class="rounded-xl bg-canvas px-3 py-3">
                         <dt class="font-semibold text-indigo">{{ definition.term }}</dt><dd class="mt-1 text-sm text-ink/70">{{ definition.definition }}</dd>
-                        <dd v-if="definition.boundary" class="mt-2 border-l-2 border-indigo/30 pl-3 text-xs text-ink/55">{{ t('lesson.answer.definition.boundary') }}：{{ definition.boundary }}</dd>
+                        <dd v-if="definition.boundary" class="mt-2 border-l-2 border-indigo/30 pl-3 text-xs text-muted">{{ t('lesson.answer.definition.boundary') }}：{{ definition.boundary }}</dd>
                       </div>
                     </dl>
                   </li>
                   <li v-if="answer.workedExamples?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.example.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.example.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.example.description') }}</p>
                     <ol class="mt-3 stack-y-md">
                       <li v-for="(example, exampleIndex) in answer.workedExamples" :key="`${exampleIndex}-${example.setup}`" class="rounded-xl bg-canvas px-3 py-3">
                         <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ workedExampleBasisLabel(example.basis) }}</span>
@@ -803,7 +803,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   </li>
                   <li v-if="answer.priorityResolutions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.priority.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.priority.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.priority.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="item in answer.priorityResolutions" :key="`${item.baseRule}-${item.competingRule}`" class="rounded-xl bg-canvas px-3 py-3">
                         <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ priorityBasisLabel(item.basis) }}</span>
@@ -815,7 +815,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   </li>
                   <li v-if="answer.timingResolutions?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.timing.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.timing.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.timing.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="item in answer.timingResolutions" :key="`${item.timingContext}-${item.resolutionOrder}`" class="rounded-xl bg-canvas px-3 py-3">
                         <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ timingBasisLabel(item.basis) }}</span>
@@ -827,7 +827,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   </li>
                   <li v-if="answer.tieResolutions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.tie.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.tie.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.tie.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="item in answer.tieResolutions" :key="`${item.tieContext}-${item.finalOutcome}`" class="rounded-xl bg-canvas px-3 py-3">
                         <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ tieBasisLabel(item.basis) }}</span>
@@ -839,7 +839,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   </li>
                   <li v-if="answer.scopeResolutions?.length" class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.scope.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.scope.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.scope.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="item in answer.scopeResolutions" :key="`${item.ruleContext}-${item.currentSituation}`" class="rounded-xl bg-canvas px-3 py-3">
                         <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{{ scopeStatusLabel(item.matchStatus) }} · {{ scopeBasisLabel(item.basis) }}</span>
@@ -852,7 +852,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   </li>
                   <li v-if="answer.conceptComparisons?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.comparison.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.comparison.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.comparison.description') }}</p>
                     <ul class="mt-3 stack-y-md">
                       <li v-for="item in answer.conceptComparisons" :key="`${item.leftConcept}-${item.rightConcept}`" class="rounded-xl bg-canvas px-3 py-3">
                         <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ comparisonBasisLabel(item.basis) }}</span>
@@ -865,7 +865,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                   </li>
                   <li v-if="answer.ruleOptions?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.05] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.options.title') }}</p>
-                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.options.description') }}</p>
+                    <p class="mt-1 text-xs text-muted">{{ t('lesson.answer.options.description') }}</p>
                     <p class="mt-3 rounded-xl bg-paper px-3 py-2"><span class="font-semibold text-ink">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ answer.ruleOptions[0]?.selectionRule }}</p>
                     <ol class="mt-3 grid gap-3 sm:grid-cols-2">
                       <li v-for="(item, index) in answer.ruleOptions" :key="`${item.optionName}-${index}`" class="rounded-xl bg-canvas px-3 py-3">
@@ -890,7 +890,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
 
               <div v-if="publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-ink/10 bg-paper p-4">
                 <p class="text-sm font-semibold text-ink">{{ t('lesson.answer.feedback.title') }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lesson.answer.feedback.description') }}</p>
+                <p class="mt-1 text-xs leading-5 text-muted">{{ t('lesson.answer.feedback.description') }}</p>
                 <p v-if="answerResolved" class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800" role="status">{{ t('lesson.answer.feedback.resolvedStatus') }}</p>
                 <div v-else class="mt-3 flex flex-wrap gap-2">
                   <button type="button" class="min-h-11 rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800" @click="markAnswerResolved">{{ t('lesson.answer.feedback.resolved') }}</button>
@@ -902,13 +902,13 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
 
             <section v-if="primaryCitation" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6" aria-labelledby="lesson-answer-evidence-title">
               <p id="lesson-answer-evidence-title" class="font-semibold text-indigo">{{ t('lesson.answer.evidence.title') }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lesson.answer.evidence.description') }}</p>
+              <p class="mt-1 text-xs leading-5 text-muted">{{ t('lesson.answer.evidence.description') }}</p>
               <article class="mt-4 rounded-2xl border border-indigo/20 bg-paper p-4">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <p class="font-semibold">{{ primaryCitation.heading }}</p>
                   <span class="text-xs font-semibold text-indigo">{{ citationPages(primaryCitation) }}</span>
                 </div>
-                <p class="mt-2 text-sm leading-6 text-ink/65">{{ primaryCitation.excerpt }}</p>
+                <p class="mt-2 text-sm leading-6 text-muted">{{ primaryCitation.excerpt }}</p>
               </article>
               <details v-if="additionalCitations.length" class="mt-4">
                 <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.evidence.more', { count: additionalCitations.length }) }}</summary>
@@ -918,7 +918,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                       <p class="font-semibold">{{ citation.heading }}</p>
                       <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
                     </div>
-                    <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
+                    <p class="mt-2 text-sm leading-6 text-muted">{{ citation.excerpt }}</p>
                   </li>
                 </ol>
               </details>

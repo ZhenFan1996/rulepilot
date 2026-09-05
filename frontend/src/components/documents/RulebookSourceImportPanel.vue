@@ -81,7 +81,7 @@ function candidateLanguage(candidate: RulebookCandidate) {
     <div class="min-w-0 flex-1">
       <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('documents.game.selectedEyebrow') }}</p>
       <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ selectedEdition.game.name }}</h2>
-      <p class="mt-1 text-sm text-ink/55">{{ t('documents.game.selectedEdition', { edition: selectedEdition.edition.name }) }}</p>
+      <p class="mt-1 text-sm text-muted">{{ t('documents.game.selectedEdition', { edition: selectedEdition.edition.name }) }}</p>
       <a
         v-if="selectedEdition.bggMetadata?.bggUrl"
         :href="selectedEdition.bggMetadata.bggUrl"
@@ -106,7 +106,7 @@ function candidateLanguage(candidate: RulebookCandidate) {
       class="mt-4 grid gap-2 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4 text-sm sm:grid-cols-3"
       role="status"
     >
-      <li v-for="(step, index) in copy.searchSteps" :key="step" class="flex items-center gap-2 text-ink/60">
+      <li v-for="(step, index) in copy.searchSteps" :key="step" class="flex items-center gap-2 text-muted">
         <span class="grid size-6 shrink-0 place-items-center rounded-full bg-indigo/10 text-xs font-bold text-indigo">{{ index + 1 }}</span>
         <span>{{ step }}</span>
       </li>
@@ -117,7 +117,7 @@ function candidateLanguage(candidate: RulebookCandidate) {
       aria-live="polite"
     >
       <h2 class="font-display text-xl font-semibold">{{ hasImportableCandidate ? copy.title : copy.noImportableTitle }}</h2>
-      <p class="mt-1 text-xs leading-5 text-ink/50">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
+      <p class="mt-1 text-xs leading-5 text-muted">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
       <div
         v-if="terminalNotice && discoverySummary"
         data-testid="rulebook-discovery-summary"
@@ -136,14 +136,14 @@ function candidateLanguage(candidate: RulebookCandidate) {
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0">
               <p class="font-semibold">{{ candidate.title }}</p>
-              <p class="mt-1 break-all text-xs text-ink/45">{{ candidate.sourceDomain }}</p>
-              <p class="mt-2 text-xs leading-5 text-ink/55">
+              <p class="mt-1 break-all text-xs text-muted">{{ candidate.sourceDomain }}</p>
+              <p class="mt-2 text-xs leading-5 text-muted">
                 {{ copy.publisher }}: {{ candidate.publisher || '—' }} · {{ copy.language }}: {{ candidateLanguage(candidate) }} · {{ copy.edition }}: {{ candidate.edition || '—' }}
               </p>
               <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">
                 {{ copy.sources[candidate.sourceType] }}
               </p>
-              <p class="mt-1 text-xs text-ink/45">
+              <p class="mt-1 text-xs text-muted">
                 {{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? copy.gallery : copy.page }}
               </p>
               <p class="mt-1 text-xs font-semibold text-indigo">{{ copy.capabilities[candidate.capability] }}</p>
@@ -159,7 +159,7 @@ function candidateLanguage(candidate: RulebookCandidate) {
           </div>
         </li>
       </ul>
-      <p v-else-if="!candidates.length" class="mt-4 text-sm text-ink/55">{{ copy.empty }}</p>
+      <p v-else-if="!candidates.length" class="mt-4 text-sm text-muted">{{ copy.empty }}</p>
       <div v-if="!hasImportableCandidate" class="mt-4 flex flex-wrap gap-x-4 gap-y-2">
         <button
           type="button"
@@ -175,12 +175,12 @@ function candidateLanguage(candidate: RulebookCandidate) {
       </div>
       <section v-if="identityCandidates.length" class="mt-5 border-t border-ink/10 pt-4" :aria-label="copy.identityOnlyTitle">
         <h3 class="text-sm font-semibold text-ink/70">{{ copy.identityOnlyTitle }}</h3>
-        <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.identityOnlyDetail }}</p>
+        <p class="mt-1 text-xs leading-5 text-muted">{{ copy.identityOnlyDetail }}</p>
         <ul class="mt-3 stack-y-sm">
           <li v-for="candidate in identityCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-lg border border-ink/10 bg-canvas p-3 text-xs">
             <p class="font-semibold text-ink/70">{{ candidate.title }}</p>
             <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
-            <p class="mt-1 text-ink/50">{{ copy.capabilities[candidate.capability] }}</p>
+            <p class="mt-1 text-muted">{{ copy.capabilities[candidate.capability] }}</p>
           </li>
         </ul>
       </section>

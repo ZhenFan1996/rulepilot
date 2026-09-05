@@ -111,8 +111,8 @@ const failureKind = computed(() => failedRecovery.value?.failureKind ?? 'OTHER')
           :status="officialPlayerStatus"
           class="mt-2 text-sm font-semibold text-copper"
         />
-        <p class="mt-1 text-xs leading-5 text-ink/60">{{ officialImportStage }}</p>
-        <p v-if="officialImportJob.stage !== 'FAILED'" class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
+        <p class="mt-1 text-xs leading-5 text-muted">{{ officialImportStage }}</p>
+        <p v-if="officialImportJob.stage !== 'FAILED'" class="mt-1 text-xs leading-5 text-muted">{{ officialImportCopy.safe }}</p>
       </div>
       <span v-if="officialImportBytes" class="shrink-0 text-xs font-semibold text-indigo">{{ officialImportBytes }}</span>
     </div>
@@ -132,7 +132,7 @@ const failureKind = computed(() => failedRecovery.value?.failureKind ?? 'OTHER')
         <a v-if="failedRecovery?.canOpenSourceInBrowser && officialImportJob.officialSourceUrl" :href="officialImportJob.officialSourceUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ officialImportCopy.openOriginalSource }} ↗</a>
       </div>
     </div>
-    <p class="mt-3 border-t border-ink/8 pt-3 text-xs text-ink/45">{{ officialImportCopy.background }}</p>
+    <p class="mt-3 border-t border-ink/8 pt-3 text-xs text-muted">{{ officialImportCopy.background }}</p>
   </section>
 
   <p v-if="message && !preparingVersionId" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
@@ -143,11 +143,11 @@ const failureKind = computed(() => failedRecovery.value?.failureKind ?? 'OTHER')
           :status="preparationPlayerStatus"
           class="font-semibold text-ink"
         />
-        <p class="mt-1 text-sm leading-6 text-ink/60">{{ message }}</p>
+        <p class="mt-1 text-sm leading-6 text-muted">{{ message }}</p>
       </div>
       <span class="shrink-0 text-xs font-medium text-indigo">{{ preparationElapsedLabel }}</span>
     </div>
-    <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">{{ t('documents.background') }}</p>
+    <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-muted">{{ t('documents.background') }}</p>
   </div>
   <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
   <div v-if="processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">

@@ -58,7 +58,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '桌游资料', unknownYear: '发行年份未知', stats: '游戏信息',
   evidenceBoundary: 'BGG 资料仅用于推荐、识别游戏和展示封面。后续讲解与答疑只会引用你确认的规则书。',
   select: '选择这款桌游并找规则书', selecting: '正在准备…', source: '查看 BGG 原始资料', retry: '重新读取',
-  translation: '译自 BGG 原文', translating: '原文已就绪，中文版本正在补齐…',
+  translation: '译自 BGG 原文', translating: '正在读取中文简介…', untranslated: '暂无中文译文，以下为 BGG 原文。',
   officialName: 'BGG 版本资料收录的官方中文名', metadataTranslation: '中文对照',
   cover: (gameName: string) => `${gameName} 封面`, players: (min: number, max: number) => `${min}–${max} 人`,
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
@@ -73,7 +73,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: 'Game details', unknownYear: 'Publication year unavailable', stats: 'Game details',
   evidenceBoundary: 'BGG data is used only for recommendations, game identification, and cover art. Teaching and Q&A cite only the rulebook you confirm.',
   select: 'Choose this game and find its rulebook', selecting: 'Preparing…', source: 'View original BGG data', retry: 'Try again',
-  translation: 'Translated from the BGG source', translating: 'Source details are ready; localized metadata is being added…',
+  translation: 'Translated from the BGG source', translating: 'Loading localized details…', untranslated: 'A translation is unavailable. The BGG source is shown below.',
   officialName: 'Official Chinese name recorded by a BGG edition', metadataTranslation: 'Localized terms',
   cover: (gameName: string) => `${gameName} cover`, players: (min: number, max: number) => `${min}–${max} players`,
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
@@ -298,8 +298,8 @@ onBeforeUnmount(() => {
               <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
               <h1 class="mt-2 font-display text-[1.85rem] font-semibold leading-[1.05] tracking-tight [overflow-wrap:anywhere] sm:text-4xl lg:text-5xl">{{ displayName }}</h1>
               <p v-if="game?.officialNameLocalized" class="mt-2 text-xs font-medium leading-5 text-copper sm:text-sm">{{ game.originalName }} · {{ copy.officialName }}</p>
-              <p v-if="game" class="mt-2 text-sm text-ink/45">{{ game.publicationYear ?? copy.unknownYear }}</p>
-              <p v-if="loading" data-testid="game-detail-loading" class="mt-3 text-sm text-ink/50" role="status">{{ copy.loading }}</p>
+              <p v-if="game" class="mt-2 text-sm text-muted">{{ game.publicationYear ?? copy.unknownYear }}</p>
+              <p v-if="loading" data-testid="game-detail-loading" class="mt-3 text-sm text-muted" role="status">{{ copy.loading }}</p>
             </div>
             <ul v-if="game && stats.length" data-testid="game-detail-stats" class="game-detail-stats flex min-w-0 flex-wrap gap-2" :aria-label="copy.stats">
               <li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-8 px-3 text-xs sm:min-h-9 sm:text-sm">{{ stat }}</li>
@@ -315,20 +315,21 @@ onBeforeUnmount(() => {
         <div v-if="game" data-testid="game-long-details" class="min-w-0 border-t border-ink/10 pt-6">
           <p v-if="translating" class="text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
           <p v-else-if="game.descriptionTranslated" class="text-xs font-semibold text-copper">{{ copy.translation }}</p>
-          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68 [overflow-wrap:anywhere]">{{ game.description }}</p>
+          <p v-else-if="locale === 'zh-CN' && game.description" class="text-xs font-semibold text-copper" role="status">{{ copy.untranslated }}</p>
+          <p v-if="game.description" :class="locale === 'zh-CN' ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68 [overflow-wrap:anywhere]">{{ game.description }}</p>
           <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ game.designers.join('、') }}</dd></div>
-            <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ game.publishers.join('、') }}</dd></div>
-            <div v-if="game.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}<span v-if="game.mechanicsTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1 leading-6">{{ game.mechanics.join('、') }}</dd></div>
-            <div v-if="game.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}<span v-if="game.categoriesTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1 leading-6">{{ game.categories.join('、') }}</dd></div>
+            <div v-if="game.designers.length"><dt class="font-semibold text-muted">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ game.designers.join('、') }}</dd></div>
+            <div v-if="game.publishers.length"><dt class="font-semibold text-muted">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ game.publishers.join('、') }}</dd></div>
+            <div v-if="game.mechanics.length"><dt class="font-semibold text-muted">{{ copy.mechanics }}<span v-if="game.mechanicsTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1 leading-6">{{ game.mechanics.join('、') }}</dd></div>
+            <div v-if="game.categories.length"><dt class="font-semibold text-muted">{{ copy.categories }}<span v-if="game.categoriesTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1 leading-6">{{ game.categories.join('、') }}</dd></div>
           </dl>
-          <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
+          <p class="mt-5 text-xs leading-5 text-muted">{{ copy.evidenceBoundary }}</p>
         </div>
         <div v-if="game" class="min-w-0 border-t border-ink/10 pt-6">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 class="font-display text-2xl font-semibold">{{ copy.editionImages }}</h2>
-              <p class="mt-1 text-sm text-ink/50">{{ copy.editionImagesHint }}</p>
+              <p class="mt-1 text-sm text-muted">{{ copy.editionImagesHint }}</p>
             </div>
             <div class="flex flex-col items-start gap-2 sm:items-end">
               <a :href="`${game.bggUrl}/images`" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-indigo">{{ copy.imageGallery }} ↗</a>
@@ -339,14 +340,14 @@ onBeforeUnmount(() => {
             <li v-for="editionImage in game.editionImages" :key="editionImage.versionId" class="game-tile w-40 shrink-0 snap-start bg-canvas p-3 sm:w-44">
               <img :src="editionImage.imageUrl" :alt="editionImage.name" loading="lazy" referrerpolicy="no-referrer" class="aspect-[4/5] w-full object-contain">
               <p class="mt-2 truncate text-sm font-semibold" :title="editionImage.name">{{ editionImage.name }}</p>
-              <p v-if="editionImage.publicationYear || editionImage.languages.length" class="mt-1 text-xs text-ink/45">
+              <p v-if="editionImage.publicationYear || editionImage.languages.length" class="mt-1 text-xs text-muted">
                 {{ [editionImage.publicationYear, ...editionImage.languages].filter(Boolean).join(' · ') }}
               </p>
             </li>
           </ul>
           <div class="mt-5 rounded-xl border border-ink/10 bg-canvas px-4 py-3 text-sm">
             <a :href="`${game.bggUrl}/files`" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo">{{ copy.communityFiles }} ↗</a>
-            <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.communityFilesHint }}</p>
+            <p class="mt-1 text-xs leading-5 text-muted">{{ copy.communityFilesHint }}</p>
           </div>
         </div>
       </section>

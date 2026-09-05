@@ -3,22 +3,23 @@
 @source not "../../e2e";
 
 @theme {
-  --font-sans: "Avenir Next", "PingFang SC", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Iowan Old Style", "Songti SC", "Noto Serif SC", Georgia, serif;
-  --color-canvas: #f2ead9;
-  --color-paper: #fffaf0;
-  --color-ink: #2a2d29;
-  --color-ink-panel: #1e2e2d;
-  --color-panel-text: #f3ead9;
-  --color-copper: #b7553e;
-  --color-copper-dark: #93402f;
-  --color-indigo: #376178;
-  --color-felt: #45634f;
-  --color-gold: #c49a50;
-  --color-clay: #c46b50;
-  --color-felt-deep: #2b473a;
-  --color-muted: #746f65;
-  --color-border: rgba(72, 59, 40, 0.15);
+  --font-sans: "PingFang SC", "Hiragino Sans GB", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Avenir Next", "PingFang SC", "Microsoft YaHei", var(--font-sans);
+  --color-canvas: #f2f4f1;
+  --color-paper: #ffffff;
+  --color-ink: #243b35;
+  --color-ink-panel: #163c33;
+  --color-panel-text: #f4f7fb;
+  --color-copper: #25604f;
+  --color-on-accent: #ffffff;
+  --color-copper-dark: #194a3c;
+  --color-indigo: #25604f;
+  --color-felt: #25604f;
+  --color-gold: #9b6b13;
+  --color-clay: #906351;
+  --color-felt-deep: #163c33;
+  --color-muted: #63736b;
+  --color-border: #d9e0d9;
 }
 
 :root {
@@ -27,44 +28,46 @@
   font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  background: #f2ead9;
+  background: #f2f4f1;
 }
 
 :root.dark {
   color-scheme: dark;
-  --color-canvas: #171b19;
-  --color-paper: #232823;
-  --color-ink: #f2e8d5;
-  --color-ink-panel: #111d1c;
-  --color-panel-text: #f2e8d5;
-  --color-copper: #dc7d62;
-  --color-copper-dark: #bd624c;
-  --color-indigo: #9bb9c8;
-  --color-felt: #4d735d;
-  --color-gold: #d3ac62;
-  --color-clay: #d58268;
-  --color-felt-deep: #213c32;
-  --color-muted: #aaa291;
-  --color-border: rgba(242, 232, 213, 0.14);
+  --color-canvas: #172823;
+  --color-paper: #20362e;
+  --color-ink: #e8efe9;
+  --color-ink-panel: #122d24;
+  --color-panel-text: #e8efe9;
+  --color-copper: #a5cfb5;
+  --color-on-accent: #122d24;
+  --color-copper-dark: #c0dec9;
+  --color-indigo: #a5cfb5;
+  --color-felt: #376953;
+  --color-gold: #e4bc69;
+  --color-clay: #d6a08a;
+  --color-felt-deep: #173e30;
+  --color-muted: #a8bcb0;
+  --color-border: #3a5246;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     color-scheme: dark;
-    --color-canvas: #171b19;
-    --color-paper: #232823;
-    --color-ink: #f2e8d5;
-    --color-ink-panel: #111d1c;
-    --color-panel-text: #f2e8d5;
-    --color-copper: #dc7d62;
-    --color-copper-dark: #bd624c;
-    --color-indigo: #9bb9c8;
-    --color-felt: #4d735d;
-    --color-gold: #d3ac62;
-    --color-clay: #d58268;
-    --color-felt-deep: #213c32;
-    --color-muted: #aaa291;
-    --color-border: rgba(242, 232, 213, 0.14);
+    --color-canvas: #172823;
+    --color-paper: #20362e;
+    --color-ink: #e8efe9;
+    --color-ink-panel: #122d24;
+    --color-panel-text: #e8efe9;
+    --color-copper: #a5cfb5;
+    --color-on-accent: #122d24;
+    --color-copper-dark: #c0dec9;
+    --color-indigo: #a5cfb5;
+    --color-felt: #376953;
+    --color-gold: #e4bc69;
+    --color-clay: #d6a08a;
+    --color-felt-deep: #173e30;
+    --color-muted: #a8bcb0;
+    --color-border: #3a5246;
   }
 }
 
@@ -94,7 +97,7 @@ body {
 
 .app-root #main-content,
 .app-root .tabletop-app {
-  min-height: calc(100vh - var(--app-top-inset));
+  background: var(--color-canvas);
 }
 
 .connectivity-status-bar {
@@ -111,8 +114,8 @@ body {
 }
 
 ::selection {
-  color: #fffaf0;
-  background: #45634f;
+  color: #ffffff;
+  background: #25604f;
 }
 
 :focus-visible {
@@ -162,36 +165,15 @@ button {
   font: inherit;
 }
 
-.tabletop-hero {
-  background:
-    radial-gradient(circle at 15% 25%, rgb(255 250 240 / 7%) 0 0.8px, transparent 1px) 0 0 / 14px 14px,
-    linear-gradient(145deg, #324f41, #203932);
-}
-
 .agent-workspace {
   background: var(--color-paper);
-  box-shadow: 0 26px 70px -58px rgb(18 33 41 / 80%);
 }
 
-.tabletop-app {
-  background-image:
-    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--color-ink) 5%, transparent) 0 0.65px, transparent 0.8px),
-    linear-gradient(115deg, color-mix(in srgb, var(--color-paper) 24%, transparent), transparent 38%);
-  background-size: 16px 16px, 100% 100%;
-}
 
 .tabletop-page {
   width: min(100%, 86rem);
   margin-inline: auto;
   padding: clamp(1.5rem, 3vw, 2.75rem) clamp(1.25rem, 3.2vw, 3.25rem) 5.5rem;
-  animation: tabletop-page-arrive 220ms ease both;
-}
-
-@keyframes tabletop-page-arrive {
-  from {
-    opacity: 0;
-    translate: 0 0.5rem;
-  }
 }
 
 .tabletop-heading {
@@ -201,36 +183,23 @@ button {
 }
 
 .tabletop-kicker {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  color: var(--color-copper);
-  font-size: 0.73rem;
-  font-weight: 750;
-  letter-spacing: 0.08em;
-}
-
-.tabletop-kicker::before {
-  width: 0.42rem;
-  height: 0.42rem;
-  rotate: 45deg;
-  border: 1px solid currentColor;
-  content: "";
+  color: var(--color-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
 }
 
 .tabletop-title {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(2.2rem, 4vw, 3.75rem);
+  font-size: clamp(1.65rem, 2.7vw, 2.25rem);
   font-weight: 650;
-  line-height: 1.06;
-  letter-spacing: -0.035em;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
   text-wrap: balance;
 }
 
 .tabletop-lede {
   max-width: 42rem;
-  color: color-mix(in srgb, var(--color-ink) 60%, transparent);
+  color: var(--color-muted);
   font-size: 0.97rem;
   line-height: 1.78;
 }
@@ -238,34 +207,12 @@ button {
 .tabletop-panel {
   position: relative;
   border: 1px solid var(--color-border);
-  border-radius: 1.3rem 1.3rem 0.9rem 0.9rem;
+  border-radius: 0.75rem;
   background: var(--color-paper);
-  box-shadow:
-    inset 0 1px color-mix(in srgb, var(--color-paper) 84%, white),
-    0 20px 54px -48px color-mix(in srgb, var(--color-ink-panel) 72%, transparent);
 }
 
 .player-board {
-  clip-path: none;
-  border-radius: 1.4rem 1.4rem 0.9rem 0.9rem;
-}
-
-.player-board::before {
-  position: absolute;
-  z-index: 2;
-  top: 0.55rem;
-  right: 0.55rem;
-  width: 2.2rem;
-  height: 2.2rem;
-  border-top: 1px solid color-mix(in srgb, var(--color-gold) 60%, transparent);
-  border-right: 1px solid color-mix(in srgb, var(--color-gold) 60%, transparent);
-  border-radius: 0 0.8rem 0 0;
-  content: "";
-  pointer-events: none;
-}
-
-.player-board::after {
-  display: none;
+  border-radius: 0.75rem;
 }
 
 .hex-token {
@@ -283,51 +230,14 @@ button {
 .drawer-shelf {
   position: fixed;
   isolation: isolate;
-  background-image:
-    radial-gradient(circle at 1px 1px, rgb(255 242 215 / 6%) 0 0.6px, transparent 0.75px),
-    linear-gradient(160deg, rgb(255 255 255 / 3%), transparent 45%);
-  background-size: 13px 13px, 100% 100%;
-  box-shadow: 12px 0 44px -34px rgb(0 0 0 / 78%);
-}
-
-.drawer-shelf::before {
-  position: absolute;
-  inset: 4.8rem 0.75rem 0.75rem;
-  z-index: -1;
-  border: 1px solid rgb(223 190 119 / 12%);
-  border-radius: 6.5rem 6.5rem 1rem 1rem;
-  content: "";
-}
-
-.drawer-shelf__ornament {
-  position: absolute;
-  top: 1.1rem;
-  right: 1rem;
-  color: rgb(223 190 119 / 36%);
-  font-size: 1.1rem;
-  pointer-events: none;
 }
 
 .drawer-link {
   position: relative;
-  border: 1px solid transparent;
-  border-radius: 0.85rem 0.85rem 0.55rem 0.55rem;
+  border-bottom: 2px solid transparent;
 }
 
-.drawer-link-active {
-  box-shadow: 0 7px 22px -15px rgb(0 0 0 / 85%);
-}
-
-.drawer-link-active::before {
-  position: absolute;
-  top: 0.5rem;
-  bottom: 0.5rem;
-  left: -0.28rem;
-  width: 0.22rem;
-  border-radius: 99px;
-  background: #b7553e;
-  content: "";
-}
+.drawer-link-active { border-bottom-color: var(--color-indigo); }
 
 .mobile-navigation {
   box-shadow: 0 -8px 28px -22px color-mix(in srgb, var(--color-ink-panel) 65%, transparent);
@@ -354,7 +264,7 @@ button {
   border-radius: 1rem;
   color: var(--color-ink);
   background: color-mix(in srgb, var(--color-paper) 97%, transparent);
-  box-shadow: 0 18px 42px -24px color-mix(in srgb, var(--color-ink-panel) 70%, transparent);
+  box-shadow: 0 4px 16px rgb(20 45 31 / 8%);
   text-align: left;
   backdrop-filter: blur(12px);
   transition: border-color 140ms ease;
@@ -389,8 +299,6 @@ button {
   color: var(--color-copper);
   font-size: 0.6875rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
 }
 
 .work-status-title {
@@ -457,20 +365,12 @@ button {
   box-shadow: 0 10px 24px -12px rgb(26 35 42 / 55%);
 }
 
-.shelf-hero-shadow {
-  box-shadow: 0 18px 42px rgb(26 35 42 / 16%);
-}
-
 .game-card-shadow {
   box-shadow: 0 12px 32px rgb(26 35 42 / 6%);
 }
 
 .game-card-shadow:hover {
   box-shadow: 0 18px 40px rgb(26 35 42 / 12%);
-}
-
-.lesson-hero-shadow {
-  box-shadow: 0 24px 70px -48px rgb(16 31 38 / 75%);
 }
 
 .lesson-step-shadow {
@@ -509,21 +409,6 @@ button {
   .lg-stack-y-sm > :not(:last-child) { margin-block-end: 0.5rem; }
 }
 
-.tabletop-illustrated-hero {
-  position: relative;
-  overflow: hidden;
-  min-height: 22rem;
-  border: 1px solid var(--color-border);
-  border-radius: 2rem 2rem 0.9rem 0.9rem;
-  background: #e7d8bc;
-}
-
-.tabletop-illustrated-hero img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
 .score-track {
   counter-reset: tabletop-score;
 }
@@ -547,28 +432,13 @@ button {
   content: counter(tabletop-score, decimal-leading-zero);
 }
 
-.tabletop-panel::after {
-  display: none;
-}
-
-.tabletop-felt {
-  color: #fffaf2;
-  background-color: var(--color-felt-deep);
-  background-image:
-    radial-gradient(circle at 1px 1px, rgb(255 250 242 / 7%) 0.6px, transparent 0.75px),
-    linear-gradient(135deg, rgb(255 255 255 / 2%), transparent 45%);
-  background-size: 11px 11px, 100% 100%;
-}
-
 .tabletop-rule {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  color: color-mix(in srgb, var(--color-ink) 48%, transparent);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  color: var(--color-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .tabletop-rule::after {
@@ -581,15 +451,13 @@ button {
 .game-tile {
   position: relative;
   border: 1px solid var(--color-border);
-  border-radius: 1.15rem 1.15rem 0.75rem 0.75rem;
+  border-radius: 0.75rem;
   background: var(--color-paper);
-  transition: translate 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+  transition: border-color 160ms ease;
 }
 
 .game-tile:hover {
-  border-color: color-mix(in srgb, var(--color-copper) 45%, transparent);
-  box-shadow: 0 18px 34px -26px rgb(26 35 42 / 70%);
-  translate: 0 -3px;
+  border-color: var(--color-indigo);
 }
 
 .tile-enter-active,
@@ -638,7 +506,7 @@ button {
 
   .player-board {
     clip-path: none;
-    border-radius: 1.15rem 1.15rem 0.75rem 0.75rem;
+    border-radius: 0.75rem;
   }
 }
 
@@ -649,47 +517,11 @@ button {
   background: var(--shelf-cover);
 }
 
-.shelf-cover::before,
-.shelf-cover::after {
-  position: absolute;
-  content: "";
-  border: 1px solid currentColor;
-  opacity: 0.22;
-}
-
 .lesson-cover {
   position: relative;
   overflow: hidden;
   color: var(--lesson-cover-ink);
   background: var(--lesson-cover);
-}
-
-.lesson-cover::before {
-  position: absolute;
-  right: -2.5rem;
-  bottom: -3rem;
-  width: 9rem;
-  height: 9rem;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-  content: "";
-  opacity: 0.24;
-}
-
-.shelf-cover::before {
-  width: 13rem;
-  height: 13rem;
-  right: -4rem;
-  bottom: -7rem;
-  border-radius: 50%;
-}
-
-.shelf-cover::after {
-  width: 8rem;
-  height: 8rem;
-  left: -2rem;
-  top: -4rem;
-  transform: rotate(28deg);
 }
 
 @media (prefers-reduced-motion: reduce) {

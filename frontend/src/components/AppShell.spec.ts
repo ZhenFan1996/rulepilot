@@ -102,7 +102,7 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('可以继续浏览')
     expect(wrapper.text()).toContain('公开讲解')
     expect(wrapper.text()).not.toContain('我的规则书')
-    expect(wrapper.text()).toContain('我的讲解')
+    expect(backgroundWorkTrigger.attributes('aria-label')).toBeTruthy()
     expect(backgroundWorkTrigger.text()).toContain('1')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('中文')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('EN')
