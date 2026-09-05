@@ -27,21 +27,6 @@ public final class RulebookTitleInferencePolicy {
         return sharedIdentity == null ? uploaded : sharedIdentity;
     }
 
-    /**
-     * Applies a title that the teaching boundary has already confirmed against the active source pages.
-     *
-     * <p>The publication boundary does not receive rulebook text, so it must not repeat model inference. It may only
-     * persist a confirmed title when the upload label is empty or contains that title as a bounded, shorter identity.
-     */
-    public static boolean shouldReplaceWithSourceConfirmedTitle(
-            String uploadedTitle, String sourceConfirmedTitle) {
-        String uploaded = clean(uploadedTitle);
-        String confirmed = clean(sourceConfirmedTitle);
-        if (confirmed == null) return false;
-        if (uploaded == null) return true;
-        return isContainedIdentity(uploaded, confirmed);
-    }
-
     private static boolean isSourceConfirmedContainedIdentity(
             String uploadedTitle,
             String inferredTitle,

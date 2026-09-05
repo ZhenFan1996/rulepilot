@@ -448,7 +448,7 @@ class HttpOfficialRulebookSourceFetcherTest {
     }
 
     @Test
-    void rejectsUnmarkedHtmlEvenWhenTheBodyStartsLikeAPdf() {
+    void downloadsPdfContentEvenWhenTheServerLabelsItAsHtml() {
         OkHttpClient http = new OkHttpClient.Builder()
                 .addInterceptor(chain -> new Response.Builder()
                         .request(chain.request())
@@ -456,13 +456,13 @@ class HttpOfficialRulebookSourceFetcherTest {
                         .code(200)
                         .message("OK")
                         .header("Content-Type", "text/html")
-                        .body(ResponseBody.create("%PDF-fake", MediaType.parse("text/html")))
+                        .body(ResponseBody.create("%PDF-1.7\nbody", MediaType.parse("text/html")))
                         .build())
                 .build();
         HttpOfficialRulebookSourceFetcher fetcher = new HttpOfficialRulebookSourceFetcher(http, 1_024);
 
-        assertThatThrownBy(() -> fetcher.fetch(URI.create("https://publisher.example/rules.pdf")))
-                .isInstanceOf(OfficialRulebookSourceAccessException.class);
+        assertThat(fetcher.fetch(URI.create("https://publisher.example/rules.pdf")).content())
+                .isEqualTo("%PDF-1.7\nbody".getBytes(StandardCharsets.US_ASCII));
     }
 
     private byte[] jpeg(int rgb) throws IOException {

@@ -28,59 +28,31 @@ class DocumentTeachingPreparationServiceTest {
     @Test
     void automaticallyAssignsAnOwnedReadyRulebook() {
         RuleDocument document = rulebook(null, "alice");
-        RuleDocument titled = document.withTitle("SETI");
         DocumentVersion version = version(document.id(), ProcessingStatus.READY);
         UUID editionId = UUID.randomUUID();
         when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
         when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
         when(catalog.provisionDefaultEdition("SETI")).thenReturn(editionId);
-        when(documents.findDocument(editionId, "alice", titled.title(), titled.sourceType()))
+        when(documents.findDocument(editionId, "alice", document.title(), document.sourceType()))
                 .thenReturn(Optional.empty());
 
         var scope = preparation.prepare(version.id(), "alice", "SETI");
 
         assertThat(scope.editionId()).isEqualTo(editionId);
-        verify(documents).update(titled);
-        verify(documents).update(titled.assignTo(editionId));
-    }
-
-    @Test
-    void publishesASourceConfirmedTitleInsteadOfKeepingFilenameNoise() {
-        RuleDocument document = new RuleDocument(
-                UUID.randomUUID(), null, "aurora_rulebook_EN_36_web", DocumentSourceType.BASE_RULEBOOK, "alice", NOW);
-        DocumentVersion version = version(document.id(), ProcessingStatus.READY);
-        UUID editionId = UUID.randomUUID();
-        when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
-        when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
-        when(catalog.provisionDefaultEdition("Aurora")).thenReturn(editionId);
-        RuleDocument titled = document.withTitle("Aurora");
-        when(documents.findDocument(editionId, "alice", titled.title(), titled.sourceType()))
-                .thenReturn(Optional.empty());
-
-        var scope = preparation.prepare(version.id(), "alice", "Aurora");
-
-        assertThat(scope.documentTitle()).isEqualTo("Aurora");
-        verify(documents).update(titled);
-        verify(documents).update(titled.assignTo(editionId));
-    }
-
-    @Test
-    void refusesToPublishAnUnrelatedOrEmbeddedSuggestedTitle() {
-        RuleDocument document = new RuleDocument(
-                UUID.randomUUID(), null, "Cart release notes", DocumentSourceType.BASE_RULEBOOK, "alice", NOW);
-        DocumentVersion version = version(document.id(), ProcessingStatus.READY);
-        UUID editionId = UUID.randomUUID();
-        when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
-        when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
-        when(catalog.provisionDefaultEdition("Art")).thenReturn(editionId);
-        when(documents.findDocument(editionId, "alice", document.title(), document.sourceType()))
-                .thenReturn(Optional.empty());
-
-        var scope = preparation.prepare(version.id(), "alice", "Art");
-
-        assertThat(scope.documentTitle()).isEqualTo("Cart release notes");
-        verify(documents, never()).update(document.withTitle("Art"));
         verify(documents).update(document.assignTo(editionId));
+    }
+
+    @Test
+    void preservesAnAssignedRulebooksTitleWhenPublishingTeaching() {
+        RuleDocument document = rulebook(UUID.randomUUID(), "alice");
+        DocumentVersion version = version(document.id(), ProcessingStatus.READY);
+        when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
+        when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
+
+        var scope = preparation.prepare(version.id(), "alice", "SETI");
+
+        assertThat(scope.documentTitle()).isEqualTo(document.title());
+        verify(documents, never()).update(org.mockito.ArgumentMatchers.any(RuleDocument.class));
     }
 
     @Test
@@ -88,12 +60,11 @@ class DocumentTeachingPreparationServiceTest {
         RuleDocument document = rulebook(null, "alice");
         DocumentVersion version = version(document.id(), ProcessingStatus.READY);
         UUID editionId = UUID.randomUUID();
-        RuleDocument titled = document.withTitle("SETI");
-        RuleDocument existing = rulebook(editionId, "alice").withTitle("SETI");
+        RuleDocument existing = rulebook(editionId, "alice");
         when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
         when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
         when(catalog.provisionDefaultEdition("SETI")).thenReturn(editionId);
-        when(documents.findDocument(editionId, "alice", titled.title(), titled.sourceType()))
+        when(documents.findDocument(editionId, "alice", document.title(), document.sourceType()))
                 .thenReturn(Optional.of(existing));
 
         var scope = preparation.prepare(version.id(), "alice", "SETI");

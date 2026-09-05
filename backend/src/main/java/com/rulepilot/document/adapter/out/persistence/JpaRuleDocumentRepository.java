@@ -117,7 +117,6 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
             throw new IllegalArgumentException("rule document does not exist");
         }
         entity.gameEditionId = document.gameEditionId();
-        entity.title = document.title();
         entity.officialSourceUrl = document.officialSourceUrl();
         entity.officialCoverUrl = document.officialCoverUrl();
         entityManager.flush();

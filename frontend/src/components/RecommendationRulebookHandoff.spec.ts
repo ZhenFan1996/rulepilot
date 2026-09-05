@@ -338,6 +338,8 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.text()).toContain('Wingspan Rulebook')
     expect(wrapper.text()).toContain('英文（来源已明确标注）')
     expect(wrapper.text()).toContain('出版社 / 权利方来源')
+    expect(wrapper.findAll('a').find(link => link.text().includes('提供公开链接或自己的规则书'))?.attributes('href'))
+      .toContain('editionId=edition-1')
     const reviewStatus = wrapper.get('[data-testid="player-work-status"]')
     expect(reviewStatus.text()).toBe('等待你继续')
     expect(reviewStatus.attributes('data-player-work-terminality')).toBe('waiting')

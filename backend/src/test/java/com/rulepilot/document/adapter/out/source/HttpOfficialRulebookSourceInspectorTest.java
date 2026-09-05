@@ -261,7 +261,7 @@ class HttpOfficialRulebookSourceInspectorTest {
     }
 
     @Test
-    void recognizesAnExactPdfDispositionWithoutTrustingAFilenameSubstring() {
+    void doesNotPublishPdfDownloadCapabilityFromAnAttachmentFilenameAlone() {
         AtomicInteger calls = new AtomicInteger();
         OkHttpClient http = new OkHttpClient.Builder()
                 .addInterceptor(chain -> {
@@ -286,10 +286,7 @@ class HttpOfficialRulebookSourceInspectorTest {
                 .build();
         var inspector = new HttpOfficialRulebookSourceInspector(http, 64 * 1024);
 
-        assertThat(inspector.inspect(URI.create("https://publisher.example/attachment/1")))
-                .get()
-                .extracting(OfficialRulebookSourceInspector.Inspection::mediaType)
-                .isEqualTo(OfficialRulebookSourceInspector.MediaType.PDF);
+        assertThat(inspector.inspect(URI.create("https://publisher.example/attachment/1"))).isEmpty();
         assertThat(inspector.inspect(URI.create("https://publisher.example/attachment/2")))
                 .get()
                 .extracting(OfficialRulebookSourceInspector.Inspection::mediaType)

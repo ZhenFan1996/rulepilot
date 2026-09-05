@@ -97,13 +97,6 @@ public record RuleDocument(
                 : new RuleDocument(id, gameEditionId, title, sourceType, officialSourceUrl, normalized, createdBy, createdAt);
     }
 
-    public RuleDocument withTitle(String nextTitle) {
-        String normalized = normalized(nextTitle, "title", 160);
-        return title.equals(normalized)
-                ? this
-                : new RuleDocument(id, gameEditionId, normalized, sourceType, officialSourceUrl, officialCoverUrl, createdBy, createdAt);
-    }
-
     private static String officialSourceUrl(String value) {
         if (value == null || value.isBlank()) return null;
         String normalized = value.strip();
