@@ -143,7 +143,7 @@ const canManageRulebook = computed(() => props.item.documentCount > 0 || props.i
         <RouterLink v-else-if="item.gameId && item.pendingImportCount" :to="detailTarget!" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-ink px-4 text-sm font-semibold text-canvas transition hover:bg-ink/90">
           {{ t('shelf.card.viewProgress') }} <TabletopGlyph name="arrow" :size="17" />
         </RouterLink>
-        <RouterLink v-else :to="rulebookTarget" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-copper px-4 text-sm font-semibold text-white transition hover:bg-copper-dark">
+        <RouterLink v-else :to="rulebookTarget" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-copper px-4 text-sm font-semibold text-on-accent transition hover:bg-copper-dark">
           <TabletopGlyph name="rulebook" :size="17" /> {{ item.documentStatus === 'READY' ? t('shelf.card.start') : t('shelf.card.viewRulebook') }}
         </RouterLink>
         <RouterLink v-if="canManageRulebook" :to="rulebookTarget" class="grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/12 text-ink/55 transition hover:border-indigo hover:text-indigo" :aria-label="t('shelf.card.manageRulebooks')">

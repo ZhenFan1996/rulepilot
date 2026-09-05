@@ -319,7 +319,7 @@ onBeforeUnmount(() => {
                 </div>
               </template>
               <div v-else class="flex h-full min-h-48 flex-col items-start justify-between bg-[radial-gradient(circle_at_top_right,rgba(185,82,57,0.08),transparent_50%)] p-5">
-                <span class="grid size-11 place-items-center rounded-full border border-dashed border-copper/45 bg-paper text-2xl text-copper transition group-hover:border-copper group-hover:bg-copper group-hover:text-white">＋</span>
+                <span class="grid size-11 place-items-center rounded-full border border-dashed border-copper/45 bg-paper text-2xl text-copper transition group-hover:border-copper group-hover:bg-copper group-hover:text-on-accent">＋</span>
                 <div class="max-w-[15rem]">
                   <p class="font-display text-xl font-semibold">{{ slotLabel(definition) }}</p>
                   <p class="mt-1.5 text-sm leading-5 text-ink/45">{{ slotHint(definition) }}</p>

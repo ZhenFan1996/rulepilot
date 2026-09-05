@@ -1090,15 +1090,14 @@ onBeforeUnmount(() => {
 <template>
   <AppShell :login-action-owned="loginRequired" @session-identity="updateSessionIdentity">
     <section class="tabletop-page max-w-6xl">
-      <p class="tabletop-kicker">{{ t('lessons.eyebrow') }}</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 ref="pageHeading" tabindex="-1" class="font-display text-4xl font-semibold tracking-tight outline-none">{{ loginRequired ? signedOutCopy.pageTitle : t('lessons.title') }}</h1>
+          <h1 ref="pageHeading" tabindex="-1" class="tabletop-title outline-none">{{ loginRequired ? signedOutCopy.pageTitle : t('lessons.title') }}</h1>
           <p class="mt-4 max-w-2xl leading-7 text-ink/55">{{ loginRequired ? signedOutCopy.pageDescription : t('lessons.description') }}</p>
         </div>
         <div class="flex flex-wrap gap-2">
           <button v-if="!loginRequired && visiblePlans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
-          <RouterLink v-if="!loginRequired" :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">{{ t('lessons.upload') }}</RouterLink>
+          <RouterLink v-if="!loginRequired" :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-on-accent">{{ t('lessons.upload') }}</RouterLink>
         </div>
       </div>
 
@@ -1166,7 +1165,7 @@ onBeforeUnmount(() => {
       <div v-else-if="visiblePlans.length === 0 && pendingJourneys.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.empty.title') }}</h2>
         <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.empty.description') }}</p>
-        <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-white">{{ t('lessons.empty.action') }}</RouterLink>
+        <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-on-accent">{{ t('lessons.empty.action') }}</RouterLink>
       </div>
 
       <div v-else-if="visiblePlans.length > 0 && displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">

@@ -53,8 +53,7 @@ onMounted(() => { void load() })
     <section class="tabletop-page max-w-6xl">
       <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p class="text-sm font-semibold text-copper">{{ t('library.eyebrow') }}</p>
-          <h1 class="mt-2 max-w-3xl font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('library.heading') }}</h1>
+          <h1 class="tabletop-title">{{ t('library.heading') }}</h1>
           <p class="mt-4 max-w-2xl leading-7 text-ink/60">{{ t('library.description') }}</p>
         </div>
         <label class="relative block w-full sm:w-72">

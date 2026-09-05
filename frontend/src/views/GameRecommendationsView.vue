@@ -53,12 +53,12 @@ const route = useRoute()
 const router = useRouter()
 const copy = {
   'zh-CN': {
-    eyebrow: '桌游目录',
-    title: '按自己的节奏慢慢挑',
-    description: '搜索 BGG 收录的桌游，按热度、玩家评分和细分类型浏览。只有 BGG 版本资料明确收录的官方中文名才会显示为中文。',
-    assistant: '让推荐助手帮我挑', assistantDescription: '如果还没有明确目标，可以回到对话里说人数、时间和想要的感觉。',
+
+    title: '桌游目录',
+    description: '按名称、玩家评分或类型查找 BGG 收录的桌游。',
+    assistant: '让推荐助手帮我挑',
     searchLabel: '搜索桌游', searchPlaceholder: '输入桌游名或原版名', search: '搜索', searching: '搜索中…',
-    browseEyebrow: '游戏目录', browseTitle: '浏览全部桌游',
+    browseTitle: '浏览全部桌游',
     sortLabel: '排序', sortHot: '当前热榜优先', sortRating: '玩家评分优先', sortRank: 'BGG 总榜优先',
     typeLabel: 'BGG 类型榜', apply: '应用', clear: '重置',
     all: '全部基础游戏', abstract: '抽象策略', customizable: '可定制游戏', children: '儿童游戏', family: '家庭游戏', party: '聚会游戏', strategy: '策略游戏', thematic: '主题游戏', war: '战争游戏', expansion: '扩展',
@@ -72,11 +72,11 @@ const copy = {
     pagination: '桌游目录分页', pageSummary: '第 {current} / {total} 页', previousPage: '上一页', nextPage: '下一页', goToPage: '前往第 {page} 页',
   },
   en: {
-    eyebrow: 'Game catalog', title: 'Browse at your own pace',
+    title: 'Game catalog',
     description: 'Search BGG games and browse by heat, player rating, and detailed type. Localized titles appear only when an official BGG edition records them.',
-    assistant: 'Ask the recommendation assistant', assistantDescription: 'If you do not have a precise target yet, return to the conversation and share the group, time, and mood.',
+    assistant: 'Ask the recommendation assistant',
     searchLabel: 'Search the full catalog', searchPlaceholder: 'Enter a title or original name', search: 'Search', searching: 'Searching…',
-    browseEyebrow: 'Game catalog', browseTitle: 'Browse every game',
+    browseTitle: 'Browse every game',
     sortLabel: 'Sort', sortHot: 'Current heat first', sortRating: 'Player rating first', sortRank: 'BGG rank first', typeLabel: 'BGG ranking family', apply: 'Apply', clear: 'Reset',
     all: 'All base games', abstract: 'Abstract', customizable: 'Customizable', children: "Children's", family: 'Family', party: 'Party', strategy: 'Strategy', thematic: 'Thematic', war: 'War', expansion: 'Expansions',
     scope: 'BGG lists {sourceCount} records; {total} match these filters.', sourceDate: 'Updated {date}', loading: 'Loading the BGG catalog',
@@ -396,24 +396,18 @@ onBeforeUnmount(() => {
 <template>
   <AppShell>
     <div class="tabletop-page">
-      <header class="grid gap-7 pb-8 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-end">
+      <header class="flex flex-wrap items-end justify-between gap-4 pb-6">
         <div class="tabletop-heading">
-          <p class="tabletop-kicker">{{ t('eyebrow') }}</p>
           <h1 class="tabletop-title">{{ t('title') }}</h1>
           <p class="tabletop-lede">{{ t('description') }}</p>
         </div>
-        <RouterLink :to="{ name: 'game-recommendations' }" class="game-tile player-board p-5">
-          <strong class="font-display text-xl">{{ t('assistant') }}</strong>
-          <span class="mt-2 block text-xs leading-5 text-ink/55">{{ t('assistantDescription') }}</span>
-          <span class="mt-3 block text-sm font-semibold text-felt">← {{ t('assistant') }}</span>
-        </RouterLink>
+        <RouterLink :to="{ name: 'game-recommendations' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline underline-offset-4">{{ t('assistant') }}</RouterLink>
       </header>
 
-      <section id="game-catalog" class="scroll-mt-6 border-t border-ink/10 pt-8">
+      <section id="game-catalog" class="scroll-mt-6 border-t border-ink/10 pt-5">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p class="tabletop-kicker">{{ t('browseEyebrow') }}</p>
-            <h2 class="mt-1 font-display text-3xl font-semibold">{{ t('browseTitle') }}</h2>
+            <h2 class="text-lg font-semibold">{{ t('browseTitle') }}</h2>
           </div>
           <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-12 items-center" :aria-label="t('officialSource')">
             <img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[171px]" width="342" height="76">
@@ -467,7 +461,7 @@ onBeforeUnmount(() => {
                   class="h-full w-full"
                 />
                 <TabletopGlyph v-else name="cards" :size="48" />
-                <span v-if="game.hotRank" class="absolute left-2 top-2 rounded-full bg-copper px-2.5 py-1 text-xs font-bold text-white">{{ t('hotRank', { rank: game.hotRank }) }}</span>
+                <span v-if="game.hotRank" class="absolute left-2 top-2 rounded-full bg-copper px-2.5 py-1 text-xs font-bold text-on-accent">{{ t('hotRank', { rank: game.hotRank }) }}</span>
               </div>
               <h3 class="mt-3 line-clamp-2 font-display text-lg font-semibold leading-6">{{ game.name }}</h3>
               <p v-if="game.nameLocalized" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ game.originalName }}</p>

@@ -47,7 +47,7 @@ test('retains secret drafts across providers and requires explicit discard befor
   await gamesLink.click()
   await page.getByRole('alertdialog').getByRole('button', { name: '放弃更改并离开' }).click()
   await expect(page).toHaveURL(/\/catalog$/)
-  await expect(page.getByRole('heading', { name: '今晚想开哪一局？' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '我的游戏' })).toBeVisible()
 })
 
 test('blocks navigation during a save and continues automatically only after success', async ({ page }) => {

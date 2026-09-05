@@ -165,8 +165,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-64">
-    <aside class="drawer-shelf app-fixed-top fixed bottom-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-white/8 bg-ink-panel px-4 py-5 text-[#f5f0e8] lg:flex">
-      <div class="drawer-shelf__ornament" aria-hidden="true">❦</div>
+    <aside class="drawer-shelf app-fixed-top fixed bottom-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-ink/10 bg-paper px-4 py-5 text-ink lg:flex">
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="relative mx-2 rounded-xl focus-visible:outline-offset-4">
         <ProductMark />
       </RouterLink>
@@ -177,19 +176,19 @@ onBeforeUnmount(() => {
           :key="item.name"
           :to="item.path"
           :data-testid="item.name === 'work-status' ? 'work-status-navigation-link' : undefined"
-          class="drawer-link group flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-[color,background-color,translate]"
-          :class="currentNavigationName === item.name ? 'border-[#d5b46a]/55 bg-[#f8efdf] text-[#27312e] drawer-link-active' : 'border-transparent text-[#f5f0e8]/66 hover:translate-x-0.5 hover:bg-white/7 hover:text-[#f5f0e8]'"
+          class="drawer-link group flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
+          :class="currentNavigationName === item.name ? 'border-transparent bg-indigo/10 text-indigo drawer-link-active' : 'border-transparent text-ink/65 hover:bg-ink/5 hover:text-ink'"
         >
-          <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" :class="currentNavigationName === item.name ? 'text-copper' : 'text-[#f5f0e8]/48 group-hover:text-[#f5f0e8]'" />
+          <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" :class="currentNavigationName === item.name ? 'text-copper' : 'text-ink/65 group-hover:text-ink'" />
           <span class="min-w-0 flex-1">{{ t(item.labelKey) }}</span>
-          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-navigation-active" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-white">{{ backgroundActiveCount }}</span>
+          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-navigation-active" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-on-accent">{{ backgroundActiveCount }}</span>
           <span v-else-if="item.name === 'work-status' && backgroundFinishedCount" data-testid="work-status-navigation-finished" class="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
         </RouterLink>
         <RouterLink
           v-if="isAdmin"
           :to="{ name: 'admin-models' }"
           class="drawer-link flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
-          :class="currentNavigationName === 'admin-models' ? 'border-[#d5b46a]/55 bg-[#f8efdf] text-[#27312e]' : 'border-transparent text-[#f5f0e8]/58 hover:bg-white/7 hover:text-[#f5f0e8]'"
+          :class="currentNavigationName === 'admin-models' ? 'border-transparent bg-indigo/10 text-indigo' : 'border-transparent text-ink/65 hover:bg-ink/5 hover:text-ink'"
         >
           <TabletopGlyph name="players" :size="19" class="shrink-0" />
           <span>{{ t('nav.adminModels') }}</span>
@@ -198,41 +197,41 @@ onBeforeUnmount(() => {
           v-if="isAdmin"
           :to="{ name: 'agent-audit' }"
           class="drawer-link flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
-          :class="currentNavigationName === 'agent-audit' ? 'border-[#d5b46a]/55 bg-[#f8efdf] text-[#27312e]' : 'border-transparent text-[#f5f0e8]/58 hover:bg-white/7 hover:text-[#f5f0e8]'"
+          :class="currentNavigationName === 'agent-audit' ? 'border-transparent bg-indigo/10 text-indigo' : 'border-transparent text-ink/65 hover:bg-ink/5 hover:text-ink'"
         >
           <TabletopGlyph name="rulebook" :size="19" class="shrink-0" />
           <span>{{ t('nav.agentAudit') }}</span>
         </RouterLink>
       </nav>
 
-      <div v-if="username && !immersive" id="background-work-desktop-trigger" class="relative mt-auto border-t border-white/10 pt-4">
+      <div v-if="username && !immersive" id="background-work-desktop-trigger" class="relative mt-auto border-t border-ink/10 pt-4">
         <button
           type="button"
           data-testid="background-work-trigger-desktop"
-          class="flex min-h-11 w-full items-center gap-3 rounded-xl border border-white/12 bg-white/6 px-3 text-sm font-semibold text-[#f5f0e8]/78 transition hover:border-[#d5b46a]/45 hover:bg-white/10 hover:text-[#f5f0e8]"
+          class="flex min-h-11 w-full items-center gap-3 rounded-xl border border-ink/10 bg-canvas px-3 text-sm font-semibold text-ink/65 transition hover:border-indigo/30 hover:bg-ink/5 hover:text-ink"
           :aria-label="t('shell.backgroundWork')"
           aria-haspopup="dialog"
           @click="openBackgroundWork"
         >
-          <span class="grid size-8 shrink-0 place-items-center rounded-full bg-[#d5b46a]/14 text-[#e0be74]" aria-hidden="true"><TabletopGlyph name="cards" :size="17" /></span>
+          <span class="grid size-8 shrink-0 place-items-center rounded-full bg-indigo/10 text-indigo" aria-hidden="true"><TabletopGlyph name="cards" :size="17" /></span>
           <span class="min-w-0 flex-1 text-left">{{ t('shell.backgroundWork') }}</span>
-          <span v-if="backgroundActiveCount" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-white">{{ backgroundActiveCount }}</span>
+          <span v-if="backgroundActiveCount" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-on-accent">{{ backgroundActiveCount }}</span>
           <span v-else-if="backgroundFinishedCount" class="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
         </button>
       </div>
 
-      <div class="relative border-t border-white/10 pt-4" :class="username && !immersive ? 'mt-3' : 'mt-auto'">
-        <RouterLink v-if="username" :to="{ name: 'account' }" class="mb-2 flex min-h-11 items-center gap-3 rounded-xl bg-white/6 px-3 text-sm font-semibold hover:bg-white/10">
-          <span class="grid h-7 w-7 place-items-center rounded-full bg-copper text-xs text-white">{{ username.slice(0, 1).toUpperCase() }}</span>
+      <div class="relative border-t border-ink/10 pt-4" :class="username && !immersive ? 'mt-3' : 'mt-auto'">
+        <RouterLink v-if="username" :to="{ name: 'account' }" class="mb-2 flex min-h-11 items-center gap-3 rounded-xl bg-canvas px-3 text-sm font-semibold hover:bg-ink/5">
+          <span class="grid h-7 w-7 place-items-center rounded-full bg-copper text-xs text-on-accent">{{ username.slice(0, 1).toUpperCase() }}</span>
           <span class="truncate">{{ username }}</span>
         </RouterLink>
         <div class="mb-2 px-1"><LanguageSwitcher /></div>
-        <button class="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" @click="toggleTheme">
+        <button class="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-ink/65 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" @click="toggleTheme">
           <span>{{ isDark ? t('shell.theme.light') : t('shell.theme.dark') }}</span>
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
         </button>
-        <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]" @click="logout">{{ t('shell.signOut') }}</button>
-        <RouterLink v-else-if="!loginActionOwned" :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]">{{ t('shell.signIn') }}</RouterLink>
+        <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-ink/65 hover:bg-ink/5 hover:text-ink" @click="logout">{{ t('shell.signOut') }}</button>
+        <RouterLink v-else-if="!loginActionOwned" :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-ink/65 hover:bg-ink/5 hover:text-ink">{{ t('shell.signIn') }}</RouterLink>
       </div>
     </aside>
 
@@ -251,7 +250,7 @@ onBeforeUnmount(() => {
           @click="openBackgroundWork"
         >
           <TabletopGlyph name="cards" :size="18" />
-          <span v-if="backgroundActiveCount" class="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-copper px-1 text-[0.65rem] text-white">{{ backgroundActiveCount }}</span>
+          <span v-if="backgroundActiveCount" class="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-copper px-1 text-[0.65rem] text-on-accent">{{ backgroundActiveCount }}</span>
           <span v-else-if="backgroundFinishedCount" class="absolute right-1 top-1 size-2 rounded-full bg-emerald-500" aria-hidden="true" />
         </button>
         <LanguageSwitcher />
@@ -313,7 +312,7 @@ onBeforeUnmount(() => {
       >
         <span class="relative">
           <TabletopGlyph :name="item.icon" :size="18" />
-          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-mobile-navigation-active" class="absolute -right-3 -top-2 grid min-w-4 place-items-center rounded-full bg-copper px-1 text-[0.58rem] leading-4 text-white">{{ backgroundActiveCount }}</span>
+          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-mobile-navigation-active" class="absolute -right-3 -top-2 grid min-w-4 place-items-center rounded-full bg-copper px-1 text-[0.58rem] leading-4 text-on-accent">{{ backgroundActiveCount }}</span>
           <span v-else-if="item.name === 'work-status' && backgroundFinishedCount" class="absolute -right-1.5 -top-1 size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
         </span>
         <span>{{ t(item.labelKey) }}</span>

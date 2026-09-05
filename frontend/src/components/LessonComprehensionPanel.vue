@@ -80,7 +80,7 @@ function pageList(pages: number[]) {
           <button type="button" class="min-h-11 rounded-xl border px-3 text-sm font-semibold disabled:opacity-40" :class="task.result === 'CAN_DO' ? 'border-emerald-700 bg-emerald-50 text-emerald-900' : 'border-ink/15'" :disabled="saving !== null || !online" @click="emit('rateTask', task.type, 'CAN_DO')">{{ t('lesson.comprehension.action.canDo') }}</button>
           <button type="button" class="min-h-11 rounded-xl border px-3 text-sm font-semibold disabled:opacity-40" :class="task.result === 'NEEDS_HELP' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'" :disabled="saving !== null || !online" @click="emit('rateTask', task.type, 'NEEDS_HELP')">{{ t('lesson.comprehension.action.needsHelp') }}</button>
         </div>
-        <button v-if="task.result === 'NEEDS_HELP' && task.chapterPositions.length" type="button" class="mt-3 min-h-10 w-full rounded-xl bg-copper px-3 text-sm font-semibold text-white" @click="emit('revisitChapter', (task.chapterPositions.at(0) ?? 1) - 1)">{{ t('lesson.comprehension.action.revisit', { chapter: task.chapterPositions.at(0) ?? 1 }) }}</button>
+        <button v-if="task.result === 'NEEDS_HELP' && task.chapterPositions.length" type="button" class="mt-3 min-h-10 w-full rounded-xl bg-copper px-3 text-sm font-semibold text-on-accent" @click="emit('revisitChapter', (task.chapterPositions.at(0) ?? 1) - 1)">{{ t('lesson.comprehension.action.revisit', { chapter: task.chapterPositions.at(0) ?? 1 }) }}</button>
       </li>
     </ol>
     <div v-if="comprehension?.visualAids.length" class="mt-6 border-t border-ink/10 pt-5">

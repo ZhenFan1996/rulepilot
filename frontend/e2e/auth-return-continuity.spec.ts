@@ -24,7 +24,7 @@ test('returns a newly registered player to the exact page without leaving auth f
   await page.getByRole('button', { name: '创建并登录' }).click()
 
   await expect(page).toHaveURL('/catalog?view=ready#collection')
-  await expect(page.getByRole('heading', { level: 1, name: '今晚想开哪一局？' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: '我的游戏' })).toBeVisible()
   await page.goBack()
   await expect(page).toHaveURL('/catalog?view=ready#collection')
   await expect(page).not.toHaveURL(/\/(?:login|register)(?:\?|$)/)
@@ -58,7 +58,7 @@ test('falls back to the root journey after login when a local return route has r
   await page.getByRole('button', { name: '登录', exact: true }).click()
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('今天玩什么')
   await expect(page).not.toHaveURL('/account')
 })
 

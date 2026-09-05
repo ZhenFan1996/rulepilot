@@ -43,8 +43,7 @@ const props = defineProps<{ sessionIdentity?: string | null }>()
 const { locale } = useLocale()
 const copy = {
   'zh-CN': {
-    eyebrow: '一起挑一款', title: '今晚想玩什么？',
-    description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
+    title: '选游戏',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…', workingReply: '正在回复', workingSearch: '正在查找桌游', workingRecommendation: '正在整理推荐', replyingDetail: '正在生成回复…',
     reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', failureReply: '这轮没有形成可安全提交的推荐，所以我没有猜测或伪造候选。你的问题和已有条件都还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', modelConfigurationError: '这次推荐没有完成，也没有写入对话结果。你刚才的请求仍保留；请先配置并保存推荐模型。当前配置不变时，同一请求不会成功，也不会自动重试。', retry: '重试', modelSettings: '前往模型设置', profile: '这次想找',
@@ -71,8 +70,7 @@ const copy = {
     elapsed: '已用 {value} 秒', workLog: '这轮进度',
   },
   en: {
-    eyebrow: 'Choose together', title: 'What should we play tonight?',
-    description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
+    title: 'Game preferences',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
     reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', modelConfigurationError: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; first configure and save a recommendation model. With the configuration unchanged, the same request cannot succeed and will not retry automatically.', retry: 'Retry', modelSettings: 'Open model settings', profile: 'Looking for',
@@ -1602,25 +1600,23 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="py-7 sm:py-9" aria-labelledby="recommendation-agent-title">
-    <div class="tabletop-panel player-board tabletop-felt overflow-hidden p-1">
-      <div class="grid gap-px overflow-hidden rounded-[1.15rem] bg-white/10 lg:grid-cols-[minmax(14rem,0.46fr)_minmax(38rem,1.54fr)]">
-        <div class="recommendation-table-side bg-felt-deep px-5 py-6 sm:px-7 sm:py-8">
-          <p class="font-display text-sm italic text-[#e8bd6a]">{{ t('eyebrow') }}</p>
-          <h2 id="recommendation-agent-title" class="mt-2 max-w-xl font-display text-4xl font-semibold leading-none tracking-tight text-white sm:text-5xl">{{ t('title') }}</h2>
-          <p class="recommendation-intro-copy mt-4 max-w-xl text-sm leading-7">{{ t('description') }}</p>
-          <div v-if="profileLabels.length" class="mt-6"><p class="recommendation-profile-label text-xs font-semibold">{{ t('profile') }}</p><ul class="mt-2 flex flex-wrap gap-2"><li v-for="label in profileLabels" :key="label" class="recommendation-profile-chip border-l border-white/25 px-2.5 py-1 text-xs font-semibold">{{ label }}</li></ul></div>
-          <details v-if="response?.userModel?.summary" class="mt-5 rounded-xl border border-white/10 bg-black/10 p-4">
-            <summary class="cursor-pointer text-xs font-semibold text-[#e8bd6a]">{{ responseT(response, 'understanding') }}</summary>
+  <section class="pb-7" aria-labelledby="recommendation-agent-title">
+    <div class="tabletop-panel overflow-hidden">
+      <div class="grid overflow-hidden lg:grid-cols-[12rem_minmax(0,1fr)]">
+        <div class="recommendation-table-side border-b border-ink/10 bg-canvas/60 p-4 lg:border-b-0 lg:border-r">
+          <h2 id="recommendation-agent-title" class="text-sm font-semibold text-ink">{{ t('title') }}</h2>
+          <div v-if="profileLabels.length" class="mt-6"><p class="recommendation-profile-label text-xs font-semibold">{{ t('profile') }}</p><ul class="mt-2 flex flex-wrap gap-2"><li v-for="label in profileLabels" :key="label" class="recommendation-profile-chip border-l border-ink/15 px-2.5 py-1 text-xs font-semibold">{{ label }}</li></ul></div>
+          <details v-if="response?.userModel?.summary" class="mt-5 rounded-xl border border-ink/10 bg-paper p-4">
+            <summary class="cursor-pointer text-xs font-semibold text-indigo">{{ responseT(response, 'understanding') }}</summary>
             <p class="recommendation-understanding-copy mt-3 text-sm leading-6">{{ response.userModel.summary }}</p>
-            <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence, response.responseLocale) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ responseT(response, 'basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
+            <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-indigo">{{ confidenceLabel(hypothesis.confidence, response.responseLocale) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ responseT(response, 'basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
           <div v-if="sessionKnown" class="mt-5 flex flex-wrap gap-x-4 gap-y-2">
-            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="startNewConversation">{{ t('newChat') }}</button>
-            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" :aria-expanded="conversationHistoryOpen" @click="toggleConversationHistory">{{ t('chatHistory') }}</button>
-            <button v-if="canResetRecommendation" type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
+            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="startNewConversation">{{ t('newChat') }}</button>
+            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" :aria-expanded="conversationHistoryOpen" @click="toggleConversationHistory">{{ t('chatHistory') }}</button>
+            <button v-if="canResetRecommendation" type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
           </div>
-          <ul v-if="conversationHistoryOpen" class="mt-2 grid gap-2 rounded-xl border border-white/10 bg-black/10 p-2">
+          <ul v-if="conversationHistoryOpen" class="mt-2 grid gap-2 rounded-xl border border-ink/10 bg-paper p-2">
             <li v-for="session in conversationHistory" :key="session.conversationId">
               <button type="button" class="w-full rounded-lg px-3 py-2 text-left text-xs leading-5 text-white/70 hover:bg-white/10" :class="session.conversationId === conversationId ? 'bg-white/10 font-semibold text-white' : ''" @click="openConversationFromHistory(session)">{{ conversationHistoryTitle(session) }}</button>
             </li>
@@ -1649,7 +1645,7 @@ onBeforeUnmount(() => {
                   />
                   <p v-else-if="message.response?.games.length" role="status" data-testid="recommendation-explanation-unavailable" class="text-sm leading-6 text-ink/60">{{ responseT(message.response, 'explanationUnavailable') }}</p>
 
-                  <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
+                  <div v-if="message.response?.games.length" class="mt-4">
                     <p v-if="message.response.shortfall" class="mb-2 inline-flex rounded-full border border-copper/25 bg-copper/5 px-2.5 py-1 text-[0.6875rem] font-semibold text-copper">{{ responseT(message.response, 'shortfall', { available: message.response.shortfall.availableCount, requested: message.response.shortfall.requestedCount }) }}</p>
                     <TransitionGroup tag="div" name="tile" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
                       <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame" @details="openDetails" />
@@ -1844,29 +1840,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.recommendation-table-side {
-  background-image:
-    radial-gradient(circle at 18% 12%, rgb(255 255 255 / 5%), transparent 28%),
-    linear-gradient(145deg, rgb(255 255 255 / 2%), transparent 45%);
-}
-
-.recommendation-paper {
-  background-image:
-    linear-gradient(90deg, rgb(148 98 55 / 4%) 1px, transparent 1px),
-    linear-gradient(rgb(148 98 55 / 2.5%) 1px, transparent 1px);
-  background-size: 2rem 2rem;
-}
-
 .recommendation-live-work {
-  background: linear-gradient(105deg, color-mix(in srgb, var(--color-canvas) 82%, transparent), color-mix(in srgb, var(--color-paper) 55%, transparent));
-}
-
-.recommendation-live-work::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: linear-gradient(to bottom, var(--color-copper), color-mix(in srgb, var(--color-copper) 18%, transparent));
-  content: '';
+  background: var(--color-canvas);
 }
 
 .recommendation-live-signal {
@@ -1893,36 +1868,34 @@ onBeforeUnmount(() => {
   }
 }
 
-.recommendation-intro-copy {
-  color: color-mix(in srgb, white 62%, transparent);
-}
+
 
 .recommendation-profile-label {
-  color: color-mix(in srgb, white 40%, transparent);
+  color: var(--color-muted);
 }
 
 .recommendation-profile-chip {
-  color: color-mix(in srgb, white 78%, transparent);
+  color: color-mix(in srgb, var(--color-ink) 78%, transparent);
 }
 
 .recommendation-understanding-copy {
-  color: color-mix(in srgb, white 72%, transparent);
+  color: color-mix(in srgb, var(--color-ink) 72%, transparent);
 }
 
 .recommendation-hypothesis {
-  color: color-mix(in srgb, white 58%, transparent);
+  color: color-mix(in srgb, var(--color-ink) 58%, transparent);
 }
 
 .recommendation-basis {
-  color: color-mix(in srgb, white 38%, transparent);
+  color: var(--color-muted);
 }
 
 .recommendation-reset {
-  color: color-mix(in srgb, white 55%, transparent);
+  color: var(--color-muted);
 }
 
 .recommendation-reset:hover {
-  color: white;
+  color: var(--color-indigo);
 }
 
 .recommendation-tool-label {

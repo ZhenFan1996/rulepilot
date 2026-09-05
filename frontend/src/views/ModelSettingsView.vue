@@ -565,7 +565,7 @@ onBeforeUnmount(() => {
                 <span v-if="role[0] === 'visual'" class="mt-1.5 block font-normal leading-5 text-ink/40">{{ t('models.visualRoleHint') }}</span>
               </label>
 
-              <button :disabled="hasPendingMutation || !assignmentsDirty" class="min-h-11 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-50">{{ savingAssignments ? t('models.applying') : t('models.saveUses') }}</button>
+              <button :disabled="hasPendingMutation || !assignmentsDirty" class="min-h-11 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-on-accent disabled:opacity-50">{{ savingAssignments ? t('models.applying') : t('models.saveUses') }}</button>
             </form>
 
             <p class="mt-5 text-xs text-ink/35">{{ t('models.revision', { revision: snapshot.revision }) }}</p>

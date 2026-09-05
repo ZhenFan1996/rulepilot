@@ -189,7 +189,7 @@ defineExpose({ clearSelectedFileInput, focusOfficialSource, openLocalFilePicker,
       </div>
     </details>
 
-    <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+    <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-on-accent disabled:cursor-not-allowed disabled:opacity-40">
       {{ preparingVersionId ? t('documents.submitPreparing') : uploading ? t('documents.submitUploading') : t('documents.submit') }}
     </button>
   </form>

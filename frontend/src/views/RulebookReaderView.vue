@@ -254,7 +254,7 @@ onUnmounted(() => {
               <span v-if="pages.length" class="shrink-0 text-xs text-ink/45">{{ copy.pages }}</span>
             </div>
           </div>
-          <button ref="answerOpener" type="button" :disabled="loading || Boolean(errorMessage)" :aria-expanded="answersOpen" aria-controls="rulebook-questions" class="min-h-11 shrink-0 rounded-xl bg-copper px-4 text-sm font-semibold text-white" @click="answersOpen = true">{{ copy.answer }}</button>
+          <button ref="answerOpener" type="button" :disabled="loading || Boolean(errorMessage)" :aria-expanded="answersOpen" aria-controls="rulebook-questions" class="min-h-11 shrink-0 rounded-xl bg-copper px-4 text-sm font-semibold text-on-accent" @click="answersOpen = true">{{ copy.answer }}</button>
         </div>
       </header>
 

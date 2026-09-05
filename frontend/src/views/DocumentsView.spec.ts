@@ -65,7 +65,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('正在为这款桌游找规则书')
-    expect(wrapper.get('img[src="/illustrations/rulebook-reading.webp"]').attributes('alt')).toBe('')
     expect(wrapper.text()).toContain('Catalog Game')
     expect(wrapper.text()).toContain('已选择版本：BGG 基础版')
     expect(wrapper.get('select').element.value).toBe('edition-1')
@@ -285,7 +284,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('上传规则书')
-    expect(wrapper.text()).toContain('上传 PDF，或按页拍下规则书')
     expect(wrapper.text()).toContain('已有 PDF')
     expect(wrapper.text()).toContain('现在拍一页')
     expect(wrapper.text()).toContain('添加已拍页面')

@@ -86,7 +86,7 @@ function requestConfirm() {
             type="button"
             :disabled="pending"
             :aria-busy="pending"
-            class="min-h-11 rounded-xl bg-copper px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+            class="min-h-11 rounded-xl bg-copper px-5 py-3 text-sm font-semibold text-on-accent disabled:opacity-50"
             @click="requestConfirm"
           >
             {{ pending ? pendingLabel : actionLabel }}

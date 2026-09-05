@@ -45,7 +45,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
 
   await page.goto('/')
   await page.getByRole('link', { name: '找桌游', exact: true }).click()
-  await page.getByRole('link', { name: /打开完整桌游目录/ }).click()
+  await page.getByRole('link', { name: /浏览目录/ }).click()
   await expect(page).toHaveURL('/discover/catalog')
   await expect(page.getByRole('heading', { name: '浏览全部桌游' })).toBeVisible()
   await expect(page.getByRole('link', { name: /Catalog Game/ })).toBeVisible()
@@ -435,11 +435,11 @@ test('keeps manual onboarding and the ready guide usable when BGG fails on mobil
   await page.setViewportSize({ width: 390, height: 844 })
 
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '规则书递过来，咱们开桌。' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '今天玩什么？' })).toBeVisible()
   await expect(page.getByRole('link', { name: '我有规则书' }).first()).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
 
-  await page.getByRole('link', { name: '慢慢逛完整目录' }).click()
+  await page.getByRole('link', { name: '浏览全部桌游' }).click()
   await expect(page.getByText('桌游目录暂时打不开')).toBeVisible()
   await expect(page.getByText('筛选条件已经保留，可以稍后重试。')).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)

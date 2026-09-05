@@ -211,7 +211,7 @@ onUnmounted(() => {
 
           <button
             type="button"
-            class="mt-4 min-h-12 rounded-xl bg-copper px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+            class="mt-4 min-h-12 rounded-xl bg-copper px-5 text-sm font-semibold text-on-accent disabled:cursor-not-allowed disabled:opacity-40"
             :disabled="!selectedFile || recognizing"
             @click="recognize"
           >

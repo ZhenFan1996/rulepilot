@@ -43,7 +43,7 @@ test('keeps a selected rulebook draft through cancelled navigation and discards 
   await gamesLink.click()
   await page.getByRole('alertdialog').getByRole('button', { name: '放弃草稿并离开' }).click()
   await expect(page).toHaveURL(/\/catalog$/)
-  await expect(page.getByRole('heading', { name: '今晚想开哪一局？' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '我的游戏' })).toBeVisible()
 })
 
 async function mockRulebookIntake(page: Page) {

@@ -195,7 +195,7 @@ onMounted(load)
             <label><span class="text-sm font-semibold">{{ copy.baseUrl }}</span><input v-model="currentDraft.baseUrl" :disabled="selectedProvider === 'gemini'" class="mt-2 min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4 disabled:opacity-45"></label>
             <label><span class="text-sm font-semibold">{{ copy.model }}</span><input v-model="currentDraft.model" required class="mt-2 min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4"></label>
             <label class="flex min-h-12 items-center gap-3"><input v-model="currentDraft.visionCapable" type="checkbox" class="size-5"><span class="text-sm font-semibold">{{ copy.vision }}</span></label>
-            <div class="md:text-right"><button type="submit" :disabled="!currentDraft.apiKey.trim() || Boolean(saving)" class="min-h-12 rounded-xl bg-copper px-5 font-semibold text-white disabled:opacity-40">{{ copy.saveProvider }}</button></div>
+            <div class="md:text-right"><button type="submit" :disabled="!currentDraft.apiKey.trim() || Boolean(saving)" class="min-h-12 rounded-xl bg-copper px-5 font-semibold text-on-accent disabled:opacity-40">{{ copy.saveProvider }}</button></div>
           </form>
         </section>
 

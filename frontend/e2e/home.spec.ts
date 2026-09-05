@@ -16,21 +16,18 @@ async function mockHomeGames(page: Page) {
   await page.route('**/api/auth/session', route => route.fulfill({ status: 401, json: {} }))
 }
 
-test('uses the full illustrated-hero rhythm while BGG hot and random games lead discovery', async ({ page }, testInfo) => {
+test('keeps rulebook and game discovery actions reachable alongside BGG games', async ({ page }, testInfo) => {
   await mockHomeGames(page)
   await page.goto('/')
 
   await expect(page).toHaveURL('/')
   await expect(page).toHaveTitle(/RulePilot/)
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
-  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
-  await expect(page.getByText('从一句局况，到能开桌')).toHaveCount(0)
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('今天玩什么')
   await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(1)
   await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
   await expect(page.locator('a[href="/discover"]:visible').first()).toBeVisible()
-  await expect(page.locator('img[src="/illustrations/home-screenprint-friends.webp"]')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'BGG 热门桌游' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '随机抽三盒' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '再看看这几款' })).toBeVisible()
   await expect(page.locator('.home-game-grid > li')).toHaveCount(4)
   await expect(page.locator('.home-random__games > li')).toHaveCount(3)
   const randomLinks = page.locator('.home-random__games a')
@@ -41,20 +38,6 @@ test('uses the full illustrated-hero rhythm while BGG hot and random games lead 
     .not.toEqual(initialRandomHrefs)
   await expect(page.locator('img[alt="Powered by BoardGameGeek"]')).toHaveCount(1)
 
-  const heroLayout = await page.locator('.home-intro__art').evaluate((element) => {
-    const intro = element.closest('.home-intro')!
-    const introBox = intro.getBoundingClientRect()
-    const artBox = element.getBoundingClientRect()
-    return {
-      float: getComputedStyle(element).float,
-      widthRatio: artBox.width / introBox.width,
-      heightRatio: artBox.height / introBox.height,
-    }
-  })
-  expect(heroLayout.float).toBe('none')
-  expect(heroLayout.widthRatio).toBeGreaterThan(0.44)
-  expect(heroLayout.widthRatio).toBeLessThan(0.54)
-  expect(heroLayout.heightRatio).toBeGreaterThan(0.98)
   await page.screenshot({ path: testInfo.outputPath('home-desktop.png'), fullPage: true })
 })
 
@@ -64,51 +47,19 @@ test('keeps hot games, random picks, and the primary journey usable on a mobile 
   await page.goto('/')
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
-  await expect(page.getByText('从一句局况，到能开桌')).toHaveCount(0)
   await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(1)
   await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
-  await expect(page.locator('img[src="/illustrations/home-screenprint-friends.webp"]')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'BGG 热门桌游' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '随机抽三盒' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '再看看这几款' })).toBeVisible()
   expect(new Set(await page.locator('.home-random__games a').evaluateAll(links => links.map(link => link.getAttribute('href')))).size).toBe(3)
   await expect(page.getByRole('navigation', { name: '主要导航' })).toBeVisible()
 
-  const stackedArt = await page.locator('.home-intro__art').evaluate((element) => {
-    const style = getComputedStyle(element)
-    const intro = element.closest('.home-intro')!
-    const introBox = intro.getBoundingClientRect()
-    const artBox = element.getBoundingClientRect()
-    const copyBox = intro.querySelector('.home-intro__copy')!.getBoundingClientRect()
-    const primaryActionBox = intro.querySelector('.home-primary-action')!.getBoundingClientRect()
-    return {
-      float: style.float,
-      shapeOutside: style.shapeOutside,
-      widthRatio: artBox.width / introBox.width,
-      height: artBox.height,
-      precedesCopy: artBox.bottom <= copyBox.top + 1,
-      sideInset: Math.min(artBox.left - introBox.left, introBox.right - artBox.right),
-      topInset: artBox.top - introBox.top,
-      primaryActionTop: primaryActionBox.top,
-      viewportHeight: window.innerHeight,
-      borderLeftWidth: Number.parseFloat(style.borderLeftWidth),
-      borderBottomWidth: Number.parseFloat(style.borderBottomWidth),
-    }
-  })
-  expect(stackedArt.float).toBe('none')
-  expect(stackedArt.shapeOutside).toBe('none')
-  expect(stackedArt.widthRatio).toBeGreaterThan(0.98)
-  expect(stackedArt.height).toBeGreaterThanOrEqual(184)
-  expect(stackedArt.height).toBeLessThanOrEqual(196)
-  expect(stackedArt.precedesCopy).toBe(true)
-  expect(stackedArt.sideInset).toBeLessThanOrEqual(2)
-  expect(stackedArt.topInset).toBeLessThanOrEqual(2)
-  expect(stackedArt.primaryActionTop).toBeLessThan(stackedArt.viewportHeight - 64)
-  expect(stackedArt.borderLeftWidth).toBe(0)
-  expect(stackedArt.borderBottomWidth).toBeGreaterThan(0)
+  const primaryAction = page.locator('.home-primary-action')
+  await expect(primaryAction).toBeInViewport()
+  await expect(page.locator('.home-intro__actions a[href="/discover"]')).toBeInViewport()
 
   await page.getByRole('button', { name: 'EN', exact: true }).click()
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('Hand me the rulebook')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('What are we playing')
   const englishActionFit = await page.locator('.home-intro__actions').evaluate((element) => {
     const actions = [...element.querySelectorAll('a')].map((action) => action.getBoundingClientRect())
     const mobileNavigation = document.querySelector('.mobile-navigation')!.getBoundingClientRect()
@@ -162,8 +113,7 @@ test('keeps the signed-in root journey stable across a history round trip', asyn
   await page.goto('/')
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByText('player，新游戏带来了吗？')).toBeVisible()
-  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
+  await expect(page.getByText('player，欢迎回来')).toBeVisible()
   await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(0)
 
   const discover = page.locator('a[href="/discover"]:visible').first()
@@ -173,7 +123,6 @@ test('keeps the signed-in root journey stable across a history round trip', asyn
   await page.goBack()
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'BGG 热门桌游' })).toBeVisible()
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('今天玩什么')
 })

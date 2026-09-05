@@ -1125,7 +1125,7 @@ onUnmounted(() => {
 
           <ol v-if="publicAnswerTurns.length" class="mt-6 stack-y-xl" :aria-label="t('public.question.thread')">
             <li v-for="(turn, index) in publicAnswerTurns" :key="`${index}-${turn.question}`" class="stack-y-md">
-              <div class="ml-auto max-w-[92%] rounded-2xl rounded-tr-md bg-copper px-4 py-3 text-sm font-medium leading-6 text-white sm:max-w-[78%]">{{ turn.question }}</div>
+              <div class="ml-auto max-w-[92%] rounded-2xl rounded-tr-md bg-copper px-4 py-3 text-sm font-medium leading-6 text-on-accent sm:max-w-[78%]">{{ turn.question }}</div>
               <article :id="`public-answer-${index}`" tabindex="-1" class="max-w-[96%] overflow-hidden rounded-3xl border border-ink/10 bg-paper elevation-sm outline-none focus:ring-4 focus:ring-indigo/15 sm:max-w-[88%]">
                 <div class="p-5 sm:p-6">
                   <div class="flex flex-wrap items-center gap-2"><span v-if="publishesConclusion(turn.answer.answer.status)" :class="confidenceClasses(turn.answer.answer.confidence)" :data-confidence="turn.answer.answer.confidence" class="rounded-full px-3 py-1 text-xs font-semibold">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span v-if="publishesConclusion(turn.answer.answer.status)" class="rounded-full bg-copper/[0.1] px-3 py-1 text-xs font-semibold text-copper">{{ answerBasisLabel(turn.answer.answer.answerBasis) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>

@@ -54,22 +54,18 @@ describe('GameShelfView', () => {
     const wrapper = mount(GameShelfView, { global: { plugins: [router] } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('今晚想开哪一局？')
     expect(wrapper.text()).toContain('Root')
     expect(wrapper.text()).toContain('2–4 人')
     expect(wrapper.text()).toContain('90 分钟')
     expect(wrapper.text()).toContain('继续讲解')
     expect(wrapper.text()).not.toContain('不属于我的测试游戏')
-    expect(wrapper.get('img[src="/illustrations/game-library.webp"]').attributes('alt')).toBe('')
     expect(wrapper.get('img[alt="Root 的游戏封面"]').attributes('src')).toBe('https://images.example/root.jpg')
     expect(wrapper.get('a[href="/lesson/plan-root"]')).toBeTruthy()
 
     setLocale('en')
     await wrapper.vm.$nextTick()
-    expect(wrapper.text()).toContain('What are we playing tonight?')
     expect(wrapper.text()).toContain('2–4 players')
     expect(wrapper.text()).toContain('Continue guide')
-    expect(wrapper.text()).not.toContain('今晚想开哪一局？')
   })
 
   it('presents an unspecified edition language honestly instead of exposing the und code', async () => {

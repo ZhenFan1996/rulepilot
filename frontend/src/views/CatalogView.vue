@@ -283,7 +283,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
 
           <form v-else class="mt-4 flex gap-3" @submit.prevent="searchBgg">
             <input v-model="bggQuery" required minlength="2" maxlength="120" :placeholder="t('catalog.bgg.placeholder')" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-copper">
-            <button :disabled="bggSearching" class="rounded-lg bg-copper px-5 font-semibold text-white disabled:opacity-50">{{ bggSearching ? t('catalog.bgg.searching') : t('catalog.bgg.search') }}</button>
+            <button :disabled="bggSearching" class="rounded-lg bg-copper px-5 font-semibold text-on-accent disabled:opacity-50">{{ bggSearching ? t('catalog.bgg.searching') : t('catalog.bgg.search') }}</button>
           </form>
 
           <p v-if="bggError" class="mt-4 text-sm text-red-700" role="alert">{{ bggError }}</p>
@@ -314,7 +314,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
             </div>
             <p v-if="importedBgg.description" class="mt-4 whitespace-pre-line text-sm leading-6 text-ink/60">{{ importedBgg.description }}</p>
             <p class="mt-3 text-xs text-ink/40">{{ t('catalog.bgg.attribution') }}</p>
-            <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white">{{ t('catalog.upload') }}</RouterLink>
+            <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-on-accent">{{ t('catalog.upload') }}</RouterLink>
           </article>
         </section>
 
@@ -379,7 +379,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
                 </label>
                 <p v-if="selectedGame.editions.length === 0" class="text-sm text-ink/45">{{ t('catalog.expansion.needEdition') }}</p>
               </fieldset>
-              <button :disabled="saving || compatibleEditionIds.length === 0" class="mt-5 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">{{ t('catalog.expansion.save') }}</button>
+              <button :disabled="saving || compatibleEditionIds.length === 0" class="mt-5 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-on-accent disabled:opacity-40">{{ t('catalog.expansion.save') }}</button>
               <ul class="mt-5 stack-y-sm text-sm text-ink/60">
                 <li v-for="expansion in selectedGame.expansions" :key="expansion.id">{{ expansion.name }} · {{ t('catalog.expansion.compatibleCount', { count: expansion.compatibleEditionIds.length }) }}</li>
               </ul>

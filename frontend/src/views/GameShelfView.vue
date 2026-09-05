@@ -324,22 +324,18 @@ onBeforeUnmount(() => {
 <template>
   <AppShell @session-identity="updateSessionIdentity">
     <div class="shelf-page tabletop-page">
-      <section class="player-board relative grid overflow-hidden border border-ink/10 bg-ink text-canvas shelf-hero-shadow lg:grid-cols-[minmax(0,0.85fr)_minmax(24rem,1.15fr)]">
-        <div class="relative z-10 px-6 py-8 sm:px-9 sm:py-10 lg:py-14">
-          <p class="text-xs font-bold uppercase tracking-[0.2em] text-copper">{{ t('shelf.eyebrow') }}</p>
-          <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('shelf.title') }}</h1>
-          <p class="mt-4 max-w-xl text-base leading-7 text-canvas/70">{{ t('shelf.description') }}</p>
+      <section class="border-b border-ink/10 pb-7">
+        <div class="tabletop-heading">
+          <h1 class="tabletop-title">{{ t('shelf.title') }}</h1>
+          <p class="tabletop-lede">{{ t('shelf.description') }}</p>
           <div class="mt-7 flex flex-wrap gap-3">
-            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-white transition hover:bg-copper-dark">
+            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-on-accent transition hover:bg-copper-dark">
               <TabletopGlyph name="plus" :size="18" /> {{ t('shelf.addRulebook') }}
             </RouterLink>
-            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-canvas/25 px-5 text-sm font-bold text-canvas transition hover:bg-canvas/10">
+            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-ink/15 px-5 text-sm font-semibold text-indigo transition hover:bg-ink/5">
               <TabletopGlyph name="library" :size="18" /> {{ t('shelf.publicGuides') }}
             </RouterLink>
           </div>
-        </div>
-        <div class="relative min-h-64 overflow-hidden border-t border-canvas/10 lg:min-h-full lg:border-l lg:border-t-0" aria-hidden="true">
-          <img src="/illustrations/game-library.webp" alt="" width="1600" height="900" loading="eager" class="absolute inset-0 h-full w-full object-cover object-right">
         </div>
       </section>
 
@@ -375,7 +371,7 @@ onBeforeUnmount(() => {
         <div class="mx-auto grid size-16 place-items-center rounded-2xl bg-copper/10 text-copper"><TabletopGlyph name="rulebook" :size="32" /></div>
         <h2 class="mt-5 font-display text-3xl font-semibold">{{ t('shelf.empty.title') }}</h2>
         <p class="mx-auto mt-3 max-w-md leading-7 text-ink/60">{{ t('shelf.empty.description') }}</p>
-        <RouterLink :to="{ name: 'teach' }" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-white transition hover:bg-copper-dark">
+        <RouterLink :to="{ name: 'teach' }" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl bg-copper px-5 text-sm font-bold text-on-accent transition hover:bg-copper-dark">
           <TabletopGlyph name="plus" :size="18" /> {{ t('shelf.empty.action') }}
         </RouterLink>
       </section>
