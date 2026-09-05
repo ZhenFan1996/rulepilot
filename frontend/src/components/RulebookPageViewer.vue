@@ -29,6 +29,7 @@ const props = withDefaults(defineProps<{
 
 const { locale } = useLocale()
 const viewerTop = ref<HTMLElement | null>(null)
+const zoomed = ref(false)
 const pageList = ref<HTMLOListElement | null>(null)
 const requestedImage = shallowRef<PageImageRequest | null>(null)
 const displayedImage = shallowRef<PageImageRequest | null>(null)
@@ -39,7 +40,6 @@ let disposed = false
 const copy = computed(() => locale.value === 'zh-CN' ? {
   page: (value: number) => `第 ${value} 页`,
   image: (value: number) => `规则书第 ${value} 页`,
-  extracted: (value: number) => `已识别 ${value} 个字符`,
   loading: (value: number) => `正在加载第 ${value} 页…`,
   loadingWithPreserved: (value: number, preserved: number) => `正在加载第 ${value} 页；第 ${preserved} 页继续显示。`,
   displayed: (value: number) => `第 ${value} 页已显示`,
@@ -50,11 +50,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   openingState: '正在打开',
   displayedState: '已显示',
   failedState: '加载失败',
-  pagesLabel: '规则书页面',
+  pagesLabel: '规则书页面', zoom: '放大阅读', fit: '适合页面',
 } : {
   page: (value: number) => `Page ${value}`,
   image: (value: number) => `Rulebook page ${value}`,
-  extracted: (value: number) => `${value} characters indexed`,
   loading: (value: number) => `Loading page ${value}…`,
   loadingWithPreserved: (value: number, preserved: number) => `Loading page ${value}; page ${preserved} remains displayed.`,
   displayed: (value: number) => `Page ${value} displayed`,
@@ -65,7 +64,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   openingState: 'Opening',
   displayedState: 'Displayed',
   failedState: 'Failed to load',
-  pagesLabel: 'Rulebook pages',
+  pagesLabel: 'Rulebook pages', zoom: 'Enlarge page', fit: 'Fit page',
 })
 
 const pageSignature = computed(() => props.pages.map(page => page.pageNumber).join(','))
@@ -203,19 +202,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="viewerTop" class="grid scroll-mt-20 gap-4 lg:grid-cols-[12rem_minmax(0,1fr)]">
-    <aside class="order-2 lg:order-1">
+  <div ref="viewerTop" class="grid scroll-mt-20 gap-3">
+    <nav class="min-w-0">
       <p v-if="eyebrow" class="tabletop-kicker px-1">{{ eyebrow }}</p>
       <ol
         ref="pageList"
-        class="grid grid-cols-4 gap-2 lg:grid-cols-2"
-        :class="[eyebrow ? 'mt-3' : '', dialogMode ? 'sm:grid-cols-8' : 'sm:grid-cols-6']"
+        class="flex gap-2 overflow-x-auto p-1"
+        :class="eyebrow ? 'mt-3' : ''"
         :aria-label="copy.pagesLabel"
       >
-        <li v-for="page in pages" :key="page.pageNumber">
+        <li v-for="page in pages" :key="page.pageNumber" class="shrink-0">
           <button
             type="button"
-            class="w-full rounded-lg border bg-paper px-2 py-3 text-left text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo focus-visible:ring-offset-2"
+            class="min-h-11 rounded-lg border bg-paper px-3 py-2 text-left text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo focus-visible:ring-offset-2"
             :class="pageButtonClass(page.pageNumber)"
             :data-page-number="page.pageNumber"
             :aria-current="displayedImage?.pageNumber === page.pageNumber ? 'page' : undefined"
@@ -224,18 +223,20 @@ onBeforeUnmount(() => {
             @keydown="navigatePages($event, page.pageNumber)"
           >
             <span class="block font-bold">{{ copy.page(page.pageNumber) }}</span>
-            <span class="mt-1 block text-[0.65rem] text-ink/40">{{ copy.extracted(page.characterCount) }}</span>
             <span v-if="pageState(page.pageNumber)" class="sr-only">{{ pageState(page.pageNumber) }}</span>
           </button>
         </li>
       </ol>
-    </aside>
+    </nav>
 
-    <section class="order-1 min-w-0 lg:order-2">
+    <section class="min-w-0">
+      <div class="mb-2 flex justify-end">
+        <button type="button" :disabled="!displayedImage" :aria-pressed="zoomed" class="min-h-11 rounded-lg border border-ink/15 bg-paper px-4 text-sm font-semibold text-indigo disabled:opacity-40" @click="zoomed = !zoomed">{{ zoomed ? copy.fit : copy.zoom }}</button>
+      </div>
       <div
         data-testid="rulebook-page-stage"
-        class="relative mx-auto grid w-full max-w-6xl place-items-center overflow-hidden rounded-lg bg-ink/5 p-1 shadow-2xl shadow-ink/20 sm:p-2"
-        :class="imageLoading || imageFailed ? 'min-h-72' : ''"
+        class="relative mx-auto w-full max-w-6xl rounded-lg bg-ink/5 p-1 shadow-2xl shadow-ink/20 sm:p-2"
+        :class="[imageLoading || imageFailed ? 'min-h-72' : '', zoomed ? 'max-h-[calc(100dvh-12rem)] overflow-auto' : 'grid place-items-center overflow-hidden']"
         :aria-busy="imageLoading ? 'true' : 'false'"
       >
         <img
@@ -246,8 +247,8 @@ onBeforeUnmount(() => {
           :data-page-number="displayedImage.pageNumber"
           :src="displayedImage.url"
           :alt="copy.image(displayedImage.pageNumber)"
-          class="mx-auto h-auto w-auto max-w-full object-contain"
-          :class="dialogMode ? 'max-h-[calc(100vh-9rem)]' : 'max-h-[calc(100vh-8rem)]'"
+          class="h-auto w-auto object-contain"
+          :class="zoomed ? 'max-w-none' : ['mx-auto max-w-full', dialogMode ? 'max-h-[calc(100vh-9rem)]' : 'max-h-[calc(100vh-8rem)]']"
         >
 
         <img

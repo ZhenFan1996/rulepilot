@@ -414,10 +414,11 @@ class RecommendationReActContractTest {
     }
 
     @Test
-    void singleIncludedTypeBecomesThePublishedProfileAndATypeFitClaim() throws Exception {
+    void agentCanChooseBeyondTheFirstRankedEligibleCandidate() throws Exception {
         Game socialSignal = game(551, "Social Signal", BggGameType.PARTY, 3, 8, 75, "2.1");
         Game quietEngine = game(552, "Quiet Engine", BggGameType.STRATEGY, 2, 5, 80, "2.2");
-        RecordingCatalog catalog = new RecordingCatalog(socialSignal, quietEngine);
+        Game sharedRhythm = game(553, "Shared Rhythm", BggGameType.PARTY, 3, 7, 45, "1.8");
+        RecordingCatalog catalog = new RecordingCatalog(socialSignal, quietEngine, sharedRhythm);
         ScriptedModel model = new ScriptedModel(
                 action(
                         "typed-search",
@@ -428,9 +429,9 @@ class RecommendationReActContractTest {
                         "typed-publish",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"publicationCount\":1,\"playerReply\":\"这款符合本轮全部硬条件。\","
-                                + "\"selections\":[{\"bggId\":551,"
-                                + "\"internalEvidenceIds\":[\"B551:playerCount\",\"B551:durationMinutes\","
-                                + "\"B551:complexity\",\"B551:bggType\"]}]}"));
+                                + "\"selections\":[{\"bggId\":553,"
+                                + "\"internalEvidenceIds\":[\"B553:playerCount\",\"B553:durationMinutes\","
+                                + "\"B553:complexity\",\"B553:bggType\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
         var response = loop.converse(
@@ -445,14 +446,20 @@ class RecommendationReActContractTest {
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.profile().type()).isEqualTo(BggGameType.PARTY);
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
-                .containsExactly(551);
+                .containsExactly(553);
         assertThat(toolObservation(model.requests.getLast(), "typed-search")
                         .path("verifiedCandidateBggIds").toString())
-                .isEqualTo("[551]");
+                .isEqualTo("[551,553]");
         assertThat(catalog.lastFilters.get()).satisfies(filters -> {
             assertThat(filters.textQuery()).isNull();
             assertThat(filters.sort()).isEqualTo(BoardGameRecommendationCatalog.CatalogSort.RANK);
         });
+        JsonNode terminalSchema = new ObjectMapper().readTree(model.requests.getLast().tools().stream()
+                .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
+                .findFirst().orElseThrow().inputSchema());
+        assertThat(terminalSchema.path("properties").path("selections").path("items")
+                .path("properties").path("bggId").path("enum"))
+                .contains(new ObjectMapper().getNodeFactory().numberNode(553));
         loop.stopBoundedCalls();
     }
 
@@ -934,7 +941,7 @@ class RecommendationReActContractTest {
         JsonNode searchObservation = toolObservation(model.requests.getLast(), "bounded-result-search");
         List<JsonNode> modelCandidates = new ArrayList<>();
         searchObservation.path("turnState").path("verifiedGames").forEach(modelCandidates::add);
-        assertThat(modelCandidates).hasSize(3);
+        assertThat(modelCandidates).hasSize(5);
         assertThat(modelCandidates).allSatisfy(candidate ->
                 assertThat(candidate.path("observations").has(
                         "B" + candidate.path("bggId").asInt() + ":publisherDescription")).isTrue());
@@ -955,9 +962,7 @@ class RecommendationReActContractTest {
                         .path("bggId")
                         .path("enum")
                         .toString())
-                .isEqualTo("[951,952,953]");
-        assertThat(publicationSchema.toString())
-                .doesNotContain("954", "955", "B954:publisherDescription", "B955:publisherDescription");
+                .isEqualTo("[951,952,953,954,955]");
         loop.stopBoundedCalls();
     }
 
@@ -1057,7 +1062,7 @@ class RecommendationReActContractTest {
         assertThat(observation.path("appliedSearchContract").path("publicationCount").asInt())
                 .isEqualTo(1);
         assertThat(observation.path("turnState").path("verifiedGames").findValuesAsText("bggId"))
-                .containsExactly("971");
+                .containsExactly("971", "972", "973");
         JsonNode publicationSchema = new ObjectMapper().readTree(model.requests.getLast().tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                 .findFirst()

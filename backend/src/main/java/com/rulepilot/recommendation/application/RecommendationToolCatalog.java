@@ -249,18 +249,12 @@ final class RecommendationToolCatalog {
     private List<Integer> pendingPublicationIds(RecommendationAgentState state) {
         if (state.pendingPublicationSeed == null) return List.of();
         LinkedHashSet<Integer> eligible = new LinkedHashSet<>(recommendableIds(state));
-        List<Integer> candidates = state.pendingPublicationSeed.candidateBggIds().stream()
+        return state.pendingPublicationSeed.candidateBggIds().stream()
                 .filter(eligible::contains)
                 .filter(id -> !actionExecutor.narrativeObservations(
                                 state.verified.get(id), state.research)
                         .isEmpty())
                 .toList();
-        if (state.activeSearch == null) return candidates;
-        int requestedCount = requestedCount(state.activeSearch, candidates.size());
-        int publicationCount = Math.min(requestedCount, properties.resultCount());
-        // The catalog search already owns ranking and hard eligibility. The terminal model writes and cites the
-        // resulting slate; reopening the wider scan here duplicates selection work and enlarges its evidence surface.
-        return candidates.stream().limit(publicationCount).toList();
     }
 
     private ToolSpec recommendationAction(RecommendationAgentState state, List<Integer> candidateIds) {
@@ -415,21 +409,12 @@ final class RecommendationToolCatalog {
             object.set("availableCapabilities", json.valueToTree(availableCapabilities(state)));
             Set<Integer> detailedCandidateIds = state.pendingPublicationSeed == null
                     ? Set.of()
-                    : pendingPublicationIds(state).stream()
-                            .limit(maximumDetailedCandidates(state))
-                            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                    : Set.copyOf(pendingPublicationIds(state));
             object.set("turnState", json.valueToTree(turnState(state, detailedCandidateIds)));
             return json.writeValueAsString(object);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation observation context could not be serialized", exception);
         }
-    }
-
-    private int maximumDetailedCandidates(RecommendationAgentState state) {
-        int requestedCount = state.activeSearch == null
-                ? properties.resultCount()
-                : requestedCount(state.activeSearch, pendingPublicationIds(state).size());
-        return Math.min(requestedCount, properties.resultCount());
     }
 
     private int requestedCount(CatalogSearch search, int availableCandidates) {

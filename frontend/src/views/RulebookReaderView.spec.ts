@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RulebookReaderView from './RulebookReaderView.vue'
 
@@ -11,6 +11,9 @@ function answerStreamResponse(result: unknown) {
 }
 
 describe('RulebookReaderView', () => {
+  beforeEach(() => vi.stubGlobal('matchMedia', () => ({
+    matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  })))
   afterEach(() => {
     localStorage.clear()
     sessionStorage.clear()

@@ -116,7 +116,7 @@ describe('RecommendationRulebookDialog', () => {
       signals.push(options!.signal!)
       if (requests === 1) return closed.promise
       return Promise.resolve(Response.json([
-        { pageNumber: 1, text: 'Current page', characterCount: 700 },
+        { pageNumber: 2, text: 'Current page', characterCount: 700 },
       ]))
     }))
     const wrapper = mount(RecommendationRulebookDialog, {
@@ -128,14 +128,14 @@ describe('RecommendationRulebookDialog', () => {
     expect(signals[0]!.aborted).toBe(true)
     await wrapper.setProps({ open: true })
     await flushPromises()
-    expect(wrapper.text()).toContain('已识别 700 个字符')
+    expect(wrapper.find('button[data-page-number="2"]').exists()).toBe(true)
 
     closed.resolve(Response.json([
       { pageNumber: 1, text: 'Closed page', characterCount: 99 },
     ]))
     await flushPromises()
-    expect(wrapper.text()).toContain('已识别 700 个字符')
-    expect(wrapper.text()).not.toContain('已识别 99 个字符')
+    expect(wrapper.find('button[data-page-number="2"]').exists()).toBe(true)
+    expect(wrapper.find('button[data-page-number="1"]').exists()).toBe(false)
     expect(signals[1]!.aborted).toBe(false)
     wrapper.unmount()
   })
@@ -150,7 +150,7 @@ describe('RecommendationRulebookDialog', () => {
         return oldVersion.promise
       }
       return Promise.resolve(Response.json([
-        { pageNumber: 1, text: 'New version', characterCount: 810 },
+        { pageNumber: 2, text: 'New version', characterCount: 810 },
       ]))
     }))
     const wrapper = mount(RecommendationRulebookDialog, {
@@ -162,13 +162,14 @@ describe('RecommendationRulebookDialog', () => {
     await flushPromises()
     expect(oldSignal?.aborted).toBe(true)
     expect(wrapper.text()).toContain('新版')
-    expect(wrapper.text()).toContain('已识别 810 个字符')
+    expect(wrapper.get('[data-testid="rulebook-page-loader"]').attributes('src')).toContain('/document-new/pages/2/image')
 
     oldVersion.resolve(Response.json([
       { pageNumber: 1, text: 'Old version', characterCount: 120 },
     ]))
     await flushPromises()
-    expect(wrapper.text()).not.toContain('已识别 120 个字符')
+    expect(wrapper.find('button[data-page-number="1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="rulebook-page-loader"]').attributes('src')).toContain('/document-new/pages/2/image')
     wrapper.unmount()
   })
 

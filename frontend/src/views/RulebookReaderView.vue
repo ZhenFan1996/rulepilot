@@ -38,6 +38,9 @@ const errorMessage = ref('')
 const username = ref('')
 const online = ref(navigator.onLine)
 const answersOpen = ref(false)
+const readingViewport = window.matchMedia('(min-width: 1024px)')
+const wideReader = ref(readingViewport.matches)
+const answerOpener = ref<HTMLButtonElement | null>(null)
 const cardOcrOpen = ref(false)
 const answerPanel = ref<{ focusQuestion?: () => void } | null>(null)
 const resetDialogOpen = ref(false)
@@ -48,18 +51,18 @@ let disposed = false
 
 useModalFocus({
   dialog: answersDialog,
-  open: answersOpen,
-  requestClose: () => { answersOpen.value = false },
+  open: () => answersOpen.value && !wideReader.value,
+  requestClose: closeAnswers,
 })
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   back: '返回我的游戏', eyebrow: '原规则书', pages: `${pages.value.length} 页`,
   loading: '正在打开规则书…', error: '暂时无法打开这本规则书。', retry: '重试',
-  answer: '基于这本规则书答疑', close: '关闭答疑', hint: '讲解不是必经步骤；你可以边读边问。',
+  answer: '基于这本规则书答疑', close: '关闭答疑', hint: '翻到你关心的部分，随时提问。',
 } : {
   back: 'Back to my games', eyebrow: 'Original rulebook', pages: `${pages.value.length} pages`,
   loading: 'Opening the rulebook…', error: 'This rulebook cannot be opened right now.', retry: 'Retry',
-  answer: 'Ask from this rulebook', close: 'Close questions', hint: 'A generated lesson is optional. Read and ask as you go.',
+  answer: 'Ask from this rulebook', close: 'Close questions', hint: 'Read at your own pace and ask whenever you need.',
 })
 
 function isCurrentLoad(sequence: number, target: string) {
@@ -211,10 +214,16 @@ async function loadRulebook() {
 }
 
 function updateOnline() { online.value = navigator.onLine }
+function updateReadingViewport(event: MediaQueryListEvent) { wideReader.value = event.matches }
+function closeAnswers() {
+  answersOpen.value = false
+  if (wideReader.value) answerOpener.value?.focus()
+}
 
 onMounted(() => {
   disposed = false
   void loadRulebook()
+  readingViewport.addEventListener('change', updateReadingViewport)
   window.addEventListener('online', updateOnline)
   window.addEventListener('offline', updateOnline)
 })
@@ -227,6 +236,7 @@ watch(locale, () => {
 onUnmounted(() => {
   disposed = true
   loadSequence++
+  readingViewport.removeEventListener('change', updateReadingViewport)
   window.removeEventListener('online', updateOnline)
   window.removeEventListener('offline', updateOnline)
 })
@@ -244,42 +254,43 @@ onUnmounted(() => {
               <span v-if="pages.length" class="shrink-0 text-xs text-ink/45">{{ copy.pages }}</span>
             </div>
           </div>
-          <button type="button" class="min-h-11 shrink-0 rounded-xl bg-copper px-4 text-sm font-semibold text-white" @click="answersOpen = true">{{ copy.answer }}</button>
+          <button ref="answerOpener" type="button" :disabled="loading || Boolean(errorMessage)" :aria-expanded="answersOpen" aria-controls="rulebook-questions" class="min-h-11 shrink-0 rounded-xl bg-copper px-4 text-sm font-semibold text-white" @click="answersOpen = true">{{ copy.answer }}</button>
         </div>
       </header>
 
-      <div class="mx-auto max-w-[100rem] px-3 py-4 sm:px-6">
-        <p v-if="loading" class="rounded-xl bg-paper p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
-        <section v-else-if="errorMessage" class="rounded-xl border border-red-200 bg-paper p-8 text-center" role="alert">
-          <p class="font-semibold">{{ errorMessage }}</p>
-          <button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 text-sm font-semibold text-white" @click="loadRulebook">{{ copy.retry }}</button>
+      <div class="mx-auto grid max-w-[100rem] gap-5 px-3 py-4 sm:px-6" :class="answersOpen ? 'lg:grid-cols-[minmax(0,1fr)_26rem]' : ''">
+        <section class="min-w-0">
+          <p v-if="loading" class="rounded-xl bg-paper p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
+          <section v-else-if="errorMessage" class="rounded-xl border border-red-200 bg-paper p-8 text-center" role="alert">
+            <p class="font-semibold">{{ errorMessage }}</p>
+            <button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 text-sm font-semibold text-white" @click="loadRulebook">{{ copy.retry }}</button>
+          </section>
+          <RulebookPageViewer v-else :version-id="versionId" :pages="pages" :eyebrow="copy.eyebrow" :hint="copy.hint" />
         </section>
-        <RulebookPageViewer v-else :version-id="versionId" :pages="pages" :eyebrow="copy.eyebrow" :hint="copy.hint" />
-      </div>
 
-      <button v-if="!answersOpen && !loading && !errorMessage" type="button" class="fixed bottom-5 right-4 z-30 min-h-12 rounded-full bg-copper px-5 text-sm font-bold text-white shadow-xl sm:right-6" @click="answersOpen = true">{{ copy.answer }}</button>
-
-      <div v-if="answersOpen" class="fixed inset-0 z-50 bg-ink/40 backdrop-blur-[2px]" @click.self="answersOpen = false">
-        <aside ref="answersDialog" tabindex="-1" class="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-ink/10 bg-canvas p-4 shadow-2xl outline-none sm:p-6" role="dialog" aria-modal="true" :aria-label="copy.answer">
-          <div class="app-sticky-top sticky z-10 flex items-center justify-between border-b border-ink/10 bg-canvas/95 pb-3 backdrop-blur">
-            <div><p class="font-semibold">{{ copy.answer }}</p><p class="mt-1 text-xs text-ink/45">{{ copy.hint }}</p></div>
-            <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="answersOpen = false">×</button>
-          </div>
-          <LessonAnswerPanel
-            ref="answerPanel"
-            :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
-            :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError" :answer-failure-recovery="answerFailureRecovery" :answer-outcome="answerOutcome"
-            :answer-elapsed-seconds="answerElapsedSeconds" :answer-soft-budget-reached="answerSoftBudgetReached"
-            :agent-trace="agentTrace" :streamed-answer-parts="streamedAnswerParts" :online="online" :ruling="ruling"
-            :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
-            :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
-            @update:question="question = $event" @update:editing-ruling="editingRuling = $event"
-            @update:edited-verdict="editedVerdict = $event" @update:edited-explanation="editedExplanation = $event"
-            @ask="askQuestion" @cancel-answer="cancelAnswer" @request-help="requestLearningHelp"
-            @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="requestClearThread"
-            @confirm-ruling="confirmAnswer" @reload-ruling="reloadRuling" @save-ruling-revision="saveRulingRevision"
-          />
-        </aside>
+        <div v-if="answersOpen" class="fixed inset-0 z-50 bg-ink/40 backdrop-blur-[2px] lg:static lg:z-auto lg:min-w-0 lg:bg-transparent lg:backdrop-blur-none" @click.self="closeAnswers">
+          <aside id="rulebook-questions" ref="answersDialog" tabindex="-1" class="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-ink/10 bg-canvas p-4 shadow-2xl outline-none sm:p-6 lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7rem)] lg:rounded-xl lg:border lg:p-4 lg:shadow-none" :role="wideReader ? 'complementary' : 'dialog'" :aria-modal="wideReader ? undefined : true" :aria-label="copy.answer">
+            <div class="sticky top-0 z-10 flex items-center justify-between border-b border-ink/10 bg-canvas/95 pb-3 backdrop-blur">
+              <div><p class="font-semibold">{{ copy.answer }}</p><p class="mt-1 text-xs text-ink/45">{{ copy.hint }}</p></div>
+              <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="closeAnswers">×</button>
+            </div>
+            <LessonAnswerPanel
+              ref="answerPanel"
+              :show-header="false"
+              :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
+              :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError" :answer-failure-recovery="answerFailureRecovery" :answer-outcome="answerOutcome"
+              :answer-elapsed-seconds="answerElapsedSeconds" :answer-soft-budget-reached="answerSoftBudgetReached"
+              :agent-trace="agentTrace" :streamed-answer-parts="streamedAnswerParts" :online="online" :ruling="ruling"
+              :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
+              :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
+              @update:question="question = $event" @update:editing-ruling="editingRuling = $event"
+              @update:edited-verdict="editedVerdict = $event" @update:edited-explanation="editedExplanation = $event"
+              @ask="askQuestion" @cancel-answer="cancelAnswer" @request-help="requestLearningHelp"
+              @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="requestClearThread"
+              @confirm-ruling="confirmAnswer" @reload-ruling="reloadRuling" @save-ruling-revision="saveRulingRevision"
+            />
+          </aside>
+        </div>
       </div>
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
       <ConversationResetDialog

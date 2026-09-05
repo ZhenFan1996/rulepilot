@@ -169,6 +169,9 @@ test('keeps requested and displayed rulebook pages atomic across slow, failed, a
   const pageStatus = page.getByTestId('rulebook-page-status')
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
   await expect(pageStatus).toContainText('第 1 页已显示')
+  await page.getByRole('button', { name: '放大阅读', exact: true }).click()
+  await expect(page.getByRole('button', { name: '适合页面', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: '适合页面', exact: true }).click()
 
   await page.locator('button[data-page-number="2"]').click()
   await expect(pageStatus).toContainText('正在加载第 2 页；第 1 页继续显示')
