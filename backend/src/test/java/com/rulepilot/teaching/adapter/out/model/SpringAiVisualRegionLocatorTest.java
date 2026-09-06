@@ -67,8 +67,7 @@ class SpringAiVisualRegionLocatorTest {
     @Test
     void parsesOnlyTheCandidateIdProtocolAndRejectsAnyModelAuthoredGeometry() {
         var guide = VisualLocatorResponsePolicy.parseModelGuide("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7",
-                "label":"行动状态","visibleDescription":"棋子位于弧形轨道上"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7"}]}
                 """).orElseThrow();
 
         assertThat(guide.reviews()).singleElement().satisfies(review -> {
@@ -77,19 +76,8 @@ class SpringAiVisualRegionLocatorTest {
         });
         assertThat(guide.batchAction()).isEqualTo(VisualRegionLocator.BatchAction.STOP);
         assertThat(VisualLocatorResponsePolicy.parseModelGuide("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7",
-                "label":"行动状态","visibleDescription":"棋子位于弧形轨道上","x":100}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7","x":100}]}
                 """)).isEmpty();
-    }
-
-    @Test
-    void rejectsAVisualLabelThatCannotWorkAsAReaderHeading() {
-        String overlongLabel = "图".repeat(VisualLocatorResponsePolicy.MAX_LABEL_CHARACTERS + 1);
-
-        assertThat(VisualLocatorResponsePolicy.parseModelGuide("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"opaque_7","label":"%s","visibleDescription":"棋子位于弧形轨道上"}]}
-                """.formatted(overlongLabel))).isEmpty();
     }
 
     @Test
@@ -97,8 +85,7 @@ class SpringAiVisualRegionLocatorTest {
         UUID evidence = UUID.randomUUID();
         Candidate candidate = candidate("opaque_7", 4, new Rectangle(120, 180, 360, 240));
         Runtime runtime = runtime("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7",
-                "label":"行动状态","visibleDescription":"棋子位于弧形轨道上"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7"}]}
                 """);
 
         var result = runtime.locator().locateGuideWithResult(request(
@@ -125,7 +112,7 @@ class SpringAiVisualRegionLocatorTest {
                 .orElseThrow();
         assertThat(userText)
                 .contains(
-                        "outputLocale: Simplified Chinese",
+                        "Page 4 source context",
                         "\"candidateId\":\"opaque_7\"",
                         "\"attachmentIndex\":1",
                         "\"pageNumber\":4",
@@ -139,22 +126,20 @@ class SpringAiVisualRegionLocatorTest {
         Candidate candidate = candidate("known_1", 4, new Rectangle(100, 100, 300, 300));
         String unknownId = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"unknown_9","label":"棋盘","visibleDescription":"中央棋盘区域"}]}
+                "candidateId":"unknown_9"}]}
                 """;
         String secondUnknownId = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"unknown_10","label":"棋盘","visibleDescription":"中央棋盘区域"}]}
+                "candidateId":"unknown_10"}]}
                 """;
         String acceptedReplacement = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"known_1","label":"棋盘","visibleDescription":"中央棋盘区域"}]}
+                "candidateId":"known_1"}]}
                 """;
         String repeatedId = """
                 {"batchAction":"STOP","reviews":[
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1",
-                "label":"棋盘","visibleDescription":"中央棋盘区域"},
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1",
-                "label":"棋盘","visibleDescription":"同一中央棋盘区域"}]}
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1"},
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1"}]}
                 """;
         Runtime recovered = runtime(unknownId, secondUnknownId, acceptedReplacement);
         Runtime localizedDuplicate = runtime(repeatedId);
@@ -183,7 +168,7 @@ class SpringAiVisualRegionLocatorTest {
                         "\"allowedCandidateIds\":[\"known_1\"]",
                         "\"allowedStepPositions\":[1]",
                         "\"requiredAction\":\"RETURN_COMPLETE_REPLACEMENT\"",
-                        "\"allowedDecisions\":[\"ACCEPT_CANDIDATE\",\"NO_VISUAL\"]",
+                        "\"allowedDecisions\":[\"ACCEPT_CANDIDATE\",\"REFINE_CANDIDATE\",\"NO_VISUAL\"]",
                         "\"PATCH_PREVIOUS_FIELDS\"",
                         "\"EDIT_PIXELS\"");
     }
@@ -195,12 +180,10 @@ class SpringAiVisualRegionLocatorTest {
         VisualLocationRequest request = request(
                 claims, List.of(pageTwo), List.of(page(2, solidPng(Color.WHITE))), 1);
         String crossPageResponse = """
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"page_two",
-                "label":"组件","visibleDescription":"一组组件"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"page_two"}]}
                 """;
         String unknownStepResponse = """
-                {"batchAction":"STOP","reviews":[{"stepPosition":3,"action":"ACCEPT_CANDIDATE","candidateId":"page_two",
-                "label":"组件","visibleDescription":"一组组件"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":3,"action":"ACCEPT_CANDIDATE","candidateId":"page_two"}]}
                 """;
         Runtime crossPage = runtime(crossPageResponse);
         Runtime unknownStep = runtime(unknownStepResponse, unknownStepResponse);
@@ -220,7 +203,7 @@ class SpringAiVisualRegionLocatorTest {
     void acceptsSparseSelectionsWithoutMakingTheModelRestateEveryNoVisualStep() throws IOException {
         String incomplete = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1","label":"组件","visibleDescription":"组件位于版图中央"}]}
+                "candidateId":"candidate_1"}]}
                 """;
         Runtime runtime = runtime(incomplete);
         VisualLocationRequest request = request(
@@ -241,10 +224,8 @@ class SpringAiVisualRegionLocatorTest {
     void acceptsDistinctComplementaryCandidatesForTheSameStep() throws IOException {
         Runtime runtime = runtime("""
                 {"batchAction":"STOP","reviews":[
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"overview",
-                "label":"流程概览","visibleDescription":"完整流程和阶段顺序"},
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"detail",
-                "label":"阶段细节","visibleDescription":"单个阶段的图标与状态"}]}
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"overview"},
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"detail"}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 2)),
@@ -257,9 +238,7 @@ class SpringAiVisualRegionLocatorTest {
         var result = runtime.locator().locateGuideWithResult(request);
 
         assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
-        assertThat(result.regions())
-                .extracting(VisualRegionLocator.LocatedRegion::label)
-                .containsExactly("流程概览", "阶段细节");
+        assertThat(result.regions()).hasSize(2);
         assertThat(result.regions())
                 .allSatisfy(region -> assertThat(region.supportedStepPositions()).containsExactly(1));
         verify(runtime.model(), times(1)).call(any(Prompt.class));
@@ -268,8 +247,7 @@ class SpringAiVisualRegionLocatorTest {
     @Test
     void preservesTypedNoVisualForAProseOnlyCandidateWithoutRetrying() throws IOException {
         Runtime runtime = runtime("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"NO_VISUAL","candidateId":null,
-                "label":null,"visibleDescription":null}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"NO_VISUAL","candidateId":null}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 3)),
@@ -287,8 +265,7 @@ class SpringAiVisualRegionLocatorTest {
         Runtime runtime = runtime(
                 "not-json",
                 """
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"candidate_1",
-                "label":"图例","visibleDescription":"三个图标由箭头连接"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"candidate_1"}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 3)),
@@ -327,39 +304,10 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void tellsTheSameAgentExactlyHowToRepairAnOverlongVisualHeading() throws IOException {
-        String longLabel = "图".repeat(VisualLocatorResponsePolicy.MAX_LABEL_CHARACTERS + 1);
-        Runtime runtime = runtime(
-                """
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1","label":"%s","visibleDescription":"三个图标由箭头连接"}]}
-                """.formatted(longLabel),
-                """
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1","label":"图例","visibleDescription":"三个图标由箭头连接"}]}
-                """);
-
-        assertThat(runtime.locator().locateGuideWithResult(request(
-                        List.of(claim(1, 3)),
-                        List.of(candidate("candidate_1", 3, new Rectangle(0, 0, 550, 550))),
-                        List.of(page(3, solidPng(Color.GREEN))),
-                        1))
-                .diagnostic())
-                .isEqualTo(Diagnostic.FOUND);
-
-        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
-        verify(runtime.model(), times(2)).call(prompts.capture());
-        assertThat(prompts.getAllValues().getLast().getInstructions().stream().map(message -> message.getText()))
-                .anySatisfy(text -> assertThat(text).contains(
-                        "An ACCEPT_CANDIDATE label contains 81 characters",
-                        "shorten every label to at most 80 characters"));
-    }
-
-    @Test
     void stopsWhenAVisualSelectionCyclesBackToAnyEarlierRejectedCandidate() throws IOException {
         String first = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"unknown_1","label":"图例","visibleDescription":"第一种无效选择"}]}
+                "candidateId":"unknown_1"}]}
                 """;
         String second = first.replace("unknown_1", "unknown_2").replace("第一种", "第二种");
         Runtime runtime = runtime(first, second, first);
@@ -390,7 +338,7 @@ class SpringAiVisualRegionLocatorTest {
                 .thenThrow(new IllegalStateException("temporary provider failure"))
                 .thenReturn(response("""
                         {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                        "candidateId":"candidate_1","label":"图例","visibleDescription":"三个图标由箭头连接"}]}
+                        "candidateId":"candidate_1"}]}
                         """));
         var locator = new SpringAiVisualRegionLocator(configuration);
         VisualLocationRequest request = request(
@@ -480,7 +428,7 @@ class SpringAiVisualRegionLocatorTest {
                 "not-json",
                 """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1","label":"图例","visibleDescription":"三个图标由箭头连接"}]}
+                "candidateId":"candidate_1"}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 3)),
@@ -547,7 +495,7 @@ class SpringAiVisualRegionLocatorTest {
         };
         Runtime runtime = runtime(budget, """
                 {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1","label":"图例","visibleDescription":"三个图标由箭头连接"}]}
+                "candidateId":"candidate_1"}]}
                 """);
         Candidate candidate = candidate("candidate_1", 3, new Rectangle(0, 0, 550, 550));
 
@@ -707,7 +655,7 @@ class SpringAiVisualRegionLocatorTest {
     void normalizesContinueToStopOnTheLastBatchWithoutDiscardingValidReviews() throws IOException {
         String response = """
                 {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1","label":"图例","visibleDescription":"图标由箭头连接"}]}
+                "candidateId":"candidate_1"}]}
                 """;
         Candidate candidate = candidate("candidate_1", 1, new Rectangle(0, 0, 550, 550));
         Runtime withNextBatch = runtime(response);
@@ -742,16 +690,27 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(options.getMaxTokens()).isNull();
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
-        assertThat(SpringAiVisualRegionLocator.QWEN_SYSTEM)
-                .contains(
-                        "ACCEPT_CANDIDATE",
-                        "NO_VISUAL",
-                        "candidateId",
-                        "STOP",
-                        "CONTINUE",
-                        "explicitly supplied outputLocale")
-                .doesNotContain("visualBudget")
-                .doesNotContain("pageNumber, label", " x,", "width", "height");
+    }
+
+    @Test
+    void refinementCanOnlyRequestAnOfferedRefinableIdentityAndNeverPublishItsParentImplicitly() throws IOException {
+        var candidate = candidate("coarse_1", 2, new Rectangle(100, 100, 500, 500));
+        var request = new VisualLocationRequest("图例", List.of(claim(1, 2)), List.of(candidate),
+                List.of(page(2, solidPng(Color.BLUE))), "owner", null, null, 1, false, java.util.Set.of("coarse_1"));
+        var result = runtime("""
+                {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"REFINE_CANDIDATE","candidateId":"coarse_1"}]}
+                """).locator().locateGuideWithResult(request);
+        assertThat(result.refinementCandidateIds()).containsExactly("coarse_1");
+        assertThat(result.regions()).isEmpty();
+        assertThat(result.batchAction()).isEqualTo(VisualRegionLocator.BatchAction.CONTINUE);
+
+        var unavailable = new VisualLocationRequest(request.sectionTitle(), request.claims(), request.candidates(),
+                request.pages(), "owner", null, null, 1, false);
+        var rejected = runtime("""
+                {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"REFINE_CANDIDATE","candidateId":"coarse_1"}]}
+                """).locator().locateGuideWithResult(unavailable);
+        assertThat(rejected.refinementCandidateIds()).isEmpty();
+        assertThat(rejected.diagnostic()).isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
     }
 
     private Runtime runtime(String... responses) {
@@ -830,7 +789,7 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     private VisualRegionLocator.PageImage page(int page, byte[] content) {
-        return new VisualRegionLocator.PageImage(page, "image/png", content);
+        return new VisualRegionLocator.PageImage(page, "image/png", content, "Page " + page + " source context");
     }
 
     private byte[] solidPng(Color color) throws IOException {

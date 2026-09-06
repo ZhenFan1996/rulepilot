@@ -18,8 +18,6 @@ import java.util.Optional;
 /** Strict admission for a model that may select application-owned candidates but can never author geometry. */
 final class VisualLocatorResponsePolicy {
 
-    static final int MAX_LABEL_CHARACTERS = 80;
-
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
@@ -63,12 +61,10 @@ final class VisualLocatorResponsePolicy {
     private static Optional<ModelReview> parseReview(JsonNode review) {
         if (review == null
                 || !review.isObject()
-                || review.size() != 5
+                || review.size() != 3
                 || !integral(review, "stepPosition")
                 || !text(review, "action")
-                || !review.has("candidateId")
-                || !review.has("label")
-                || !review.has("visibleDescription")) {
+                || !review.has("candidateId")) {
             return Optional.empty();
         }
         int stepPosition = review.get("stepPosition").intValue();
@@ -80,28 +76,19 @@ final class VisualLocatorResponsePolicy {
             return Optional.empty();
         }
         if (action == ModelAction.NO_VISUAL) {
-            if (!review.get("candidateId").isNull()
-                    || !review.get("label").isNull()
-                    || !review.get("visibleDescription").isNull()) {
+            if (!review.get("candidateId").isNull()) {
                 return Optional.empty();
             }
-            return Optional.of(new ModelReview(stepPosition, action, null, null, null));
+            return Optional.of(new ModelReview(stepPosition, action, null));
         }
-        if (!nonBlankText(review, "candidateId")
-                || !nonBlankText(review, "label")
-                || !nonBlankText(review, "visibleDescription")) {
+        if (!nonBlankText(review, "candidateId")) {
             return Optional.empty();
         }
         String candidateId = review.get("candidateId").textValue().strip();
-        String label = review.get("label").textValue().strip();
-        String visibleDescription = review.get("visibleDescription").textValue().strip();
-        if (label.length() > MAX_LABEL_CHARACTERS) return Optional.empty();
         return Optional.of(new ModelReview(
                 stepPosition,
                 action,
-                candidateId,
-                label,
-                visibleDescription));
+                candidateId));
     }
 
     private static boolean integral(JsonNode object, String field) {
@@ -157,12 +144,12 @@ final class VisualLocatorResponsePolicy {
                 "rootFields", List.of("batchAction", "reviews"),
                 "batchAction", List.of("STOP", "CONTINUE"),
                 "reviewFields", List.of(
-                        "stepPosition", "action", "candidateId", "label", "visibleDescription"),
-                "actions", List.of("ACCEPT_CANDIDATE", "NO_VISUAL")));
+                        "stepPosition", "action", "candidateId"),
+                "actions", List.of("ACCEPT_CANDIDATE", "REFINE_CANDIDATE", "NO_VISUAL")));
         feedback.put("allowedCandidateIds", List.copyOf(allowedCandidateIds));
         feedback.put("allowedStepPositions", List.copyOf(allowedStepPositions));
         feedback.put("requiredAction", "RETURN_COMPLETE_REPLACEMENT");
-        feedback.put("allowedDecisions", List.of("ACCEPT_CANDIDATE", "NO_VISUAL"));
+        feedback.put("allowedDecisions", List.of("ACCEPT_CANDIDATE", "REFINE_CANDIDATE", "NO_VISUAL"));
         feedback.put("forbiddenActions", List.of(
                 "PATCH_PREVIOUS_FIELDS",
                 "EDIT_PIXELS",
@@ -178,21 +165,8 @@ final class VisualLocatorResponsePolicy {
             if (root == null || !root.isObject()) {
                 return "The visual selection candidate must be one JSON object.";
             }
-            JsonNode reviews = root.path("reviews");
-            if (reviews.isArray()) {
-                for (JsonNode review : reviews) {
-                    if (nonBlankText(review, "label")) {
-                        int length = review.get("label").textValue().strip().length();
-                        if (length > MAX_LABEL_CHARACTERS) {
-                            return "An ACCEPT_CANDIDATE label contains " + length
-                                    + " characters; shorten every label to at most "
-                                    + MAX_LABEL_CHARACTERS + " characters.";
-                        }
-                    }
-                }
-            }
             return "The candidate does not match the exact batchAction plus non-empty reviews contract; every review "
-                    + "must contain exactly stepPosition, action, candidateId, label, and visibleDescription with "
+                    + "must contain exactly stepPosition, action, and candidateId with "
                     + "the action-dependent nullability described in the original contract.";
         } catch (JsonProcessingException invalidJson) {
             String location = invalidJson.getLocation() == null
@@ -217,23 +191,20 @@ final class VisualLocatorResponsePolicy {
 
     enum ModelAction {
         ACCEPT_CANDIDATE,
+        REFINE_CANDIDATE,
         NO_VISUAL
     }
 
     record ModelReview(
             int stepPosition,
             ModelAction action,
-            String candidateId,
-            String label,
-            String visibleDescription) {
+            String candidateId) {
         ModelReview {
             if (stepPosition < 1 || action == null) {
                 throw new IllegalArgumentException("model visual review is invalid");
             }
             boolean noVisual = action == ModelAction.NO_VISUAL;
-            if (noVisual != (candidateId == null)
-                    || noVisual != (label == null)
-                    || noVisual != (visibleDescription == null)) {
+            if (noVisual != (candidateId == null)) {
                 throw new IllegalArgumentException("model visual review action is invalid");
             }
         }

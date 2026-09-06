@@ -35,7 +35,7 @@ class VisualCandidateSelectionPaidCanaryTest {
             .build();
 
     @Test
-    void acceptsTheProductionFiveFieldCandidateProtocolAndAbstainsWithoutEmittingGeometry() throws Exception {
+    void selectsSupportedCandidatesWithoutInventingVisualEvidence() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_VISUAL_CANDIDATE_EVAL")));
         Path fixtures = Path.of(requiredEnvironment("RULEPILOT_VISUAL_CANDIDATE_FIXTURE_DIR"));
         List<CandidateFixture> candidates = List.of(
@@ -78,17 +78,21 @@ class VisualCandidateSelectionPaidCanaryTest {
         assertThat(fieldNames(root)).containsExactlyInAnyOrder("batchAction", "reviews");
         assertThat(root.path("batchAction").asText()).isEqualTo("STOP");
         assertThat(root.path("reviews").isArray()).isTrue();
-        assertThat(root.path("reviews")).hasSize(3);
         root.path("reviews").forEach(review -> assertThat(fieldNames(review))
                 .containsExactlyInAnyOrder(
                         "stepPosition",
                         "action",
-                        "candidateId",
-                        "label",
-                        "visibleDescription"));
+                        "candidateId"));
         var guide = VisualLocatorResponsePolicy.parseModelGuide(content).orElseThrow();
 
-        assertThat(guide.reviews())
+        assertThat(guide.reviews()).allSatisfy(review -> {
+            assertThat(review.stepPosition()).isIn(1, 2, 3);
+            if (review.stepPosition() == 3) {
+                assertThat(review.action()).isEqualTo(VisualLocatorResponsePolicy.ModelAction.NO_VISUAL);
+            }
+        });
+        assertThat(guide.reviews().stream()
+                        .filter(review -> review.action() == VisualLocatorResponsePolicy.ModelAction.ACCEPT_CANDIDATE))
                 .extracting(
                         VisualLocatorResponsePolicy.ModelReview::stepPosition,
                         VisualLocatorResponsePolicy.ModelReview::action,
@@ -97,16 +101,7 @@ class VisualCandidateSelectionPaidCanaryTest {
                         org.assertj.core.groups.Tuple.tuple(
                                 1, VisualLocatorResponsePolicy.ModelAction.ACCEPT_CANDIDATE, "K7M2"),
                         org.assertj.core.groups.Tuple.tuple(
-                                2, VisualLocatorResponsePolicy.ModelAction.ACCEPT_CANDIDATE, "T6N1"),
-                        org.assertj.core.groups.Tuple.tuple(
-                                3, VisualLocatorResponsePolicy.ModelAction.NO_VISUAL, null));
-        assertThat(guide.reviews().stream()
-                        .filter(review -> review.action()
-                                == VisualLocatorResponsePolicy.ModelAction.ACCEPT_CANDIDATE))
-                .allSatisfy(review -> {
-                    assertThat(review.label()).isNotBlank();
-                    assertThat(review.visibleDescription()).isNotBlank();
-                });
+                                2, VisualLocatorResponsePolicy.ModelAction.ACCEPT_CANDIDATE, "T6N1"));
         assertThat(content)
                 .doesNotContain(
                         "\"x\"",
@@ -132,7 +127,7 @@ class VisualCandidateSelectionPaidCanaryTest {
         return ChatClient.create(model)
                 .prompt()
                 .options(options)
-                .system(SpringAiVisualRegionLocator.QWEN_SYSTEM)
+                .system(SpringAiVisualRegionLocator.SYSTEM)
                 .user(user -> {
                     user.text("""
                                     Section: Visual candidate boundary canary

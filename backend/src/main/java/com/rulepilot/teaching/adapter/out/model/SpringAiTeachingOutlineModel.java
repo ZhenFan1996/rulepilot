@@ -33,6 +33,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.retry.TransientAiException;
@@ -138,21 +143,26 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             ModelCallExecutor calls) {
         AgentState state = startState(request);
         Set<RejectionObservation> seenRejections = new LinkedHashSet<>();
+        Set<Integer> deliveredPages = new LinkedHashSet<>();
+        List<Message> conversation = new ArrayList<>();
+        conversation.add(new SystemMessage(systemPrompt));
         for (int turn = 1; ; turn++) {
-            String stateJson = json(state.view());
-            String callInput = systemPrompt + "\n" + userPrompt + "\n" + stateJson;
+            String stateJson = json(state.view(deliveredPages));
+            conversation.add(new UserMessage(new PromptTemplate(userPrompt).render(Map.of(
+                    "learningGoal", request.learningGoalForPrompt(), "state", stateJson))));
+            deliveredPages.addAll(state.readPages);
+            String callInput = conversation.stream().map(Message::getText)
+                    .collect(java.util.stream.Collectors.joining("\n"));
             String content = callProvider(
                     calls,
                     "advanceTeachingOutlineAgent|" + turn,
                     callInput,
                     "Teaching outline Agent chose its next action",
                     () -> configuredPrompt(role, owner)
-                            .system(systemPrompt)
-                            .user(user -> user.text(userPrompt)
-                                    .param("learningGoal", request.learningGoalForPrompt())
-                                    .param("state", stateJson))
+                            .messages(List.copyOf(conversation))
                             .call()
                             .content());
+            conversation.add(new AssistantMessage(content == null ? "" : content));
             try {
                 OutlineAction action = parseAction(content);
                 switch (action) {
@@ -168,7 +178,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 recordRejection(calls, turn, rejection);
                 if (!seenRejections.add(rejection)) {
                     throw new InvalidOutlineAction(
-                            "teaching outline Agent repeated the same rejected complete action and observation",
+                            "teaching outline Agent repeated the same rejected action and observation",
                             invalid);
                 }
                 state.observe(rejection);
@@ -345,13 +355,14 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             this.pages = pages;
         }
 
-        private AgentView view() {
+        private AgentView view(Set<Integer> deliveredPages) {
             List<PagePreview> available = pages.values().stream()
                     .map(page -> new PagePreview(
                             page.pageNumber(),
                             page.available() ? "AVAILABLE" : "UNAVAILABLE"))
                     .toList();
             List<ReadPage> read = readPages.stream()
+                    .filter(page -> !deliveredPages.contains(page))
                     .map(pages::get)
                     .filter(java.util.Objects::nonNull)
                     .map(page -> new ReadPage(page.pageNumber(), page.text(), page.visualAidAvailable()))
@@ -360,6 +371,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     BASE_OUTPUT_LOCALE,
                     request.learningGoalForPrompt(),
                     available,
+                    List.copyOf(readPages),
                     read,
                     List.copyOf(chapters.values()),
                     unreadAvailablePages(),
@@ -520,7 +532,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
 
         private void observe(RejectionObservation observation) {
-            latestObservation = observation;
+            // The complete candidate is already present exactly once as the preceding assistant message.
+            latestObservation = Map.of(
+                    "code", observation.code(), "path", observation.path(), "reason", observation.reason(),
+                    "schema", observation.schema(), "allowedPageIds", observation.allowedPageIds(),
+                    "allowedChapterIds", observation.allowedChapterIds());
         }
 
         private void reject(String code, String path, String reason) {
@@ -604,7 +620,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             String outputLocale,
             String learningGoal,
             List<PagePreview> availablePages,
-            List<ReadPage> readRulePages,
+            List<Integer> readPageIds,
+            List<ReadPage> newlyReadRulePages,
             List<ChapterCandidate> publishedChapters,
             List<Integer> unreadAvailablePageIds,
             List<Integer> readPagesNotUsedByAnyChapter,

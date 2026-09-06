@@ -28,5 +28,5 @@ chapter. If those pages contain a material unhandled procedure, publish the miss
 `unresolvedTopics`.
 
 Return exactly one complete JSON action matching `actionSchema`. Never return Markdown, prose outside the JSON,
-patches, or partial fields. A rejection observation contains the complete rejected JSON, typed code/path/reason, the
-same schema, and all allowed identities; regenerate the whole action.
+patches, or partial fields. The preceding assistant message preserves the complete rejected JSON; the rejection observation provides the typed
+code/path/reason, same schema, and all allowed identities. Regenerate the whole action.

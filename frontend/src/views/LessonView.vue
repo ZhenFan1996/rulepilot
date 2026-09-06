@@ -43,6 +43,7 @@ interface TeachingPlan {
   documentVersionId: string
   gameTitle: string
   premise: string
+  wholeGameContext?: { unresolvedTopics: string[] }
   sections: Array<{
     position: number
     title: string
@@ -239,16 +240,11 @@ function terminalGenerationPresentation(
   } else if (complete) {
     kind = 'COMPLETE'
     message = t('lesson.generation.finished.complete')
-  } else if (state === 'COMPLETED' && readable) {
+  } else if (['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED'].includes(state) && readable) {
     kind = 'READABLE'
     message = locale.value === 'en'
-      ? 'This generation run has finished with a readable guide draft. Additional content review is not complete.'
-      : '本轮生成已经结束；可读讲解草稿已经保留，额外内容复核尚未完成。'
-  } else if ((state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') && readable) {
-    kind = 'READABLE'
-    message = locale.value === 'en'
-      ? `${readableCount} readable ${readableCount === 1 ? 'chapter draft is' : 'chapter drafts are'} preserved. Content without enough evidence or completed review was not published as a complete guide.`
-      : `本轮生成已经结束；已保留 ${readableCount} 章可读讲解草稿，证据不足或未完成复核的部分没有作为完整讲解发布。`
+      ? `This generation run has finished. ${readableCount} readable ${readableCount === 1 ? 'chapter is' : 'chapters are'} available; the guide has not been marked complete.`
+      : `本轮生成已经结束；${readableCount} 章讲解可读，课程尚未标记为完整。`
   } else if (state === 'COMPLETED' || state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
     kind = 'NEEDS_ACTION'
     message = locale.value === 'en'
@@ -806,6 +802,14 @@ onUnmounted(() => {
         :finished-message="generationTerminalPresentation?.message ?? ''"
         :finished-status="generationTerminalPresentation?.workStatus ?? null"
       />
+      <aside
+        v-if="plan?.wholeGameContext?.unresolvedTopics.length"
+        data-testid="lesson-unresolved-topics"
+        class="mx-auto my-4 max-w-4xl rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-6 text-amber-950"
+      >
+        <p class="font-semibold">{{ locale === 'en' ? 'Topics not covered in this guide' : '本课程尚未覆盖的主题' }}</p>
+        <ul class="mt-2 list-disc pl-5"><li v-for="topic in plan.wholeGameContext.unresolvedTopics" :key="topic">{{ topic }}</li></ul>
+      </aside>
       <section
         v-if="generationRestartPresentation"
         data-testid="lesson-generation-restart"

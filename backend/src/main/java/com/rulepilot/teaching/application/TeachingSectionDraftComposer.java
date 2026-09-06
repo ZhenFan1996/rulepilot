@@ -13,7 +13,6 @@ import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
-import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -43,11 +42,10 @@ final class TeachingSectionDraftComposer {
     TeachingSectionDraftComposer(
             TeachingLessonModel model,
             EvidenceVerifier evidenceVerifier,
-            AuditedAgentInvocations invocations,
-            VisualRulebookPageFacts visualFacts) {
+            AuditedAgentInvocations invocations) {
         this.model = model;
         this.invocations = invocations;
-        this.requestFactory = new TeachingSectionModelRequestFactory(visualFacts);
+        this.requestFactory = new TeachingSectionModelRequestFactory();
         this.candidateValidator = new TeachingSectionCandidateValidator(evidenceVerifier);
     }
 

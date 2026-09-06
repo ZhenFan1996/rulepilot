@@ -57,7 +57,16 @@ class SpringAiTeachingOutlineModelRetryTest {
         });
         assertThat(outline.unresolvedTopics())
                 .containsExactly("维修细节仍需补充");
-        verify(fixture.chatModel, times(3)).call(any(Prompt.class));
+        ArgumentCaptor<Prompt> conversation = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel, times(3)).call(conversation.capture());
+        Prompt completion = conversation.getAllValues().getLast();
+        assertThat(completion.getInstructions().stream().filter(AssistantMessage.class::isInstance))
+                .hasSize(2);
+        String context = promptText(completion);
+        for (PageInput page : request().pages()) {
+            assertThat(context.indexOf(page.text())).isGreaterThanOrEqualTo(0);
+            assertThat(context.indexOf(page.text())).isEqualTo(context.lastIndexOf(page.text()));
+        }
     }
 
     @Test
@@ -84,13 +93,16 @@ class SpringAiTeachingOutlineModelRetryTest {
 
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(fixture.chatModel, times(3)).call(prompts.capture());
-        String repairState = promptText(prompts.getAllValues().get(1));
+        Prompt repairPrompt = prompts.getAllValues().get(1);
+        assertThat(repairPrompt.getInstructions().stream()
+                .filter(AssistantMessage.class::isInstance).map(message -> message.getText()).toList())
+                .containsExactly(invalid);
+        String repairState = promptText(repairPrompt);
         assertThat(repairState)
                 .contains("\"code\":\"INVALID_CHAPTER_ID\"")
                 .contains("\"path\":\"$.chapter.key\"")
                 .contains("\"reason\":\"chapter key must be unique kebab-case\"")
                 .contains("\"schema\":")
-                .contains("\"candidateJson\":")
                 .contains("bad_key")
                 .contains("\"allowedPageIds\":[\"page-1\"]")
                 .contains("\"allowedChapterIds\":[]");

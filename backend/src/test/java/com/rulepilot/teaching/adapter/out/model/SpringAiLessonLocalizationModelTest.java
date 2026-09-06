@@ -28,6 +28,8 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -74,8 +76,9 @@ class SpringAiLessonLocalizationModelTest {
         assertThat(options.getExtraBody()).containsEntry("thinking", Map.of("type", "disabled"));
     }
 
-    @Test
-    void preservesCompleteVisualProseAndTranslatesStructuredRuleFacts() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void preservesCompleteVisualProseAndTranslatesStructuredRuleFacts(boolean sourceHasDescription) {
         UUID evidenceId = UUID.randomUUID();
         LessonSection source = new LessonSection(
                 1,
@@ -102,7 +105,7 @@ class SpringAiLessonLocalizationModelTest {
                                         "把主棋盘放在桌面中央。",
                                         List.of(2),
                                         List.of(evidenceId))),
-                                new VisualFocus(2, "主棋盘", "图中显示主棋盘和周围组件。", 100, 100, 300, 300)),
+                                new VisualFocus(2, "主棋盘", sourceHasDescription ? "图中显示主棋盘和周围组件。" : "", 100, 100, 300, 300)),
                         new LessonStep(
                                 2,
                                 "检查",
@@ -111,8 +114,8 @@ class SpringAiLessonLocalizationModelTest {
                                 List.of(2),
                                 List.of(),
                                 null)));
-        String longDescription = "This crop shows the board and every nearby component in a deliberately verbose "
-                .repeat(6);
+        String longDescription = sourceHasDescription
+                ? "This crop shows the board and every nearby component in a deliberately verbose ".repeat(6) : "";
         SectionTranslationDraft draft = new SectionTranslationDraft(
                 1,
                 "Setup",

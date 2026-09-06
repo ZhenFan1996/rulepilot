@@ -171,8 +171,6 @@ public class UploadedDocumentIngestion {
         if (renderedPageCount.get() != totalPages) {
             throw new IllegalStateException("rendered page count does not match extracted page count");
         }
-        // Optional modules can enrich a fully rendered immutable document without being coupled into this pipeline.
-        events.publishEvent(new RenderedDocumentAvailable(documentVersionId, totalPages));
         // Keep the positioned extraction that just produced the durable page text. Re-opening the same PDF in the
         // next queue stage adds substantial work on a small worker and can only reproduce these same source blocks.
         documents.markStructuring(documentVersionId);
@@ -219,6 +217,9 @@ public class UploadedDocumentIngestion {
         progress.update(documentVersionId, "INDEXING", 95, pageCount, false);
         documents.markReady(documentVersionId);
         progress.update(documentVersionId, "READY", 100, pageCount, true);
+        // Synchronous optional listeners may take minutes. Publish only after readiness is durable and visible,
+        // so teaching and Q&A can use the document while visual enrichment finishes on this worker.
+        events.publishEvent(new RenderedDocumentAvailable(documentVersionId, pageCount));
     }
 
     static int renderingPercentage(int completedPages, int totalPages) {

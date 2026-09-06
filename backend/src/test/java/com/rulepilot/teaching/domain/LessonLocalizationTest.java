@@ -13,16 +13,19 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LessonLocalizationTest {
 
-    @Test
-    void replacesOnlyPlayerVisibleProseWhileKeepingTheCitedStructureAndCrop() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void replacesOnlyPlayerVisibleProseWhileKeepingTheCitedStructureAndCrop(boolean sourceHasDescription) {
         UUID lessonId = UUID.randomUUID();
         UUID planId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         VisualFocus primary = new VisualFocus(
-                2, "玩家板", "蓝色玩家板旁放着三个木制标记", 100, 200, 300, 400);
+                2, "玩家板", sourceHasDescription ? "蓝色玩家板旁放着三个木制标记" : "", 100, 200, 300, 400);
         VisualFocus secondary = new VisualFocus(
                 4, "行动牌", "三张行动牌并排放在玩家板右侧", 250, 150, 450, 250);
         IllustratedLesson source = new IllustratedLesson(
@@ -63,7 +66,7 @@ class LessonLocalizationTest {
                                         "Place your player mat",
                                         "Put your player mat in front of you.",
                                         "Player mat",
-                                        "Three wooden markers sit beside a blue player mat.")))),
+                                        sourceHasDescription ? "Three wooden markers sit beside a blue player mat." : "")))),
                         Instant.now());
 
         IllustratedLesson localized = localization.applyTo(source);
@@ -76,7 +79,7 @@ class LessonLocalizationTest {
         assertThat(step.visualFocus()).isEqualTo(new VisualFocus(
                 2,
                 "Player mat",
-                "Three wooden markers sit beside a blue player mat.",
+                sourceHasDescription ? "Three wooden markers sit beside a blue player mat." : "",
                 100,
                 200,
                 300,
@@ -86,7 +89,7 @@ class LessonLocalizationTest {
                         new VisualFocus(
                                 2,
                                 "Player mat",
-                                "Three wooden markers sit beside a blue player mat.",
+                                sourceHasDescription ? "Three wooden markers sit beside a blue player mat." : "",
                                 100,
                                 200,
                                 300,

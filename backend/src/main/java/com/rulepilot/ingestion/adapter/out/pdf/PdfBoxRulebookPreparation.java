@@ -15,6 +15,8 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.stream.Collectors;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -155,7 +157,8 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     static List<DocumentProcessing.ExtractedPage> extractPages(PDDocument document, int maxExtractedCharacters)
             throws IOException {
         LayoutTextStripper stripper = new LayoutTextStripper();
-        stripper.setSortByPosition(true);
+        // Capture authored text runs before ordering whole blocks by page whitespace. Sorting individual glyphs
+        // globally merges neighboring columns; content-stream order alone can put headings after their bodies.
         // PDFTextStripper initializes document and writer state through getText. LayoutTextStripper captures each
         // page's writer output itself, so this traverses the PDF page tree once instead of once per page.
         stripper.getText(document);
@@ -485,11 +488,18 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
         @Override
         protected void writePage() throws IOException {
             var originalOutput = output;
-            var pageOutput = new java.io.StringWriter();
-            output = pageOutput;
+            output = java.io.Writer.nullWriter();
             try {
                 super.writePage();
-                textByPage.add(pageOutput.toString());
+                List<DocumentProcessing.ExtractedTextBlock> ordered = new ArrayList<>();
+                orderByWhitespace(List.copyOf(blocks), ordered);
+                blocks.clear();
+                for (var block : ordered) {
+                    blocks.add(new DocumentProcessing.ExtractedTextBlock(blocks.size(), block.text(),
+                            block.x(), block.y(), block.width(), block.height()));
+                }
+                textByPage.add(blocks.stream().map(DocumentProcessing.ExtractedTextBlock::text)
+                        .collect(Collectors.joining("\n")));
             } finally {
                 output = originalOutput;
             }
@@ -539,6 +549,41 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             if (x + width > 1_000) width = 1_000 - x;
             if (y + height > 1_000) height = 1_000 - y;
             blocks.add(new DocumentProcessing.ExtractedTextBlock(blocks.size(), text, x, y, width, height));
+        }
+
+        // Recursive whitespace cuts preserve columns as units before reading their lines top-to-bottom.
+        // Only empty geometric gaps split regions; when boxes overlap, retain their authored order.
+        private void orderByWhitespace(List<DocumentProcessing.ExtractedTextBlock> region,
+                List<DocumentProcessing.ExtractedTextBlock> ordered) {
+            if (region.size() < 2) {
+                ordered.addAll(region);
+                return;
+            }
+            for (boolean horizontal : new boolean[] {false, true}) {
+                var sorted = region.stream().sorted(Comparator.comparingInt(block ->
+                        horizontal ? block.y() : block.x())).toList();
+                int end = horizontal ? sorted.getFirst().y() + sorted.getFirst().height()
+                        : sorted.getFirst().x() + sorted.getFirst().width();
+                int cut = -1;
+                int widest = 0;
+                for (int index = 1; index < sorted.size(); index++) {
+                    var block = sorted.get(index);
+                    int start = horizontal ? block.y() : block.x();
+                    int gap = start - end;
+                    if (gap > widest || (gap > 0 && gap == widest
+                            && Math.abs(index - sorted.size() / 2) < Math.abs(cut - sorted.size() / 2))) {
+                        widest = gap;
+                        cut = index;
+                    }
+                    end = Math.max(end, start + (horizontal ? block.height() : block.width()));
+                }
+                if (cut > 0) {
+                    orderByWhitespace(sorted.subList(0, cut), ordered);
+                    orderByWhitespace(sorted.subList(cut, sorted.size()), ordered);
+                    return;
+                }
+            }
+            ordered.addAll(region);
         }
 
         private int normalized(float value, float dimension) {

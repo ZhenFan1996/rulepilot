@@ -365,7 +365,6 @@ public class VisualLessonEnricher {
             case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉服务调用失败；这不是 JSON 格式错误，仅省略本节配图，已校验正文保持不变";
             case CANDIDATE_PREPARATION_FAILED -> "第 " + sectionPosition + " 节的候选截图无法生成；仅省略配图，已校验正文保持不变";
             case REJECTED_TOO_SMALL -> "第 " + sectionPosition + " 节的截图太小，无法辅助理解；仅省略配图，已校验正文保持不变";
-            case REJECTED_MISSING_OBSERVATION -> "第 " + sectionPosition + " 节的截图没有可核对的图中说明；仅省略配图，已校验正文保持不变";
             case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节的候选只有文字或标题；仅省略配图，已校验正文保持不变";
             case REJECTED_OUTSIDE_CANDIDATE -> "第 " + sectionPosition + " 节的返回区域不在可引用范围内；仅省略配图，已校验正文保持不变";
             case REJECTED_UNKNOWN_EVIDENCE -> "第 " + sectionPosition + " 节的截图没有对应规则依据；仅省略配图，已校验正文保持不变";
@@ -457,7 +456,6 @@ public class VisualLessonEnricher {
         MODEL_PROVIDER_FAILURE,
         CANDIDATE_PREPARATION_FAILED,
         REJECTED_TOO_SMALL,
-        REJECTED_MISSING_OBSERVATION,
         REJECTED_NON_VISUAL,
         REJECTED_OUTSIDE_CANDIDATE,
         REJECTED_UNKNOWN_EVIDENCE,

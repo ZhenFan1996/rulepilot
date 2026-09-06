@@ -1,6 +1,5 @@
 package com.rulepilot.visualaid.adapter.out.persistence;
 
-import com.rulepilot.visualaid.VisualRegionCatalog;
 import com.rulepilot.visualaid.VisualRegionCatalog.Region;
 import com.rulepilot.visualaid.application.VisualRegionIndex;
 import jakarta.persistence.Column;
@@ -18,7 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 @Profile("!test")
-public class JpaVisualRegionIndex implements VisualRegionCatalog, VisualRegionIndex {
+public class JpaVisualRegionIndex implements VisualRegionIndex {
 
     private final EntityManager entityManager;
 

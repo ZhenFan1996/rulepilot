@@ -282,7 +282,6 @@ public interface TeachingLessonModel {
             String sectionType,
             String heading,
             String excerpt,
-            String visualPresentation,
             EvidenceContentKind contentKind,
             int pageFrom,
             int pageTo) {
@@ -299,7 +298,6 @@ public interface TeachingLessonModel {
                     sectionType,
                     heading,
                     excerpt,
-                    null,
                     EvidenceContentKind.CANONICAL_TEXT,
                     pageFrom,
                     pageTo);
@@ -311,9 +309,6 @@ public interface TeachingLessonModel {
                     || contentKind == null || pageFrom < 1 || pageTo < pageFrom) {
                 throw new IllegalArgumentException("teaching evidence input is invalid");
             }
-            visualPresentation = visualPresentation == null || visualPresentation.isBlank()
-                    ? null
-                    : visualPresentation.strip();
         }
     }
 

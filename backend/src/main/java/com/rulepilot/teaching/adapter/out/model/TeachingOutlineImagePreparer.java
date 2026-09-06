@@ -40,7 +40,7 @@ final class TeachingOutlineImagePreparer {
             BufferedImage source = ImageIO.read(new ByteArrayInputStream(input.content()));
             if (source == null) throw new IllegalArgumentException("rulebook visual locator page image cannot be decoded");
             BufferedImage resized = resize(source);
-            return new VisualRegionLocator.PageImage(input.pageNumber(), "image/jpeg", encode(resized));
+            return new VisualRegionLocator.PageImage(input.pageNumber(), "image/jpeg", encode(resized), input.sourceText());
         } catch (IOException exception) {
             throw new UncheckedIOException("could not prepare rulebook visual locator page", exception);
         }

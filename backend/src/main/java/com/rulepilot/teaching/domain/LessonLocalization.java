@@ -126,7 +126,10 @@ public record LessonLocalization(
                 .toList();
         boolean hasTranslatedVisualLabel = !translated.visualLabel().isBlank();
         boolean hasTranslatedVisualDescription = !translated.visualDescription().isBlank();
-        if (hasTranslatedVisualLabel != hasTranslatedVisualDescription) {
+        boolean hasSourceVisualDescription = source.visualFocus() != null
+                && !source.visualFocus().visibleDescription().isBlank();
+        if ((hasTranslatedVisualDescription && !hasTranslatedVisualLabel)
+                || (hasTranslatedVisualLabel && hasTranslatedVisualDescription != hasSourceVisualDescription)) {
             throw new IllegalArgumentException("localized visual focus is incomplete");
         }
         List<VisualFocus> visualFoci = new java.util.ArrayList<>(source.visualFoci());

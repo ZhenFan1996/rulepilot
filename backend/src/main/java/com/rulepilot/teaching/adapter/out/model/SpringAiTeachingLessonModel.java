@@ -475,7 +475,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             evidence.sectionType(),
                             evidence.heading(),
                             readableEvidence(evidence.excerpt()),
-                            evidence.visualPresentation(),
                             evidence.contentKind(),
                             evidence.pageFrom(),
                             evidence.pageTo());
@@ -571,7 +570,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             String sectionType,
             String heading,
             String excerpt,
-            String visualPresentation,
             TeachingLessonModel.EvidenceContentKind contentKind,
             int pageFrom,
             int pageTo) {}

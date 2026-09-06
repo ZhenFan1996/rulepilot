@@ -12,6 +12,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -53,9 +54,10 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
         try {
             temporaryPdf = Files.createTempFile("rulepilot-docling-", ".pdf");
             copyBounded(rulebookPdf, temporaryPdf);
-            String taskId = submit(temporaryPdf);
-            await(taskId);
-            return mapDocument(downloadResult(taskId));
+            Instant deadline = Instant.now().plus(properties.timeout());
+            String taskId = submit(RequestBody.create(temporaryPdf.toFile(), PDF), "rulebook.pdf", deadline);
+            await(taskId, deadline);
+            return mapDocument(downloadResult(taskId, deadline));
         } catch (IOException exception) {
             throw new UncheckedIOException("Docling visual layout request failed", exception);
         } finally {
@@ -67,6 +69,29 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
                 }
             }
         }
+    }
+
+    @Override
+    public Extraction extractImage(byte[] image, Duration timeout) {
+        if (image == null || image.length == 0 || image.length > properties.maxFileBytes()
+                || timeout == null || timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("Docling image input is invalid");
+        }
+        Instant deadline = Instant.now().plus(timeout.compareTo(properties.timeout()) < 0 ? timeout : properties.timeout());
+        try {
+            String taskId = submit(RequestBody.create(image, MediaType.get("image/png")), "detail.png", deadline);
+            await(taskId, deadline);
+            return mapDocument(downloadResult(taskId, deadline));
+        } catch (IOException failure) {
+            throw new UncheckedIOException("Docling visual refinement failed", failure);
+        }
+    }
+
+    private static Duration remaining(Instant deadline) {
+        if (Thread.currentThread().isInterrupted()) throw new IllegalStateException("Docling conversion was interrupted");
+        Duration remaining = Duration.between(Instant.now(), deadline);
+        if (remaining.isNegative() || remaining.isZero()) throw new IllegalStateException("Docling conversion timed out");
+        return remaining;
     }
 
     private void copyBounded(InputStream source, Path target) throws IOException {
@@ -84,10 +109,10 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
         if (total == 0) throw new IllegalArgumentException("rulebook PDF is empty");
     }
 
-    private String submit(Path pdf) throws IOException {
+    private String submit(RequestBody file, String filename, Instant deadline) throws IOException {
         RequestBody body = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("files", "rulebook.pdf", RequestBody.create(pdf.toFile(), PDF))
+                .addFormDataPart("files", filename, file)
                 .addFormDataPart("to_formats", "json")
                 .addFormDataPart("target_type", "presigned_url")
                 .build();
@@ -95,23 +120,22 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
                 .url(properties.serviceUrl() + "/v1/convert/file/async")
                 .header("X-Api-Key", properties.apiKey())
                 .post(body)
-                .build());
+                .build(), deadline);
         String taskId = response.path("task_id").asText("").strip();
         if (taskId.isBlank()) throw new IllegalStateException("Docling did not return a task id");
         return taskId;
     }
 
-    private void await(String taskId) throws IOException {
-        Instant deadline = Instant.now().plus(properties.timeout());
+    private void await(String taskId, Instant deadline) throws IOException {
         while (Instant.now().isBefore(deadline)) {
-            JsonNode response = executeJson(authenticatedGet("/v1/status/poll/" + taskId));
+            JsonNode response = executeJson(authenticatedGet("/v1/status/poll/" + taskId), deadline);
             String status = response.path("task_status").asText("").toLowerCase(Locale.ROOT);
             if ("success".equals(status)) return;
             if (TERMINAL_FAILURES.contains(status)) {
                 throw new IllegalStateException("Docling conversion failed with status " + status);
             }
             try {
-                Thread.sleep(properties.pollInterval().toMillis());
+                Thread.sleep(Math.max(1, Math.min(properties.pollInterval().toMillis(), remaining(deadline).toMillis())));
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Docling conversion was interrupted", interrupted);
@@ -120,8 +144,8 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
         throw new IllegalStateException("Docling conversion timed out");
     }
 
-    private JsonNode downloadResult(String taskId) throws IOException {
-        JsonNode result = executeJson(authenticatedGet("/v1/result/" + taskId));
+    private JsonNode downloadResult(String taskId, Instant deadline) throws IOException {
+        JsonNode result = executeJson(authenticatedGet("/v1/result/" + taskId), deadline);
         if (result.path("num_succeeded").asInt(0) != 1 || result.path("num_failed").asInt(0) != 0) {
             throw new IllegalStateException("Docling conversion result was not successful");
         }
@@ -133,7 +157,7 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
             if ("json".equals(artifact.path("artifact_type").asText())
                     && "application/json".equals(artifact.path("mime_type").asText())) {
                 URI uri = allowedArtifactUri(artifact.path("uri").asText());
-                return executeJson(new Request.Builder().url(uri.toString()).get().build());
+                return executeJson(new Request.Builder().url(uri.toString()).get().build(), deadline);
             }
         }
         throw new IllegalStateException("Docling returned no JSON artifact");
@@ -147,8 +171,10 @@ public final class DoclingVisualLayoutExtractor implements VisualLayoutExtractor
                 .build();
     }
 
-    private JsonNode executeJson(Request request) throws IOException {
-        try (Response response = http.newCall(request).execute()) {
+    private JsonNode executeJson(Request request, Instant deadline) throws IOException {
+        var call = http.newCall(request);
+        call.timeout().timeout(remaining(deadline).toNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+        try (Response response = call.execute()) {
             if (!response.isSuccessful()) {
                 throw new IllegalStateException("Docling request failed with status " + response.code());
             }

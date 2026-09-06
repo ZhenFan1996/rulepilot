@@ -132,24 +132,6 @@ public interface VisualRulebookPageFacts {
                             : "\nCataloged visual anchors (0-1000 page coordinates):" + anchors);
         }
 
-        /**
-         * Lesson prose may use the visual pass for presentation, never as a second source of rule effects.
-         * Keeping the factual summary out of this projection prevents an image interpretation from silently
-         * overriding or supplementing the cited PDF text.
-         */
-        public String presentationEvidenceText() {
-            String anchors = visualAnchors.stream()
-                    .map(anchor -> anchor.kind() + " | " + anchor.label()
-                            + " | " + anchor.visibleDescription())
-                    .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
-            return "Visual presentation data only. Do not use it to state a rule effect, condition, quantity, score, "
-                    + "timing, or exception. It may inform only a typed VISUAL intent and the literal relationship "
-                    + "a later page-grounded visual aid should help the player notice."
-                    + "\nPrinted terms: " + printedTerms
-                    + (visualAnchors.isEmpty()
-                            ? "\nCataloged visual anchors: none"
-                            : "\nCataloged visual anchors:" + anchors);
-        }
 
     }
 
