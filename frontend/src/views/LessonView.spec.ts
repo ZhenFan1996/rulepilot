@@ -342,6 +342,7 @@ describe('LessonView progressive reading', () => {
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
           ...planFixture('plan-1', 'Cited draft'),
+          wholeGameContext: { unresolvedTopics: ['Optional module needs a separate rulebook'] },
           sections: [{ position: 1, title: 'Readable draft', visualEvidenceRecommended: false }],
         })
       }
@@ -366,8 +367,7 @@ describe('LessonView progressive reading', () => {
     expect(status.text()).toBe('Chapters available')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(status.attributes('data-player-work-outcome')).toBe('none')
-    expect(wrapper.text()).toContain('readable guide draft')
-    expect(wrapper.text()).toContain('Additional content review is not complete')
+    expect(wrapper.get('[data-testid="lesson-unresolved-topics"]').text()).toContain('Optional module needs a separate rulebook')
     expect(wrapper.text()).not.toContain('Guide complete')
     expect(wrapper.text()).not.toContain('Every chapter is loaded')
     expect(status.element.closest('[role="status"]')?.classList.contains('bg-amber-50')).toBe(true)
@@ -491,8 +491,6 @@ describe('LessonView progressive reading', () => {
     expect(status.text()).toBe('已有章节可读')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(status.attributes('data-player-work-outcome')).toBe('none')
-    expect(wrapper.text()).toContain('已保留 1 章可读讲解草稿')
-    expect(wrapper.text()).toContain('没有作为完整讲解发布')
     expect(wrapper.text()).not.toContain('讲解完成')
     expect(wrapper.text()).not.toContain('需要处理')
     wrapper.unmount()

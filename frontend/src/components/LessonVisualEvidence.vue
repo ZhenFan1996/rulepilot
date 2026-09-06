@@ -322,9 +322,9 @@ function isReliableDetailViewport(focus: VisualFocus) {
         <span class="text-xs font-semibold text-muted">{{ t('lesson.chapter.page', { page: focus.pageNumber }) }}</span>
       </div>
       <p class="mt-1 font-display text-lg font-semibold text-ink">{{ focus.label }}</p>
-      <p class="mt-2 text-sm leading-6 text-ink/70">
+      <p v-if="focus.visibleDescription" class="mt-2 text-sm leading-6 text-ink/70">
         <span class="font-semibold text-copper">{{ t('lesson.visualEvidence.lookFor') }}</span>
-        {{ focus.visibleDescription || focus.label }}
+        {{ focus.visibleDescription }}
       </p>
       <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted">
         <span>{{ t('lesson.visualEvidence.boundary') }}</span>

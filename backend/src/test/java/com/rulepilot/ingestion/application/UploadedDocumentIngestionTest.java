@@ -84,7 +84,7 @@ class UploadedDocumentIngestionTest {
         verify(progress).update(versionId, "CHUNKING", 85, 3, false);
         verify(documents).markStructuring(versionId);
         verify(documents).markChunking(versionId);
-        verify(events).publishEvent(new RenderedDocumentAvailable(versionId, 3));
+        verifyNoInteractions(events);
         InOrder statusOrder = inOrder(documents);
         statusOrder.verify(documents).markStructuring(versionId);
         statusOrder.verify(documents).markChunking(versionId);
@@ -93,10 +93,15 @@ class UploadedDocumentIngestionTest {
         InOrder persistenceBeforeImages = inOrder(structures, pageImages);
         persistenceBeforeImages.verify(structures).organize(versionId, pages);
         persistenceBeforeImages.verify(pageImages, Mockito.times(3)).store(Mockito.eq(versionId), any());
-        InOrder renderingBeforePlugin = inOrder(pageImages, events, documents);
-        renderingBeforePlugin.verify(pageImages, Mockito.times(3)).store(Mockito.eq(versionId), any());
-        renderingBeforePlugin.verify(events).publishEvent(new RenderedDocumentAvailable(versionId, 3));
-        renderingBeforePlugin.verify(documents).markStructuring(versionId);
+        when(documents.pageCount(versionId)).thenReturn(3);
+        doAnswer(ignored -> {
+                    // Readiness must already be durable and visible when a slow optional listener begins.
+                    verify(documents).markReady(versionId);
+                    verify(progress).update(versionId, "READY", 100, 3, true);
+                    return null;
+                }).when(events).publishEvent(new RenderedDocumentAvailable(versionId, 3));
+        ingestion.process(versionId, DocumentProcessingStage.EMBED);
+        verify(events).publishEvent(new RenderedDocumentAvailable(versionId, 3));
         assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
                         .tag("phase", "extraction").timer().count())
                 .isOne();

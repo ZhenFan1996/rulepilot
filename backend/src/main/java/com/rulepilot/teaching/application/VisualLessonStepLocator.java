@@ -249,6 +249,7 @@ final class VisualLessonStepLocator {
         boolean candidateFound = false;
         boolean stopped = false;
         int batchNumber = 1;
+        Set<String> refinedIds = new LinkedHashSet<>();
         for (int pageStart = 0;
                 !stopped && pageStart < candidatePages.size();
                 pageStart += DocumentPageImages.MAX_PAGES_PER_READ) {
@@ -279,7 +280,7 @@ final class VisualLessonStepLocator {
             candidateFound = true;
 
             for (int offset = 0;
-                    offset < selected.size();
+                    !stopped && offset < selected.size();
                     offset += VisualRegionLocator.VisualLocationRequest.MAX_CANDIDATES_PER_BATCH) {
                 boundary = boundary(runId, workflowDeadline);
                 if (boundary.stoppedOutcome() != null) {
@@ -324,7 +325,12 @@ final class VisualLessonStepLocator {
                             .map(VisualRegionCandidateSelector.Candidate::pageNumber)
                             .distinct()
                             .map(availablePages::get)
-                            .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
+                            .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content(),
+                                    understanding.pageBlocks().stream()
+                                            .filter(block -> block.pageNumber() == image.pageNumber())
+                                            .sorted(java.util.Comparator.comparingInt(RulebookUnderstanding.PageBlock::readingOrder))
+                                            .map(RulebookUnderstanding.PageBlock::text)
+                                            .collect(Collectors.joining("\n"))))
                             .toList();
                     boolean hasMoreCandidates = !pending.isEmpty()
                             || end < selected.size()
@@ -341,7 +347,11 @@ final class VisualLessonStepLocator {
                                         runId == null ? null : documentVersionId,
                                         runId,
                                         batchNumber++,
-                                        hasMoreCandidates),
+                                        hasMoreCandidates,
+                                        indexedRegions.supportsRefinement() ? candidateBatch.candidates().stream()
+                                                .map(VisualRegionCandidateSelector.Candidate::candidateId)
+                                                .filter(id -> !refinedIds.contains(id)).collect(Collectors.toSet())
+                                                : Set.of()),
                                 boundary.remaining());
                     } catch (AgentExecutionStoppedException modelStopped) {
                         throw modelStopped;
@@ -357,6 +367,51 @@ final class VisualLessonStepLocator {
                                     candidateBatch.candidates().subList(0, split), false));
                         }
                         continue;
+                    }
+                    for (String refinementId : guide.refinementCandidateIds()) {
+                        var parent = candidateBatch.candidates().stream()
+                                .filter(candidate -> candidate.candidateId().equals(refinementId))
+                                .findFirst().orElseThrow(() -> new IllegalArgumentException("unknown refinement identity"));
+                        if (!indexedRegions.supportsRefinement() || !refinedIds.add(refinementId)) continue;
+                        boundary = boundary(runId, workflowDeadline);
+                        if (boundary.stoppedOutcome() != null) break;
+                        var rectangle = parent.rectangle();
+                        List<VisualRegionCatalog.Region> finer;
+                        var reservation = runId == null || execution == null ? null : execution.reserve(runId,
+                                AgentExecutionControl.ActivityType.TOOL, "refineVisualCandidate|" + refinementId,
+                                refinementId.length());
+                        long refinementStarted = System.nanoTime();
+                        boolean refinementFailed = false;
+                        try {
+                            finer = indexedRegions.refine(new VisualRegionCatalog.Region(parent.pageNumber(), "PICTURE",
+                                    rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height()),
+                                    availablePages.get(parent.pageNumber()).content(), boundary.remaining());
+                        } catch (AgentExecutionStoppedException stoppedExecution) {
+                            throw stoppedExecution;
+                        } catch (RuntimeException optionalRefinementFailure) {
+                            refinementFailed = true;
+                            finer = List.of();
+                        }
+                        if (reservation != null) execution.complete(reservation,
+                                refinementFailed ? AgentExecutionControl.ActivityOutcome.FAILED
+                                        : AgentExecutionControl.ActivityOutcome.SUCCEEDED,
+                                0, (System.nanoTime() - refinementStarted) / 1_000_000,
+                                refinementFailed ? "图片细分不可用；保留原候选" : "图片细分返回 " + finer.size() + " 个局部候选");
+                        var next = new ArrayList<VisualRegionCandidateSelector.Candidate>();
+                        next.add(parent); // A failed or unhelpful refinement never removes the selectable context.
+                        next.addAll(candidates.select(understanding, Set.of(parent.pageNumber()), terms(section, steps),
+                                Map.of(parent.pageNumber(), finer.stream()
+                                        .filter(child -> child.pageNumber() == parent.pageNumber()
+                                                && child.x() >= rectangle.x() && child.y() >= rectangle.y()
+                                                && child.x() + child.width() <= rectangle.x() + rectangle.width()
+                                                && child.y() + child.height() <= rectangle.y() + rectangle.height()
+                                                && child.width() * child.height() < rectangle.width() * rectangle.height())
+                                        .map(child -> new Proposal(new RulebookUnderstanding.Rectangle(
+                                                child.x(), child.y(), child.width(), child.height()))).toList())));
+                        for (int start = 0; start < next.size(); start += VisualRegionLocator.VisualLocationRequest.MAX_CANDIDATES_PER_BATCH) {
+                            pending.addLast(new CandidateBatch(List.copyOf(next.subList(start, Math.min(next.size(),
+                                    start + VisualRegionLocator.VisualLocationRequest.MAX_CANDIDATES_PER_BATCH))), true));
+                        }
                     }
                     if (guide.regions().isEmpty()) {
                         if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
@@ -535,7 +590,6 @@ final class VisualLessonStepLocator {
             List<VisualRegionCandidateSelector.Candidate> attachedCandidates,
             Set<UUID> evidenceIds) {
         if (!cropPolicy.isReadableForPlayer(region)) return VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
-        if (region.visibleDescription().isBlank()) return VisualLessonEnricher.Outcome.REJECTED_MISSING_OBSERVATION;
         if (!cropPolicy.isUsefulPlayerVisual(region)) return VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL;
         if (!cropPolicy.matchesCandidate(region, attachedCandidates)) {
             return VisualLessonEnricher.Outcome.REJECTED_OUTSIDE_CANDIDATE;

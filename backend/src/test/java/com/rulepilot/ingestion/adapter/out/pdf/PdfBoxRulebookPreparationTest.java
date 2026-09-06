@@ -27,6 +27,43 @@ import org.junit.jupiter.api.Test;
 class PdfBoxRulebookPreparationTest {
 
     @Test
+    void preservesColumnConditionsAndPlacesLateAuthoredHeadingsBeforeTheirBodies() throws IOException {
+        try (PDDocument document = new PDDocument()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(
+                        org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(50, 700);
+                content.showText("If the reactor remains online:");
+                content.newLineAtOffset(0, -20);
+                content.showText("Move the maintenance marker.");
+                content.endText();
+                content.beginText();
+                content.setFont(new PDType1Font(
+                        org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(330, 700);
+                content.showText("After shutdown:");
+                content.newLineAtOffset(0, -20);
+                content.showText("Remove all fuel from the reactor.");
+                content.endText();
+                content.beginText();
+                content.setFont(new PDType1Font(
+                        org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(50, 740);
+                content.showText("MAINTENANCE");
+                content.endText();
+            }
+            ExtractedPage extracted = PdfBoxRulebookPreparation.extractPages(document, 10_000).getFirst();
+            assertThat(extracted.text()).startsWith("MAINTENANCE");
+            assertThat(extracted.text().indexOf("Move the maintenance marker."))
+                    .isLessThan(extracted.text().indexOf("After shutdown:"));
+            assertThat(extracted.text()).contains("If the reactor remains online:", "Remove all fuel from the reactor.");
+        }
+    }
+
+    @Test
     void rejectsUnboundedEvidenceRenderSessions() {
         assertThatThrownBy(() -> new PdfBoxRulebookPreparation(10, 10_000, 0))
                 .isInstanceOf(IllegalArgumentException.class)

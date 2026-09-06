@@ -34,8 +34,6 @@ class VisualReaderCropPolicyTest {
         LocatedRegion ruleBox = region("文字说明", "规则框里只有文字", 100, 100, 280, 180);
         LocatedRegion contradicted = new LocatedRegion(
                 2,
-                "冲突区域",
-                "视觉模型明确标记该区域与被讲解主张冲突",
                 100,
                 100,
                 280,
@@ -53,8 +51,6 @@ class VisualReaderCropPolicyTest {
     void treatsFullPageAsATypedSourceInsteadOfRejectingItByArea() {
         LocatedRegion wholePage = new LocatedRegion(
                 2,
-                "完整流程图",
-                "整页是一张由箭头连接的连续流程图",
                 0,
                 0,
                 1_000,
@@ -89,6 +85,6 @@ class VisualReaderCropPolicyTest {
     }
 
     private LocatedRegion region(String label, String observation, int x, int y, int width, int height) {
-        return new LocatedRegion(2, label, observation, x, y, width, height, List.of(evidence), List.of(1));
+        return new LocatedRegion(2, x, y, width, height, List.of(evidence), List.of(1));
     }
 }

@@ -26,7 +26,7 @@ class BoundedVisualRegionLocatorTest {
         try {
             var bounded = new BoundedVisualRegionLocator(
                     ignored -> Optional.of(new VisualRegionLocator.LocatedRegion(
-                            1, "setup", 100, 100, 200, 200, List.of(evidence))), executor, Duration.ofSeconds(1));
+                            1, 100, 100, 200, 200, List.of(evidence))), executor, Duration.ofSeconds(1));
 
             assertThat(bounded.locate(request(evidence))).isPresent();
         } finally {
@@ -138,6 +138,6 @@ class BoundedVisualRegionLocatorTest {
                         1,
                         new RulebookUnderstanding.Rectangle(100, 100, 200, 200),
                         VisualSourceKind.PAGE_REGION)),
-                List.of(new VisualRegionLocator.PageImage(1, "image/png", new byte[] {1})));
+                List.of(new VisualRegionLocator.PageImage(1, "image/png", new byte[] {1}, "")));
     }
 }

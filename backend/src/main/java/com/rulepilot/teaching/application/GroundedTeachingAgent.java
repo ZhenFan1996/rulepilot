@@ -70,7 +70,7 @@ public class GroundedTeachingAgent {
         this.evidenceRetriever = new TeachingSectionEvidenceRetriever(
                 tools, evidenceVerifier, invocations, visualEvidenceResolver);
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
-                model, evidenceVerifier, invocations, visualFacts);
+                model, evidenceVerifier, invocations);
         this.workloadPolicy = new TeachingRunWorkloadPolicy();
         this.visualEnricher = visualEnricher;
     }

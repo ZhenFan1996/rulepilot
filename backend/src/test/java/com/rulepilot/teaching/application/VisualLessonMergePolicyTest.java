@@ -27,8 +27,6 @@ class VisualLessonMergePolicyTest {
                 region(evidence, "轨道状态", 320, 360, 260, 180),
                 new LocatedRegion(
                         2,
-                        "牌面示例",
-                        "卡牌下方有一排资源图标",
                         650,
                         180,
                         240,
@@ -47,9 +45,10 @@ class VisualLessonMergePolicyTest {
         assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
         assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
         assertThat(step.visualFocus()).isEqualTo(step.visualFoci().getFirst());
+        assertThat(step.visualFoci()).allSatisfy(focus -> assertThat(focus.visibleDescription()).isEmpty());
         assertThat(step.visualFoci())
                 .extracting(VisualFocus::label)
-                .containsExactly("行动图标", "轨道状态", "牌面示例");
+                .containsExactly(step.heading(), step.heading(), step.heading());
     }
 
     @Test
@@ -86,7 +85,7 @@ class VisualLessonMergePolicyTest {
         assertThat(merged.duplicateCount()).isZero();
         assertThat(merged.section().steps().getFirst().visualFoci())
                 .extracting(VisualFocus::label)
-                .containsExactly("流程概览", "阶段图标");
+                .containsExactly("流程概览", "执行流程");
     }
 
     @Test
@@ -133,8 +132,6 @@ class VisualLessonMergePolicyTest {
         LessonSection source = section(List.of(citedStep), List.of(4), List.of(evidence));
         LocatedRegion illustration = new LocatedRegion(
                 5,
-                "市场示意图",
-                "三叠牌下方各有两张蔬菜卡。",
                 100,
                 120,
                 700,
@@ -154,8 +151,6 @@ class VisualLessonMergePolicyTest {
     private LocatedRegion region(UUID evidence, String label, int x, int y, int width, int height) {
         return new LocatedRegion(
                 2,
-                label,
-                "图中可见" + label,
                 x,
                 y,
                 width,

@@ -11,7 +11,6 @@ import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
-import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
@@ -63,8 +62,7 @@ class TeachingSectionDraftComposerTest {
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
                 model,
                 new CitationScopeVerifier(),
-                directInvocations(),
-                VisualRulebookPageFacts.empty());
+                directInvocations());
 
         TeachingSectionDraftCandidate result = composer.compose(
                 plan, planned, List.of(), List.of(evidence), UUID.randomUUID(), 0);

@@ -4,21 +4,11 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
-import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
-/** Maps selected evidence and stored visual observations into one bounded teaching-model request. */
+/** Maps citation-owned rule evidence into the teaching-model request; visual selection has its own owner. */
 final class TeachingSectionModelRequestFactory {
-
-    private final VisualRulebookPageFacts visualFacts;
-
-    TeachingSectionModelRequestFactory(VisualRulebookPageFacts visualFacts) {
-        this.visualFacts = visualFacts;
-    }
 
     TeachingLessonModel.SectionRequest create(
             TeachingPlan plan,
@@ -30,30 +20,16 @@ final class TeachingSectionModelRequestFactory {
                 planned.title(),
                 planned.objective(),
                 priorSections,
-                modelEvidence(plan.documentVersionId(), evidence),
+                evidence.stream().map(this::toModelEvidence).toList(),
                 plan.createdBy());
     }
 
-    private List<EvidenceInput> modelEvidence(java.util.UUID documentVersionId, List<RuleEvidence> evidence) {
-        Set<Integer> pages = evidence.stream()
-                .filter(source -> source.pageFrom() == source.pageTo())
-                .map(RuleEvidence::pageFrom)
-                .collect(Collectors.toSet());
-        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
-                .collect(Collectors.toMap(
-                        VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::presentationEvidenceText));
-        return evidence.stream().map(source -> toModelEvidence(source, factsByPage)).toList();
-    }
-
-    private EvidenceInput toModelEvidence(RuleEvidence evidence, Map<Integer, String> factsByPage) {
-        String visualFact = evidence.pageFrom() == evidence.pageTo() ? factsByPage.get(evidence.pageFrom()) : null;
+    private EvidenceInput toModelEvidence(RuleEvidence evidence) {
         return new EvidenceInput(
                 evidence.chunkId(),
                 evidence.sectionType(),
                 evidence.heading(),
                 evidence.excerpt(),
-                evidence.contentKind() == RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION ? null : visualFact,
                 switch (evidence.contentKind()) {
                     case CANONICAL_TEXT -> TeachingLessonModel.EvidenceContentKind.CANONICAL_TEXT;
                     case VISUAL_PLACEHOLDER -> TeachingLessonModel.EvidenceContentKind.VISUAL_PLACEHOLDER;

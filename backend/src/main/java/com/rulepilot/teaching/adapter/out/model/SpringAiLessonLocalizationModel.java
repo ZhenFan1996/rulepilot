@@ -104,7 +104,9 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
                     }
                     boolean hasVisual = sourceStep.visualFocus() != null;
                     if (step.visualLabel() == null || step.visualDescription() == null
-                            || (hasVisual && (step.visualLabel().isBlank() || step.visualDescription().isBlank()))
+                            || (hasVisual && (step.visualLabel().isBlank()
+                                    || step.visualDescription().isBlank()
+                                            != sourceStep.visualFocus().visibleDescription().isBlank()))
                             || (!hasVisual && (!step.visualLabel().isEmpty() || !step.visualDescription().isEmpty()))) {
                         throw new IllegalArgumentException("localized lesson visual fields do not match the source step");
                     }

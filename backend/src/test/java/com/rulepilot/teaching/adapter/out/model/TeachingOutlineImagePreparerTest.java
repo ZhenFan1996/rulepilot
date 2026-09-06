@@ -53,10 +53,11 @@ class TeachingOutlineImagePreparerTest {
         ImageIO.write(source, "jpeg", encoded);
 
         VisualRegionLocator.PageImage prepared = preparer.prepare(
-                new VisualRegionLocator.PageImage(5, "image/jpeg", encoded.toByteArray()));
+                new VisualRegionLocator.PageImage(5, "image/jpeg", encoded.toByteArray(), "Source page rules"));
         BufferedImage result = ImageIO.read(new ByteArrayInputStream(prepared.content()));
 
         assertThat(prepared.pageNumber()).isEqualTo(5);
+        assertThat(prepared.sourceText()).isEqualTo("Source page rules");
         assertThat(prepared.mediaType()).isEqualTo("image/jpeg");
         assertThat(result.getWidth()).isEqualTo(1024);
         assertThat(result.getHeight()).isEqualTo(768);

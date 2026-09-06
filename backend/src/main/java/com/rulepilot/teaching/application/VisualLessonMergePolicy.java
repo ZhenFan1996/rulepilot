@@ -49,8 +49,8 @@ final class VisualLessonMergePolicy {
             LessonStep supportedStep = steps.get(supportedStepIndex.get());
             VisualFocus focus = new VisualFocus(
                     region.pageNumber(),
-                    region.label(),
-                    region.visibleDescription(),
+                    supportedStep.heading(),
+                    "",
                     region.x(),
                     region.y(),
                     region.width(),

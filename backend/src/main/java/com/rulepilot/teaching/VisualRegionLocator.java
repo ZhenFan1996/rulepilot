@@ -1,6 +1,5 @@
 package com.rulepilot.teaching;
 
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.time.Duration;
@@ -98,7 +97,11 @@ public interface VisualRegionLocator {
         }
     }
 
-    record LocateGuideResult(List<LocatedRegion> regions, Diagnostic diagnostic, BatchAction batchAction) {
+    record LocateGuideResult(List<LocatedRegion> regions, Diagnostic diagnostic, BatchAction batchAction,
+            List<String> refinementCandidateIds) {
+        public LocateGuideResult(List<LocatedRegion> regions, Diagnostic diagnostic, BatchAction batchAction) {
+            this(regions, diagnostic, batchAction, List.of());
+        }
         public LocateGuideResult {
             if (regions == null
                     || regions.size() > VisualLocationRequest.MAX_CANDIDATES_PER_BATCH
@@ -107,6 +110,10 @@ public interface VisualRegionLocator {
                     || (regions.isEmpty() && diagnostic == Diagnostic.FOUND)
                     || (!regions.isEmpty() && diagnostic != Diagnostic.FOUND)) {
                 throw new IllegalArgumentException("visual guide result is invalid");
+            }
+            refinementCandidateIds = List.copyOf(refinementCandidateIds);
+            if (!refinementCandidateIds.isEmpty() && batchAction != BatchAction.CONTINUE) {
+                throw new IllegalArgumentException("refinement requires another candidate batch");
             }
             regions = List.copyOf(regions);
         }
@@ -144,31 +151,14 @@ public interface VisualRegionLocator {
             UUID runId,
             int batchNumber,
             boolean hasMoreCandidates,
-            PlayerLocale outputLocale) {
-        public static final int MAX_CANDIDATES_PER_BATCH = 12;
-
-        public VisualLocationRequest(
-                String sectionTitle,
-                List<Claim> claims,
-                List<Candidate> candidates,
-                List<PageImage> pages,
-                String modelConfigurationOwner,
-                UUID documentVersionId,
-                UUID runId,
-                int batchNumber,
-                boolean hasMoreCandidates) {
-            this(
-                    sectionTitle,
-                    claims,
-                    candidates,
-                    pages,
-                    modelConfigurationOwner,
-                    documentVersionId,
-                    runId,
-                    batchNumber,
-                    hasMoreCandidates,
-                    PlayerLocale.ZH_CN);
+            Set<String> refinableCandidateIds) {
+        public VisualLocationRequest(String sectionTitle, List<Claim> claims, List<Candidate> candidates,
+                List<PageImage> pages, String modelConfigurationOwner, UUID documentVersionId, UUID runId,
+                int batchNumber, boolean hasMoreCandidates) {
+            this(sectionTitle, claims, candidates, pages, modelConfigurationOwner, documentVersionId, runId,
+                    batchNumber, hasMoreCandidates, Set.of());
         }
+        public static final int MAX_CANDIDATES_PER_BATCH = 12;
 
         public VisualLocationRequest(
                 String sectionTitle,
@@ -214,8 +204,7 @@ public interface VisualRegionLocator {
                     || pages == null || pages.isEmpty()
                     || candidates.size() > MAX_CANDIDATES_PER_BATCH
                     || pages.size() > MAX_CANDIDATES_PER_BATCH
-                    || batchNumber < 1
-                    || outputLocale == null) {
+                    || batchNumber < 1) {
                 throw new IllegalArgumentException("visual location request is invalid");
             }
             claims = List.copyOf(claims);
@@ -231,6 +220,10 @@ public interface VisualRegionLocator {
             Set<Integer> pageNumbers = pages.stream()
                     .map(PageImage::pageNumber)
                     .collect(java.util.stream.Collectors.toSet());
+            refinableCandidateIds = Set.copyOf(refinableCandidateIds);
+            if (!candidateIds.containsAll(refinableCandidateIds)) {
+                throw new IllegalArgumentException("refinable identities must belong to the offered batch");
+            }
             if (candidateIds.size() != candidates.size()
                     || candidateBoundaries.size() != candidates.size()
                     || pageNumbers.size() != pages.size()
@@ -290,25 +283,24 @@ public interface VisualRegionLocator {
         }
     }
 
-    record PageImage(int pageNumber, String mediaType, byte[] content) {
+    record PageImage(int pageNumber, String mediaType, byte[] content, String sourceText) {
         public PageImage {
             if (pageNumber < 1 || mediaType == null || mediaType.isBlank() || content == null || content.length == 0) {
                 throw new IllegalArgumentException("visual page image is invalid");
             }
             content = content.clone();
+            if (sourceText == null) throw new IllegalArgumentException("visual source text must be explicit");
         }
 
         @Override public byte[] content() { return content.clone(); }
     }
 
     /**
-     * A bounded, literal observation of a page region. It is deliberately not a rule interpretation:
+     * An identified page region without independently authored rule prose:
      * the associated text evidence remains the source for game-rule claims.
      */
     record LocatedRegion(
             int pageNumber,
-            String label,
-            String visibleDescription,
             int x,
             int y,
             int width,
@@ -318,7 +310,7 @@ public interface VisualRegionLocator {
             boolean claimContradicted,
             VisualSourceKind sourceKind) {
         public LocatedRegion {
-            if (pageNumber < 1 || label == null || label.isBlank()
+            if (pageNumber < 1
                     || x < 0 || y < 0 || width < 20 || height < 20 || x + width > 1_000 || y + height > 1_000
                     || supportedEvidenceIds == null || supportedEvidenceIds.isEmpty()
                     || supportedEvidenceIds.stream().anyMatch(java.util.Objects::isNull)
@@ -331,15 +323,12 @@ public interface VisualRegionLocator {
             if ((sourceKind == VisualSourceKind.FULL_PAGE) != completePage) {
                 throw new IllegalArgumentException("full-page visual region kind and geometry must agree");
             }
-            visibleDescription = visibleDescription == null ? "" : visibleDescription;
             supportedEvidenceIds = List.copyOf(supportedEvidenceIds);
             supportedStepPositions = List.copyOf(supportedStepPositions);
         }
 
         public LocatedRegion(
                 int pageNumber,
-                String label,
-                String visibleDescription,
                 int x,
                 int y,
                 int width,
@@ -348,8 +337,6 @@ public interface VisualRegionLocator {
                 List<Integer> supportedStepPositions) {
             this(
                     pageNumber,
-                    label,
-                    visibleDescription,
                     x,
                     y,
                     width,
@@ -362,8 +349,6 @@ public interface VisualRegionLocator {
 
         public LocatedRegion(
                 int pageNumber,
-                String label,
-                String visibleDescription,
                 int x,
                 int y,
                 int width,
@@ -373,8 +358,6 @@ public interface VisualRegionLocator {
                 boolean claimContradicted) {
             this(
                     pageNumber,
-                    label,
-                    visibleDescription,
                     x,
                     y,
                     width,
@@ -387,32 +370,17 @@ public interface VisualRegionLocator {
 
         public LocatedRegion(
                 int pageNumber,
-                String label,
-                String visibleDescription,
                 int x,
                 int y,
                 int width,
                 int height,
                 List<UUID> supportedEvidenceIds) {
-            this(pageNumber, label, visibleDescription, x, y, width, height, supportedEvidenceIds, List.of(), false);
-        }
-
-        public LocatedRegion(
-                int pageNumber,
-                String label,
-                int x,
-                int y,
-                int width,
-                int height,
-                List<UUID> supportedEvidenceIds) {
-            this(pageNumber, label, "", x, y, width, height, supportedEvidenceIds, List.of(), false);
+            this(pageNumber, x, y, width, height, supportedEvidenceIds, List.of(), false);
         }
 
         public LocatedRegion withClaimContradiction() {
             return new LocatedRegion(
                     pageNumber,
-                    label,
-                    visibleDescription,
                     x,
                     y,
                     width,

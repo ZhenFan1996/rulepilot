@@ -34,6 +34,53 @@ import org.junit.jupiter.api.Test;
 
 class VisualLessonStepLocatorTest {
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void refinementOffersSmallerOwnedCropsAndKeepsTheParentSelectableAfterOptionalFailure(boolean fails) {
+        UUID version = UUID.randomUUID();
+        UUID evidence = UUID.randomUUID();
+        var images = mock(DocumentPageImages.class);
+        when(images.read(version, Set.of(2))).thenReturn(List.of(
+                new DocumentPageImages.PageImage(2, "image/png", new byte[] {1}, 1000, 1000)));
+        var catalog = mock(VisualRegionCatalog.class);
+        when(catalog.configured()).thenReturn(true);
+        when(catalog.supportsRefinement()).thenReturn(true);
+        when(catalog.find(version, Set.of(2))).thenReturn(List.of(
+                new VisualRegionCatalog.Region(2, "PICTURE", 100, 100, 700, 700)));
+        when(catalog.refine(any(), any(), any())).thenAnswer(call -> {
+            if (fails) throw new IllegalStateException("optional provider unavailable");
+            return List.of(new VisualRegionCatalog.Region(2, "PICTURE", 200, 250, 300, 300),
+                    new VisualRegionCatalog.Region(3, "PICTURE", 200, 250, 300, 300));
+        });
+        var model = mock(VisualRegionLocator.class);
+        var parentId = new java.util.concurrent.atomic.AtomicReference<String>();
+        when(model.locateGuideWithResult(any(), any(Duration.class))).thenAnswer(call -> {
+            VisualRegionLocator.VisualLocationRequest request = call.getArgument(0);
+            if (parentId.get() == null) {
+                parentId.set(request.candidates().getFirst().candidateId());
+                return new VisualRegionLocator.LocateGuideResult(List.of(), VisualRegionLocator.Diagnostic.NO_REGION,
+                        VisualRegionLocator.BatchAction.CONTINUE, List.of(parentId.get()));
+            }
+            assertThat(request.refinableCandidateIds()).doesNotContain(parentId.get());
+            assertThat(request.candidates()).allMatch(candidate -> candidate.pageNumber() == 2);
+            var selected = request.candidates().getLast();
+            assertThat(selected.rectangle()).isEqualTo(fails ? new Rectangle(100, 100, 700, 700)
+                    : new Rectangle(200, 250, 300, 300));
+            return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
+                    2, selected.rectangle().x(), selected.rectangle().y(), selected.rectangle().width(),
+                    selected.rectangle().height(), List.of(evidence), List.of(1))));
+        });
+        var locator = new VisualLessonStepLocator(images, new VisualRegionCandidateSelector(),
+                VisualRegionProposer.unavailable(), catalog, model, new VisualReaderCropPolicy(), null,
+                Clock.systemUTC(), Duration.ofMinutes(5));
+        var step = step(evidence, 2);
+        var result = locator.locate(new RulebookUnderstanding(List.of(pageBlock(2, 0)), List.of(), List.of(), List.of()),
+                version, section(evidence, step), List.of(step), "player");
+        assertThat(result.rejection()).isNull();
+        assertThat(result.regions()).singleElement().satisfies(region ->
+                assertThat(region.supportedEvidenceIds()).containsExactly(evidence));
+    }
+
     @Test
     void offersOnlyPlannedVisualPagesBeyondTheRuleCitationAndSkipsAlreadyUsedRegions() {
         UUID documentVersionId = UUID.randomUUID();
@@ -49,11 +96,13 @@ class VisualLessonStepLocatorTest {
                 assertThat(candidate.pageNumber()).isEqualTo(6);
                 assertThat(candidate.rectangle()).isEqualTo(new Rectangle(220, 240, 500, 320));
             });
+            assertThat(request.pages()).singleElement().satisfies(page -> {
+                assertThat(page.pageNumber()).isEqualTo(6);
+                assertThat(page.sourceText()).isEqualTo("Rule text on page 6");
+            });
             var candidate = request.candidates().getFirst();
             return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
                     candidate.pageNumber(),
-                    "worked example",
-                    "A worked example is visible.",
                     candidate.rectangle().x(),
                     candidate.rectangle().y(),
                     candidate.rectangle().width(),
@@ -125,8 +174,6 @@ class VisualLessonStepLocatorTest {
             var candidate = request.candidates().getFirst();
             return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
                     candidate.pageNumber(),
-                    "setup diagram",
-                    "A bounded setup diagram is visible.",
                     candidate.rectangle().x(),
                     candidate.rectangle().y(),
                     candidate.rectangle().width(),
@@ -280,8 +327,6 @@ class VisualLessonStepLocatorTest {
             var accepted = request.candidates().getFirst();
             return VisualRegionLocator.LocateGuideResult.found(List.of(new VisualRegionLocator.LocatedRegion(
                     accepted.pageNumber(),
-                    "usable diagram",
-                    "A usable diagram remains visible.",
                     accepted.rectangle().x(),
                     accepted.rectangle().y(),
                     accepted.rectangle().width(),
@@ -403,8 +448,6 @@ class VisualLessonStepLocatorTest {
             return VisualRegionLocator.LocateGuideResult.found(
                     List.of(new VisualRegionLocator.LocatedRegion(
                             accepted.pageNumber(),
-                            "useful diagram",
-                            "A useful diagram is visible.",
                             accepted.rectangle().x(),
                             accepted.rectangle().y(),
                             accepted.rectangle().width(),

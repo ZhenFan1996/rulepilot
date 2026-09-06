@@ -9,6 +9,13 @@ public interface VisualRegionCatalog {
 
     List<Region> find(UUID documentVersionId, Set<Integer> pageNumbers);
 
+    /** Refines an offered, application-owned crop using original page pixels under the caller's deadline. */
+    default List<Region> refine(Region parent, byte[] pageImage, java.time.Duration timeout) {
+        return List.of();
+    }
+
+    default boolean supportsRefinement() { return false; }
+
     default boolean configured() {
         return true;
     }
