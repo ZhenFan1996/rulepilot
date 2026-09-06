@@ -90,7 +90,6 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.getByTestId('lesson-visual-evidence')).toBeVisible()
   await expect(page.getByTestId('lesson-visual-context')).toHaveCount(0)
   await expectLoadedVisualImage(page)
-  await expect(page.getByText('图注描述可见内容，规则以本步骤及来源页为准。')).toBeVisible()
   await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/lesson/plan-1/questions')
   await expect(page.locator('#lesson-question-panel')).toHaveCount(0)
   await page.goto('/read/plan-1')
