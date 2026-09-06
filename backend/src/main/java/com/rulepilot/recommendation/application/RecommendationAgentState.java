@@ -37,6 +37,7 @@ final class RecommendationAgentState {
     final List<String> actions = new ArrayList<>();
     PublicationSeed pendingPublicationSeed;
     CatalogSearch activeSearch;
+    List<String> catalogMechanics = List.of();
     Research research = Research.empty();
     CandidateComparison comparison;
     List<Source> publicContextSources = List.of();

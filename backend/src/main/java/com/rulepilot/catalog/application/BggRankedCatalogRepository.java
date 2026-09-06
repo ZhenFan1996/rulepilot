@@ -15,6 +15,8 @@ public interface BggRankedCatalogRepository {
 
     Page find(Query query);
 
+    List<String> findMechanics();
+
     default List<RankedGame> findExactName(String name) {
         return List.of();
     }

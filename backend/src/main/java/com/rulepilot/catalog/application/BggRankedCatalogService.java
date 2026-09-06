@@ -226,6 +226,11 @@ public class BggRankedCatalogService
     }
 
     @Override
+    public List<String> mechanics() {
+        return repository.findMechanics();
+    }
+
+    @Override
     public CandidateSet searchGames(BoardGameRecommendationCatalog.CatalogFilters filters) {
         if (filters == null) throw new IllegalArgumentException("BGG catalog filters are required");
         var checkedFilters = new BoardGameRecommendationCatalog.CatalogFilters(
@@ -246,10 +251,12 @@ public class BggRankedCatalogService
         List<RankedGame> ranked = repository.findByMetadataFilters(checkedFilters);
         if (ranked.isEmpty()) return new CandidateSet(gameCount(), List.of(), true);
 
-        Map<Integer, DiscoveryGame> available = new LinkedHashMap<>(storedDetails(ranked));
-        // Filtered browsing is the low-latency Agent tool. Production always has the
-        // persistent metadata cache; never turn this local query into an N+1 remote BGG wait.
-        if (metadataCache == null) available.putAll(details(ranked));
+        // Recommendation needs a truthful read outcome: a failed cache read is not an empty catalog.
+        // Production stays on the local metadata path without an N+1 remote BGG wait.
+        Map<Integer, DiscoveryGame> available = metadataCache == null ? details(ranked)
+                : metadataCache.discoveryGames(ranked.stream().map(RankedGame::bggId).toList(), Instant.now())
+                        .entrySet().stream().collect(java.util.stream.Collectors.toMap(
+                                Map.Entry::getKey, entry -> entry.getValue().value()));
         List<BoardGameRecommendationCatalog.Game> games = ranked.stream()
                 .map(game -> new BrowseGame(game, null, available.get(game.bggId())))
                 .filter(game -> game.details() != null)

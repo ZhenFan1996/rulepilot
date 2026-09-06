@@ -68,6 +68,11 @@ class BggRankedCatalogImportServiceTest {
         private Snapshot published;
 
         @Override
+        public List<String> findMechanics() {
+            return List.of();
+        }
+
+        @Override
         public Optional<Snapshot> findSnapshot() {
             return Optional.ofNullable(published);
         }

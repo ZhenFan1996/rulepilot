@@ -141,6 +141,15 @@ public class BoardGameRecommendationTools {
         return webResearch.configured();
     }
 
+    List<String> catalogMechanics() {
+        try {
+            return catalog.mechanics();
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation catalog taxonomy is unavailable");
+            return List.of();
+        }
+    }
+
     int catalogGameCount() {
         return catalog.gameCount();
     }

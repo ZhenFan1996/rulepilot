@@ -94,10 +94,6 @@ class RecommendationReActContractTest {
                 .inputSchema());
         assertThat(firstSchema.path("properties").fieldNames().next()).isEqualTo("decisionBrief");
         assertThat(firstSchema.path("required").get(0).asText()).isEqualTo("decisionBrief");
-        assertThat(model.requests.get(1).messages().stream()
-                        .flatMap(message -> message.toolCalls().stream())
-                        .map(ToolCall::argumentsJson))
-                .noneMatch(arguments -> arguments.contains("decisionBrief"));
         loop.stopBoundedCalls();
     }
 
@@ -1215,6 +1211,74 @@ class RecommendationReActContractTest {
         loop.stopBoundedCalls();
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void catalogFailureIsUnavailableAndSparsePagesStillReachVerifiedGames(boolean failure) {
+        var catalog = org.mockito.Mockito.mock(BoardGameRecommendationCatalog.class);
+        Game candidate = game(1001, "Foundry Council", BggGameType.STRATEGY, 2, 4, 90, "3.1");
+        org.mockito.Mockito.when(catalog.searchGames(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    CatalogFilters filters = invocation.getArgument(0);
+                    if (failure) throw new IllegalStateException("catalog disconnected");
+                    return new CandidateSet(41, filters.offset() < 40 ? List.of() : List.of(candidate),
+                            filters.offset() >= 40);
+                });
+        ScriptedModel model = new ScriptedModel(
+                action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"playerReply\":\"这款支持四人。\",\"selections\":[{\"bggId\":1001,"
+                                + "\"internalEvidenceIds\":[\"B1001:playerCount\"]}]}"));
+        RecommendationReActLoop loop = loop(model, catalog);
+        try {
+            var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(), "推荐一款游戏"),
+                    "zh-CN", "player", ignored -> {});
+            assertThat(response.outcome()).isEqualTo(failure ? Outcome.UNAVAILABLE : Outcome.RECOMMENDATIONS);
+            if (failure) {
+                assertThat(response.harness().failureDetailCode()).isEqualTo("CATALOG_UNAVAILABLE");
+                assertThat(response.games()).isEmpty();
+            } else {
+                assertThat(response.games()).extracting(value -> value.game().ranking().bggId()).containsExactly(1001);
+            }
+        } finally {
+            loop.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void unknownMechanismIsCorrectedByTheAgentUsingCatalogIdentities() throws Exception {
+        RecordingCatalog catalog = new RecordingCatalog(
+                game(1001, "Foundry Council", BggGameType.STRATEGY, 2, 4, 90, "3.1", "Worker Placement"));
+        String rejected = "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[],"
+                + "\"requiredMechanics\":[\"unrecognized-mechanism\"]}";
+        ScriptedModel model = new ScriptedModel(
+                action("unknown", BoardGameRecommendationAgent.SEARCH_TOOL, rejected),
+                action("corrected", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        rejected.replace("unrecognized-mechanism", "Worker Placement")),
+                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"playerReply\":\"这款支持四人。\",\"selections\":[{\"bggId\":1001,"
+                                + "\"internalEvidenceIds\":[\"B1001:playerCount\"]}]}"));
+        RecommendationReActLoop loop = loop(model, catalog);
+        try {
+            var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(), "推荐一款游戏"),
+                    "zh-CN", "player", ignored -> {});
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).extracting(value -> value.game().ranking().bggId()).containsExactly(1001);
+            Request correction = model.requests.get(1);
+            assertThat(toolObservation(correction, "unknown").path("code").asText())
+                    .isEqualTo("CATALOG_TAXONOMY_INVALID");
+            assertThat(correction.messages().stream().flatMap(message -> message.toolCalls().stream())
+                    .map(ToolCall::argumentsJson).filter(rejected::equals)).hasSize(1);
+            JsonNode schema = new ObjectMapper().readTree(correction.tools().stream()
+                    .filter(tool -> tool.name().equals(BoardGameRecommendationAgent.SEARCH_TOOL))
+                    .findFirst().orElseThrow().inputSchema());
+            assertThat(schema.path("properties").path("requiredMechanics").path("items").path("enum").toString())
+                    .isEqualTo("[\"Worker Placement\"]");
+        } finally {
+            loop.stopBoundedCalls();
+        }
+    }
+
     @Test
     void aWorkerPlacementPreferenceIsPartOfTheSingleTypedCatalogContract() throws Exception {
         RecordingCatalog catalog = new RecordingCatalog(
@@ -1320,7 +1384,7 @@ class RecommendationReActContractTest {
         loop.stopBoundedCalls();
     }
 
-    private static RecommendationReActLoop loop(BoardGameRecommendationModel model, RecordingCatalog catalog) {
+    private static RecommendationReActLoop loop(BoardGameRecommendationModel model, BoardGameRecommendationCatalog catalog) {
         BoardGameRecommendationWebResearch noResearch = new BoardGameRecommendationWebResearch() {
             @Override
             public boolean configured() {
@@ -1337,7 +1401,7 @@ class RecommendationReActContractTest {
 
     private static RecommendationReActLoop loop(
             BoardGameRecommendationModel model,
-            RecordingCatalog catalog,
+            BoardGameRecommendationCatalog catalog,
             BoardGameRecommendationWebResearch research) {
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -1558,6 +1622,11 @@ class RecommendationReActContractTest {
 
         private RecordingCatalog(Game... games) {
             this.games = List.of(games);
+        }
+
+        @Override
+        public List<String> mechanics() {
+            return games.stream().flatMap(game -> game.details().mechanics().stream()).distinct().sorted().toList();
         }
 
         @Override

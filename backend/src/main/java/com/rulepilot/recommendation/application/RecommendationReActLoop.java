@@ -306,7 +306,8 @@ final class RecommendationReActLoop {
         List<String> currentTurnEvidenceIds = preferenceEvidenceIds.isEmpty()
                 ? List.of()
                 : List.of(preferenceEvidenceIds.getLast());
-        List<ToolSpec> actions = toolCatalog.actions(preferenceEvidenceIds, currentTurnEvidenceIds);
+        state.catalogMechanics = withinDeadline(state, tools::catalogMechanics);
+        List<ToolSpec> actions = toolCatalog.actions(state.catalogMechanics, currentTurnEvidenceIds);
 
         String input = toolCatalog.agentInput(request, state, locale);
         List<Message> messages = new ArrayList<>(List.of(
@@ -672,6 +673,7 @@ final class RecommendationReActLoop {
             checkpointListener.accept(new TurnCheckpoint(state.profile, state.verifiedForAgent()));
         }
         if (!outcome.rejected()
+                && outcome.response() == null
                 && SEARCH_TOOL.equals(call.name())
                 && recommendableIds(state).isEmpty()) {
             progress.complete();

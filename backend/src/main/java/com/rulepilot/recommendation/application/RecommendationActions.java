@@ -243,7 +243,7 @@ final class RecommendationActions {
                 Integer.MAX_VALUE,
                 "RESULT_COUNT_OUT_OF_RANGE");
         List<String> mechanics = arguments.has("requiredMechanics")
-                ? boundedTaxonomy(arguments.path("requiredMechanics"))
+                ? catalogMechanics(arguments.path("requiredMechanics"), state.catalogMechanics)
                 : List.of();
         BoardGameRecommendationAgent.InteractionPreference requiredInteraction = arguments.has("requiredInteraction")
                 ? enumValue(
@@ -353,6 +353,9 @@ final class RecommendationActions {
 
         CatalogObservation terminal = scan.terminal();
         List<Game> candidates = scan.candidates();
+        if (candidates.isEmpty() && !terminal.succeeded()) {
+            return ActionOutcome.terminal(runtime.unavailable(state, locale, terminal.code()));
+        }
         state.completeCatalogSearch(scan.sourceCount(), candidates);
         Map<String, Object> appliedContract = new LinkedHashMap<>();
         appliedContract.put("evidence", evidenceId);
@@ -486,8 +489,7 @@ final class RecommendationActions {
             }
             if (eligible.size() >= candidateWindowSize
                     || page.pageExhausted()
-                    || page.games().isEmpty()
-                    || pageIds.equals(previousPageIds)
+                    || (!pageIds.isEmpty() && pageIds.equals(previousPageIds))
                     || pagesScanned >= pageBudget) {
                 break;
             }
@@ -1015,11 +1017,12 @@ final class RecommendationActions {
         return distinct;
     }
 
-    private List<String> boundedTaxonomy(JsonNode node) {
+    private List<String> catalogMechanics(JsonNode node, List<String> allowed) {
         List<String> values = strings(node, 0);
-        if (values.size() > 8
-                || values.stream().anyMatch(value -> value.codePointCount(0, value.length()) > 80)) {
-            throw new InvalidAction("CATALOG_TAXONOMY_INVALID");
+        if (!allowed.containsAll(values)) {
+            throw new InvalidAction("CATALOG_TAXONOMY_INVALID",
+                    "Use only mechanism identities from the search tool schema; an unknown identity is not a no-match result.",
+                    Map.of("allowedMechanics", allowed));
         }
         return values;
     }

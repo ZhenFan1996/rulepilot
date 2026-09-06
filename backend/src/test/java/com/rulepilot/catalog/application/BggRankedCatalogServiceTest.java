@@ -195,6 +195,14 @@ class BggRankedCatalogServiceTest {
                 .as("structured Agent browsing stays on the local PostgreSQL/cache path")
                 .isEmpty();
         assertThat(bgg.searchQueries).isEmpty();
+
+        org.mockito.Mockito.when(cache.discoveryGames(
+                        org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalStateException("metadata unavailable"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.searchGames(
+                new com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters(
+                        List.of(), List.of(), List.of(), List.of(), 8)))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -332,6 +340,11 @@ class BggRankedCatalogServiceTest {
         private List<String> mechanicQuery = List.of();
         private final java.util.ArrayList<List<Integer>> idLookupBatches = new java.util.ArrayList<>();
         private int exactBatchQueries;
+
+        @Override
+        public List<String> findMechanics() {
+            return List.of();
+        }
 
         @Override
         public Optional<Snapshot> findSnapshot() {
