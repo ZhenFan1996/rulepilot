@@ -174,7 +174,6 @@ describe('LessonChapterList', () => {
       .toMatch(/^data:image\/jpeg;base64,/)
     expect(fetch).toHaveBeenCalledWith('/crop/2', expect.objectContaining({ credentials: 'include' }))
     expect(wrapper.text()).toContain('把主板放在桌面中央。')
-    expect(wrapper.text()).toContain('规则以本步骤及来源页为准')
   })
 
   it('keeps each cited visual inside the step narrative it explains', async () => {
@@ -201,7 +200,6 @@ describe('LessonChapterList', () => {
     const visual = pairedStep.get('[data-testid="lesson-visual-evidence"]')
 
     expect(wrapper.get('.lesson-step-shadow').classes()).toContain('min-w-0')
-    expect(narrative.get('.mt-4').classes()).toContain('2xl:grid')
     expect(narrative.text()).toContain('把主板放在桌面中央。')
     expect(visual.attributes('aria-describedby')).toBe(narrative.attributes('id'))
     expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).toContain('grid')

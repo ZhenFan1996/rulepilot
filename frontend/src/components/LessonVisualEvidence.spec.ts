@@ -68,7 +68,6 @@ describe('LessonVisualEvidence', () => {
     expect(fetch).toHaveBeenCalledWith('/crop/6', expect.objectContaining({ credentials: 'include' }))
     expect(wrapper.get('[data-testid="lesson-visual-image"]').attributes('href')).toBe('/page/6')
     expect(wrapper.find('[data-testid="lesson-visual-context"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('规则以本步骤及来源页为准')
   })
 
   it('keeps the observation and original-page escape hatch when the crop fails', async () => {
@@ -83,14 +82,13 @@ describe('LessonVisualEvidence', () => {
     expect(wrapper.findAll('a[href="/page/6"]')).not.toHaveLength(0)
   })
 
-  it('localizes navigation and evidence-boundary copy without changing media coordinates', async () => {
+  it('localizes source navigation without changing media coordinates', async () => {
     setLocale('en')
     const wrapper = mountEvidence()
     await flushPromises()
 
     expect(wrapper.text()).toContain('Illustrated step · 1/1')
     expect(wrapper.text()).toContain('Look for:')
-    expect(wrapper.text()).toContain('this step and its source page remain authoritative')
     expect(wrapper.get('img[alt*="Illustration for “行动网格”"]')).toBeTruthy()
   })
 

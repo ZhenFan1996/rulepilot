@@ -126,7 +126,7 @@ public class PublicLessonController {
     ResponseEntity<byte[]> pageImage(@PathVariable UUID planId, @PathVariable int pageNumber) {
         return publicPageImage(() -> {
             var image = image(planId, pageNumber);
-            return crops.crop(image, 0, 0, 1_000, 1_000, 0);
+            return crops.crop(image, 0, 0, 1_000, 1_000);
         });
     }
 

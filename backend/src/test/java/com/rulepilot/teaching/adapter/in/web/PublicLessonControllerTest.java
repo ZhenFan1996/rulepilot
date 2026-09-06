@@ -79,7 +79,7 @@ class PublicLessonControllerTest {
         byte[] normalized = new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9};
         when(lessons.requireCitedPage(planId, 4)).thenReturn(lesson);
         when(pageImages.read(documentVersionId, Set.of(4))).thenReturn(List.of(stored));
-        when(crops.crop(stored, 0, 0, 1_000, 1_000, 0)).thenReturn(normalized);
+        when(crops.crop(stored, 0, 0, 1_000, 1_000)).thenReturn(normalized);
 
         mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image", planId, 4))
                 .andExpect(status().isOk())
@@ -88,7 +88,7 @@ class PublicLessonControllerTest {
                 .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("private")))
                 .andExpect(content().bytes(normalized));
 
-        verify(crops).crop(stored, 0, 0, 1_000, 1_000, 0);
+        verify(crops).crop(stored, 0, 0, 1_000, 1_000);
     }
 
     @Test

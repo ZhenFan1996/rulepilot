@@ -23,7 +23,6 @@ import org.springframework.stereotype.Component;
 final class RulePageImageCropper implements DocumentPageImageCropper {
 
     private static final int NORMALIZED_PAGE_SIZE = 1_000;
-    private static final int CONTEXT_PADDING = 35;
     private static final int PREVIEW_MAX_WIDTH = 480;
     private static final int PREVIEW_MAX_HEIGHT = 680;
     private static final long MAX_SOURCE_PAGE_PIXELS = 40L * 1_000 * 1_000;
@@ -46,16 +45,8 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
 
     @Override
     public byte[] crop(PageImage page, int x, int y, int width, int height) {
-        return crop(page, x, y, width, height, CONTEXT_PADDING);
-    }
-
-    @Override
-    public byte[] crop(PageImage page, int x, int y, int width, int height, int contextPadding) {
         validateFocus(x, y, width, height);
-        if (contextPadding < 0 || contextPadding > 100) {
-            throw new IllegalArgumentException("document page crop padding is invalid");
-        }
-        CropProjection projection = cropProjection(page, x, y, width, height, contextPadding);
+        CropProjection projection = cropProjection(page, x, y, width, height);
         int permits = acquireDecodeWork(projection.totalWorkPixels());
         try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(page.content()))) {
             if (input == null) throw new IllegalStateException("document page image cannot be decoded");
@@ -124,15 +115,14 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
             int x,
             int y,
             int width,
-            int height,
-            int contextPadding) {
+            int height) {
         long sourcePixels = sourcePixels(page);
-        int left = pixel(Math.max(0, x - contextPadding), page.width());
-        int top = pixel(Math.max(0, y - contextPadding), page.height());
+        int left = pixel(x, page.width());
+        int top = pixel(y, page.height());
         int right = pixelCeiling(
-                Math.min(NORMALIZED_PAGE_SIZE, x + width + contextPadding), page.width());
+                x + width, page.width());
         int bottom = pixelCeiling(
-                Math.min(NORMALIZED_PAGE_SIZE, y + height + contextPadding), page.height());
+                y + height, page.height());
         int projectedWidth = right - left;
         int projectedHeight = bottom - top;
         long projectedPixels = (long) projectedWidth * projectedHeight;

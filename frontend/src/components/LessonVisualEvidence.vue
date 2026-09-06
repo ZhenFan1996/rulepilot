@@ -267,8 +267,8 @@ function isReliableDetailViewport(focus: VisualFocus) {
         <img
           :src="loadedDetailImageUrl"
           :alt="t('lesson.visualEvidence.alt', { page: focus.pageNumber, label: focus.label })"
-          class="block w-full object-contain"
-          :class="compact ? 'aspect-[4/3] max-h-64 min-h-36' : 'max-h-[32rem] min-h-40'"
+          class="mx-auto block h-auto w-auto max-w-full object-contain"
+          :class="compact ? 'max-h-64' : 'max-h-[32rem]'"
           loading="lazy"
           decoding="async"
           @error="handleDetailDecodeFailure"
@@ -327,7 +327,6 @@ function isReliableDetailViewport(focus: VisualFocus) {
         {{ focus.visibleDescription }}
       </p>
       <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted">
-        <span>{{ t('lesson.visualEvidence.boundary') }}</span>
         <a :href="originalPageUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo hover:underline">{{ t('lesson.visualEvidence.openOriginal') }} ↗</a>
       </div>
     </figcaption>

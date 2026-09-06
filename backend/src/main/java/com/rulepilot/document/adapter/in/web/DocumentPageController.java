@@ -68,7 +68,7 @@ public class DocumentPageController {
                 .orElseThrow(() -> new IllegalArgumentException("document page image does not exist"));
         byte[] content = MediaType.IMAGE_JPEG_VALUE.equalsIgnoreCase(image.mediaType())
                 ? image.content()
-                : imageCropper.crop(image, 0, 0, 1_000, 1_000, 0);
+                : imageCropper.crop(image, 0, 0, 1_000, 1_000);
         return ResponseEntity.ok()
                 .contentType(MediaType.IMAGE_JPEG)
                 .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePrivate())
