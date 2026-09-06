@@ -11,6 +11,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
@@ -610,6 +611,7 @@ final class RecommendationReActLoop {
             try {
                 outcome = actionExecutor.execute(
                         executionCall,
+                        currentActions.stream().filter(action -> action.name().equals(call.name())).findFirst().orElseThrow(),
                         state,
                         request,
                         locale,
@@ -756,9 +758,13 @@ final class RecommendationReActLoop {
         ConversationResponse response = new ConversationResponse(
                 Outcome.NO_MATCH,
                 DecisionMode.MODEL_ASSISTED,
-                chinese(locale)
-                        ? "当前目录里没有找到符合条件的游戏。你可以告诉我最愿意放宽哪一项，我再换一组。"
-                        : "The current catalog has no game matching those conditions. Tell me which constraint you would most like to relax, and I can try a different set.",
+                state.activeSearch != null && state.activeSearch.title() != null
+                        ? chinese(locale)
+                                ? "当前目录里还没核验到你说的游戏。能补充英文名、封面或出版社中的任意一项，帮我确认是哪款吗？"
+                                : "I could not verify that game in the catalog. Could you share its original title, cover, or publisher to help identify it?"
+                        : chinese(locale)
+                                ? "当前目录里没有找到同时符合全部条件的游戏，因此这次先不推荐不符合要求的替代品。"
+                                : "The current catalog has no game matching all these conditions, so I have not substituted games that fail your requirements.",
                 state.selectionProfile(),
                 null,
                 state.sourceCount,
@@ -975,8 +981,11 @@ final class RecommendationReActLoop {
             RecommendationAgentState state,
             List<RecommendedGame> games,
             Set<String> finalResponseEvidenceIds) {
-        Set<Integer> cited = games.stream()
-                .map(RecommendedGame::game)
+        List<Game> citedGames = state.verified.values().stream()
+                .filter(game -> actionExecutor.narrativeObservations(game, state.research).keySet().stream()
+                        .anyMatch(finalResponseEvidenceIds::contains))
+                .toList();
+        Set<Integer> cited = citedGames.stream()
                 .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).values().stream())
                 .filter(observation -> finalResponseEvidenceIds.contains(observation.id()))
                 .flatMap(observation -> observation.sourceIndexes().stream())
@@ -1009,6 +1018,14 @@ final class RecommendationReActLoop {
                     source.title(),
                     source.url(),
                     source.domain()));
+        }
+        Set<Integer> displayedIds = games.stream().map(game -> game.game().ranking().bggId())
+                .collect(java.util.stream.Collectors.toSet());
+        for (Game game : citedGames) {
+            if (displayedIds.contains(game.ranking().bggId())) continue;
+            String url = "https://boardgamegeek.com/boardgame/" + game.ranking().bggId();
+            if (seenUrls.add(url)) result.add(new ResearchSource(
+                    nextIndex++, game.ranking().sourceName(), url, "boardgamegeek.com"));
         }
         return List.copyOf(result);
     }

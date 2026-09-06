@@ -317,7 +317,7 @@ rulepilot:
       hedge-delay: ${BGG_RECOMMENDATION_HEDGE_DELAY:PT0S}
       temperature: ${BGG_RECOMMENDATION_TEMPERATURE:0.0}
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
-      result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
+      result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:1}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
       max-output-tokens: ${BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS:2000}
       timeout: ${AGENT_TIMEOUT:PT2M}

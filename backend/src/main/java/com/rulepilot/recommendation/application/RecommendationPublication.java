@@ -24,21 +24,25 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** The single structure, candidate, evidence-ownership, and publication boundary for recommendation prose. */
 final class RecommendationPublication {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(RecommendationPublication.class);
+
     private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("selections");
-    private static final Set<String> FOLLOW_UP_PUBLICATION_FIELDS =
-            Set.of("publicationCount", "selections");
+    private static final Set<String> PUBLICATION_FIELDS =
+            Set.of("maximumRecommendations", "selections");
     private static final Set<String> SELECTION_REQUIRED_FIELDS = Set.of("bggId");
 
     private final BoardGameRecommendationSelector selector;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions observations;
     private final RecommendationReActLoop runtime;
-    private final int maximumResultCount;
     private final ObjectMapper publicationJson;
+    private final int defaultResultCount;
 
     RecommendationPublication(
             BoardGameRecommendationSelector selector,
@@ -51,7 +55,7 @@ final class RecommendationPublication {
         this.evidenceReview = evidenceReview;
         this.observations = observations;
         this.runtime = runtime;
-        maximumResultCount = properties.resultCount();
+        defaultResultCount = properties.resultCount();
         publicationJson = json.copy()
                 .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
                 .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
@@ -64,7 +68,7 @@ final class RecommendationPublication {
 
         JsonNode root = parse(argumentsJson);
         boolean searchOwnsCount = state.activeSearch != null;
-        requireObject(root, searchOwnsCount ? SEARCH_PUBLICATION_FIELDS : FOLLOW_UP_PUBLICATION_FIELDS);
+        requireObject(root, searchOwnsCount ? SEARCH_PUBLICATION_FIELDS : PUBLICATION_FIELDS);
         List<Integer> currentlyRecommendable = runtime.recommendableIds(state);
         List<Integer> allowedCandidateIds = pending.candidateBggIds().stream()
                 .filter(currentlyRecommendable::contains)
@@ -73,24 +77,19 @@ final class RecommendationPublication {
                     return game != null && !observations.narrativeObservations(game, state.research).isEmpty();
                 })
                 .toList();
-        Integer explicitSearchCount = searchOwnsCount
-                ? state.activeSearch.requestedCount()
-                : null;
+        Integer explicitSearchCount = searchOwnsCount ? state.activeSearch.requestedCount() : null;
         int requestedCount = searchOwnsCount
                 ? explicitSearchCount == null
-                        ? Math.min(maximumResultCount, allowedCandidateIds.size())
+                        ? Math.min(defaultResultCount, allowedCandidateIds.size())
                         : explicitSearchCount
-                : positiveInteger(root.path("publicationCount"));
-        int maximumSelections = Math.min(
-                maximumResultCount,
-                Math.min(requestedCount, allowedCandidateIds.size()));
+                : integer(root.path("maximumRecommendations"), 0);
+        int maximumCards = Math.min(requestedCount, allowedCandidateIds.size());
         JsonNode rawSelections = root.path("selections");
         JsonNode selections = selectionArray(rawSelections);
         if (!rawSelections.isArray()) {
             state.actions.add("RECOMMENDATION_WIRE_FORMAT_NORMALIZED");
         }
-        if (selections.isEmpty()
-                || maximumSelections == 0) {
+        if (selections.isEmpty() || allowedCandidateIds.isEmpty()) {
             throw invalid(Code.PUBLICATION_SELECTION_COUNT_INVALID);
         }
 
@@ -99,18 +98,15 @@ final class RecommendationPublication {
         Set<Integer> selectedIds = new LinkedHashSet<>();
         Set<Code> localizedFailures = new LinkedHashSet<>();
         InvalidPublication firstCandidateFailure = null;
-        boolean candidateSetChanged = selections.size() > maximumSelections;
-        if (selections.size() > maximumSelections) {
-            localizedFailures.add(Code.PUBLICATION_SELECTION_COUNT_INVALID);
-        }
+        // Evidence bindings can support comparisons and limitations independently of displayed cards.
+        boolean candidateSetChanged = false;
         for (int index = 0; index < selections.size(); index++) {
-            if (selectedGames.size() == maximumSelections) break;
             JsonNode selection = selections.get(index);
             Game game;
             int bggId;
             try {
                 requireObject(selection, SELECTION_REQUIRED_FIELDS);
-                bggId = positiveInteger(selection.path("bggId"));
+                bggId = integer(selection.path("bggId"), 1);
                 if (!selectedIds.add(bggId)) {
                     throw invalid(Code.DUPLICATE_SELECTION);
                 }
@@ -126,10 +122,10 @@ final class RecommendationPublication {
                 continue;
             }
             candidates.add(selectionEvidence(state, game, selection, localizedFailures));
-            selectedGames.add(game);
+            if (selectedGames.size() < maximumCards) selectedGames.add(game);
         }
 
-        if (selectedGames.isEmpty()) {
+        if (candidates.isEmpty()) {
             if (firstCandidateFailure != null) throw firstCandidateFailure;
             throw invalid(Code.PUBLICATION_SELECTION_COUNT_INVALID);
         }
@@ -145,6 +141,7 @@ final class RecommendationPublication {
                 playerReply = null;
             }
         }
+        if (requestedCount == 0 && playerReply == null) throw invalid(Code.RECOMMENDATION_REPLY_INVALID);
         PublicationDraft draft = new PublicationDraft(playerReply, candidates);
         RecommendationShortfall shortfall = (explicitSearchCount != null || !searchOwnsCount)
                         && selectedGames.size() < requestedCount
@@ -169,7 +166,7 @@ final class RecommendationPublication {
         try {
             JsonNode selection = parse(selectionJson);
             requireObject(selection, SELECTION_REQUIRED_FIELDS);
-            int bggId = positiveInteger(selection.path("bggId"));
+            int bggId = integer(selection.path("bggId"), 1);
             PublicationSeed pending = Objects.requireNonNull(
                     state.pendingPublicationSeed, "pending recommendation publication is required");
             Game game = validatedCandidate(state, pending, runtime.recommendableIds(state), bggId);
@@ -218,6 +215,7 @@ final class RecommendationPublication {
             String accumulatedArguments = call.argumentsJson();
             List<String> complete = completeSelectionObjects(accumulatedArguments);
             int limit = previewLimit(state, accumulatedArguments);
+            if (limit == 0) return;
             for (int index = inspectedObjects; index < complete.size(); index++) {
                 inspectedObjects++;
                 if (emittedIds.size() >= limit) continue;
@@ -230,15 +228,10 @@ final class RecommendationPublication {
     }
 
     private int previewLimit(RecommendationAgentState state, String accumulatedArguments) {
-        int requested;
-        if (state.activeSearch != null) {
-            requested = state.activeSearch.requestedCount() == null
-                    ? maximumResultCount
-                    : state.activeSearch.requestedCount();
-        } else {
-            requested = completedPositiveIntegerField(accumulatedArguments, "publicationCount");
-        }
-        return Math.min(maximumResultCount, Math.max(0, requested));
+        int requested = state.activeSearch == null
+                ? completedPositiveIntegerField(accumulatedArguments, "maximumRecommendations")
+                : state.activeSearch.requestedCount() == null ? defaultResultCount : state.activeSearch.requestedCount();
+        return Math.max(0, requested);
     }
 
     private int completedPositiveIntegerField(String json, String field) {
@@ -315,7 +308,10 @@ final class RecommendationPublication {
         if (draft.playerReply() != null) {
             state.actions.add("MODEL_AUTHORED_RECOMMENDATION");
         }
-        if (prepared.localized()) state.actions.add("RECOMMENDATION_NARRATIVE_PARTIAL");
+        if (prepared.localized()) {
+            state.actions.add("RECOMMENDATION_NARRATIVE_PARTIAL");
+            LOGGER.info("Recommendation narrative omitted after publication validation: {}", prepared.localizedFailures());
+        }
         return response(
                 state,
                 permit,
@@ -340,7 +336,7 @@ final class RecommendationPublication {
         List<BoardGameRecommendationAgent.ResearchSource> sources =
                 runtime.responseSources(state, games, publishedEvidenceIds);
         ConversationResponse response = new ConversationResponse(
-                Outcome.RECOMMENDATIONS,
+                permit.requestedCount() == 0 ? Outcome.CONVERSATION : Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
                 assistantMessage,
                 state.selectionProfile(),
@@ -407,11 +403,11 @@ final class RecommendationPublication {
         return value.asText();
     }
 
-    private int positiveInteger(JsonNode value) {
+    private int integer(JsonNode value, int minimum) {
         if (value == null
                 || !value.isIntegralNumber()
                 || !value.canConvertToInt()
-                || value.intValue() <= 0) {
+                || value.intValue() < minimum) {
             throw invalid(Code.FINAL_ID_NOT_VERIFIED);
         }
         return value.intValue();

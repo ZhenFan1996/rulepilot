@@ -43,6 +43,11 @@ class BoardGameRecommendationSelectorTest {
                 List.of("Hand Management", "Network and Route Building"));
         var observations = selector.observations(candidate);
 
+        assertThat(observations).filteredOn(observation -> observation.attribute().equals("bggRatingCount"))
+                .singleElement().satisfies(observation -> {
+                    assertThat(observation.bggId()).isEqualTo(candidate.ranking().bggId());
+                    assertThat(observation.value()).isEqualTo(Integer.toString(candidate.ranking().usersRated()));
+                });
         assertThat(observations)
                 .filteredOn(observation -> observation.attribute().equals("mechanics"))
                 .singleElement()

@@ -445,9 +445,8 @@ public class RecommendationConversationCoordinator {
         List<DialogueMessage> transcript = new ArrayList<>(request.transcript());
         if (!transcript.isEmpty()) {
             DialogueMessage last = transcript.getLast();
-            // Browser clients optimistically append the current player turn before sending it. The request message
-            // is the durable turn boundary, so importing that same trailing protocol item would make an UNAVAILABLE
-            // turn look committed even though only its idempotency result was saved.
+            // The browser's optimistic current item belongs to this turn, not the imported prior state.
+            // nextState persists that user request once, including when generation is unavailable.
             if ("user".equals(last.role()) && request.message().equals(last.text())) {
                 transcript.removeLast();
             }
@@ -461,10 +460,13 @@ public class RecommendationConversationCoordinator {
             ConversationResponse response,
             UUID clientTurnId,
             String responseLocale) {
-        if (response.outcome() == Outcome.UNAVAILABLE) return previous;
-
         List<DialogueMessage> transcript = new ArrayList<>(previous.transcript());
         appendUnlessDuplicate(transcript, new DialogueMessage("user", request.message()));
+        if (response.outcome() == Outcome.UNAVAILABLE) {
+            return new ConversationState(previous.profile(), completeTranscript(transcript),
+                    previous.knownGames(), previous.shownBggIds(), previous.verifiedGames(),
+                    previous.latestPublishedTurn());
+        }
         appendUnlessDuplicate(transcript, new DialogueMessage("assistant", response.assistantMessage()));
 
         Map<Integer, KnownGame> games = new LinkedHashMap<>();

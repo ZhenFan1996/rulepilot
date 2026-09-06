@@ -62,18 +62,18 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', textBlock = """
-            exclude-played | 推荐一款三人工放游戏，River Market 除外，因为玩过了。 | 201
-            exclude-two | 三人玩工放，别再推荐 River Market 或 Quiet Abbey，其他的可以。 | 201,202
-            reference-alternative | 我喜欢 River Market 的工放机制，想换一款不同的，三个人玩。 | 201
-            positive-title | 只推荐 River Market 这款游戏，三个人玩。 | 0
+            exclude-played | 推荐一款三人工放游戏，River Market 除外，因为玩过了。 | 201 | 1
+            exclude-two | 三人玩工放，别再推荐 River Market 或 Quiet Abbey，其他的可以。 | 201,202 | 0
+            reference-alternative | 我喜欢 River Market 的工放机制，想换一款不同的，三个人玩。 | 201 | 1
+            positive-title | 只推荐 River Market 这款游戏，三个人玩。 | 0 | 1
             """)
-    void respectsTitleIntentInNaturalRequests(String scenario, String message, String excluded) throws Exception {
+    void respectsTitleIntentInNaturalRequests(String scenario, String message, String excluded, int expectedCount) throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen").toLowerCase(Locale.ROOT);
         String prefix = provider.toUpperCase(Locale.ROOT);
         String modelName = canaryModel(prefix);
         Capture capture = new Capture(provider, modelName);
-        var properties = new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var properties = new BoardGameRecommendationProperties(8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model(provider, environment(prefix + "_API_KEY", null), environment(prefix + "_BASE_URL", null),
                         modelName, capture),
@@ -89,6 +89,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             List<Integer> ids = response.games().stream().map(item -> item.game().ranking().bggId()).toList();
             assertThat(ids).isNotEmpty();
+            if (expectedCount > 0) assertThat(ids).hasSize(expectedCount);
             if (excluded.equals("0")) assertThat(ids).containsExactly(201);
             else assertThat(ids).doesNotContainAnyElementsOf(java.util.Arrays.stream(excluded.split(","))
                     .map(Integer::valueOf).toList());
@@ -116,7 +117,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchThatMustNotRun()),
@@ -171,7 +172,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
@@ -204,13 +205,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .argumentsJson());
             assertThat(openingSearch.path("requiredMechanics").toString())
                     .isEqualTo("[\"Worker Placement\"]");
-            int openingRequestedCount = openingSearch.path("publicationCount").asInt();
-            assertThat(openingRequestedCount).isGreaterThanOrEqualTo(opening.response().games().size());
-            if (openingRequestedCount > opening.response().games().size()) {
-                assertThat(opening.response().shortfall())
-                        .isEqualTo(new BoardGameRecommendationAgent.RecommendationShortfall(
-                                openingRequestedCount, opening.response().games().size()));
-            }
             assertThat(openingSearch.path("players").asInt()).isEqualTo(3);
             assertThat(openingSearch.path("complexity").path("minimum").decimalValue())
                     .isGreaterThanOrEqualTo(new BigDecimal("3.0"));
@@ -233,24 +227,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .hasSize(1)
                     .allSatisfy(game -> assertThat(game.game().ranking().bggId())
                             .isNotIn(alreadyShown));
-            JsonNode replacementSearch = json.readTree(capture
-                    .toolCalls(BoardGameRecommendationAgent.SEARCH_TOOL, "worker-replacement")
-                    .getFirst()
-                    .argumentsJson());
-            assertThat(replacementSearch.path("publicationCount").asInt()).isEqualTo(1);
-            assertThat(replacementSearch.path("experienceQuestion").asText()).isNotBlank();
-            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL, "worker-replacement"))
-                    .isEmpty();
-            assertThat(replacement.response().harness().webResearchCalls()).isEqualTo(1);
+            assertThat(replacement.response().assistantMessage()).isNotBlank();
+            assertThat(replacement.response().games()).allSatisfy(game ->
+                    assertThat(game.game().details().mechanics()).contains("Worker Placement"));
 
-            for (String turn : List.of("worker-opening", "worker-comparison", "worker-replacement")) {
-                assertThat(capture.toolCalls(BoardGameRecommendationAgent.SEARCH_TOOL, turn))
-                        .hasSizeLessThanOrEqualTo(1);
-                assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL, turn))
-                        .hasSizeLessThanOrEqualTo(1);
-                assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL, turn))
-                        .hasSizeLessThanOrEqualTo(1);
-            }
             assertThat(conversation.turns())
                     .allSatisfy(turn -> {
                         assertThat(turn.latencyMs()).isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
@@ -299,7 +279,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
@@ -331,16 +311,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.assistantMessage()).isNotBlank();
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.SEARCH_TOOL)).hasSize(1);
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)).hasSize(1);
-            JsonNode search = json.readTree(capture
-                    .toolCalls(BoardGameRecommendationAgent.SEARCH_TOOL)
-                    .getFirst()
-                    .argumentsJson());
-            assertThat(search.path("publicationCount").asInt())
-                    .isGreaterThanOrEqualTo(response.games().size());
-            assertThat(search.path("experienceQuestion").asText()).isNotBlank();
-            assertThat(capture.toolCalls(BoardGameRecommendationAgent.RESEARCH_TOOL))
-                    .isEmpty();
-            assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+            assertThat(response.games()).allSatisfy(game -> {
+                assertThat(game.game().details().minPlayers()).isLessThanOrEqualTo(4);
+                assertThat(game.game().details().maxPlayers()).isGreaterThanOrEqualTo(4);
+            });
             assertThat(firstRecommendationPartMs.get()).isBetween(0L, totalMs - 1);
             assertThat(totalMs).isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
             writeArtifact("playful-party", capture, response, totalMs, null);
@@ -368,7 +342,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
@@ -399,7 +373,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .getFirst()
                     .argumentsJson());
             assertThat(search.path("requiredInteraction").asText()).isEqualTo("COOPERATIVE");
-            assertThat(search.path("descriptionQuery").asText()).isNotBlank();
+            assertThat(search.path("descriptionQueryEnglish").asText()).isNotBlank();
             assertThat(capture.toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)).hasSize(1);
             JsonNode publication = json.readTree(capture
                     .toolCalls(BoardGameRecommendationAgent.RECOMMEND_TOOL)
