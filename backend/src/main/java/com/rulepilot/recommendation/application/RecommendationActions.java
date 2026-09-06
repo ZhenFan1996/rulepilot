@@ -268,6 +268,12 @@ final class RecommendationActions {
         TitleFilter title = arguments.has("requiredTitle")
                 ? titleFilter(arguments.path("requiredTitle"))
                 : null;
+        List<TitleFilter> excludedTitles = new ArrayList<>();
+        if (arguments.has("excludedTitles")) {
+            JsonNode exclusions = arguments.path("excludedTitles");
+            if (!exclusions.isArray()) throw new InvalidAction("TITLE_FILTER_INVALID");
+            for (JsonNode exclusion : exclusions) excludedTitles.add(titleFilter(exclusion));
+        }
         Integer players = arguments.has("players")
                 ? integer(arguments.path("players"), 1, 20, "PLAYERS_OUT_OF_RANGE")
                 : null;
@@ -298,12 +304,26 @@ final class RecommendationActions {
                 complexity,
                 includeTypes.size() == 1 ? includeTypes.getFirst() : BggGameType.ALL,
                 requiredInteraction);
+        progress.accept(ProgressStage.SEARCHING_BGG_CATALOG, null);
+        for (int index = 0; index < excludedTitles.size(); index++) {
+            TitleFilter excluded = excludedTitles.get(index);
+            if (excluded.scope() != TitleScope.SERIES) continue;
+            CatalogSearch lookup = new CatalogSearch(
+                    List.of(), List.of(), List.of(), excluded, List.of(),
+                    null, null, null, null, evidenceId, RecommendationProfile.empty());
+            CatalogScan seeds = scanCatalog(lookup, List.of(), List.of(), List.of(), excluded.value(),
+                    CatalogSort.RELEVANCE, lookup.selectionProfile(), Set.of(), state);
+            if (!seeds.terminal().succeeded()) {
+                return ActionOutcome.terminal(runtime.unavailable(state, locale, seeds.terminal().code()));
+            }
+            excludedTitles.set(index, excluded.withFamilies(canonicalGameFamilies(seeds.candidates())));
+        }
         CatalogSearch search = new CatalogSearch(
                 includeTypes,
                 excludeTypes,
                 catalogMechanics,
                 title,
-                List.of(),
+                excludedTitles,
                 requestedCount,
                 players,
                 maxMinutes,
@@ -311,8 +331,6 @@ final class RecommendationActions {
                 evidenceId,
                 selectionProfile);
         state.beginCatalogSearch(search);
-
-        progress.accept(ProgressStage.SEARCHING_BGG_CATALOG, null);
         Set<Integer> unavailable = new LinkedHashSet<>(state.excludedIds);
         if (title == null || title.match() != TitleMatch.EXACT) {
             unavailable.addAll(state.previouslyShownIds);
@@ -361,6 +379,7 @@ final class RecommendationActions {
         appliedContract.put("evidence", evidenceId);
         appliedContract.put("includeTypes", includeTypes);
         appliedContract.put("excludeTypes", excludeTypes);
+        if (!excludedTitles.isEmpty()) appliedContract.put("excludedTitles", excludedTitles);
         if (requestedCount != null) appliedContract.put("publicationCount", requestedCount);
         if (!mechanics.isEmpty()) appliedContract.put("requiredMechanics", mechanics);
         appliedContract.put("requiredInteraction", requiredInteraction);
@@ -460,7 +479,10 @@ final class RecommendationActions {
                                 null,
                                 null,
                                 null,
-                                textQuery,
+                                textQuery == null ? null : new com.rulepilot.catalog.BoardGameRecommendationCatalog.TextQuery(
+                                        textQuery, search.title() == null
+                                                ? com.rulepilot.catalog.BoardGameRecommendationCatalog.TextScope.DESCRIPTION
+                                                : com.rulepilot.catalog.BoardGameRecommendationCatalog.TextScope.TITLE),
                                 sort,
                                 CATALOG_PAGE_SIZE,
                                 currentOffset));

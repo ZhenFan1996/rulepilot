@@ -72,7 +72,7 @@ public interface BoardGameRecommendationCatalog {
             Integer maximumPublicationYear,
             BigDecimal minimumAverageRating,
             Integer minimumRatingsCount,
-            String textQuery,
+            TextQuery textQuery,
             CatalogSort sort,
             int maximum,
             int offset) {
@@ -116,8 +116,6 @@ public interface BoardGameRecommendationCatalog {
             designers = designers == null ? List.of() : List.copyOf(designers);
             publishers = publishers == null ? List.of() : List.copyOf(publishers);
             families = families == null ? List.of() : List.copyOf(families);
-            textQuery = textQuery == null ? null : textQuery.strip().replaceAll("\\s+", " ");
-            if (textQuery != null && textQuery.isBlank()) textQuery = null;
             sort = sort == null ? CatalogSort.RANK : sort;
             if (maximum < 1 || maximum > MAX_SEARCH_PAGE_SIZE) {
                 throw new IllegalArgumentException("BGG catalog filter maximum exceeds the storage page size");
@@ -147,6 +145,18 @@ public interface BoardGameRecommendationCatalog {
             }
         }
     }
+
+    record TextQuery(String value, TextScope scope) {
+        public TextQuery {
+            if (value == null || value.isBlank() || scope == null) {
+                throw new IllegalArgumentException("catalog text query requires a value and scope");
+            }
+            value = java.text.Normalizer.normalize(value.strip(), java.text.Normalizer.Form.NFKC)
+                    .replaceAll("\\s+", " ");
+        }
+    }
+
+    enum TextScope { TITLE, DESCRIPTION }
 
     enum CatalogSort {
         RANK,

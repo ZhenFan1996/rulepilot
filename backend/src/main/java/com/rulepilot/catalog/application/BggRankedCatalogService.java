@@ -244,7 +244,7 @@ public class BggRankedCatalogService
                 filters.maximumPublicationYear(),
                 filters.minimumAverageRating(),
                 filters.minimumRatingsCount(),
-                checkedTextQuery(filters.textQuery()),
+                filters.textQuery(),
                 filters.sort(),
                 filters.maximum(),
                 filters.offset());
@@ -263,13 +263,6 @@ public class BggRankedCatalogService
                 .map(this::recommendationGame)
                 .toList();
         return new CandidateSet(gameCount(), games, ranked.size() < checkedFilters.maximum());
-    }
-
-    private String checkedTextQuery(String value) {
-        if (value == null) return null;
-        String checked = value.strip().replaceAll("\\s+", " ");
-        if (checked.isBlank()) return null;
-        return checked;
     }
 
     private List<String> checkedMetadataFilters(List<String> values, String label) {

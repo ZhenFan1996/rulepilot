@@ -60,6 +60,47 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', textBlock = """
+            exclude-played | 推荐一款三人工放游戏，River Market 除外，因为玩过了。 | 201
+            exclude-two | 三人玩工放，别再推荐 River Market 或 Quiet Abbey，其他的可以。 | 201,202
+            reference-alternative | 我喜欢 River Market 的工放机制，想换一款不同的，三个人玩。 | 201
+            positive-title | 只推荐 River Market 这款游戏，三个人玩。 | 0
+            """)
+    void respectsTitleIntentInNaturalRequests(String scenario, String message, String excluded) throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen").toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        String modelName = canaryModel(prefix);
+        Capture capture = new Capture(provider, modelName);
+        var properties = new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var agent = new BoardGameRecommendationAgent(
+                model(provider, environment(prefix + "_API_KEY", null), environment(prefix + "_BASE_URL", null),
+                        modelName, capture),
+                new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
+                new BoardGameRecommendationSelector(properties), properties, json);
+        long started = System.nanoTime();
+        capture.beginTurn(scenario);
+        try {
+            var response = agent.converse(new ConversationRequest(RecommendationProfile.empty(), message),
+                    "zh-CN", null, ignored -> {}, ignored -> {},
+                    part -> capture.firstRecommendationPart(elapsed(started)));
+            writeArtifact(scenario, capture, response, elapsed(started), null);
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            List<Integer> ids = response.games().stream().map(item -> item.game().ranking().bggId()).toList();
+            assertThat(ids).isNotEmpty();
+            if (excluded.equals("0")) assertThat(ids).containsExactly(201);
+            else assertThat(ids).doesNotContainAnyElementsOf(java.util.Arrays.stream(excluded.split(","))
+                    .map(Integer::valueOf).toList());
+            assertThat(elapsed(started)).isLessThan(RECOMMENDATION_TIMEOUT.toMillis());
+        } catch (Throwable failure) {
+            writeArtifact(scenario + "-failed", capture, null, elapsed(started), failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
     @Test
     void repliesToAGreetingNaturallyWithoutUnneededExternalWork() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
@@ -888,6 +929,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         @Override
         public CandidateSet searchGames(CatalogFilters filters) {
             List<Game> matches = games.values().stream()
+                    .filter(game -> filters.textQuery() == null
+                            || filters.textQuery().scope() != BoardGameRecommendationCatalog.TextScope.TITLE
+                            || game.ranking().sourceName().toLowerCase(Locale.ROOT)
+                                    .contains(filters.textQuery().value().toLowerCase(Locale.ROOT)))
                     .filter(game -> filters.types().isEmpty()
                             || game.ranking().types().stream().anyMatch(filters.types()::contains))
                     .filter(game -> game.details().categories().containsAll(filters.categories()))
@@ -904,7 +949,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .filter(game -> filters.minimumRatingsCount() == null
                             || game.ranking().usersRated() >= filters.minimumRatingsCount())
                     .sorted(java.util.Comparator.comparingInt(
-                                    (Game game) -> textMatchScore(game, filters.textQuery()))
+                                    (Game game) -> textMatchScore(game, filters.textQuery() == null ? null : filters.textQuery().value()))
                             .reversed()
                             .thenComparingInt(game -> game.ranking().bggId()))
                     .toList();

@@ -234,8 +234,19 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
         }
         String textMatches = "";
         String textJoin = "";
-        if (filters.textQuery() != null) {
-            parameters.addValue("textQuery", filters.textQuery());
+        boolean descriptionQuery = filters.textQuery() != null
+                && filters.textQuery().scope() == com.rulepilot.catalog.BoardGameRecommendationCatalog.TextScope.DESCRIPTION;
+        if (filters.textQuery() != null && !descriptionQuery) {
+            parameters.addValue("titleQuery", escapedSearch(filters.textQuery().value()));
+            clauses.add("""
+                    (lower(g.source_name) LIKE lower(:titleQuery) ESCAPE E'\\\\'
+                     OR EXISTS (SELECT 1 FROM bgg_game_name_alias alias
+                                WHERE alias.bgg_id = g.bgg_id
+                                  AND lower(alias.alias) LIKE lower(:titleQuery) ESCAPE E'\\\\'))
+                    """);
+        }
+        if (descriptionQuery) {
+            parameters.addValue("textQuery", filters.textQuery().value());
             textMatches = """
                     WITH text_matches AS MATERIALIZED (
                         SELECT cache.bgg_id,
@@ -253,7 +264,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                     TEXT_SEARCH_QUERY);
             textJoin = " LEFT JOIN text_matches text_match ON text_match.bgg_id = g.bgg_id ";
         }
-        String relevanceOrder = filters.textQuery() == null
+        String relevanceOrder = !descriptionQuery
                 ? ""
                 : "text_match.relevance DESC NULLS LAST, ";
         String sql = textMatches + "SELECT " + QUALIFIED_COLUMNS + " FROM bgg_ranked_game g " + textJoin + " WHERE "
