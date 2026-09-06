@@ -244,8 +244,15 @@ function stepKindLabel(kind: string) {
                     </div>
                     <div
                       class="mt-4"
-                      :class="stepVisuals(step).length ? '2xl:grid 2xl:grid-cols-[minmax(20rem,1.08fr)_minmax(16rem,0.92fr)] 2xl:items-start 2xl:gap-6' : ''"
+                      :class="stepVisuals(step).length ? 'grid gap-5 2xl:grid-cols-[minmax(16rem,0.92fr)_minmax(20rem,1.08fr)] 2xl:items-start 2xl:gap-6' : ''"
                     >
+                      <div class="min-w-0">
+                        <p class="text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
+                        <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
+
+                        <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-muted transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
+                      </div>
+
                       <ul
                         v-if="stepVisuals(step).length"
                         data-testid="lesson-step-visuals"
@@ -278,13 +285,6 @@ function stepKindLabel(kind: string) {
                           />
                         </li>
                       </ul>
-
-                      <div class="min-w-0" :class="stepVisuals(step).length ? 'mt-5 2xl:mt-0' : ''">
-                        <p class="text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
-                        <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
-
-                        <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-muted transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
-                      </div>
                     </div>
                   </div>
                 </div>

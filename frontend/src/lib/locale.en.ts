@@ -310,7 +310,6 @@ const englishMessages = {
     'lesson.visualEvidence.lookFor': 'Look for: ',
     'lesson.visualEvidence.alt': 'Illustration for “{label}” from rulebook page {page}',
     'lesson.visualEvidence.loading': 'Loading the illustration for this step',
-    'lesson.visualEvidence.boundary': 'The caption describes visible content; this step and its source page remain authoritative.',
     'lesson.visualEvidence.openOriginal': 'Check the source page',
     'lesson.visualEvidence.protectedTitle': 'This candidate image is not reliable enough',
     'lesson.visualEvidence.protectedBody': 'The narrow candidate touches the page trim and may be truncated, so the image is omitted; check the source page directly.',

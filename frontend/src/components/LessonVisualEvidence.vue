@@ -327,7 +327,6 @@ function isReliableDetailViewport(focus: VisualFocus) {
         {{ focus.visibleDescription }}
       </p>
       <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted">
-        <span>{{ t('lesson.visualEvidence.boundary') }}</span>
         <a :href="originalPageUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo hover:underline">{{ t('lesson.visualEvidence.openOriginal') }} ↗</a>
       </div>
     </figcaption>

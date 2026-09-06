@@ -316,7 +316,6 @@ const messages = {
     'lesson.visualEvidence.lookFor': '看这里：',
     'lesson.visualEvidence.alt': '规则书第 {page} 页中与“{label}”对应的插图',
     'lesson.visualEvidence.loading': '正在加载与当前步骤对应的插图',
-    'lesson.visualEvidence.boundary': '图注描述可见内容，规则以本步骤及来源页为准。',
     'lesson.visualEvidence.openOriginal': '核对原页',
     'lesson.visualEvidence.protectedTitle': '这张候选图不够可靠',
     'lesson.visualEvidence.protectedBody': '候选紧贴页边且过窄，可能包含被截断内容；已省略图片，请直接核对原页。',
