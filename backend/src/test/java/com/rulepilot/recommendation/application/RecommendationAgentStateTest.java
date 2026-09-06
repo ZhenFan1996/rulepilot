@@ -42,6 +42,22 @@ class RecommendationAgentStateTest {
                 .containsExactly(13);
     }
 
+    @Test
+    void titleExclusionsPreserveExactScopeAndOverridePositiveRequirements() {
+        var exact = new RecommendationAgentState.TitleFilter(
+                RecommendationAgentState.TitleMatch.EXACT, RecommendationAgentState.TitleScope.TITLE, "  GAME 1  ");
+        var fragment = new RecommendationAgentState.TitleFilter(
+                RecommendationAgentState.TitleMatch.CONTAINS, RecommendationAgentState.TitleScope.TITLE, "Game 1");
+        var search = new RecommendationAgentState.CatalogSearch(
+                List.of(), List.of(), List.of(), fragment, List.of(exact),
+                1, null, null, null, "U1", RecommendationProfile.empty());
+
+        assertThat(search.matches(game(1))).as("exclusion wins even inside a required title fragment").isFalse();
+        assertThat(search.matches(game(10))).as("one excluded title does not exclude similarly named games").isTrue();
+        assertThat(search.matches(game(2))).as("positive title requirements still apply").isFalse();
+        assertThat(fragment.matches(game(10))).as("explicit fragment exclusion can match related names").isTrue();
+    }
+
     private Game game(int id) {
         return new Game(
                 new Ranking(

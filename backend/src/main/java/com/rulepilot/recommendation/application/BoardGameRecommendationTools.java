@@ -73,7 +73,7 @@ public class BoardGameRecommendationTools {
             Integer maximumPublicationYear,
             java.math.BigDecimal minimumAverageRating,
             Integer minimumRatingsCount,
-            String textQuery,
+            BoardGameRecommendationCatalog.TextQuery textQuery,
             CatalogSort sort,
             int maximum,
             int offset) {

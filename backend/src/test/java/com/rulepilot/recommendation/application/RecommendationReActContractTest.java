@@ -8,6 +8,8 @@ import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CandidateSet;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.TextQuery;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.TextScope;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
@@ -175,6 +177,39 @@ class RecommendationReActContractTest {
     }
 
     @Test
+    void excludedSeriesCannotEnterPublicationEvenWhenTheModelSelectsIt() throws Exception {
+        RecordingCatalog catalog = new RecordingCatalog(
+                gameWithFamilies(481, "Ironworks: Northern Mills", List.of("Game: Ironworks")),
+                gameWithFamilies(483, "Steel City Ledger", List.of("Game: Ironworks")),
+                gameWithFamilies(484, "Merchant Harbors", List.of("Game: Merchant Harbors")));
+        ScriptedModel model = new ScriptedModel(
+                action("exclude-search", BoardGameRecommendationAgent.SEARCH_TOOL, """
+                        {"evidence":"U1","publicationCount":1,"includeTypes":[],"excludeTypes":[],
+                         "requiredInteraction":"ANY","excludedTitles":[
+                           {"match":"CONTAINS","scope":"SERIES","value":"Ironworks"}]}
+                        """),
+                action("exclude-publication", BoardGameRecommendationAgent.RECOMMEND_TOOL, """
+                        {"playerReply":"Merchant Harbors supports your group.","selections":[
+                          {"bggId":483,"internalEvidenceIds":["B483:playerCount"]},
+                          {"bggId":484,"internalEvidenceIds":["B484:playerCount"]}]}
+                        """));
+        RecommendationReActLoop loop = loop(model, catalog);
+        List<BoardGameRecommendationAgent.RecommendationPart> streamed = new ArrayList<>();
+
+        var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(),
+                "Recommend something other than the Ironworks series; we have played it."),
+                "en", "player", ignored -> {}, ignored -> {}, streamed::add);
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).extracting(item -> item.game().ranking().bggId()).containsExactly(484);
+        assertThat(streamed).extracting(item -> item.game().game().ranking().bggId()).containsExactly(484);
+        JsonNode observation = toolObservation(model.requests.get(1), "exclude-search");
+        assertThat(observation.path("verifiedCandidateBggIds").toString()).isEqualTo("[484]");
+        assertThat(catalog.lastFilters.get().textQuery()).isNull();
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void namedCollectionDiscoveryPublishesItsSelectedTargetCount() throws Exception {
         Game northernWorks = gameWithFamilies(
                 481, "Ironworks: Northern Mills", List.of("Game: Ironworks"));
@@ -306,7 +341,7 @@ class RecommendationReActContractTest {
         assertThat(response.shortfall()).isNull();
         assertThat(catalog.searches).hasValue(1);
         assertThat(catalog.lastFilters.get().types()).isEmpty();
-        assertThat(catalog.lastFilters.get().textQuery()).isEqualTo("Grove");
+        assertThat(catalog.lastFilters.get().textQuery()).isEqualTo(new TextQuery("Grove", TextScope.TITLE));
 
         Request terminalDecision = model.requests.getLast();
         String terminalContext = terminalDecision.messages().stream()
@@ -388,7 +423,7 @@ class RecommendationReActContractTest {
         assertThat(response.harness().webResearchCalls()).isZero();
         assertThat(catalog.lastFilters.get()).satisfies(filters -> {
             assertThat(filters.types()).containsExactly(BggGameType.FAMILY);
-            assertThat(filters.textQuery()).isEqualTo("shelter secrets storm atmosphere");
+            assertThat(filters.textQuery()).isEqualTo(new TextQuery("shelter secrets storm atmosphere", TextScope.DESCRIPTION));
             assertThat(filters.sort()).isEqualTo(BoardGameRecommendationCatalog.CatalogSort.RELEVANCE);
         });
         JsonNode searchObservation = toolObservation(model.requests.getLast(), "description-ranked-search");
@@ -1220,12 +1255,14 @@ class RecommendationReActContractTest {
                 .thenAnswer(invocation -> {
                     CatalogFilters filters = invocation.getArgument(0);
                     if (failure) throw new IllegalStateException("catalog disconnected");
-                    return new CandidateSet(41, filters.offset() < 40 ? List.of() : List.of(candidate),
+                    return new CandidateSet(41, filters.offset() < 40
+                            ? List.of(game(1002 + filters.offset(), "Old Foundry", BggGameType.STRATEGY, 2, 4, 90, "3.1"))
+                            : List.of(candidate),
                             filters.offset() >= 40);
                 });
         ScriptedModel model = new ScriptedModel(
                 action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"publicationCount\":1,\"includeTypes\":[],\"excludeTypes\":[],\"excludedTitles\":[{\"match\":\"EXACT\",\"scope\":\"TITLE\",\"value\":\"Old Foundry\"}]}"),
                 action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"playerReply\":\"这款支持四人。\",\"selections\":[{\"bggId\":1001,"
                                 + "\"internalEvidenceIds\":[\"B1001:playerCount\"]}]}"));

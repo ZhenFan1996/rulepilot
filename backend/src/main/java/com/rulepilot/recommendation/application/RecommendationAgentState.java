@@ -159,7 +159,7 @@ final class RecommendationAgentState {
             List<BggGameType> excludeTypes,
             List<String> mechanics,
             TitleFilter title,
-            List<String> resolvedFamilies,
+            List<TitleFilter> excludedTitles,
             Integer requestedCount,
             Integer players,
             Integer maxMinutes,
@@ -170,7 +170,7 @@ final class RecommendationAgentState {
             includeTypes = includeTypes == null ? List.of() : List.copyOf(includeTypes);
             excludeTypes = excludeTypes == null ? List.of() : List.copyOf(excludeTypes);
             mechanics = mechanics == null ? List.of() : List.copyOf(mechanics);
-            resolvedFamilies = resolvedFamilies == null ? List.of() : List.copyOf(resolvedFamilies);
+            excludedTitles = excludedTitles == null ? List.of() : List.copyOf(excludedTitles);
             if (requestedCount != null && requestedCount < 1
                     || evidenceId == null
                     || evidenceId.isBlank()
@@ -185,10 +185,8 @@ final class RecommendationAgentState {
             if (!includeTypes.isEmpty() && includeTypes.stream().noneMatch(actualTypes::contains)) return false;
             if (excludeTypes.stream().anyMatch(actualTypes::contains)) return false;
             if (!game.details().mechanics().containsAll(mechanics)) return false;
+            if (excludedTitles.stream().anyMatch(excluded -> excluded.matches(game))) return false;
             if (title == null) return true;
-            if (title.scope() == TitleScope.SERIES && !resolvedFamilies.isEmpty()) {
-                return game.details().families().stream().anyMatch(this::matchesResolvedFamily);
-            }
             return title.matches(game);
         }
 
@@ -197,8 +195,8 @@ final class RecommendationAgentState {
                     includeTypes,
                     excludeTypes,
                     mechanics,
-                    title,
-                    families,
+                    title.withFamilies(families),
+                    excludedTitles,
                     requestedCount,
                     players,
                     maxMinutes,
@@ -206,14 +204,17 @@ final class RecommendationAgentState {
                     evidenceId,
                     selectionProfile);
         }
-
-        private boolean matchesResolvedFamily(String family) {
-            String actual = TitleFilter.normalize(family);
-            return resolvedFamilies.stream().map(TitleFilter::normalize).anyMatch(actual::equals);
-        }
     }
 
-    record TitleFilter(TitleMatch match, TitleScope scope, String value) {
+    record TitleFilter(TitleMatch match, TitleScope scope, String value, List<String> families) {
+        TitleFilter(TitleMatch match, TitleScope scope, String value) {
+            this(match, scope, value, List.of());
+        }
+
+        TitleFilter withFamilies(List<String> resolved) {
+            return new TitleFilter(match, scope, value, resolved);
+        }
+
         TitleFilter {
             if (match == null || scope == null || normalize(value).isEmpty()) {
                 throw new IllegalArgumentException("title filter is invalid");
@@ -222,9 +223,15 @@ final class RecommendationAgentState {
                 throw new IllegalArgumentException("series title filter must use CONTAINS");
             }
             value = value.strip();
+            families = List.copyOf(families);
         }
 
         boolean matches(Game game) {
+            if (scope == TitleScope.SERIES && game.details().families().stream()
+                    .map(TitleFilter::normalize)
+                    .anyMatch(actual -> families.stream().map(TitleFilter::normalize).anyMatch(actual::equals))) {
+                return true;
+            }
             String expected = normalize(value);
             return java.util.stream.Stream.of(
                             game.ranking().sourceName(),

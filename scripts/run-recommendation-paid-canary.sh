@@ -49,6 +49,6 @@ case "$RULEPILOT_RECOMMENDATION_CANARY_PROVIDER" in
 esac
 
 cd "$ROOT_DIR/backend"
-./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#repliesToAGreetingNaturallyWithoutUnneededExternalWork+followsUpAndReplacesGamesInAWorkerPlacementConversation+publishesForAnOrdinaryMoodBasedRequest+keepsAnExplicitCooperativeRequestInsideTheTypedPlayModeBoundary' test
+./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#repliesToAGreetingNaturallyWithoutUnneededExternalWork+followsUpAndReplacesGamesInAWorkerPlacementConversation+publishesForAnOrdinaryMoodBasedRequest+keepsAnExplicitCooperativeRequestInsideTheTypedPlayModeBoundary+respectsTitleIntentInNaturalRequests' test
 
 echo "Paid recommendation canary passed; raw model diagnostics remain under ignored .local/agent-evaluation/."

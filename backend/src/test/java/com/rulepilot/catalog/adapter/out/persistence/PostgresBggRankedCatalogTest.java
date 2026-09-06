@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.TextQuery;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.TextScope;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
@@ -194,22 +196,36 @@ class PostgresBggRankedCatalogTest {
                 .containsExactly(20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                        null, null, null, null, "industrial rail", CatalogSort.RELEVANCE, 20, 0)))
+                        null, null, null, null, new TextQuery("industrial rail", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, 20, 0)))
                 .as("cached BGG descriptions and tags rank the relevant game first without hard-filtering the slate")
                 .extracting(RankedGame::bggId)
                 .containsExactly(10, 20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                        null, null, null, null, "industrial gardens", CatalogSort.RELEVANCE, 20, 0)))
+                        null, null, null, null, new TextQuery("industrial gardens", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, 20, 0)))
                 .as("concept retrieval recalls both partial and inflected matches without inventing a semantic tie-break")
                 .extracting(RankedGame::bggId)
                 .containsExactlyInAnyOrder(10, 20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                        null, null, null, null, "unmatched constellation", CatalogSort.RELEVANCE, 20, 0)))
+                        null, null, null, null, new TextQuery("unmatched constellation", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, 20, 0)))
                 .as("a soft concept query must not erase otherwise eligible ranked games")
                 .extracting(RankedGame::bggId)
                 .containsExactly(10, 20);
+        for (String title : List.of("Strategy", "百变", "100%")) {
+            assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                    null, null, null, null, new TextQuery(title, TextScope.TITLE),
+                    CatalogSort.RELEVANCE, 20, 0)))
+                    .as("title queries filter canonical/localized names before pagination, including literal wildcards")
+                    .extracting(RankedGame::bggId).containsExactly(10);
+        }
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                null, null, null, null, new TextQuery("industrial", TextScope.TITLE),
+                CatalogSort.RELEVANCE, 20, 0)))
+                .as("description matches cannot fill a named-title lookup with unrelated games")
+                .isEmpty();
         jdbc.getJdbcTemplate().update("""
                 UPDATE bgg_metadata_cache SET cached_at = NOW() - INTERVAL '3 days',
                     fresh_until = NOW() - INTERVAL '2 days', stale_until = NOW() - INTERVAL '1 day'
