@@ -54,7 +54,7 @@ public class DocumentNativeVisualEvidence implements NativeVisualEvidence {
                 evidenceId,
                 pageNumber,
                 "image/jpeg",
-                cropper.crop(image, x, y, width, height, 0),
+                cropper.crop(image, x, y, width, height),
                 x,
                 y,
                 width,

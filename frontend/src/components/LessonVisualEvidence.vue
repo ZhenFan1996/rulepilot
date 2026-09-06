@@ -267,8 +267,8 @@ function isReliableDetailViewport(focus: VisualFocus) {
         <img
           :src="loadedDetailImageUrl"
           :alt="t('lesson.visualEvidence.alt', { page: focus.pageNumber, label: focus.label })"
-          class="block w-full object-contain"
-          :class="compact ? 'aspect-[4/3] max-h-64 min-h-36' : 'max-h-[32rem] min-h-40'"
+          class="mx-auto block h-auto w-auto max-w-full object-contain"
+          :class="compact ? 'max-h-64' : 'max-h-[32rem]'"
           loading="lazy"
           decoding="async"
           @error="handleDetailDecodeFailure"

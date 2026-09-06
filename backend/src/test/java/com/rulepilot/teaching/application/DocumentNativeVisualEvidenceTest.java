@@ -67,8 +67,7 @@ class DocumentNativeVisualEvidenceTest {
         DocumentPageImageCropper cropper = mock(DocumentPageImageCropper.class);
         when(cropper.crop(org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
-                        org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
-                        org.mockito.ArgumentMatchers.eq(0)))
+                        org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt()))
                 .thenReturn(new byte[] {3, 4});
         VisualRulebookPageFacts facts = mock(VisualRulebookPageFacts.class);
         when(facts.find(versionId, Set.of(4))).thenReturn(List.of(new PageFact(
@@ -100,8 +99,7 @@ class DocumentNativeVisualEvidenceTest {
                 org.mockito.ArgumentMatchers.eq(100),
                 org.mockito.ArgumentMatchers.eq(100),
                 org.mockito.ArgumentMatchers.eq(300),
-                org.mockito.ArgumentMatchers.eq(200),
-                org.mockito.ArgumentMatchers.eq(0));
+                org.mockito.ArgumentMatchers.eq(200));
 
         assertThat(adapter.readPage(versionId, evidenceId, 5)).isEmpty();
         assertThat(adapter.readPage(UUID.randomUUID(), evidenceId, 4)).isEmpty();

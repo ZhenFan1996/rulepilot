@@ -23,7 +23,7 @@ class RulePageImageCropperTest {
     private final RulePageImageCropper cropper = new RulePageImageCropper();
 
     @Test
-    void returnsTheFocusedRegionWithAThinContextMargin() throws IOException {
+    void returnsOnlyTheSelectedObjectWithoutNeighboringPageContent() throws IOException {
         BufferedImage source = new BufferedImage(100, 200, BufferedImage.TYPE_INT_RGB);
         var graphics = source.createGraphics();
         graphics.setColor(Color.WHITE);
@@ -32,17 +32,23 @@ class RulePageImageCropperTest {
         graphics.fillRect(25, 50, 50, 100);
         graphics.dispose();
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
-        ImageIO.write(source, "jpeg", encoded);
+        ImageIO.write(source, "png", encoded);
 
         byte[] result = cropper.crop(
-                new PageImage(4, "image/jpeg", encoded.toByteArray(), 100, 200),
+                new PageImage(4, "image/png", encoded.toByteArray(), 100, 200),
                 250, 250, 500, 500);
 
         BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result));
-        assertThat(cropped.getWidth()).isEqualTo(58);
-        assertThat(cropped.getHeight()).isEqualTo(114);
-        assertThat(cropped.getWidth()).isLessThan(source.getWidth());
-        assertThat(cropped.getHeight()).isLessThan(source.getHeight());
+        assertThat(cropped.getWidth()).isEqualTo(50);
+        assertThat(cropped.getHeight()).isEqualTo(100);
+        // The white area around the selected blue object must not leak into the reader crop.
+        for (int x = 0; x < cropped.getWidth(); x++) {
+            for (int y = 0; y < cropped.getHeight(); y++) {
+                Color pixel = new Color(cropped.getRGB(x, y));
+                assertThat(pixel.getBlue()).isGreaterThan(200);
+                assertThat(pixel.getRed()).isLessThan(20);
+            }
+        }
     }
 
     @Test
@@ -70,25 +76,6 @@ class RulePageImageCropperTest {
     }
 
     @Test
-    void supportsACompactContextMarginForSmallVisualCrops() throws IOException {
-        BufferedImage source = new BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB);
-        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
-        ImageIO.write(source, "jpeg", encoded);
-
-        byte[] result = cropper.crop(
-                new PageImage(1, "image/jpeg", encoded.toByteArray(), 100, 100),
-                250,
-                250,
-                200,
-                200,
-                10);
-
-        BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result));
-        assertThat(cropped.getWidth()).isEqualTo(22);
-        assertThat(cropped.getHeight()).isEqualTo(22);
-    }
-
-    @Test
     void normalizesAFullEvidencePageToABrowserSafeRgbJpeg() throws IOException {
         BufferedImage source = new BufferedImage(80, 120, BufferedImage.TYPE_4BYTE_ABGR);
         var graphics = source.createGraphics();
@@ -103,8 +90,7 @@ class RulePageImageCropperTest {
                 0,
                 0,
                 1_000,
-                1_000,
-                0);
+                1_000);
 
         BufferedImage normalized = ImageIO.read(new ByteArrayInputStream(result));
         assertThat(normalized.getWidth()).isEqualTo(80);
@@ -156,12 +142,11 @@ class RulePageImageCropperTest {
                 500,
                 500,
                 20,
-                20,
-                10);
+                20);
 
         BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result));
-        assertThat(cropped.getWidth()).isEqualTo(80);
-        assertThat(cropped.getHeight()).isEqualTo(120);
+        assertThat(cropped.getWidth()).isEqualTo(40);
+        assertThat(cropped.getHeight()).isEqualTo(60);
     }
 
     @Test
@@ -169,7 +154,7 @@ class RulePageImageCropperTest {
         PageImage page = new PageImage(1, "image/jpeg", new byte[] {1}, 7_000, 7_000);
 
         assertThatIllegalArgumentException()
-                .isThrownBy(() -> cropper.crop(page, 500, 500, 20, 20, 10))
+                .isThrownBy(() -> cropper.crop(page, 500, 500, 20, 20))
                 .withMessageContaining("source pixel limit");
     }
 
@@ -178,7 +163,7 @@ class RulePageImageCropperTest {
         PageImage page = new PageImage(1, "image/jpeg", new byte[] {1}, 5_000, 5_000);
 
         assertThatIllegalArgumentException()
-                .isThrownBy(() -> cropper.crop(page, 0, 0, 1_000, 1_000, 0))
+                .isThrownBy(() -> cropper.crop(page, 0, 0, 1_000, 1_000))
                 .withMessageContaining("projected pixel limit");
     }
 
@@ -187,7 +172,7 @@ class RulePageImageCropperTest {
         RulePageImageCropper constrained = new RulePageImageCropper(5_000_000L);
         PageImage page = new PageImage(1, "image/jpeg", new byte[] {1}, 2_000, 3_000);
 
-        assertThatThrownBy(() -> constrained.crop(page, 500, 500, 20, 20, 10))
+        assertThatThrownBy(() -> constrained.crop(page, 500, 500, 20, 20))
                 .isInstanceOf(RejectedExecutionException.class)
                 .hasMessageContaining("capacity");
     }
@@ -199,7 +184,7 @@ class RulePageImageCropperTest {
         ImageIO.write(source, "jpeg", encoded);
         PageImage page = new PageImage(1, "image/jpeg", encoded.toByteArray(), 2_000, 3_000);
         List<Callable<byte[]>> requests = IntStream.range(0, 8)
-                .mapToObj(ignored -> (Callable<byte[]>) () -> cropper.crop(page, 500, 500, 20, 20, 10))
+                .mapToObj(ignored -> (Callable<byte[]>) () -> cropper.crop(page, 500, 500, 20, 20))
                 .toList();
 
         try (var executor = Executors.newFixedThreadPool(requests.size())) {
@@ -207,8 +192,8 @@ class RulePageImageCropperTest {
 
             for (var result : results) {
                 BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result.get()));
-                assertThat(cropped.getWidth()).isEqualTo(80);
-                assertThat(cropped.getHeight()).isEqualTo(120);
+                assertThat(cropped.getWidth()).isEqualTo(40);
+                assertThat(cropped.getHeight()).isEqualTo(60);
             }
         }
     }
