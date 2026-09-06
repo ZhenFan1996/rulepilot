@@ -89,6 +89,7 @@ class PostgresBggRankedCatalogTest {
                     ('DISCOVERY', 30, '{"name":"Expansion","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Copper Press"],"families":["Industrial Age"],"description":"More industrial rail networks."}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW())
                 """);
 
+        assertThat(repository.findMechanics()).containsExactly("Deck Building");
         assertThat(repository.findSnapshot()).contains(snapshot);
         assertThat(repository.find(new Query("", BggGameType.ALL, Sort.HOT, 0, 20, List.of(20))).games())
                 .extracting(RankedGame::bggId)
@@ -209,6 +210,12 @@ class PostgresBggRankedCatalogTest {
                 .as("a soft concept query must not erase otherwise eligible ranked games")
                 .extracting(RankedGame::bggId)
                 .containsExactly(10, 20);
+        jdbc.getJdbcTemplate().update("""
+                UPDATE bgg_metadata_cache SET cached_at = NOW() - INTERVAL '3 days',
+                    fresh_until = NOW() - INTERVAL '2 days', stale_until = NOW() - INTERVAL '1 day'
+                WHERE cache_kind = 'DISCOVERY'
+                """);
+        assertThat(repository.findMechanics()).isEmpty();
     }
 
     private static RankedGame game(

@@ -46,6 +46,9 @@ public interface BoardGameRecommendationCatalog {
         return findGamesByIds(List.of(bggId)).stream().findFirst();
     }
 
+    /** Canonical mechanism identities available in the verified local catalog. */
+    List<String> mechanics();
+
     int gameCount();
 
     record CandidateSet(int sourceCount, List<Game> games, boolean pageExhausted) {

@@ -109,9 +109,9 @@ final class RecommendationToolCatalog {
                 """;
     }
 
-    List<ToolSpec> actions(List<String> ignoredEvidenceIds, List<String> currentTurnEvidenceIds) {
+    List<ToolSpec> actions(List<String> catalogMechanics, List<String> currentTurnEvidenceIds) {
         return List.of(
-                searchAction(currentTurnEvidenceIds),
+                searchAction(currentTurnEvidenceIds, catalogMechanics),
                 new ToolSpec(
                         DISCOVER_TOOL,
                         "Read an attributed public relationship or current identity fact that the BGG catalog does not own.",
@@ -198,10 +198,13 @@ final class RecommendationToolCatalog {
         return schema;
     }
 
-    private ToolSpec searchAction(List<String> currentTurnEvidenceIds) {
+    private ToolSpec searchAction(List<String> currentTurnEvidenceIds, List<String> catalogMechanics) {
         String typeArray = "{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                 + GAME_TYPES + "}}";
-        String mechanics = "{\"type\":\"array\",\"maxItems\":8,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80}}";
+        String mechanics = catalogMechanics.isEmpty()
+                ? "{\"type\":\"array\",\"maxItems\":0}"
+                : "{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
+                        + jsonArray(catalogMechanics) + "}}";
         String complexity = "{\"type\":\"object\",\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5},\"maximum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5}}}";
         return new ToolSpec(
                 SEARCH_TOOL,
@@ -377,26 +380,12 @@ final class RecommendationToolCatalog {
             throw new IllegalArgumentException("every recommendation action requires one correlated observation");
         }
         compactPriorToolState(messages);
-        List<ToolCall> compactCalls = calls.stream().map(this::withoutDecisionBrief).toList();
-        messages.add(Message.assistant("", compactCalls));
+        messages.add(Message.assistant("", calls));
         for (int index = 0; index < calls.size(); index++) {
             String observation = index == calls.size() - 1
                     ? contextualObservation(observations.get(index), state)
                     : observations.get(index);
             messages.add(Message.tool(calls.get(index), observation));
-        }
-    }
-
-    private ToolCall withoutDecisionBrief(ToolCall call) {
-        try {
-            JsonNode parsed = json.readTree(call.argumentsJson());
-            if (!(parsed instanceof ObjectNode object) || !object.has(RecommendationDecisionBrief.FIELD)) {
-                return call;
-            }
-            object.remove(RecommendationDecisionBrief.FIELD);
-            return new ToolCall(call.id(), call.name(), json.writeValueAsString(object));
-        } catch (JsonProcessingException exception) {
-            return call;
         }
     }
 
