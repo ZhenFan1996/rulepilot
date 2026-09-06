@@ -190,6 +190,21 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     }
 
     @Override
+    public List<String> findMechanics() {
+        return jdbc.queryForList("""
+                SELECT DISTINCT mechanic
+                FROM bgg_metadata_cache cache
+                CROSS JOIN LATERAL jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(cache.payload->'mechanics') = 'array'
+                         THEN cache.payload->'mechanics' ELSE '[]'::jsonb END
+                ) mechanic
+                WHERE cache.cache_kind = 'DISCOVERY' AND cache.stale_until > NOW()
+                  AND btrim(mechanic) <> ''
+                ORDER BY mechanic
+                """, Map.of(), String.class);
+    }
+
+    @Override
     public List<RankedGame> findByMetadataFilters(CatalogFilters filters) {
         MapSqlParameterSource parameters = new MapSqlParameterSource()
                 .addValue("limit", filters.maximum())

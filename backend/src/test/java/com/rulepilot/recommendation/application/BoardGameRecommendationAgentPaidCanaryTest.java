@@ -873,6 +873,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                         LinkedHashMap::new));
 
         @Override
+        public List<String> mechanics() {
+            return games.values().stream().flatMap(game -> game.details().mechanics().stream()).distinct().sorted().toList();
+        }
+
+        @Override
         public CandidateSet findCandidates(
                 BggGameType requiredType,
                 List<BggGameType> suggestedTypes,
