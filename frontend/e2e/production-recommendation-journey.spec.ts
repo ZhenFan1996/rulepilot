@@ -1094,7 +1094,7 @@ test('production publishes natural and grounded recommendation replies before th
     }
     const naturalSession = await persistedSession(page.request, created.conversationId)
     report.naturalReply.persistedMatched = persistedResultMatches(natural, naturalSession)
-    const naturalDom = await page.getByTestId('assistant-conversation-turn').last().innerText()
+    const naturalDom = await page.getByTestId('assistant-conversation-turn').last().locator('.safe-markdown').first().innerText()
     report.naturalReply.domMatched = normalized(naturalDom)
       === normalized(await markdownText(page, natural.assistantMessage))
     expect(report.naturalReply.requestMatched).toBe(true)
