@@ -40,7 +40,7 @@ class BoardGameRecommendationSelectorTest {
                 1,
                 100,
                 new BigDecimal("3.0"),
-                List.of("Hand Management", "Network and Route Building"));
+                List.of("Cooperative Game", "Team-Based Game"));
         var observations = selector.observations(candidate);
 
         assertThat(observations).filteredOn(observation -> observation.attribute().equals("bggRatingCount"))
@@ -48,13 +48,14 @@ class BoardGameRecommendationSelectorTest {
                     assertThat(observation.bggId()).isEqualTo(candidate.ranking().bggId());
                     assertThat(observation.value()).isEqualTo(Integer.toString(candidate.ranking().usersRated()));
                 });
+        assertThat(observations).noneMatch(observation -> observation.attribute().equals("interaction"));
         assertThat(observations)
                 .filteredOn(observation -> observation.attribute().equals("mechanics"))
                 .singleElement()
                 .satisfies(observation -> {
                     assertThat(observation.kind())
                             .isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.TAXONOMY);
-                    assertThat(observation.value()).isEqualTo("Hand Management, Network and Route Building");
+                    assertThat(observation.value()).isEqualTo("Cooperative Game, Team-Based Game");
                 });
     }
 

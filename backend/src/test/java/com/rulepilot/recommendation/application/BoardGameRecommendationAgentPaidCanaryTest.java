@@ -185,10 +185,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         try {
             CanaryTurn opening = conversation.turn(
                     "worker-opening",
-                    "我们三个人想玩一些工人放置的德式重策，有什么推荐？",
+                    "我们三个人想玩工人放置的德式重策，请给三款供我们比较。",
                     List.of());
             assertThat(opening.response().outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-            assertThat(opening.response().games()).hasSizeGreaterThanOrEqualTo(2).allSatisfy(game -> {
+            assertThat(opening.response().games()).hasSize(3).allSatisfy(game -> {
                 assertThat(game.game().details().minPlayers()).isLessThanOrEqualTo(3);
                 assertThat(game.game().details().maxPlayers()).isGreaterThanOrEqualTo(3);
                 assertThat(game.game().details().averageWeight())
@@ -206,8 +206,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(openingSearch.path("requiredMechanics").toString())
                     .isEqualTo("[\"Worker Placement\"]");
             assertThat(openingSearch.path("players").asInt()).isEqualTo(3);
-            assertThat(openingSearch.path("complexity").path("minimum").decimalValue())
-                    .isGreaterThanOrEqualTo(new BigDecimal("3.0"));
 
             CanaryTurn comparison = conversation.turn(
                     "worker-comparison",

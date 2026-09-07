@@ -227,6 +227,17 @@ class PostgresBggRankedCatalogTest {
                 .as("description matches cannot fill a named-title lookup with unrelated games")
                 .isEmpty();
         jdbc.getJdbcTemplate().update("""
+                UPDATE bgg_metadata_cache SET payload = jsonb_set(payload, '{description}',
+                    to_jsonb(CASE WHEN bgg_id = 10 THEN repeat('orbital ', 20) ELSE 'orbital mining' END))
+                WHERE bgg_id IN (10, 20)
+                """);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                null, null, null, null, new TextQuery("orbital mining", TextScope.DESCRIPTION),
+                CatalogSort.RELEVANCE, 20, 0)))
+                .extracting(RankedGame::bggId).containsExactly(20, 10);
+
+        jdbc.getJdbcTemplate().update("""
                 UPDATE bgg_metadata_cache SET cached_at = NOW() - INTERVAL '3 days',
                     fresh_until = NOW() - INTERVAL '2 days', stale_until = NOW() - INTERVAL '1 day'
                 WHERE cache_kind = 'DISCOVERY'

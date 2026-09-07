@@ -241,8 +241,8 @@ final class RecommendationActions {
         int evidenceTurn = evidenceReview.evidenceTurn(evidenceId, request);
         List<BggGameType> includeTypes = gameTypes(arguments.path("includeTypes"));
         List<BggGameType> excludeTypes = gameTypes(arguments.path("excludeTypes"));
-        Integer requestedCount = arguments.has("maximumRecommendations")
-                ? integer(arguments.path("maximumRecommendations"), 0, Integer.MAX_VALUE, "RESULT_COUNT_OUT_OF_RANGE") : null;
+        Integer requestedCount = arguments.has("requestedGameCount")
+                ? integer(arguments.path("requestedGameCount"), 0, Integer.MAX_VALUE, "RESULT_COUNT_OUT_OF_RANGE") : null;
         List<String> mechanics = arguments.has("requiredMechanics")
                 ? catalogMechanics(arguments.path("requiredMechanics"), state.catalogMechanics)
                 : List.of();
@@ -392,7 +392,7 @@ final class RecommendationActions {
         }
         state.completeCatalogSearch(scan.sourceCount(), candidates);
         Map<String, Object> appliedContract = new LinkedHashMap<>();
-        if (requestedCount != null) appliedContract.put("maximumRecommendations", requestedCount);
+        if (requestedCount != null) appliedContract.put("requestedGameCount", requestedCount);
         appliedContract.put("evidence", evidenceId);
         appliedContract.put("includeTypes", includeTypes);
         appliedContract.put("excludeTypes", excludeTypes);
@@ -413,6 +413,7 @@ final class RecommendationActions {
         if (maxMinutes != null) appliedContract.put("maxMinutes", maxMinutes);
         if (complexity != null) {
             Map<String, Object> range = new LinkedHashMap<>();
+            range.put("strength", complexity.strength());
             if (complexity.minimum() != null) range.put("minimum", complexity.minimum());
             if (complexity.maximum() != null) range.put("maximum", complexity.maximum());
             appliedContract.put("complexity", range);
@@ -584,7 +585,7 @@ final class RecommendationActions {
             JsonNode node,
             String evidenceText,
             int evidenceTurn) {
-        requireObject(node, Set.of());
+        requireObject(node, Set.of("strength"));
         if (!node.has("minimum") && !node.has("maximum")) {
             throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
         }
@@ -597,7 +598,9 @@ final class RecommendationActions {
         if (minimum != null && maximum != null && minimum.compareTo(maximum) > 0) {
             throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
         }
-        return ConstraintRange.hard(minimum, maximum, evidenceText, evidenceTurn);
+        return new ConstraintRange<>(minimum, maximum,
+                enumValue(ConstraintRange.Strength.class, node.path("strength"), "WEIGHT_STRENGTH_INVALID"),
+                evidenceText, evidenceTurn);
     }
 
     private TitleFilter titleFilter(JsonNode node) {

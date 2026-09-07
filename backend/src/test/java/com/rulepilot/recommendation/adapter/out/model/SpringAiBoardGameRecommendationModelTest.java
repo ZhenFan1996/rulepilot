@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.IncrementalToolCallChatModel;
+import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
@@ -33,6 +34,59 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 
 class SpringAiBoardGameRecommendationModelTest {
+
+    @Test
+    void roundTripsPrivateProviderContinuationWithoutPublishingOrSerializingIt() throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var received = new java.util.concurrent.atomic.AtomicReference<com.fasterxml.jackson.databind.JsonNode>();
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            received.set(json.readTree(exchange.getRequestBody()));
+            String events = """
+                    data: {"id":"completion","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"reasoning_content":"private-fragment-"},"finish_reason":null}]}
+
+                    data: {"id":"completion","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"reasoning_content":"complete","tool_calls":[{"index":0,"id":"publish-1","type":"function","function":{"name":"publish","arguments":"{}"}}]},"finish_reason":null}]}
+
+                    data: {"id":"completion","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+                    data: [DONE]
+
+                    """;
+            byte[] bytes = events.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var model = new com.rulepilot.modelconfig.adapter.out.ChatModelFactory(
+                    io.micrometer.observation.ObservationRegistry.NOOP, java.time.Duration.ofSeconds(5))
+                    .create("deepseek", "test-key", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "deepseek-v4-pro");
+            var configuration = mock(RuntimeModelConfiguration.class);
+            when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                    .thenReturn(new RuntimeModelConfiguration.ResolvedModel(model, "deepseek", "deepseek-v4-pro", true));
+            var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+            var search = new ToolCall("search-1", "search", "{}");
+            var prior = new BoardGameRecommendationModel.Turn("", List.of(search), CompletionStatus.COMPLETE, 1, 1, "private-prior-state");
+            var messages = List.of(Message.user("Choose a game"), Message.assistant(prior), Message.tool(search, "{}"));
+            List<ToolCall> visible = new ArrayList<>();
+            var turn = adapter.nextStreaming(new Request(messages,
+                    List.of(new ToolSpec("publish", "Publish the complete response", "{\"type\":\"object\"}")), ToolChoice.REQUIRED),
+                    null, visible::add);
+
+            assertThat(received.get().path("tool_choice").asText()).isEqualTo("auto");
+            assertThat(received.get().path("messages").get(1).path("reasoning_content").asText())
+                    .isEqualTo("private-prior-state");
+            assertThat(turn.privateReasoning()).isEqualTo("private-fragment-complete");
+            assertThat(turn.toolCalls()).containsExactly(new ToolCall("publish-1", "publish", "{}"));
+            assertThat(json.writeValueAsString(turn)).doesNotContain("private-fragment", "privateReasoning");
+            assertThat(json.writeValueAsString(Message.assistant(turn))).doesNotContain("private-fragment", "privateReasoning");
+            assertThat(turn.toString() + Message.assistant(turn) + visible).doesNotContain("private-fragment", "private-prior");
+        } finally {
+            server.stop(0);
+        }
+    }
 
     @Test
     void publishesRawProviderArgumentDeltasWithoutWaitingForTheCompletedToolCall() {
@@ -245,7 +299,7 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void keepsDeepSeekAutoWireModeForOneActionWithoutEnablingThinking() {
+    void usesNativeThinkingWithAutoToolChoiceForDeepSeek() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "deepseek", "deepseek-v4-flash");
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
@@ -265,7 +319,7 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getMaxTokens()).isEqualTo(4_096);
         assertThat(options.getExtraBody())
-                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
+                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "enabled"), "reasoning_effort", "low"));
     }
 
     @Test
@@ -522,7 +576,7 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getExtraBody())
-                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
+                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "enabled"), "reasoning_effort", "low"));
     }
 
     @Test

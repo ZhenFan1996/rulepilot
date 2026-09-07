@@ -34,7 +34,7 @@ final class RecommendationPublication {
 
     private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("selections");
     private static final Set<String> PUBLICATION_FIELDS =
-            Set.of("maximumRecommendations", "selections");
+            Set.of("requestedGameCount", "selections");
     private static final Set<String> SELECTION_REQUIRED_FIELDS = Set.of("bggId");
 
     private final BoardGameRecommendationSelector selector;
@@ -82,7 +82,7 @@ final class RecommendationPublication {
                 ? explicitSearchCount == null
                         ? Math.min(defaultResultCount, allowedCandidateIds.size())
                         : explicitSearchCount
-                : integer(root.path("maximumRecommendations"), 0);
+                : integer(root.path("requestedGameCount"), 0);
         int maximumCards = Math.min(requestedCount, allowedCandidateIds.size());
         JsonNode rawSelections = root.path("selections");
         JsonNode selections = selectionArray(rawSelections);
@@ -229,7 +229,7 @@ final class RecommendationPublication {
 
     private int previewLimit(RecommendationAgentState state, String accumulatedArguments) {
         int requested = state.activeSearch == null
-                ? completedPositiveIntegerField(accumulatedArguments, "maximumRecommendations")
+                ? completedPositiveIntegerField(accumulatedArguments, "requestedGameCount")
                 : state.activeSearch.requestedCount() == null ? defaultResultCount : state.activeSearch.requestedCount();
         return Math.max(0, requested);
     }

@@ -58,8 +58,14 @@ public interface BoardGameRecommendationModel {
         TOOL
     }
 
-    record Message(Role role, String content, List<ToolCall> toolCalls, String toolCallId, String toolName) {
+    record Message(Role role, String content, List<ToolCall> toolCalls, String toolCallId, String toolName,
+            @com.fasterxml.jackson.annotation.JsonIgnore String privateReasoning) {
+        public Message(Role role, String content, List<ToolCall> toolCalls, String toolCallId, String toolName) {
+            this(role, content, toolCalls, toolCallId, toolName, "");
+        }
+
         public Message {
+            privateReasoning = privateReasoning == null ? "" : privateReasoning;
             if (role == null || content == null || toolCalls == null) {
                 throw new IllegalArgumentException("recommendation action message is invalid");
             }
@@ -74,6 +80,16 @@ public interface BoardGameRecommendationModel {
 
         public static Message system(String content) {
             return new Message(Role.SYSTEM, content, List.of(), null, null);
+        }
+
+        /** Transient provider continuation; never projected into player or persisted conversation state. */
+        public static Message assistant(Turn turn) {
+            return new Message(Role.ASSISTANT, turn.text(), turn.toolCalls(), null, null, turn.privateReasoning());
+        }
+
+        @Override
+        public String toString() {
+            return "Message[role=" + role + ", toolCalls=" + toolCalls.size() + "]";
         }
 
         public static Message user(String content) {
@@ -126,7 +142,12 @@ public interface BoardGameRecommendationModel {
             List<ToolCall> toolCalls,
             CompletionStatus completionStatus,
             int promptTokens,
-            int completionTokens) {
+            int completionTokens,
+            @com.fasterxml.jackson.annotation.JsonIgnore String privateReasoning) {
+        public Turn(String text, List<ToolCall> toolCalls, CompletionStatus completionStatus,
+                int promptTokens, int completionTokens) {
+            this(text, toolCalls, completionStatus, promptTokens, completionTokens, "");
+        }
         public Turn(String text, List<ToolCall> toolCalls) {
             this(text, toolCalls, CompletionStatus.COMPLETE, 0, 0);
         }
@@ -136,12 +157,18 @@ public interface BoardGameRecommendationModel {
         }
 
         public Turn {
+            privateReasoning = privateReasoning == null ? "" : privateReasoning;
             text = text == null ? "" : text;
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
             completionStatus = completionStatus == null ? CompletionStatus.UNKNOWN : completionStatus;
             if (promptTokens < 0 || completionTokens < 0) {
                 throw new IllegalArgumentException("recommendation model token usage must be non-negative");
             }
+        }
+
+        @Override
+        public String toString() {
+            return "Turn[completionStatus=" + completionStatus + ", toolCalls=" + toolCalls.size() + "]";
         }
     }
 

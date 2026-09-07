@@ -18,11 +18,23 @@ public interface IncrementalToolCallChatModel {
             List<ToolCallDelta> toolCalls,
             String finishReason,
             long promptTokens,
-            long completionTokens) {
+            long completionTokens,
+            @com.fasterxml.jackson.annotation.JsonIgnore String privateReasoning) {
+        public Chunk(String text, List<ToolCallDelta> toolCalls, String finishReason,
+                long promptTokens, long completionTokens) {
+            this(text, toolCalls, finishReason, promptTokens, completionTokens, "");
+        }
+
         public Chunk {
+            privateReasoning = privateReasoning == null ? "" : privateReasoning;
             text = text == null ? "" : text;
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
             finishReason = finishReason == null ? "" : finishReason;
+        }
+
+        @Override
+        public String toString() {
+            return "Chunk[finishReason=" + finishReason + ", toolCalls=" + toolCalls.size() + "]";
         }
     }
 

@@ -187,11 +187,11 @@ class BoardGameRecommendationSelector {
                     : CandidateClaim.Relation.CONFLICT;
             assessments.add(fitAssessment(
                     bggId,
-                    "interaction",
+                    "mechanics",
                     ConstraintRange.Strength.HARD,
                     relation,
                     interactionFitText(profile.interaction(), relation, chinese),
-                    observation(observations, "interaction")));
+                    observation(observations, "mechanics")));
         }
 
         // Competitive intensity has no positive, universal BGG taxonomy label. It remains an attributed experience
@@ -204,7 +204,7 @@ class BoardGameRecommendationSelector {
             CandidateClaim.Relation relation,
             boolean chinese) {
         String mode = interaction == InteractionPreference.COOPERATIVE
-                ? chinese ? "纯合作" : "cooperative"
+                ? chinese ? "合作" : "cooperative"
                 : chinese ? "团队制" : "team-based";
         return chinese
                 ? "候选的 BGG 机制标签与" + mode + "硬条件" + relationSuffix(relation, true)
@@ -248,11 +248,6 @@ class BoardGameRecommendationSelector {
         }
         addTaxonomy(values, bggId, "categories", details.categories());
         addTaxonomy(values, bggId, "mechanics", details.mechanics());
-        if (details.mechanics().contains("Cooperative Game")) {
-            values.add(taxonomy(bggId, "interaction", InteractionPreference.COOPERATIVE.name()));
-        } else if (details.mechanics().contains("Team-Based Game")) {
-            values.add(taxonomy(bggId, "interaction", InteractionPreference.TEAM.name()));
-        }
         addNumberMetadata(values, bggId, "minimumAge", details.minimumAge());
         addMetadata(values, bggId, "bestWith", List.of(details.bestWith()));
         addMetadata(values, bggId, "recommendedWith", List.of(details.recommendedWith()));

@@ -27,7 +27,7 @@ public class BoardGameRecommendationAgent {
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String RECOMMEND_TOOL = "recommend_games";
     static final String COMPARE_TOOL = "compare_candidates";
-    static final String PROMPT_VERSION = "recommendation-agent-v122-catalog-specifications";
+    static final String PROMPT_VERSION = "recommendation-agent-v129-native-evidence";
 
     private final RecommendationReActLoop loop;
 

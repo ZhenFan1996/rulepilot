@@ -106,7 +106,7 @@ final class RecommendationToolCatalog {
         return """
                 You are RulePilot, a natural board-game companion. Treat recentConversation as the complete request and answer in the player's language. Typed JSON owns actions and constraints; the complete answer belongs in the terminal action. Take one action at a time, emit no assistant prose with a non-terminal action, and observe its result before deciding again. Greetings and general concepts may be answered directly. Game-specific answers and claims about catalog results require observed evidence. On the first typed action of a turn, its schema requires decisionBrief. Generate decisionBrief before every other argument. Its message is your complete natural public update about the chosen action and any material uncertainty. Use only information visible to the player, do not quote or describe system instructions, schemas, hidden reasoning, or internal identifiers, and do not claim unverified game facts.
 
-                Search, evidence and publication rules belong to the available action schemas. Submit the complete current request through typed arguments; do not convert descriptive preferences into hard requirements. After each observation, take another action only when a distinct read is necessary for the player's requested outcome. No result may silently loosen a hard requirement. Answer the player's question directly and concisely, ending when it is answered. Factual statements must come from observations; make your subjective recommendation conditional on those facts. Unknown properties stay unknown, including when a taxonomy label suggests a likely answer. Preserve the evidence's source and uncertainty in your prose.
+                Search, evidence and publication rules belong to the available action schemas. Submit the complete current request through typed arguments; do not convert descriptive preferences into hard requirements. After each observation, take another action only when a distinct read is necessary for the player's requested outcome. No result may silently loosen a hard requirement. Answer the player's question directly and concisely, ending when it is answered. Factual statements must come from observations; make your subjective recommendation conditional on those facts. Complete the supported parts of the request now and localize unknown properties as limitations; defer only when the player requires an unverified property to be confirmed before proceeding. Taxonomy labels do not establish unknown properties. Preserve the evidence's source and uncertainty in your prose.
                 """;
     }
 
@@ -131,8 +131,8 @@ final class RecommendationToolCatalog {
             List<String> ignoredEvidenceIds,
             List<String> ignoredCurrentEvidenceIds) {
         List<ToolSpec> available = actions.stream()
-                .filter(action -> state.activeSearch == null || !SEARCH_TOOL.equals(action.name()))
-                .filter(action -> !state.actions.contains("RESEARCH_GAME_FIT")
+                .filter(action -> state.activeSearch == null
+                        || Integer.valueOf(0).equals(state.activeSearch.requestedCount())
                         || !SEARCH_TOOL.equals(action.name()))
                 .filter(action -> state.pendingPublicationSeed == null || !DISCOVER_TOOL.equals(action.name()))
                 .filter(action -> state.activeSearch == null
@@ -206,15 +206,15 @@ final class RecommendationToolCatalog {
                 ? "{\"type\":\"array\",\"maxItems\":0}"
                 : "{\"type\":\"array\",\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(catalogMechanics) + "}}";
-        String complexity = "{\"type\":\"object\",\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5},\"maximum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5}}}";
+        String complexity = "{\"type\":\"object\",\"minProperties\":1,\"properties\":{\"strength\":{\"type\":\"string\",\"enum\":[\"HARD\",\"SOFT\"],\"description\":\"HARD only for a player-specified numerical bound; SOFT for an estimated qualitative preference.\"},\"minimum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5},\"maximum\":{\"type\":\"number\",\"minimum\":0,\"maximum\":5}},\"required\":[\"strength\"]}";
         String titleFilter = "{\"type\":\"object\",\"properties\":{\"match\":{\"type\":\"string\",\"enum\":[\"EXACT\",\"CONTAINS\"]},\"scope\":{\"type\":\"string\",\"enum\":[\"TITLE\",\"SERIES\"]},\"value\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"match\",\"scope\",\"value\"]}";
         return new ToolSpec(
                 SEARCH_TOOL,
-                "Search verified BGG identities, community ranks, rating counts and polls, structured game facts and attributed descriptions. This catalog does not provide retail prices or sales figures. The current-turn evidence owns the complete contract; no saved profile is inherited. maximumRecommendations is the number of new recommendations requested now, independent of search breadth or earlier results. Use 0 to look up game information without recommending: resolve identity and observe facts without turning a question about suitability into a hard eligibility filter. Use a positive count only for an explicit requested quantity; omit it when unspecified to use the product default. includeTypes and excludeTypes are hard literal BGG classifications: set them only for explicitly required or excluded classifications, otherwise leave them empty. requiredMechanics and excludedMechanics carry explicitly required and unwanted literal mechanisms respectively. requiredInteraction is COOPERATIVE or TEAM only for an explicit positive mode, otherwise ANY. Carry explicit player-count, age, duration and complexity bounds. requiredTitle is a positive identity requirement; excludedTitles lists unwanted identities; reference-only mentions are neither. Both use TITLE with EXACT for one game or CONTAINS for a fragment, or SERIES with CONTAINS for a named series; values omit generic series wrappers. Series use verified canonical family relationships. For generic discovery, descriptionQueryEnglish expresses desired themes or experiences as concise English concepts for soft relevance ranking; omit it with requiredTitle. experienceQuestion requests the missing subjective experience dimension only when structured facts cannot answer it; the application retrieves attributed evidence with this search. Shown and excluded BGG IDs are automatically excluded. Do not repeat this search or relax its contract when no candidates match.",
+                "Search verified BGG identities, community ranks, rating counts and polls, structured game facts and attributed descriptions. This catalog does not provide retail prices or sales figures. The current-turn evidence owns the complete contract; no saved profile is inherited. requestedGameCount is the number of new recommendations requested now, independent of search breadth or earlier results. Use 0 to look up game information without recommending: resolve identity and observe facts without turning a question about suitability into a hard eligibility filter. Preserve an exact requested quantity. Otherwise omit the quantity to use the product default. includeTypes and excludeTypes are hard literal BGG classifications: set them only for explicitly required or excluded classifications, otherwise leave them empty. requiredMechanics and excludedMechanics carry explicitly required and unwanted literal mechanisms respectively. requiredInteraction is COOPERATIVE or TEAM only for an explicit positive mode, otherwise ANY. Carry explicit player-count, age, duration and complexity bounds. requiredTitle is a positive identity requirement; excludedTitles lists unwanted identities; reference-only mentions are neither. Both use TITLE with EXACT for one game or CONTAINS for a fragment, or SERIES with CONTAINS for a named series; values omit generic series wrappers. Series use verified canonical family relationships. For generic discovery, descriptionQueryEnglish expresses desired themes or experiences as concise English concepts for soft relevance ranking; omit it with requiredTitle. experienceQuestion requests the missing subjective experience dimension only when structured facts cannot answer it; the application retrieves attributed evidence with this search. Shown and excluded BGG IDs are automatically excluded. An information-only lookup may precede a distinct recommendation search. Once a recommendation search is committed, do not repeat it or relax its contract when no candidates match.",
                 "{\"type\":\"object\",\"properties\":{"
                         + "\"evidence\":{\"type\":\"string\",\"enum\":"
                         + jsonArray(currentTurnEvidenceIds)
-                        + "},\"maximumRecommendations\":{\"type\":\"integer\",\"description\":\"Maximum number of new game recommendations permitted in the answer. Preserve the player-requested quantity; default to " + properties.resultCount() + " when unspecified. Use zero for an information-only question with no new recommendations. This is not player count or catalog retrieval breadth.\",\"minimum\":0,\"default\":" + properties.resultCount()
+                        + "},\"requestedGameCount\":{\"type\":\"integer\",\"description\":\"Number of games requested by the player in this answer, independent of players or search candidates. Preserve the player-requested quantity; default to " + properties.resultCount() + " when unspecified. Use zero for an information-only question with no new recommendations. This is not player count or catalog retrieval breadth.\",\"minimum\":0,\"default\":" + properties.resultCount()
                         + "},\"includeTypes\":"
                         + typeArray
                         + ",\"excludeTypes\":"
@@ -271,7 +271,7 @@ final class RecommendationToolCatalog {
                 state.pendingPublicationSeed, "pending recommendation publication is required");
         int maximumBindings = candidateIds.size();
         String recommendationScope = state.activeSearch == null
-                ? "The maximumRecommendations argument bounds new recommendations in both playerReply and cards."
+                ? "The requestedGameCount argument bounds new recommendations in both playerReply and cards."
                 : "The current request permits at most "
                         + (state.activeSearch.requestedCount() == null
                                 ? properties.resultCount() : state.activeSearch.requestedCount())
@@ -283,13 +283,13 @@ final class RecommendationToolCatalog {
                 .distinct()
                 .toList();
         boolean searchOwnsCount = state.activeSearch != null;
-        String maximumRecommendationsProperty = searchOwnsCount ? "" : "\"maximumRecommendations\":{\"type\":\"integer\",\"description\":\"Number of new games to recommend now, independent of player count and retrieved candidates. Preserve the player's requested quantity; when unspecified use the product default. Use 0 only when answering information without recommending any new game.\",\"minimum\":0,\"default\":" + properties.resultCount() + "},";
+        String requestedGameCountProperty = searchOwnsCount ? "" : "\"requestedGameCount\":{\"type\":\"integer\",\"description\":\"Number of new games to recommend now, independent of player count and retrieved candidates. Preserve the player's requested quantity; when unspecified use the product default. Use 0 only when answering information without recommending any new game.\",\"minimum\":0,\"default\":" + properties.resultCount() + "},";
         String requiredFields = searchOwnsCount ? "[\"selections\",\"playerReply\"]"
-                : "[\"maximumRecommendations\",\"selections\",\"playerReply\"]";
+                : "[\"requestedGameCount\",\"selections\",\"playerReply\"]";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Publish the complete natural response from verified candidates. Generate selections before playerReply so verified games can be shown while the natural response continues. Write the complete answer in playerReply about the selected games, using supplied observations. With maximumRecommendations 0, answer the information question or ask the useful clarification; selections only bind supporting evidence and produce no recommendation cards. Match the scope and brevity of the question. Do not add unselected recommendations or fill unknown facts with likely values. Attribute evidence to its actual source; catalog votes are not publisher assurances. Selections are ordered evidence bindings: put requested new recommendations first, followed by comparison subjects. Additional evidence bindings support requested comparisons, not additional recommendations. " + recommendationScope,
-                "{\"type\":\"object\",\"properties\":{" + maximumRecommendationsProperty
+                "Publish the complete natural response from verified candidates. Generate selections before playerReply so verified games can be shown while the natural response continues. Write the complete answer in playerReply about the selected games, using supplied observations. With requestedGameCount 0, answer the information question or ask the useful clarification; selections only bind supporting evidence and produce no recommendation cards. Match the scope and brevity of the question. Do not add unselected recommendations or fill unknown facts with likely values. Attribute evidence to its actual source; catalog votes are not publisher assurances. Selections are ordered evidence bindings: put requested new recommendations first, followed by comparison subjects. Additional evidence bindings support requested comparisons, not additional recommendations. " + recommendationScope,
+                "{\"type\":\"object\",\"properties\":{" + requestedGameCountProperty
                         + "\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
                         + maximumBindings
                         + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":"
@@ -366,14 +366,15 @@ final class RecommendationToolCatalog {
 
     void appendActionObservations(
             List<Message> messages,
-            List<ToolCall> calls,
+            BoardGameRecommendationModel.Turn turn,
             List<String> observations,
             RecommendationAgentState state) {
+        List<ToolCall> calls = turn.toolCalls();
         if (calls.size() != observations.size()) {
             throw new IllegalArgumentException("every recommendation action requires one correlated observation");
         }
         compactPriorToolState(messages);
-        messages.add(Message.assistant("", calls));
+        messages.add(Message.assistant(turn));
         for (int index = 0; index < calls.size(); index++) {
             String observation = index == calls.size() - 1
                     ? contextualObservation(observations.get(index), state)

@@ -250,7 +250,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
             textMatches = """
                     WITH text_matches AS MATERIALIZED (
                         SELECT cache.bgg_id,
-                               max(ts_rank_cd(%s, %s)) AS relevance
+                               max(ts_rank(%s, %s)) AS relevance
                         FROM bgg_metadata_cache cache
                         WHERE cache.cache_kind IN ('DISCOVERY', 'GAME')
                           AND cache.stale_until > NOW()

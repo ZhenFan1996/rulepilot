@@ -345,8 +345,7 @@ final class RecommendationReActLoop {
                                         answerPartListener)
                                 : null;
                 Consumer<ToolCall> publicationStream = state.pendingPublicationSeed == null
-                        || currentActions.size() != 1
-                        || !RECOMMEND_TOOL.equals(currentActions.getFirst().name())
+                        || currentActions.stream().noneMatch(action -> RECOMMEND_TOOL.equals(action.name()))
                         ? null
                         : publication.previewPublisher(
                                 state,
@@ -431,7 +430,7 @@ final class RecommendationReActLoop {
                                 "NO_PROGRESS:REPEATED_INVALID_PUBLICATION");
                     }
                     progress.retry();
-                    messages.add(Message.assistant(turn.text(), List.of()));
+                    messages.add(Message.assistant(turn));
                     messages.add(Message.user(observation(Map.of(
                             "validationError",
                                     Map.of(
@@ -490,7 +489,7 @@ final class RecommendationReActLoop {
                     }
                     toolCatalog.appendActionObservations(
                             messages,
-                            calls,
+                            turn,
                             batchObservations,
                             state);
                     continue;
@@ -514,7 +513,7 @@ final class RecommendationReActLoop {
                         if (step.terminalResponse() != null) return step.terminalResponse();
                         observations.add(step.outcome().observation());
                     }
-                    toolCatalog.appendActionObservations(messages, calls, observations, state);
+                    toolCatalog.appendActionObservations(messages, turn, observations, state);
                     continue;
                 }
                 String fingerprint = calls.stream()
@@ -546,7 +545,7 @@ final class RecommendationReActLoop {
                                 compatibility.issues()));
                 toolCatalog.appendActionObservations(
                         messages,
-                        calls,
+                        turn,
                         java.util.Collections.nCopies(calls.size(), observation),
                         state);
                 continue;
@@ -568,7 +567,7 @@ final class RecommendationReActLoop {
             if (step.terminalResponse() != null) return step.terminalResponse();
             toolCatalog.appendActionObservations(
                     messages,
-                    calls,
+                    turn,
                     List.of(step.outcome().observation()),
                     state);
         }

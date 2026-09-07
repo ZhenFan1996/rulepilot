@@ -138,11 +138,13 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         AtomicReference<BoardGameRecommendationModel.CompletionStatus> completion =
                 new AtomicReference<>(BoardGameRecommendationModel.CompletionStatus.UNKNOWN);
         StringBuilder text = new StringBuilder();
+        StringBuilder privateReasoning = new StringBuilder();
         Map<Integer, StreamingToolCall> toolCalls = new LinkedHashMap<>();
 
         if (selected.model() instanceof IncrementalToolCallChatModel rawStream
                 && rawStream.supportsIncrementalToolCallChunks()) {
             rawStream.streamToolCallChunks(prompt).doOnNext(chunk -> {
+                privateReasoning.append(chunk.privateReasoning());
                 if (chunk.promptTokens() > 0) promptTokens.set(chunk.promptTokens());
                 if (chunk.completionTokens() > 0) completionTokens.set(chunk.completionTokens());
                 if (!chunk.text().isEmpty()) {
@@ -175,6 +177,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                     return;
                 }
                 AssistantMessage output = response.getResult().getOutput();
+                privateReasoning.append(output.getMetadata().getOrDefault("reasoningContent", ""));
                 String textChunk = output.getText();
                 if (textChunk != null && !textChunk.isEmpty()) {
                     firstOutputAt.compareAndSet(0, System.nanoTime());
@@ -236,7 +239,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 completed,
                 completion.get(),
                 tokenCount(promptTokens.get()),
-                tokenCount(completionTokens.get()));
+                tokenCount(completionTokens.get()),
+                privateReasoning.toString());
     }
 
     private List<ToolCall> completedToolCalls(
@@ -347,8 +351,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         ToolCallingChatOptions.Builder<?> options;
         if (model.getOptions() instanceof OpenAiChatOptions defaults) {
             OpenAiChatOptions.Builder builder = defaults.mutate();
-            if (selected.deepSeekNonThinkingGeneration()) {
-                builder.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            if ("deepseek".equals(selected.provider())) {
+                builder.extraBody(Map.of("thinking", Map.of("type", "enabled"), "reasoning_effort", "low"));
             } else if ("qwen".equals(selected.provider())) {
                 builder.extraBody(Map.of("enable_thinking", false));
             }
@@ -392,6 +396,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     }
 
     private Object openAiToolChoice(Request request, String provider) {
+        // DeepSeek thinking supports auto tool choice; the application still requires typed publication.
+        if ("deepseek".equals(provider)) return "auto";
         if (request.toolChoice() == ToolChoice.REQUIRED
                 && "qwen".equals(provider)
                 && request.tools().size() == 1) {
@@ -416,7 +422,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                         ? null
                         : response.getResult().getMetadata().getFinishReason()),
                 tokenCount(usage == null ? null : usage.getPromptTokens()),
-                tokenCount(usage == null ? null : usage.getCompletionTokens()));
+                tokenCount(usage == null ? null : usage.getCompletionTokens()),
+                String.valueOf(output.getMetadata().getOrDefault("reasoningContent", "")));
     }
 
     private int tokenCount(Number value) {
@@ -516,6 +523,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             case USER -> new UserMessage(message.content());
             case ASSISTANT -> AssistantMessage.builder()
                     .content(message.content())
+                    .properties(message.privateReasoning().isEmpty()
+                            ? Map.of() : Map.of("reasoningContent", message.privateReasoning()))
                     .toolCalls(message.toolCalls().stream()
                             .map(call -> new AssistantMessage.ToolCall(
                                     call.id(), "function", call.name(), call.argumentsJson()))

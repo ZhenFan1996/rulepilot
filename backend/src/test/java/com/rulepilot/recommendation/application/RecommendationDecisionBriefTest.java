@@ -43,7 +43,7 @@ class RecommendationDecisionBriefTest {
         ToolCall compact = decisions.withoutBrief(call("search_bgg_catalog", validBrief("search_bgg_catalog")));
 
         assertThat(json.readTree(compact.argumentsJson()).has("decisionBrief")).isFalse();
-        assertThat(json.readTree(compact.argumentsJson()).path("maximumRecommendations").asInt()).isEqualTo(2);
+        assertThat(json.readTree(compact.argumentsJson()).path("requestedGameCount").asInt()).isEqualTo(2);
     }
 
     @Test
@@ -90,6 +90,6 @@ class RecommendationDecisionBriefTest {
         root.set("decisionBrief", json.createObjectNode()
                 .put("chosenAction", chosenAction)
                 .put("message", PUBLIC_MESSAGE));
-        return root.put("evidence", "U1").put("maximumRecommendations", 2).toString();
+        return root.put("evidence", "U1").put("requestedGameCount", 2).toString();
     }
 }
