@@ -616,6 +616,23 @@ test('restores the server conversation and unsent draft after sign-in and browse
       clientTurnId: string
       message: string
     }
+    if (serverSession) {
+      const followUp = {
+        ...(serverSession.latestResponse as Record<string, unknown>),
+        clientTurnId: request.clientTurnId, revision: 2,
+        outcome: 'conversation', assistantMessage: '可以继续了解卡牌之间的配合。', games: [],
+      }
+      serverSession = {
+        ...serverSession, revision: 2, latestResponse: followUp,
+        transcript: [
+          ...(serverSession.transcript as unknown[]),
+          { role: 'user', text: request.message },
+          { role: 'assistant', text: followUp.assistantMessage, response: followUp },
+        ],
+      }
+      await route.fulfill({ contentType: 'text/event-stream', body: `event: result\ndata: ${JSON.stringify(followUp)}\n\n` })
+      return
+    }
     const conversationId = 'f0b0d56b-50aa-4e4c-a720-935c13ecda7c'
     const profile = {
       type: 'strategy', interaction: 'any',
@@ -642,7 +659,7 @@ test('restores the server conversation and unsent draft after sign-in and browse
       profile,
       transcript: [
         { role: 'user', text: request.message },
-        { role: 'assistant', text: latestResponse.assistantMessage },
+        { role: 'assistant', text: latestResponse.assistantMessage, response: latestResponse },
       ],
       knownGames: [{ bggId: 266192, name: '展翅翱翔', originalName: 'Wingspan' }],
       shownBggIds: [266192],
@@ -672,6 +689,10 @@ test('restores the server conversation and unsent draft after sign-in and browse
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('服务端保存了完整对话和候选。')).toBeVisible()
   await expectWingspanRecommendationReady(page)
+  await composer.fill('继续介绍一下')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('可以继续了解卡牌之间的配合。')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await composer.fill('这句草稿尚未发送')
   await page.getByRole('link', { name: /浏览目录/ }).click()
   await expect(page).toHaveURL('/discover/catalog')
@@ -686,6 +707,7 @@ test('restores the server conversation and unsent draft after sign-in and browse
   await expect(page.getByText('想找 3–4 人、120–180 分钟的策略游戏')).toHaveCount(1)
   await expect(page.getByText('服务端保存了完整对话和候选。')).toHaveCount(1)
   await expectWingspanRecommendationReady(page)
+  await expect(page.getByText('可以继续了解卡牌之间的配合。')).toHaveCount(1)
   await expect(page.getByText('3–4 人', { exact: true })).toBeVisible()
   await expect(page.getByText('120–180 分钟', { exact: true })).toBeVisible()
   await expect(page.getByLabel('聊聊你想玩的游戏')).toHaveValue('这句草稿尚未发送')

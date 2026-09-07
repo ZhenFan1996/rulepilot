@@ -351,7 +351,7 @@ class BggRecommendationAgentControllerTest {
                         new BoardGameRecommendationAgent.DialogueMessage("user", "Continue"),
                         new BoardGameRecommendationAgent.DialogueMessage("assistant", "I kept the context.")),
                 List.of(new BoardGameRecommendationAgent.KnownGame(1, "Candidate", "Candidate")),
-                List.of(1));
+                List.of(1), List.of(), List.of(new PublishedTurn(clientTurnId, "en", conversationResponse, 1)));
         when(conversations.latest("player")).thenReturn(Optional.of(new SessionSnapshot(
                 conversationId,
                 5,
@@ -409,7 +409,7 @@ class BggRecommendationAgentControllerTest {
                         game.ranking().bggId(), game.details().name(), game.ranking().sourceName())),
                 List.of(game.ranking().bggId()),
                 List.of(game),
-                new PublishedTurn(publishedTurnId, "zh-CN", published));
+                List.of(new PublishedTurn(publishedTurnId, "zh-CN", published, 1)));
         when(conversations.latest("player")).thenReturn(Optional.of(new SessionSnapshot(
                 conversationId,
                 2,

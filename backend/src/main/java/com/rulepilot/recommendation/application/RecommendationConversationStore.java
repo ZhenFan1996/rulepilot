@@ -84,13 +84,13 @@ public interface RecommendationConversationStore {
             List<KnownGame> knownGames,
             List<Integer> shownBggIds,
             List<Game> verifiedGames,
-            PublishedTurn latestPublishedTurn) {
+            List<PublishedTurn> publishedTurns) {
         public ConversationState(
                 RecommendationProfile profile,
                 List<DialogueMessage> transcript,
                 List<KnownGame> knownGames,
                 List<Integer> shownBggIds) {
-            this(profile, transcript, knownGames, shownBggIds, List.of(), null);
+            this(profile, transcript, knownGames, shownBggIds, List.of(), List.of());
         }
 
         public ConversationState(
@@ -99,7 +99,7 @@ public interface RecommendationConversationStore {
                 List<KnownGame> knownGames,
                 List<Integer> shownBggIds,
                 List<Game> verifiedGames) {
-            this(profile, transcript, knownGames, shownBggIds, verifiedGames, null);
+            this(profile, transcript, knownGames, shownBggIds, verifiedGames, List.of());
         }
 
         public ConversationState {
@@ -108,11 +108,16 @@ public interface RecommendationConversationStore {
             knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
             shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
             verifiedGames = verifiedGames == null ? List.of() : List.copyOf(verifiedGames);
+            publishedTurns = publishedTurns == null ? List.of() : List.copyOf(publishedTurns);
+        }
+
+        public PublishedTurn latestPublishedTurn() {
+            return publishedTurns.isEmpty() ? null : publishedTurns.getLast();
         }
     }
 
-    /** The latest response committed to conversation semantics, separate from the latest idempotency result. */
-    record PublishedTurn(UUID clientTurnId, String responseLocale, ConversationResponse response) {
+    /** A committed response bound to its assistant entry, separate from the latest idempotency result. */
+    record PublishedTurn(UUID clientTurnId, String responseLocale, ConversationResponse response, int transcriptIndex) {
         public PublishedTurn {
             Objects.requireNonNull(clientTurnId, "published recommendation client turn is required");
             if (responseLocale == null || responseLocale.isBlank()) {

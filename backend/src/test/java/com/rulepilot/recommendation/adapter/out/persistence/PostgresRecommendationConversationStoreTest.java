@@ -158,6 +158,41 @@ class PostgresRecommendationConversationStoreTest {
     }
 
     @Test
+    void migratesTheRetainedPublicationWithoutAttachingCardsToEarlierProse() throws Exception {
+        ObjectMapper json = new ObjectMapper().findAndRegisterModules();
+        for (String reply : List.of("", "已经核对完成。")) {
+            UUID id = UUID.randomUUID();
+            var transcript = new java.util.ArrayList<>(List.of(
+                    new DialogueMessage("assistant", "先聊聊你的偏好。"),
+                    new DialogueMessage("user", "推荐一款")));
+            if (!reply.isEmpty()) transcript.add(new DialogueMessage("assistant", reply));
+            var oldState = (ObjectNode) json.valueToTree(state(transcript));
+            oldState.remove("publishedTurns");
+            var publication = json.createObjectNode();
+            publication.put("clientTurnId", UUID.randomUUID().toString());
+            publication.put("responseLocale", "zh-CN");
+            publication.set("response", json.valueToTree(response(reply)));
+            oldState.set("latestPublishedTurn", publication);
+            store.createNew(id, "alice", state(List.of()), Instant.now());
+            jdbc.getJdbcTemplate().update("update recommendation_conversation set state_json = cast(? as jsonb) where id = ?",
+                    json.writeValueAsString(oldState), id);
+            new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                    new org.springframework.core.io.ClassPathResource(
+                            "db/migration/V115__retain_published_recommendation_turns.sql"))
+                    .execute(jdbc.getJdbcTemplate().getDataSource());
+
+            var restored = store.findOwned(id, "alice").orElseThrow().state();
+            assertThat(restored.publishedTurns()).singleElement().satisfies(turn -> {
+                assertThat(turn.response().games()).hasSize(1);
+                assertThat(turn.transcriptIndex()).isEqualTo(2);
+                assertThat(restored.transcript().get(turn.transcriptIndex()))
+                        .isEqualTo(new DialogueMessage("assistant", reply));
+            });
+            assertThat(restored.transcript().getFirst().text()).isEqualTo("先聊聊你的偏好。");
+        }
+    }
+
+    @Test
     void keepsLegacyClaimCompleteAndReleaseSqlCompatibleDuringTheRollbackWindow() {
         JdbcTemplate legacyJdbc = jdbc.getJdbcTemplate();
         Instant startedAt = Instant.parse("2026-08-15T08:00:00Z");
@@ -298,7 +333,7 @@ class PostgresRecommendationConversationStoreTest {
                 List.of(),
                 List.of(301),
                 List.of(response.games().getFirst().game()),
-                new PublishedTurn(clientTurnId, "zh-CN", response));
+                List.of(new PublishedTurn(clientTurnId, "zh-CN", response, 1)));
         assertThat(store.completeTurn(
                         conversationId,
                         "alice",
@@ -341,11 +376,11 @@ class PostgresRecommendationConversationStoreTest {
                 List.of(),
                 List.of(301),
                 List.of(currentResponse.games().getFirst().game()),
-                new PublishedTurn(clientTurnId, "en", currentResponse));
+                List.of(new PublishedTurn(clientTurnId, "en", currentResponse, 0)));
         ObjectMapper legacyJson = new ObjectMapper().findAndRegisterModules();
         var legacyState = legacyJson.valueToTree(currentState);
         var legacyResponse = legacyJson.valueToTree(currentResponse);
-        addRetiredProseFields((ObjectNode) legacyState.at("/latestPublishedTurn/response/games/0"));
+        addRetiredProseFields((ObjectNode) legacyState.at("/publishedTurns/0/response/games/0"));
         addRetiredProseFields((ObjectNode) legacyResponse.at("/games/0"));
         store.createNew(conversationId, "alice", state(List.of()), now);
         jdbc.getJdbcTemplate().update(
