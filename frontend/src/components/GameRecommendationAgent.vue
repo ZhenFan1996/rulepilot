@@ -282,6 +282,8 @@ const rememberedKnownGames = ref<RecommendationConversationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
 const selectedGame = ref<RecommendationGame | null>(null)
 const journeyGames = ref<RecommendationGame[]>([])
+const conversationJourneyGames = computed(() => journeyGames.value
+  .filter(game => seenBggIds.value.includes(game.bggId)))
 const journeyStatuses = ref<Record<number, RecommendationJourneyStatus>>({})
 const detailsGame = ref<RecommendationGame | null>(null)
 const openSurface = ref<'none' | 'game-details' | 'journey' | 'rulebook' | 'lesson'>('none')
@@ -1705,7 +1707,7 @@ onBeforeUnmount(() => {
               <div v-if="failed && visibleFailedAssistantMessage" data-testid="recommendation-failed-assistant-reply" class="flex min-w-0 justify-start">
                 <SafeMarkdown :source="visibleFailedAssistantMessage" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
               </div>
-              <article v-for="game in journeyGames" :key="`journey-${game.bggId}`" data-testid="player-journey-continuation" :data-bgg-id="game.bggId" class="overflow-hidden rounded-2xl border border-copper/25 bg-canvas elevation-sm hover:border-copper/45">
+              <article v-for="game in conversationJourneyGames" :key="`journey-${game.bggId}`" data-testid="player-journey-continuation" :data-bgg-id="game.bggId" class="overflow-hidden rounded-2xl border border-copper/25 bg-canvas elevation-sm hover:border-copper/45">
                 <button data-testid="player-journey-dock" type="button" class="flex min-h-20 w-full min-w-0 items-center gap-3 px-4 py-3 text-left" @click="openJourneyCard(game, $event.currentTarget)">
                   <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="game.name" class="h-14 w-11 shrink-0 rounded-md bg-paper object-contain" referrerpolicy="no-referrer">
                   <span v-else class="grid size-11 shrink-0 place-items-center rounded-lg bg-copper/10 font-mono text-xs font-bold text-copper">{{ statusForJourney(game)?.projection.progress !== null && statusForJourney(game)?.projection.progress !== undefined ? `${statusForJourney(game)?.projection.progress}%` : '…' }}</span>
