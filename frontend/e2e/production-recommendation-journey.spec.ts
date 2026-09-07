@@ -19,7 +19,7 @@ import {
 } from '../src/lib/recommendationCanaryDiagnostics'
 
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
-const NATURAL_PROMPT = '你好'
+const NATURAL_PROMPT = '这几款我先留着。之后我可以继续问你哪些桌游相关的问题？暂时不用推荐新游戏。'
 const TURN_OBSERVATION_MS = 155_000
 const HANDOFF_OBSERVATION_MS = 60_000
 const ALLOWED_GAME_TYPES = new Set([
@@ -75,6 +75,7 @@ interface RecommendationGame {
 interface RecommendationSession {
   conversationId: string, revision: number, processing: boolean
   latestResponse: RecommendationResult | null
+  transcript: Array<{ role: string, text: string, response?: RecommendationResult | null }>
   lastTurnResult: { clientTurnId: string, outcome: RecommendationOutcome } | null
 }
 
@@ -1009,36 +1010,6 @@ test('production publishes natural and grounded recommendation replies before th
     expect(sessionResponse.ok()).toBe(true)
     const created = await sessionResponse.json() as RecommendationSession
 
-    report.stage = 'natural-reply'
-    await retainReport(reportFile, report)
-    const naturalTurn = await submitTurn(page, NATURAL_PROMPT)
-    report.naturalReply.requestMatched = naturalTurn.messageMatched
-    Object.assign(report.naturalReply, naturalTurn.timings)
-    if (naturalTurn.terminal.kind === 'error') {
-      report.naturalReply.failure = streamFailure(naturalTurn.terminal)
-      throw new Error('Natural reply stream failed')
-    }
-    const natural = naturalTurn.terminal.result
-    report.naturalReply.outcome = natural.outcome
-    report.naturalReply.assistantMessageSha256 = sha256(natural.assistantMessage)
-    report.naturalReply.agentElapsedMs = natural.agentElapsedMs ?? null
-    report.naturalReply.modelCallElapsedMs = natural.modelCallElapsedMs ?? []
-    report.naturalReply.noExternalWork = natural.catalogCalls === 0
-      && natural.webResearchCalls === 0 && natural.games.length === 0
-    if (natural.outcome !== 'conversation') {
-      report.naturalReply.failure = resultFailure(natural)
-      throw new Error('Natural reply did not reach a conversation terminal')
-    }
-    const naturalSession = await persistedSession(page.request, created.conversationId)
-    report.naturalReply.persistedMatched = persistedResultMatches(natural, naturalSession)
-    const naturalDom = await page.getByTestId('assistant-conversation-turn').last().innerText()
-    report.naturalReply.domMatched = normalized(naturalDom)
-      === normalized(await markdownText(page, natural.assistantMessage))
-    expect(report.naturalReply.requestMatched).toBe(true)
-    expect(report.naturalReply.noExternalWork).toBe(true)
-    expect(report.naturalReply.persistedMatched).toBe(true)
-    expect(report.naturalReply.domMatched).toBe(true)
-
     report.stage = 'recommendation'
     await retainReport(reportFile, report)
     const recommendationTurn = await submitTurn(page, selectionPrompt)
@@ -1099,6 +1070,50 @@ test('production publishes natural and grounded recommendation replies before th
     expect(report.recommendation.requestMatched).toBe(true)
     expect(report.recommendation.publicationErrors).toEqual([])
     expect(report.recommendation.persistedMatched).toBe(true)
+    expect(report.recommendation.domMatched).toBe(true)
+
+    report.stage = 'natural-reply'
+    await retainReport(reportFile, report)
+    const naturalTurn = await submitTurn(page, NATURAL_PROMPT)
+    report.naturalReply.requestMatched = naturalTurn.messageMatched
+    Object.assign(report.naturalReply, naturalTurn.timings)
+    if (naturalTurn.terminal.kind === 'error') {
+      report.naturalReply.failure = streamFailure(naturalTurn.terminal)
+      throw new Error('Natural reply stream failed')
+    }
+    const natural = naturalTurn.terminal.result
+    report.naturalReply.outcome = natural.outcome
+    report.naturalReply.assistantMessageSha256 = sha256(natural.assistantMessage)
+    report.naturalReply.agentElapsedMs = natural.agentElapsedMs ?? null
+    report.naturalReply.modelCallElapsedMs = natural.modelCallElapsedMs ?? []
+    report.naturalReply.noExternalWork = natural.catalogCalls === 0
+      && natural.webResearchCalls === 0 && natural.games.length === 0
+    if (natural.outcome !== 'conversation') {
+      report.naturalReply.failure = resultFailure(natural)
+      throw new Error('Natural reply did not reach a conversation terminal')
+    }
+    const naturalSession = await persistedSession(page.request, created.conversationId)
+    report.naturalReply.persistedMatched = persistedResultMatches(natural, naturalSession)
+    const naturalDom = await page.getByTestId('assistant-conversation-turn').last().innerText()
+    report.naturalReply.domMatched = normalized(naturalDom)
+      === normalized(await markdownText(page, natural.assistantMessage))
+    expect(report.naturalReply.requestMatched).toBe(true)
+    expect(report.naturalReply.noExternalWork).toBe(true)
+    expect(report.naturalReply.persistedMatched).toBe(true)
+    expect(report.naturalReply.domMatched).toBe(true)
+
+    report.stage = 'recommendation-history'
+    const retainedRecommendation = naturalSession.transcript.find(
+      turn => turn.response?.clientTurnId === recommendation.clientTurnId,
+    )?.response
+    report.recommendation.persistedMatched = retainedRecommendation != null
+      && JSON.stringify(published(retainedRecommendation)) === JSON.stringify(published(recommendation))
+    expect(report.recommendation.persistedMatched).toBe(true)
+    expect(await recommendationDomMatches(page, recommendation)).toBe(true)
+    await page.reload()
+    await expect(page.getByTestId('recommendation-game-card')).toHaveCount(recommendation.games.length)
+    report.recommendation.domMatched = await recommendationDomMatches(page, recommendation)
+      && await recommendationSourcesMatch(page, recommendation)
     expect(report.recommendation.domMatched).toBe(true)
 
     report.model.after = await modelAssignment(page.request)

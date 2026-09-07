@@ -428,7 +428,7 @@ public class BggRecommendationAgentController {
             UUID conversationId,
             long revision,
             RecommendationProfileResponse profile,
-            List<DialogueMessageRequest> transcript,
+            List<PublishedMessageResponse> transcript,
             List<KnownGameRequest> knownGames,
             List<Integer> shownBggIds,
             boolean processing,
@@ -449,13 +449,21 @@ public class BggRecommendationAgentController {
                             snapshot.revision(),
                             publishedTurn.clientTurnId(),
                             true);
+            var transcript = new java.util.ArrayList<>(snapshot.state().transcript().stream()
+                    .map(message -> new PublishedMessageResponse(message.role(), message.text(), null))
+                    .toList());
+            for (var turn : snapshot.state().publishedTurns()) {
+                var message = transcript.get(turn.transcriptIndex());
+                transcript.set(turn.transcriptIndex(), new PublishedMessageResponse(message.role(), message.text(),
+                        turn == publishedTurn ? latestResponse : present(
+                                turn.response(), turn.responseLocale(), presentation, snapshot.conversationId(),
+                                snapshot.revision(), turn.clientTurnId(), true)));
+            }
             return new RecommendationSessionResponse(
                     snapshot.conversationId(),
                     snapshot.revision(),
                     RecommendationProfileResponse.from(snapshot.state().profile()),
-                    snapshot.state().transcript().stream()
-                            .map(message -> new DialogueMessageRequest(message.role(), message.text()))
-                            .toList(),
+                    transcript,
                     snapshot.state().knownGames().stream()
                             .map(game -> new KnownGameRequest(game.bggId(), game.name(), game.originalName()))
                             .toList(),
@@ -466,6 +474,8 @@ public class BggRecommendationAgentController {
                     RecommendationTurnResultResponse.from(snapshot));
         }
     }
+
+    record PublishedMessageResponse(String role, String text, RecommendationConversationResponse response) {}
 
     record RecommendationTurnResultResponse(
             UUID clientTurnId,

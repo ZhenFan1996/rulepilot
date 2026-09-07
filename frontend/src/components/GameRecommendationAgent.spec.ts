@@ -168,7 +168,7 @@ describe('GameRecommendationAgent', () => {
     expect(evidence.attributes('rel')).toContain('noopener')
   })
 
-  it('restores the model introduction beside its game instead of hiding it in source details', async () => {
+  it('restores earlier cards and their model introductions after a follow-up', async () => {
     const assistantMessage = '先看这款，下面是当时核对过的资料。'
     const oldExplanation = '适合你提到的**自然主题**。\n\n第一次玩可以一起熟悉卡牌。'
     const latestResponse: RecommendationAgentResponse = {
@@ -188,8 +188,12 @@ describe('GameRecommendationAgent', () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({
       conversationId: '927ce433-ccea-49a0-9d39-00dc00e63580',
       revision: 1, profile, processing: false, processingSince: null,
-      transcript: [{ role: 'assistant', text: assistantMessage }],
-      knownGames: [], shownBggIds: [game.bggId], latestResponse,
+      transcript: [
+        { role: 'assistant', text: assistantMessage, response: latestResponse },
+        { role: 'user', text: '继续介绍一下' },
+        { role: 'assistant', text: '可以从卡牌之间的配合开始了解。', response: conversationResult('可以从卡牌之间的配合开始了解。') },
+      ],
+      knownGames: [], shownBggIds: [game.bggId], latestResponse: conversationResult('可以从卡牌之间的配合开始了解。'),
     })))
     const wrapper = await mountAgent('history-reader')
     await flushPromises()
@@ -220,7 +224,7 @@ describe('GameRecommendationAgent', () => {
       if (String(input).endsWith('/session')) return Response.json({
         conversationId: '927ce433-ccea-49a0-9d39-00dc00e63580',
         revision: 1, profile, processing: false, processingSince: null,
-        transcript: [{ role: 'assistant', text: earlierReply }, { role: 'user', text: '给我推荐一款' }],
+        transcript: [{ role: 'assistant', text: earlierReply }, { role: 'user', text: '给我推荐一款' }, { role: 'assistant', text: '', response: result }],
         knownGames: [], shownBggIds: [game.bggId], latestResponse: result,
       })
       requests.push(JSON.parse(String(options?.body)))

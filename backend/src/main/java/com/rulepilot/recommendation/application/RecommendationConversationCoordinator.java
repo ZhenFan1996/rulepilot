@@ -140,7 +140,7 @@ public class RecommendationConversationCoordinator {
         if (completedWhileClaiming.isPresent()) return completedWhileClaiming.get();
         UUID claimAttemptId = Objects.requireNonNull(
                 claim.claimAttemptId(), "claimed recommendation turn has no claim attempt id");
-        ConversationState initialState = withLegacyPublishedTurn(claimed);
+        ConversationState initialState = claimed.state();
         ConversationRequest effectiveRequest = requestFrom(initialState, validatedRequest);
 
         ConversationResponse response;
@@ -465,9 +465,11 @@ public class RecommendationConversationCoordinator {
         if (response.outcome() == Outcome.UNAVAILABLE) {
             return new ConversationState(previous.profile(), completeTranscript(transcript),
                     previous.knownGames(), previous.shownBggIds(), previous.verifiedGames(),
-                    previous.latestPublishedTurn());
+                    previous.publishedTurns());
         }
-        appendUnlessDuplicate(transcript, new DialogueMessage("assistant", response.assistantMessage()));
+        transcript.add(new DialogueMessage("assistant", response.assistantMessage()));
+        List<PublishedTurn> publishedTurns = new ArrayList<>(previous.publishedTurns());
+        publishedTurns.add(new PublishedTurn(clientTurnId, responseLocale, response, transcript.size() - 1));
 
         Map<Integer, KnownGame> games = new LinkedHashMap<>();
         response.games().stream().map(BoardGameRecommendationAgent.RecommendedGame::game)
@@ -503,7 +505,7 @@ public class RecommendationConversationCoordinator {
                 uniqueKnownGames(new ArrayList<>(games.values())),
                 uniqueIds(new ArrayList<>(shown)),
                 List.copyOf(verified.values()),
-                new PublishedTurn(clientTurnId, responseLocale, response));
+                publishedTurns);
     }
 
     private static ConversationState checkpointState(
@@ -524,28 +526,7 @@ public class RecommendationConversationCoordinator {
                 uniqueKnownGames(new ArrayList<>(games.values())),
                 previous.shownBggIds(),
                 List.copyOf(verified.values()),
-                previous.latestPublishedTurn());
-    }
-
-    private static ConversationState withLegacyPublishedTurn(StoredConversation conversation) {
-        ConversationState state = conversation.state();
-        if (state.latestPublishedTurn() != null
-                || conversation.lastResponse() == null
-                || conversation.lastResponse().outcome() == Outcome.UNAVAILABLE
-                || conversation.lastClientTurnId() == null
-                || conversation.lastResponseLocale() == null) {
-            return state;
-        }
-        return new ConversationState(
-                state.profile(),
-                state.transcript(),
-                state.knownGames(),
-                state.shownBggIds(),
-                state.verifiedGames(),
-                new PublishedTurn(
-                        conversation.lastClientTurnId(),
-                        conversation.lastResponseLocale(),
-                        conversation.lastResponse()));
+                previous.publishedTurns());
     }
 
     private static KnownGame knownGame(Game game) {
@@ -701,14 +682,7 @@ public class RecommendationConversationCoordinator {
             ConversationResponse lastResponse,
             String lastResponseLocale) {
         public PublishedTurn latestPublishedTurn() {
-            if (state.latestPublishedTurn() != null) return state.latestPublishedTurn();
-            if (lastResponse == null
-                    || lastResponse.outcome() == Outcome.UNAVAILABLE
-                    || lastClientTurnId == null
-                    || lastResponseLocale == null) {
-                return null;
-            }
-            return new PublishedTurn(lastClientTurnId, lastResponseLocale, lastResponse);
+            return state.latestPublishedTurn();
         }
 
         static SessionSnapshot from(StoredConversation conversation) {

@@ -1213,28 +1213,22 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
   const selectedBggId = selectedGame.value?.bggId ?? selectedBggIdToRestore
   const lastTurnResult = session.lastTurnResult ?? session.latestResponse
   const unavailableResponse = lastTurnResult?.outcome === 'unavailable'
-  const publishedResponse = session.latestResponse?.outcome === 'unavailable'
-    ? null
-    : session.latestResponse
   clearVisibleRecommendationConversation(true)
   conversationId.value = session.conversationId
   conversationRevision.value = session.revision
   profile.value = canonicalRecommendationProfile(session.profile)
-  messages.value = session.transcript.map(turn => ({ id: ++messageId, ...turn }))
+  messages.value = session.transcript.map(turn => ({ id: ++messageId, ...turn, response: turn.response ?? undefined }))
   rememberedKnownGames.value = session.knownGames.map(game => ({ ...game }))
   seenBggIds.value = [...session.shownBggIds]
 
-  if (publishedResponse) {
-    const latest = {
-      ...publishedResponse,
-      profile: canonicalRecommendationProfile(publishedResponse.profile),
-    }
+  const latest = [...messages.value].reverse().find(message => message.response)?.response
+  if (latest) {
     response.value = latest
     activeTurnLocale.value = latest.responseLocale ?? activeTurnLocale.value
     clarification.value = latest.clarification
     const responseGames = [
-      ...latest.games.map(entry => entry.game),
-      ...(latest.comparison?.candidates.map(candidate => candidate.game) ?? []),
+      ...messages.value.flatMap(message => message.response?.games.map(entry => entry.game) ?? []),
+      ...messages.value.flatMap(message => message.response?.comparison?.candidates.map(candidate => candidate.game) ?? []),
     ]
     knownGames.value = responseGames
     const restoredSelection = responseGames.find(game => game.bggId === selectedBggId)
@@ -1244,9 +1238,6 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
       selectedBggIdToRestore = restoredSelection.bggId
     }
     rememberedKnownGames.value = minimalKnownGames()
-    const lastAssistant = [...messages.value].reverse().find(message => message.role === 'assistant')
-    if (latest.assistantMessage.trim() && lastAssistant) lastAssistant.response = latest
-    else messages.value.push({ id: ++messageId, role: 'assistant', text: latest.assistantMessage, response: latest })
   } else {
     clarification.value = null
   }

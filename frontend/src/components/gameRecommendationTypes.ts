@@ -173,7 +173,7 @@ export type RecommendationServerSession = {
   conversationId: string
   revision: number
   profile: RecommendationProfile
-  transcript: { role: 'assistant' | 'user'; text: string }[]
+  transcript: { role: 'assistant' | 'user'; text: string; response?: RecommendationAgentResponse | null }[]
   knownGames: { bggId: number; name: string; originalName: string }[]
   shownBggIds: number[]
   processing: boolean

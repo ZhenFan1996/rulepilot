@@ -85,6 +85,31 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
+    void followUpKeepsEachPublishedResponseBoundToItsOriginalTranscriptTurn() throws Exception {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        ConversationResponse recommendation = responseWithGame("", verifiedGame(65));
+        ConversationResponse followUp = response("可以继续介绍这款游戏。");
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+                .thenReturn(recommendation, followUp);
+        RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
+        var first = coordinator.converse(new SessionTurn(null, 0, UUID.randomUUID(), request("推荐一款")),
+                "zh-CN", "alice", ignored -> {});
+        coordinator.converse(new SessionTurn(first.conversationId(), first.revision(), UUID.randomUUID(),
+                request("继续介绍")), "zh-CN", "alice", ignored -> {});
+
+        ObjectMapper json = new ObjectMapper().findAndRegisterModules();
+        var restored = json.readValue(json.writeValueAsBytes(coordinator.latest("alice").orElseThrow().state()),
+                ConversationState.class);
+        assertThat(restored.publishedTurns()).extracting(PublishedTurn::response)
+                .containsExactly(recommendation, followUp);
+        assertThat(restored.publishedTurns()).allSatisfy(turn -> {
+            var message = restored.transcript().get(turn.transcriptIndex());
+            assertThat(message.role()).isEqualTo("assistant");
+            assertThat(message.text()).isEqualTo(turn.response().assistantMessage());
+        });
+    }
+
+    @Test
     void startsANewConversationWhenANewTurnHasNoConversationIdentity() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
@@ -359,7 +384,7 @@ class RecommendationConversationCoordinatorTest {
                 ignored -> {});
         assertThat(first.response().outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(coordinator.latest("alice").orElseThrow().latestPublishedTurn())
-                .isEqualTo(new PublishedTurn(publishedTurnId, "zh-CN", published));
+                .isEqualTo(new PublishedTurn(publishedTurnId, "zh-CN", published, 1));
         var second = coordinator.converse(
                 new SessionTurn(
                         first.conversationId(),
@@ -374,13 +399,13 @@ class RecommendationConversationCoordinatorTest {
         assertThat(stored.lastResponse()).isEqualTo(unavailable);
         assertThat(stored.lastClientTurnId()).isEqualTo(unavailableTurnId);
         assertThat(stored.state().latestPublishedTurn()).isEqualTo(
-                new PublishedTurn(publishedTurnId, "zh-CN", published));
+                new PublishedTurn(publishedTurnId, "zh-CN", published, 1));
         assertThat(stored.state().verifiedGames())
                 .extracting(game -> game.ranking().bggId())
                 .containsExactly(67, 65);
         assertThat(stored.state().transcript())
                 .extracting(message -> message.role() + ":" + message.text())
-                .containsExactly("user:先推荐一款", "user:" + unavailableRequest);
+                .containsExactly("user:先推荐一款", "assistant:", "user:" + unavailableRequest);
 
         var replay = coordinator.converse(
                 new SessionTurn(
@@ -394,30 +419,8 @@ class RecommendationConversationCoordinatorTest {
         assertThat(replay.replayed()).isTrue();
         assertThat(replay.response()).isEqualTo(unavailable);
         assertThat(coordinator.latest("alice").orElseThrow().latestPublishedTurn())
-                .isEqualTo(new PublishedTurn(publishedTurnId, "zh-CN", published));
+                .isEqualTo(new PublishedTurn(publishedTurnId, "zh-CN", published, 1));
         verify(agent, times(2)).conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any());
-    }
-
-    @Test
-    void persistedConversationStateRoundTripsThePublishedTurnAndReadsOlderStateWithoutOne() throws Exception {
-        ObjectMapper json = new ObjectMapper().findAndRegisterModules();
-        ConversationResponse published = responseWithGame("已经核对完成。", verifiedGame(66));
-        ConversationState state = new ConversationState(
-                RecommendationProfile.empty(),
-                List.of(new DialogueMessage("assistant", published.assistantMessage())),
-                List.of(),
-                List.of(66),
-                List.of(published.games().getFirst().game()),
-                new PublishedTurn(UUID.randomUUID(), "zh-CN", published));
-
-        ConversationState restored = json.readValue(json.writeValueAsBytes(state), ConversationState.class);
-        assertThat(restored).isEqualTo(state);
-
-        var legacyJson = (com.fasterxml.jackson.databind.node.ObjectNode) json.valueToTree(state);
-        legacyJson.remove("latestPublishedTurn");
-        ConversationState restoredLegacy = json.treeToValue(legacyJson, ConversationState.class);
-        assertThat(restoredLegacy.latestPublishedTurn()).isNull();
-        assertThat(restoredLegacy.verifiedGames()).isEqualTo(state.verifiedGames());
     }
 
     @Test
