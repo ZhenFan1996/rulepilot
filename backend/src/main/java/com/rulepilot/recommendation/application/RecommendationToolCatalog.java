@@ -282,10 +282,10 @@ final class RecommendationToolCatalog {
                         .map(CandidateObservation::id))
                 .distinct()
                 .toList();
-        String publicationCountProperty = "\"newRecommendationCount\":{\"type\":\"integer\",\"description\":\"Number of new recommendation cards to publish. Use zero when answering information or declining to recommend because a necessary condition remains unverified; selections still bind all game-specific evidence used in playerReply.\",\"minimum\":0},";
+        String publicationCountProperty = "\"newRecommendationCount\":{\"type\":\"integer\",\"description\":\"Number of new games you decide to recommend for the complete conversation, independent of the number of evidence bindings. Zero publishes only your natural answer with its supporting evidence.\",\"minimum\":0},";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Publish the complete natural response from verified candidates. Generate newRecommendationCount, then selections, then playerReply. Selections are ordered evidence bindings: first the games being recommended, then any other subjects needed for the answer. Zero cards can still bind evidence when explaining limitations or comparing games. Write the complete answer in playerReply using supplied observations. Match the scope and brevity of the question. Do not add unselected recommendations or fill unknown facts with likely values. Attribute evidence to its actual source; catalog votes are not publisher assurances. " + recommendationScope,
+                "Decide which verified games, if any, suit the complete player request, then publish your natural answer. Generate newRecommendationCount, then selections, then playerReply. Selections are ordered evidence bindings: first the games being recommended, then any other subjects needed for the answer. Zero cards can still bind evidence when explaining limitations or comparing games. Write the complete answer in playerReply using supplied observations. Match the scope and brevity of the question. Do not add unselected recommendations or fill unknown facts with likely values. Attribute evidence to its actual source; catalog votes are not publisher assurances. " + recommendationScope,
                 "{\"type\":\"object\",\"properties\":{" + publicationCountProperty
                         + "\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
                         + maximumBindings
