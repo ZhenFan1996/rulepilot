@@ -241,7 +241,7 @@ final class RecommendationActions {
         int evidenceTurn = evidenceReview.evidenceTurn(evidenceId, request);
         List<BggGameType> includeTypes = gameTypes(arguments.path("includeTypes"));
         List<BggGameType> excludeTypes = gameTypes(arguments.path("excludeTypes"));
-        Integer requestedCount = arguments.has("requestedGameCount")
+        Integer requestedCount = arguments.hasNonNull("requestedGameCount")
                 ? integer(arguments.path("requestedGameCount"), 0, Integer.MAX_VALUE, "RESULT_COUNT_OUT_OF_RANGE") : null;
         List<String> mechanics = arguments.has("requiredMechanics")
                 ? catalogMechanics(arguments.path("requiredMechanics"), state.catalogMechanics)
@@ -425,9 +425,7 @@ final class RecommendationActions {
                 .toList();
         Map<String, Object> experienceResearch = null;
         if (experienceQuestion != null && !verifiedIds.isEmpty()) {
-            List<Integer> researchIds = verifiedIds.stream()
-                    .limit(properties.resultCount())
-                    .toList();
+            List<Integer> researchIds = verifiedIds;
             experienceResearch = state.webResearchAvailable
                     ? researchCandidates(researchIds, experienceQuestion, state, locale, progress)
                     : Map.of(
@@ -483,9 +481,8 @@ final class RecommendationActions {
         boolean completedPage = false;
         int candidateWindowSize = properties.modelCandidateLimit();
         // Preserve each page's alternatives without paging merely to fill the optional model window.
-        int requestedCandidates = search.requestedCount() == null
-                ? properties.resultCount() : Math.max(1, search.requestedCount());
-        while (eligible.size() < requestedCandidates) {
+        while (eligible.isEmpty()
+                || search.requestedCount() != null && eligible.size() < search.requestedCount()) {
             state.recordCatalogCall();
             int currentOffset = offset;
             CatalogObservation page;

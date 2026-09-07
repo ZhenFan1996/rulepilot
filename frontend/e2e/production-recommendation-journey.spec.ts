@@ -63,6 +63,7 @@ interface RecommendationResult {
 }
 
 interface RecommendationGame {
+  replyParts?: Array<{ text: string }>
   game: {
     bggId: number, name: string, originalName: string, bggUrl: string, bggTypes: string[]
     minPlayers: number | null, maxPlayers: number | null, playingTimeMinutes: number | null
@@ -517,6 +518,7 @@ function published(result: RecommendationResult) {
       bggId: entry.game.bggId,
       name: entry.game.name,
       originalName: entry.game.originalName,
+      introductions: (entry.replyParts ?? []).map(part => part.text),
     })),
   }
 }
@@ -552,12 +554,18 @@ async function renderedRecommendation(page: Page) {
         bggId: Number(card.dataset.bggId),
         name: card.dataset.gameName ?? '',
         originalName: card.dataset.originalName ?? '',
+        introductions: [...card.querySelectorAll<HTMLElement>(
+          '[data-testid="recommendation-game-introduction"] .safe-markdown',
+        )].map(part => part.innerText),
       })),
   }))
 }
 async function recommendationDomMatches(page: Page, result: RecommendationResult) {
   const expected = published(result)
   expected.assistantMessage = await markdownText(page, expected.assistantMessage)
+  for (const game of expected.games) {
+    game.introductions = await Promise.all(game.introductions.map(text => markdownText(page, text)))
+  }
   const rendered = await renderedRecommendation(page)
   const normalizePublication = (value: typeof expected) => ({
     assistantMessage: normalized(value.assistantMessage),
@@ -565,6 +573,7 @@ async function recommendationDomMatches(page: Page, result: RecommendationResult
       ...game,
       name: normalized(game.name),
       originalName: normalized(game.originalName),
+      introductions: game.introductions.map(normalized),
     })),
   })
   return JSON.stringify(normalizePublication(rendered)) === JSON.stringify(normalizePublication(expected))
@@ -617,6 +626,7 @@ function recommendationErrors(result: RecommendationResult, expected: {
     const game = entry.game
     const duration = game.maximumPlayTimeMinutes ?? game.playingTimeMinutes
     if (!game.name.trim() || !game.originalName.trim()) errors.push('public-title')
+    if (!entry.replyParts?.some(part => part.text.trim())) errors.push(`card-introduction:${game.bggId}`)
     if (game.minPlayers === null || game.maxPlayers === null
       || game.minPlayers > expected.playerCount || game.maxPlayers < expected.playerCount
       || duration === null || duration > expected.maximumDuration

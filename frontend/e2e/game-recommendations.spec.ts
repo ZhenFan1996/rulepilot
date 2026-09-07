@@ -334,7 +334,8 @@ async function mockPublicDiscovery(
       games: [{
         game: catalog.games[0],
         fitClaims: [],
-        replyParts: [],
+        replyParts: [{ role: 'why_fit', claimType: 'preference_inference', subject: 'introduction',
+          text: '这款围绕**鸟类栖息地**展开，适合把主题与策略放在一起考虑。', sourceIndexes: [], }],
       }],
     })
   })
@@ -578,6 +579,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await expectWingspanRecommendationReady(page)
   const firstRecommendation = page.getByTestId('assistant-recommendation-turn').last()
   await expect(firstRecommendation.getByTestId('assistant-recommendation-message')).toHaveText(recommendationReply)
+  await expect(firstRecommendation.getByTestId('recommendation-game-introduction')).toContainText('鸟类栖息地')
   await expect(firstRecommendation.getByTestId('recommendation-game-card').getByText(/为什么选它|需要留意|没有形成可安全发布/)).toHaveCount(0)
   await firstRecommendation.getByText('资料与核对记录', { exact: true }).click()
   await expect(firstRecommendation.locator('.recommendation-source-summary')).toContainText('20')

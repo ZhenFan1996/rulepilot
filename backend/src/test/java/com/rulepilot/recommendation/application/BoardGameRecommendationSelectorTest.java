@@ -20,16 +20,16 @@ import org.junit.jupiter.api.Test;
 class BoardGameRecommendationSelectorTest {
 
     private final BoardGameRecommendationSelector selector = new BoardGameRecommendationSelector(
-            new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20)));
+            new BoardGameRecommendationProperties(8, new BigDecimal("0.66"), Duration.ofSeconds(20)));
 
     @Test
     void acceptsTheUnifiedAgentTimeoutWithoutAnIndependentRecommendationMaximum() {
         var accepted = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofMinutes(2));
+                8, new BigDecimal("0.66"), Duration.ofMinutes(2));
 
         assertThat(accepted.timeout()).isEqualTo(Duration.ofMinutes(2));
         assertThatThrownBy(() -> new BoardGameRecommendationProperties(
-                        8, 3, new BigDecimal("0.66"), Duration.ZERO))
+                        8, new BigDecimal("0.66"), Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be positive");
     }

@@ -37,6 +37,8 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class RecommendationReActContractTest {
 
@@ -175,9 +177,10 @@ class RecommendationReActContractTest {
                 """;
         String arguments = new ObjectMapper().writeValueAsString(java.util.Map.of(
                 "newRecommendationCount", 1,
-                "playerReply", playerReply,
+                "playerReply", "I would start with this option.",
                 "selections", List.of(java.util.Map.of(
                         "bggId", 451,
+                        "introduction", playerReply,
                         "internalEvidenceIds", List.of("B451:playerCount")))));
         ScriptedModel model = new ScriptedModel(
                 action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
@@ -191,9 +194,12 @@ class RecommendationReActContractTest {
                 "Explain one option for three people with changing attendance, including the limits of the evidence."),
                 "en", "player", ignored -> {}, ignored -> {}, streamed::add);
 
-        assertThat(response.assistantMessage()).isEqualTo(playerReply);
+        assertThat(response.assistantMessage()).isEqualTo("I would start with this option.");
         assertThat(response.games().getFirst().claims()).isEmpty();
-        assertThat(response.games().getFirst().replyParts()).isEmpty();
+        assertThat(response.games().getFirst().replyParts()).singleElement().satisfies(part -> {
+            assertThat(part.claim().text()).isEqualTo(playerReply);
+            assertThat(part.claim().bggId()).isEqualTo(451);
+        });
         assertThat(response.harness().actions()).doesNotContain("RECOMMENDATION_NARRATIVE_PARTIAL");
         assertThat(streamed).singleElement().satisfies(part -> assertThat(part.game())
                 .isEqualTo(response.games().getFirst()));
@@ -287,15 +293,6 @@ class RecommendationReActContractTest {
         JsonNode searchObservation = toolObservation(model.requests.getLast(), "collection-search");
 
         assertThat(searchObservation.path("verifiedCandidateBggIds").toString()).isEqualTo("[481,482,483]");
-        JsonNode searchSchema = new ObjectMapper().readTree(model.requests.getFirst().tools().stream()
-                .filter(tool -> BoardGameRecommendationAgent.SEARCH_TOOL.equals(tool.name()))
-                .findFirst()
-                .orElseThrow()
-                .inputSchema());
-        assertThat(searchSchema.path("properties").has("requestedGameCount")).isTrue();
-        assertThat(searchSchema.path("required").toString()).doesNotContain("requestedGameCount");
-        assertThat(searchSchema.path("properties").path("requiredTitle").path("required").toString())
-                .contains("scope");
         loop.stopBoundedCalls();
     }
 
@@ -863,17 +860,18 @@ class RecommendationReActContractTest {
                 action(
                         "evidence-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedGameCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"requestedGameCount\":2,\"includeTypes\":[],\"excludeTypes\":[]}"),
                 action(
                         "foreign-evidence",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"newRecommendationCount\":1,\"playerReply\":\"推荐第一款。\","
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"推荐第一款。\","
                                 + "\"selections\":[{\"bggId\":701,"
-                                + "\"internalEvidenceIds\":[\"B702:playerCount\"]}]}"));
+                                + "\"introduction\":\"Unsupported introduction.\",\"internalEvidenceIds\":[\"B702:playerCount\"]},"
+                                + "{\"bggId\":702,\"introduction\":\"This game supports your group.\",\"internalEvidenceIds\":[\"B702:playerCount\"]}]}"));
         RecommendationReActLoop evidenceLoop = loop(evidenceModel, evidenceCatalog);
 
         var evidenceResponse = evidenceLoop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "从这两款里推荐一款。"),
+                new ConversationRequest(RecommendationProfile.empty(), "介绍这两款游戏。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -881,8 +879,10 @@ class RecommendationReActContractTest {
         assertThat(evidenceResponse.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(evidenceResponse.games())
                 .extracting(game -> game.game().ranking().bggId())
-                .containsExactly(701);
+                .containsExactly(701, 702);
         assertThat(evidenceResponse.games().getFirst().replyParts()).isEmpty();
+        assertThat(evidenceResponse.games().getLast().replyParts()).singleElement()
+                .satisfies(part -> assertThat(part.claim().text()).isEqualTo("This game supports your group."));
         assertThat(evidenceResponse.assistantMessage()).isEmpty();
         assertThat(evidenceResponse.harness().actions())
                 .contains("RECOMMENDATION_NARRATIVE_PARTIAL", "RECOMMEND_GAMES");
@@ -960,8 +960,9 @@ class RecommendationReActContractTest {
         loop.stopBoundedCalls();
     }
 
-    @Test
-    void explicitRequestsCanPublishEveryVerifiedSelectionBeyondTheDefaultCount() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void explicitOrAgentChosenQuantitiesCanPublishAllSuitableCandidates(boolean explicit) throws Exception {
         RecordingCatalog catalog = new RecordingCatalog(
                 game(951, "Cedar One", BggGameType.STRATEGY, 2, 4, 90, "3.1"),
                 game(952, "Cedar Two", BggGameType.STRATEGY, 2, 4, 95, "3.2"),
@@ -972,7 +973,8 @@ class RecommendationReActContractTest {
                 action(
                         "bounded-result-search",
                         BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedGameCount\":5,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\"," + (explicit ? "\"requestedGameCount\":5," : "\"requestedGameCount\":null,")
+                                + "\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}"),
                 action(
                         "bounded-result-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -986,7 +988,7 @@ class RecommendationReActContractTest {
         RecommendationReActLoop loop = loop(model, catalog);
 
         var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "给我五款策略游戏。"),
+                new ConversationRequest(RecommendationProfile.empty(), explicit ? "给我五款策略游戏。" : "帮我比较一些策略游戏，数量你来判断。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -1572,7 +1574,7 @@ class RecommendationReActContractTest {
             BoardGameRecommendationCatalog catalog,
             BoardGameRecommendationWebResearch research) {
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+                8, new BigDecimal("0.65"), Duration.ofSeconds(30));
         return new RecommendationReActLoop(
                 model,
                 new BoardGameRecommendationTools(catalog, research),

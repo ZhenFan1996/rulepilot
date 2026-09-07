@@ -73,7 +73,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         String prefix = provider.toUpperCase(Locale.ROOT);
         String modelName = canaryModel(prefix);
         Capture capture = new Capture(provider, modelName);
-        var properties = new BoardGameRecommendationProperties(8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var properties = new BoardGameRecommendationProperties(8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model(provider, environment(prefix + "_API_KEY", null), environment(prefix + "_BASE_URL", null),
                         modelName, capture),
@@ -117,7 +117,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchThatMustNotRun()),
@@ -172,7 +172,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
@@ -277,7 +277,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
@@ -340,7 +340,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 modelName,
                 capture);
         var properties = new BoardGameRecommendationProperties(
-                8, 1, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),

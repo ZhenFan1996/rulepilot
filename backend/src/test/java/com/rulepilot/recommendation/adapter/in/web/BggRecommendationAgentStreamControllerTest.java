@@ -109,7 +109,7 @@ class BggRecommendationAgentStreamControllerTest {
                 ignored -> {},
                 null,
                 new BoardGameRecommendationProperties(
-                        8, 3, new BigDecimal("0.66"), Duration.ofMinutes(2)));
+                        8, new BigDecimal("0.66"), Duration.ofMinutes(2)));
 
         SseEmitter emitter = controller.converse(
                 new BggRecommendationAgentController.RecommendationConversationRequest(null, "四人区控"),
@@ -285,6 +285,6 @@ class BggRecommendationAgentStreamControllerTest {
                 executor,
                 null,
                 new BoardGameRecommendationProperties(
-                        8, 3, new BigDecimal("0.66"), Duration.ofMinutes(2)));
+                        8, new BigDecimal("0.66"), Duration.ofMinutes(2)));
     }
 }
