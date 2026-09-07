@@ -104,13 +104,13 @@ class BoardGameRecommendationSelector {
         }
 
         if (profile.durationMinutes() != null) {
-            Integer playingTime = positiveDuration(details.playingTimeMinutes());
-            Integer minimum = positiveDuration(details.minimumPlayTimeMinutes()) == null
+            Integer playingTime = details.playingTimeMinutes();
+            Integer minimum = details.minimumPlayTimeMinutes() == null
                     ? playingTime
-                    : positiveDuration(details.minimumPlayTimeMinutes());
-            Integer maximum = positiveDuration(details.maximumPlayTimeMinutes()) == null
+                    : details.minimumPlayTimeMinutes();
+            Integer maximum = details.maximumPlayTimeMinutes() == null
                     ? playingTime
-                    : positiveDuration(details.maximumPlayTimeMinutes());
+                    : details.maximumPlayTimeMinutes();
             CandidateClaim.Relation relation;
             if (minimum == null || maximum == null) {
                 relation = CandidateClaim.Relation.UNKNOWN;
@@ -187,11 +187,11 @@ class BoardGameRecommendationSelector {
                     : CandidateClaim.Relation.CONFLICT;
             assessments.add(fitAssessment(
                     bggId,
-                    "interaction",
+                    "mechanics",
                     ConstraintRange.Strength.HARD,
                     relation,
                     interactionFitText(profile.interaction(), relation, chinese),
-                    observation(observations, "interaction")));
+                    observation(observations, "mechanics")));
         }
 
         // Competitive intensity has no positive, universal BGG taxonomy label. It remains an attributed experience
@@ -204,7 +204,7 @@ class BoardGameRecommendationSelector {
             CandidateClaim.Relation relation,
             boolean chinese) {
         String mode = interaction == InteractionPreference.COOPERATIVE
-                ? chinese ? "纯合作" : "cooperative"
+                ? chinese ? "合作" : "cooperative"
                 : chinese ? "团队制" : "team-based";
         return chinese
                 ? "候选的 BGG 机制标签与" + mode + "硬条件" + relationSuffix(relation, true)
@@ -217,25 +217,27 @@ class BoardGameRecommendationSelector {
         int bggId = game.ranking().bggId();
         Details details = game.details();
         List<CandidateObservation> values = new ArrayList<>();
+        addMetadata(values, bggId, "name", List.of(game.ranking().sourceName()));
+        addMetadata(values, bggId, "chineseEditionName", List.of(details.officialChineseName()));
+        addNumberMetadata(values, bggId, "publicationYear", game.ranking().publicationYear());
+        addNumberMetadata(values, bggId, "bggRank", game.ranking().overallRank());
+        addNumberMetadata(values, bggId, "bggRatingCount", game.ranking().usersRated());
+        addNumberMetadata(values, bggId, "bggAverageRating", game.ranking().averageRating());
+        addNumberMetadata(values, bggId, "languageDependence", details.languageDependenceLevel());
         if (details.minPlayers() != null && details.maxPlayers() != null) {
             values.add(metadata(bggId, "playerCount", details.minPlayers() + ".." + details.maxPlayers()));
         }
-        Integer playingTime = positiveDuration(details.playingTimeMinutes());
-        Integer minimumMinutes = positiveDuration(details.minimumPlayTimeMinutes()) == null
+        Integer playingTime = details.playingTimeMinutes();
+        Integer minimumMinutes = details.minimumPlayTimeMinutes() == null
                 ? playingTime
-                : positiveDuration(details.minimumPlayTimeMinutes());
-        Integer maximumMinutes = positiveDuration(details.maximumPlayTimeMinutes()) == null
+                : details.minimumPlayTimeMinutes();
+        Integer maximumMinutes = details.maximumPlayTimeMinutes() == null
                 ? playingTime
-                : positiveDuration(details.maximumPlayTimeMinutes());
+                : details.maximumPlayTimeMinutes();
         if (minimumMinutes != null && maximumMinutes != null) {
             values.add(metadata(bggId, "durationMinutes", minimumMinutes + ".." + maximumMinutes));
         }
-        if (details.averageWeight() != null) {
-            values.add(metadata(
-                    bggId,
-                    "complexity",
-                    details.averageWeight().stripTrailingZeros().toPlainString()));
-        }
+        addNumberMetadata(values, bggId, "complexity", details.averageWeight());
         if (!game.ranking().types().isEmpty()) {
             values.add(taxonomy(
                     bggId,
@@ -246,15 +248,7 @@ class BoardGameRecommendationSelector {
         }
         addTaxonomy(values, bggId, "categories", details.categories());
         addTaxonomy(values, bggId, "mechanics", details.mechanics());
-        if (details.mechanics().contains("Cooperative Game")) {
-            values.add(taxonomy(bggId, "interaction", InteractionPreference.COOPERATIVE.name()));
-        } else if (details.mechanics().contains("Team-Based Game")) {
-            values.add(taxonomy(bggId, "interaction", InteractionPreference.TEAM.name()));
-        }
-        addTaxonomy(values, bggId, "families", details.families());
-        if (details.minimumAge() != null) {
-            values.add(metadata(bggId, "minimumAge", details.minimumAge().toString()));
-        }
+        addNumberMetadata(values, bggId, "minimumAge", details.minimumAge());
         addMetadata(values, bggId, "bestWith", List.of(details.bestWith()));
         addMetadata(values, bggId, "recommendedWith", List.of(details.recommendedWith()));
         addMetadata(values, bggId, "designers", details.designers());
@@ -265,8 +259,9 @@ class BoardGameRecommendationSelector {
         return List.copyOf(values);
     }
 
-    private Integer positiveDuration(Integer minutes) {
-        return minutes != null && minutes > 0 ? minutes : null;
+    private void addNumberMetadata(List<CandidateObservation> values, int bggId, String attribute, Number value) {
+        if (value != null) values.add(metadata(bggId, attribute,
+                value instanceof BigDecimal decimal ? decimal.stripTrailingZeros().toPlainString() : value.toString()));
     }
 
     private FitAssessment fitAssessment(

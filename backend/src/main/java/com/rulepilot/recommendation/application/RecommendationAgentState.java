@@ -158,11 +158,15 @@ final class RecommendationAgentState {
             List<BggGameType> includeTypes,
             List<BggGameType> excludeTypes,
             List<String> mechanics,
+            List<String> excludedMechanics,
             TitleFilter title,
             List<TitleFilter> excludedTitles,
             Integer requestedCount,
             Integer players,
             Integer maxMinutes,
+            Integer minimumPublicationYear,
+            Integer maximumPublicationYear,
+            Integer youngestPlayerAge,
             ConstraintRange<BigDecimal> complexity,
             String evidenceId,
             RecommendationProfile selectionProfile) {
@@ -170,8 +174,9 @@ final class RecommendationAgentState {
             includeTypes = includeTypes == null ? List.of() : List.copyOf(includeTypes);
             excludeTypes = excludeTypes == null ? List.of() : List.copyOf(excludeTypes);
             mechanics = mechanics == null ? List.of() : List.copyOf(mechanics);
+            excludedMechanics = excludedMechanics == null ? List.of() : List.copyOf(excludedMechanics);
             excludedTitles = excludedTitles == null ? List.of() : List.copyOf(excludedTitles);
-            if (requestedCount != null && requestedCount < 1
+            if (requestedCount != null && requestedCount < 0
                     || evidenceId == null
                     || evidenceId.isBlank()
                     || selectionProfile == null) {
@@ -185,7 +190,13 @@ final class RecommendationAgentState {
             if (!includeTypes.isEmpty() && includeTypes.stream().noneMatch(actualTypes::contains)) return false;
             if (excludeTypes.stream().anyMatch(actualTypes::contains)) return false;
             if (!game.details().mechanics().containsAll(mechanics)) return false;
+            if (excludedMechanics.stream().anyMatch(game.details().mechanics()::contains)) return false;
             if (excludedTitles.stream().anyMatch(excluded -> excluded.matches(game))) return false;
+            Integer year = game.ranking().publicationYear();
+            if (minimumPublicationYear != null && (year == null || year < minimumPublicationYear)) return false;
+            if (maximumPublicationYear != null && (year == null || year > maximumPublicationYear)) return false;
+            Integer minimumAge = game.details().minimumAge();
+            if (youngestPlayerAge != null && (minimumAge == null || minimumAge > youngestPlayerAge)) return false;
             if (title == null) return true;
             return title.matches(game);
         }
@@ -195,11 +206,15 @@ final class RecommendationAgentState {
                     includeTypes,
                     excludeTypes,
                     mechanics,
+                    excludedMechanics,
                     title.withFamilies(families),
                     excludedTitles,
                     requestedCount,
                     players,
                     maxMinutes,
+                    minimumPublicationYear,
+                    maximumPublicationYear,
+                    youngestPlayerAge,
                     complexity,
                     evidenceId,
                     selectionProfile);

@@ -8,9 +8,12 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.SEARCH_TOOL;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
@@ -82,13 +85,11 @@ final class RecommendationReActLoop {
     private final ObjectMapper json;
     private final ExecutorService boundedCalls;
     private final long maximumRunMillis;
-    private final int maximumOutputTokens;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions actionExecutor;
     private final RecommendationPublication publication;
     private final RecommendationDecisionBrief decisionBrief;
     private final RecommendationToolCatalog toolCatalog;
-    private final RecommendationReadBatchExecutor readBatchExecutor;
     private final ObservationRegistry observations;
 
     RecommendationReActLoop(
@@ -110,12 +111,13 @@ final class RecommendationReActLoop {
         this.model = model;
         this.tools = tools;
         this.selector = selector;
-        this.json = json;
+        this.json = json.copy()
+                .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
         this.observations = observations == null ? ObservationRegistry.NOOP : observations;
         boundedCalls = AsyncContextPropagation.executorService(Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().name("recommendation-bounded-call-", 0).factory()));
         maximumRunMillis = properties.timeout().toMillis();
-        maximumOutputTokens = properties.maxOutputTokens();
         evidenceReview = new RecommendationEvidenceReview(json, this);
         actionExecutor = new RecommendationActions(tools, selector, properties, json, evidenceReview, this);
         publication = new RecommendationPublication(
@@ -127,7 +129,6 @@ final class RecommendationReActLoop {
                 json);
         decisionBrief = new RecommendationDecisionBrief(json);
         toolCatalog = new RecommendationToolCatalog(selector, properties, json, evidenceReview, actionExecutor);
-        readBatchExecutor = new RecommendationReadBatchExecutor(actionExecutor, this, boundedCalls, json);
     }
 
     void stopBoundedCalls() {
@@ -313,7 +314,7 @@ final class RecommendationReActLoop {
         List<Message> messages = new ArrayList<>(List.of(
                 Message.system(RecommendationToolCatalog.systemPrompt()),
                 Message.user(input)));
-        Map<String, SettledAction> settledActions = new LinkedHashMap<>();
+        Map<String, Integer> settledActions = new LinkedHashMap<>();
         Set<String> rejectedIncompatibleActionSets = new LinkedHashSet<>();
         Set<String> rejectedFreeFormPublications = new LinkedHashSet<>();
         int stateEpoch = 0;
@@ -333,7 +334,7 @@ final class RecommendationReActLoop {
                 Request modelRequest = new Request(
                         messages,
                         currentActions,
-                        maximumOutputTokens,
+                        null,
                         state.pendingPublicationSeed == null
                                 ? ToolChoice.AUTO
                                 : ToolChoice.REQUIRED);
@@ -344,8 +345,7 @@ final class RecommendationReActLoop {
                                         answerPartListener)
                                 : null;
                 Consumer<ToolCall> publicationStream = state.pendingPublicationSeed == null
-                        || currentActions.size() != 1
-                        || !RECOMMEND_TOOL.equals(currentActions.getFirst().name())
+                        || currentActions.stream().noneMatch(action -> RECOMMEND_TOOL.equals(action.name()))
                         ? null
                         : publication.previewPublisher(
                                 state,
@@ -430,7 +430,7 @@ final class RecommendationReActLoop {
                                 "NO_PROGRESS:REPEATED_INVALID_PUBLICATION");
                     }
                     progress.retry();
-                    messages.add(Message.assistant(turn.text(), List.of()));
+                    messages.add(Message.assistant(turn));
                     messages.add(Message.user(observation(Map.of(
                             "validationError",
                                     Map.of(
@@ -453,69 +453,6 @@ final class RecommendationReActLoop {
             }
             List<ToolCall> calls = turn.toolCalls();
             if (calls.size() > 1) {
-                RecommendationReadBatchExecutor.Compatibility compatibility =
-                        readBatchExecutor.compatibility(calls, currentActions);
-                int batchStateEpoch = stateEpoch;
-                boolean allFresh = calls.stream().noneMatch(call -> {
-                    SettledAction settled = settledActions.get(actionFingerprint(call));
-                    return settled != null && settled.stateEpoch() == batchStateEpoch;
-                });
-                if (compatibility.compatible() && allFresh) {
-                    decisionObservation.stop("completed", false, null);
-                    progress.complete();
-                    List<RecommendationActions.ActionOutcome> outcomes;
-                    try {
-                        outcomes = readBatchExecutor.execute(calls, state, request, locale, progress::parallel);
-                    } catch (RunDeadlineExceeded exception) {
-                        state.actions.add("RUN_DEADLINE_EXCEEDED");
-                        return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
-                    }
-                    List<String> batchObservations = new ArrayList<>(outcomes.size());
-                    for (int index = 0; index < outcomes.size(); index++) {
-                        ToolCall call = calls.get(index);
-                        RecommendationActions.ActionOutcome outcome = outcomes.get(index);
-                        if (outcome.response() != null || outcome.publicationArgumentsJson() != null) {
-                            throw new IllegalStateException("read-only recommendation batch returned a terminal action");
-                        }
-                        if (!outcome.rejected()) stateEpoch++;
-                        if (outcome.deterministicContractRejection()
-                                || (!outcome.rejected() && readBatchExecutor.readOnly(call.name()))) {
-                            settledActions.put(actionFingerprint(call), new SettledAction(outcome, stateEpoch));
-                        }
-                        if (outcome.settledRead()) {
-                            checkpointListener.accept(new TurnCheckpoint(state.profile, state.verifiedForAgent()));
-                        }
-                        batchObservations.add(outcome.observation());
-                    }
-                    toolCatalog.appendActionObservations(
-                            messages,
-                            calls,
-                            batchObservations,
-                            state);
-                    continue;
-                }
-                if (compatibility.compatible()) {
-                    decisionObservation.stop("completed", false, null);
-                    progress.complete();
-                    List<String> observations = new ArrayList<>();
-                    for (ToolCall call : calls) {
-                        ActionStep step = performAction(
-                                call,
-                                currentActions,
-                                settledActions,
-                                stateEpoch,
-                                state,
-                                request,
-                                locale,
-                                progress,
-                                checkpointListener);
-                        stateEpoch = step.stateEpoch();
-                        if (step.terminalResponse() != null) return step.terminalResponse();
-                        observations.add(step.outcome().observation());
-                    }
-                    toolCatalog.appendActionObservations(messages, calls, observations, state);
-                    continue;
-                }
                 String fingerprint = calls.stream()
                         .map(this::actionFingerprint)
                         .sorted()
@@ -535,17 +472,18 @@ final class RecommendationReActLoop {
                 progress.retry();
                 String observation = error(
                         "INCOMPATIBLE_ACTIONS",
-                        "A multi-action turn is valid only when every call is an independent, currently available read. Keep mutations and terminal publication in their own decision after observing all prerequisite results.",
+                        "These actions share one recommendation state. Submit one currently available action, observe its result, then decide the next action.",
                         Map.of(
                                 "submittedActions",
                                 calls.stream()
                                         .map(call -> Map.of("callId", call.id(), "action", call.name()))
                                         .toList(),
                                 "incompatibilities",
-                                compatibility.issues()));
+                                calls.stream().map(call -> Map.of("callId", call.id(),
+                                        "action", call.name(), "code", "SHARED_TURN_STATE")).toList()));
                 toolCatalog.appendActionObservations(
                         messages,
-                        calls,
+                        turn,
                         java.util.Collections.nCopies(calls.size(), observation),
                         state);
                 continue;
@@ -567,7 +505,7 @@ final class RecommendationReActLoop {
             if (step.terminalResponse() != null) return step.terminalResponse();
             toolCatalog.appendActionObservations(
                     messages,
-                    calls,
+                    turn,
                     List.of(step.outcome().observation()),
                     state);
         }
@@ -576,7 +514,7 @@ final class RecommendationReActLoop {
     private ActionStep performAction(
             ToolCall call,
             List<ToolSpec> currentActions,
-            Map<String, SettledAction> settledActions,
+            Map<String, Integer> settledActions,
             int stateEpoch,
             RecommendationAgentState state,
             ConversationRequest request,
@@ -589,8 +527,8 @@ final class RecommendationReActLoop {
         RecommendationActions.ActionOutcome outcome;
         OperationObservation actionObservation = startOperation(
                 "typed_action", observedAction(call.name()));
-        SettledAction settled = settledActions.get(fingerprint);
-        if (settled != null && settled.stateEpoch() == stateEpoch) {
+        Integer settled = settledActions.get(fingerprint);
+        if (settled != null && settled == stateEpoch) {
             actionObservation.stop("no_progress", false, null);
             state.actions.add("NO_PROGRESS:REPEATED_ACTION_OBSERVATION");
             progress.fail();
@@ -610,6 +548,7 @@ final class RecommendationReActLoop {
             try {
                 outcome = actionExecutor.execute(
                         executionCall,
+                        currentActions.stream().filter(action -> action.name().equals(call.name())).findFirst().orElseThrow(),
                         state,
                         request,
                         locale,
@@ -666,8 +605,8 @@ final class RecommendationReActLoop {
             nextStateEpoch++;
         }
         if (outcome.deterministicContractRejection()
-                || (!outcome.rejected() && readBatchExecutor.readOnly(call.name()))) {
-            settledActions.put(fingerprint, new SettledAction(outcome, nextStateEpoch));
+                || (!outcome.rejected() && !RECOMMEND_TOOL.equals(call.name()))) {
+            settledActions.put(fingerprint, nextStateEpoch);
         }
         if (outcome.settledRead()) {
             checkpointListener.accept(new TurnCheckpoint(state.profile, state.verifiedForAgent()));
@@ -698,7 +637,28 @@ final class RecommendationReActLoop {
     }
 
     String actionFingerprint(ToolCall call) {
-        return readBatchExecutor.fingerprint(decisionBrief.withoutBrief(call));
+        ToolCall action = decisionBrief.withoutBrief(call);
+        try {
+            return action.name() + "\n" + json.writeValueAsString(canonicalJson(json.readTree(action.argumentsJson())));
+        } catch (JsonProcessingException exception) {
+            return action.name() + "\n" + action.argumentsJson();
+        }
+    }
+
+    private JsonNode canonicalJson(JsonNode value) {
+        if (value.isObject()) {
+            var canonical = json.createObjectNode();
+            List<String> fields = new ArrayList<>();
+            value.fieldNames().forEachRemaining(fields::add);
+            fields.stream().sorted().forEach(field -> canonical.set(field, canonicalJson(value.path(field))));
+            return canonical;
+        }
+        if (value.isArray()) {
+            var canonical = json.createArrayNode();
+            value.forEach(element -> canonical.add(canonicalJson(element)));
+            return canonical;
+        }
+        return value.deepCopy();
     }
 
     private ConversationResponse publishValidatedResponse(
@@ -756,9 +716,13 @@ final class RecommendationReActLoop {
         ConversationResponse response = new ConversationResponse(
                 Outcome.NO_MATCH,
                 DecisionMode.MODEL_ASSISTED,
-                chinese(locale)
-                        ? "当前目录里没有找到符合条件的游戏。你可以告诉我最愿意放宽哪一项，我再换一组。"
-                        : "The current catalog has no game matching those conditions. Tell me which constraint you would most like to relax, and I can try a different set.",
+                state.activeSearch != null && state.activeSearch.title() != null
+                        ? chinese(locale)
+                                ? "当前目录里还没核验到你说的游戏。能补充英文名、封面或出版社中的任意一项，帮我确认是哪款吗？"
+                                : "I could not verify that game in the catalog. Could you share its original title, cover, or publisher to help identify it?"
+                        : chinese(locale)
+                                ? "当前目录里没有找到同时符合全部条件的游戏，因此这次先不推荐不符合要求的替代品。"
+                                : "The current catalog has no game matching all these conditions, so I have not substituted games that fail your requirements.",
                 state.selectionProfile(),
                 null,
                 state.sourceCount,
@@ -975,8 +939,11 @@ final class RecommendationReActLoop {
             RecommendationAgentState state,
             List<RecommendedGame> games,
             Set<String> finalResponseEvidenceIds) {
-        Set<Integer> cited = games.stream()
-                .map(RecommendedGame::game)
+        List<Game> citedGames = state.verified.values().stream()
+                .filter(game -> actionExecutor.narrativeObservations(game, state.research).keySet().stream()
+                        .anyMatch(finalResponseEvidenceIds::contains))
+                .toList();
+        Set<Integer> cited = citedGames.stream()
                 .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).values().stream())
                 .filter(observation -> finalResponseEvidenceIds.contains(observation.id()))
                 .flatMap(observation -> observation.sourceIndexes().stream())
@@ -1010,6 +977,14 @@ final class RecommendationReActLoop {
                     source.url(),
                     source.domain()));
         }
+        Set<Integer> displayedIds = games.stream().map(game -> game.game().ranking().bggId())
+                .collect(java.util.stream.Collectors.toSet());
+        for (Game game : citedGames) {
+            if (displayedIds.contains(game.ranking().bggId())) continue;
+            String url = "https://boardgamegeek.com/boardgame/" + game.ranking().bggId();
+            if (seenUrls.add(url)) result.add(new ResearchSource(
+                    nextIndex++, game.ranking().sourceName(), url, "boardgamegeek.com"));
+        }
         return List.copyOf(result);
     }
 
@@ -1029,10 +1004,6 @@ final class RecommendationReActLoop {
             RecommendationActions.ActionOutcome outcome,
             int stateEpoch,
             ConversationResponse terminalResponse) {}
-
-    private record SettledAction(
-            RecommendationActions.ActionOutcome outcome,
-            int stateEpoch) {}
 
     String error(String code, String guidance) {
         return observation(Map.of("status", "ERROR", "code", code, "guidance", guidance));
@@ -1261,26 +1232,6 @@ final class RecommendationReActLoop {
 
         private void start(ProgressStage stage, ProgressAction action, ProgressFocus focus) {
             transition(stage, action, focus);
-        }
-
-        private void parallel(
-                String action,
-                ProgressStage stage,
-                ProgressPhase phase,
-                ProgressFocus focus) {
-            if (listener == null) return;
-            synchronized (state) {
-                synchronized (listener) {
-                    emitProgress(
-                            listener,
-                            stage,
-                            phase,
-                            progressAction(action),
-                            focus,
-                            state,
-                            startedAt);
-                }
-            }
         }
 
         private void transition(ProgressStage stage, ProgressAction action, ProgressFocus focus) {

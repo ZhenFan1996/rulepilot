@@ -49,13 +49,39 @@ class RecommendationAgentStateTest {
         var fragment = new RecommendationAgentState.TitleFilter(
                 RecommendationAgentState.TitleMatch.CONTAINS, RecommendationAgentState.TitleScope.TITLE, "Game 1");
         var search = new RecommendationAgentState.CatalogSearch(
-                List.of(), List.of(), List.of(), fragment, List.of(exact),
-                1, null, null, null, "U1", RecommendationProfile.empty());
+                List.of(), List.of(), List.of(), List.of(), fragment, List.of(exact), null, null, null, null, null, null, null, "U1", RecommendationProfile.empty());
 
         assertThat(search.matches(game(1))).as("exclusion wins even inside a required title fragment").isFalse();
         assertThat(search.matches(game(10))).as("one excluded title does not exclude similarly named games").isTrue();
         assertThat(search.matches(game(2))).as("positive title requirements still apply").isFalse();
         assertThat(fragment.matches(game(10))).as("explicit fragment exclusion can match related names").isTrue();
+    }
+
+    @Test
+    void publicationYearBoundsRemainHardAtPublication() {
+        var search = new RecommendationAgentState.CatalogSearch(
+                List.of(), List.of(), List.of(), List.of(), null, List.of(), null, null, null, 2023, 2024, null, null, "U1", RecommendationProfile.empty());
+        assertThat(search.matches(game(1))).isTrue();
+        var later = new RecommendationAgentState.CatalogSearch(
+                List.of(), List.of(), List.of(), List.of(), null, List.of(), null, null, null, 2025, null, null, null, "U1", RecommendationProfile.empty());
+        assertThat(later.matches(game(1))).isFalse();
+    }
+
+    @Test
+    void aVerifiedGameWithAnUnwantedMechanismCannotBePublished() {
+        var search = new RecommendationAgentState.CatalogSearch(
+                List.of(), List.of(), List.of(), List.of("Hand Management"), null, List.of(), null, null, null, null, null, null, null, "U1", RecommendationProfile.empty());
+        assertThat(search.matches(game(1))).isFalse();
+    }
+
+    @Test
+    void ageAppropriatenessCannotBeRelaxedDuringPublication() {
+        var tooYoung = new RecommendationAgentState.CatalogSearch(
+                List.of(), List.of(), List.of(), List.of(), null, List.of(), null, null, null, null, null, 9, null, "U1", RecommendationProfile.empty());
+        var oldEnough = new RecommendationAgentState.CatalogSearch(
+                List.of(), List.of(), List.of(), List.of(), null, List.of(), null, null, null, null, null, 10, null, "U1", RecommendationProfile.empty());
+        assertThat(tooYoung.matches(game(1))).isFalse();
+        assertThat(oldEnough.matches(game(1))).isTrue();
     }
 
     private Game game(int id) {

@@ -67,10 +67,13 @@ final class IncrementalOpenAiChatModel implements ChatModel, IncrementalToolCall
 
     private Chunk providerNeutralChunk(ChatCompletionChunk chunk) {
         StringBuilder text = new StringBuilder();
+        StringBuilder privateReasoning = new StringBuilder();
         java.util.List<ToolCallDelta> toolCalls = new java.util.ArrayList<>();
         String finishReason = "";
         for (ChatCompletionChunk.Choice choice : chunk.choices()) {
             text.append(choice.delta().content().orElse(""));
+            var reasoning = choice.delta()._additionalProperties().get("reasoning_content");
+            if (reasoning != null) privateReasoning.append(reasoning.asString().orElse(""));
             for (ChatCompletionChunk.Choice.Delta.ToolCall call :
                     choice.delta().toolCalls().orElse(java.util.List.of())) {
                 var function = call.function().orElse(null);
@@ -90,7 +93,8 @@ final class IncrementalOpenAiChatModel implements ChatModel, IncrementalToolCall
                 toolCalls,
                 finishReason,
                 usage == null ? 0 : usage.promptTokens(),
-                usage == null ? 0 : usage.completionTokens());
+                usage == null ? 0 : usage.completionTokens(),
+                privateReasoning.toString());
     }
 
     private ChatCompletionCreateParams createRequest(Prompt prompt) {

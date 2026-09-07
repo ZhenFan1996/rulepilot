@@ -282,7 +282,8 @@ class RecommendationConversationCoordinatorTest {
         StoredConversation afterUnavailable = store.findLatestOwned("alice").orElseThrow();
         assertThat(afterUnavailable.lastClientTurnId()).isEqualTo(unavailableTurnId);
         assertThat(afterUnavailable.state().profile()).isEqualTo(checkpointProfile);
-        assertThat(afterUnavailable.state().transcript()).isEmpty();
+        assertThat(afterUnavailable.state().transcript())
+                .containsExactly(new DialogueMessage("user", requestMessage));
         assertThat(afterUnavailable.state().knownGames())
                 .extracting(BoardGameRecommendationAgent.KnownGame::bggId)
                 .containsExactly(64);
@@ -309,7 +310,7 @@ class RecommendationConversationCoordinatorTest {
                         unavailable.conversationId(),
                         unavailable.revision(),
                         retryTurnId,
-                        request(requestMessage)),
+                        request("再试一次，按刚才的要求。")),
                 "zh-CN",
                 "alice",
                 ignored -> {});
@@ -324,10 +325,10 @@ class RecommendationConversationCoordinatorTest {
                 .containsExactly(64);
         assertThat(retryRequest.transcript())
                 .extracting(message -> message.role() + ":" + message.text())
-                .containsExactly("user:" + requestMessage);
+                .containsExactly("user:" + requestMessage, "user:再试一次，按刚才的要求。");
         assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
                 .extracting(message -> message.role() + ":" + message.text())
-                .containsExactly("user:" + requestMessage, "assistant:这次已经完成。");
+                .containsExactly("user:" + requestMessage, "user:再试一次，按刚才的要求。", "assistant:这次已经完成。");
         assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
                 .noneMatch(message -> message.text().equals(unavailableMessage));
     }
@@ -379,7 +380,7 @@ class RecommendationConversationCoordinatorTest {
                 .containsExactly(67, 65);
         assertThat(stored.state().transcript())
                 .extracting(message -> message.role() + ":" + message.text())
-                .containsExactly("user:先推荐一款");
+                .containsExactly("user:先推荐一款", "user:" + unavailableRequest);
 
         var replay = coordinator.converse(
                 new SessionTurn(
@@ -448,8 +449,7 @@ class RecommendationConversationCoordinatorTest {
         assertThat(unavailable.response().outcome()).isEqualTo(Outcome.UNAVAILABLE);
         assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
                 .extracting(message -> message.role() + ":" + message.text())
-                .containsExactly("assistant:" + initialGreeting)
-                .noneMatch(turn -> turn.equals("user:" + requestMessage));
+                .containsExactly("assistant:" + initialGreeting, "user:" + requestMessage);
         var effectiveRequest = org.mockito.ArgumentCaptor.forClass(ConversationRequest.class);
         verify(agent).conversePersisted(effectiveRequest.capture(), eq("zh-CN"), eq("alice"), any(), any());
         assertThat(effectiveRequest.getValue().transcript())
@@ -458,7 +458,7 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
-    void optimisticCurrentTurnIsRemovedBeforeBoundingTheImportedHistory() {
+    void optimisticCurrentTurnIsPersistedOnceWhenGenerationIsUnavailable() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         String requestMessage = "这是当前浏览器乐观追加的回合";
         when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
@@ -491,7 +491,7 @@ class RecommendationConversationCoordinatorTest {
                 ignored -> {});
 
         assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
-                .containsExactlyElementsOf(fullHistory);
+                .containsExactlyElementsOf(optimisticTranscript);
     }
 
     @Test

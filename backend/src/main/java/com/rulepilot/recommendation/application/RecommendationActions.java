@@ -100,6 +100,7 @@ final class RecommendationActions {
 
     ActionOutcome execute(
             ToolCall call,
+            com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec definition,
             RecommendationAgentState state,
             ConversationRequest request,
             String locale,
@@ -125,13 +126,17 @@ final class RecommendationActions {
         } catch (JsonProcessingException | InvalidAction exception) {
             InvalidAction invalid = exception instanceof InvalidAction value ? value : null;
             String code = invalid == null ? "INVALID_JSON" : invalid.code;
+            Map<String, Object> details = new LinkedHashMap<>();
+            if (invalid != null) details.putAll(invalid.details);
+            else details.put("validationError", ((JsonProcessingException) exception).getOriginalMessage());
+            details.put("inputSchema", definition.inputSchema());
             return rejectedContract(
                     state,
                     code,
                     invalid != null && invalid.guidance != null
                             ? invalid.guidance
                             : invalidActionGuidance(code),
-                    invalid == null ? Map.of() : invalid.details);
+                    details);
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation action {} failed ({})", call.name(), exception.getClass().getSimpleName());
             return rejectedUnavailable(
@@ -228,7 +233,6 @@ final class RecommendationActions {
                 arguments,
                 Set.of(
                         "evidence",
-                        "publicationCount",
                         "includeTypes",
                         "excludeTypes"));
         String evidenceId = text(arguments.path("evidence"));
@@ -237,14 +241,13 @@ final class RecommendationActions {
         int evidenceTurn = evidenceReview.evidenceTurn(evidenceId, request);
         List<BggGameType> includeTypes = gameTypes(arguments.path("includeTypes"));
         List<BggGameType> excludeTypes = gameTypes(arguments.path("excludeTypes"));
-        Integer requestedCount = integer(
-                arguments.path("publicationCount"),
-                1,
-                Integer.MAX_VALUE,
-                "RESULT_COUNT_OUT_OF_RANGE");
+        Integer requestedCount = arguments.has("requestedGameCount")
+                ? integer(arguments.path("requestedGameCount"), 0, Integer.MAX_VALUE, "RESULT_COUNT_OUT_OF_RANGE") : null;
         List<String> mechanics = arguments.has("requiredMechanics")
                 ? catalogMechanics(arguments.path("requiredMechanics"), state.catalogMechanics)
                 : List.of();
+        List<String> excludedMechanics = arguments.has("excludedMechanics")
+                ? catalogMechanics(arguments.path("excludedMechanics"), state.catalogMechanics) : List.of();
         BoardGameRecommendationAgent.InteractionPreference requiredInteraction = arguments.has("requiredInteraction")
                 ? enumValue(
                         BoardGameRecommendationAgent.InteractionPreference.class,
@@ -275,24 +278,34 @@ final class RecommendationActions {
             for (JsonNode exclusion : exclusions) excludedTitles.add(titleFilter(exclusion));
         }
         Integer players = arguments.has("players")
-                ? integer(arguments.path("players"), 1, 20, "PLAYERS_OUT_OF_RANGE")
+                ? integer(arguments.path("players"), 1, Integer.MAX_VALUE, "PLAYERS_OUT_OF_RANGE")
                 : null;
         Integer maxMinutes = arguments.has("maxMinutes")
-                ? integer(arguments.path("maxMinutes"), 5, 1_440, "DURATION_OUT_OF_RANGE")
+                ? integer(arguments.path("maxMinutes"), 1, Integer.MAX_VALUE, "DURATION_OUT_OF_RANGE")
                 : null;
         ConstraintRange<BigDecimal> complexity = arguments.has("complexity")
                 ? complexityConstraint(arguments.path("complexity"), evidenceText, evidenceTurn)
                 : null;
+        Integer minimumPublicationYear = arguments.has("minimumPublicationYear")
+                ? integer(arguments.path("minimumPublicationYear"), 1, 2100, "PUBLICATION_YEAR_OUT_OF_RANGE") : null;
+        Integer maximumPublicationYear = arguments.has("maximumPublicationYear")
+                ? integer(arguments.path("maximumPublicationYear"), 1, 2100, "PUBLICATION_YEAR_OUT_OF_RANGE") : null;
+        if (minimumPublicationYear != null && maximumPublicationYear != null
+                && minimumPublicationYear > maximumPublicationYear) {
+            throw new InvalidAction("PUBLICATION_YEAR_RANGE_INVALID");
+        }
+        Integer youngestPlayerAge = arguments.has("youngestPlayerAge")
+                ? integer(arguments.path("youngestPlayerAge"), 0, Integer.MAX_VALUE, "AGE_OUT_OF_RANGE") : null;
         String experienceQuestion = arguments.has("experienceQuestion")
                 ? experienceQuestion(arguments.path("experienceQuestion"))
                 : null;
-        String descriptionQuery = arguments.has("descriptionQuery")
-                ? descriptionQuery(arguments.path("descriptionQuery"))
+        String descriptionQueryEnglish = arguments.has("descriptionQueryEnglish")
+                ? descriptionQueryEnglish(arguments.path("descriptionQueryEnglish"))
                 : null;
-        if (title != null && descriptionQuery != null) {
+        if (title != null && descriptionQueryEnglish != null) {
             throw new InvalidAction(
                     "DESCRIPTION_QUERY_WITH_TITLE",
-                    "For a named-title lookup, keep requiredTitle and omit descriptionQuery; the verified title's description remains available after lookup.");
+                    "For a named-title lookup, keep requiredTitle and omit descriptionQueryEnglish; the verified title's description remains available after lookup.");
         }
         RecommendationProfile selectionProfile = new RecommendationProfile(
                 players == null
@@ -309,8 +322,7 @@ final class RecommendationActions {
             TitleFilter excluded = excludedTitles.get(index);
             if (excluded.scope() != TitleScope.SERIES) continue;
             CatalogSearch lookup = new CatalogSearch(
-                    List.of(), List.of(), List.of(), excluded, List.of(),
-                    null, null, null, null, evidenceId, RecommendationProfile.empty());
+                    List.of(), List.of(), List.of(), List.of(), excluded, List.of(), null, null, null, null, null, null, null, evidenceId, RecommendationProfile.empty());
             CatalogScan seeds = scanCatalog(lookup, List.of(), List.of(), List.of(), excluded.value(),
                     CatalogSort.RELEVANCE, lookup.selectionProfile(), Set.of(), state);
             if (!seeds.terminal().succeeded()) {
@@ -322,11 +334,15 @@ final class RecommendationActions {
                 includeTypes,
                 excludeTypes,
                 catalogMechanics,
+                excludedMechanics,
                 title,
                 excludedTitles,
                 requestedCount,
                 players,
                 maxMinutes,
+                minimumPublicationYear,
+                maximumPublicationYear,
+                youngestPlayerAge,
                 complexity,
                 evidenceId,
                 selectionProfile);
@@ -340,8 +356,8 @@ final class RecommendationActions {
                 includeTypes,
                 catalogMechanics,
                 List.of(),
-                title == null ? descriptionQuery : title.value(),
-                title == null && descriptionQuery == null ? CatalogSort.RANK : CatalogSort.RELEVANCE,
+                title == null ? descriptionQueryEnglish : title.value(),
+                title == null && descriptionQueryEnglish == null ? CatalogSort.RANK : CatalogSort.RELEVANCE,
                 selectionProfile,
                 unavailable,
                 state);
@@ -376,12 +392,16 @@ final class RecommendationActions {
         }
         state.completeCatalogSearch(scan.sourceCount(), candidates);
         Map<String, Object> appliedContract = new LinkedHashMap<>();
+        if (requestedCount != null) appliedContract.put("requestedGameCount", requestedCount);
         appliedContract.put("evidence", evidenceId);
         appliedContract.put("includeTypes", includeTypes);
         appliedContract.put("excludeTypes", excludeTypes);
         if (!excludedTitles.isEmpty()) appliedContract.put("excludedTitles", excludedTitles);
-        if (requestedCount != null) appliedContract.put("publicationCount", requestedCount);
+        if (minimumPublicationYear != null) appliedContract.put("minimumPublicationYear", minimumPublicationYear);
+        if (maximumPublicationYear != null) appliedContract.put("maximumPublicationYear", maximumPublicationYear);
+        if (youngestPlayerAge != null) appliedContract.put("youngestPlayerAge", youngestPlayerAge);
         if (!mechanics.isEmpty()) appliedContract.put("requiredMechanics", mechanics);
+        if (!excludedMechanics.isEmpty()) appliedContract.put("excludedMechanics", excludedMechanics);
         appliedContract.put("requiredInteraction", requiredInteraction);
         if (title != null) {
             appliedContract.put(
@@ -393,12 +413,13 @@ final class RecommendationActions {
         if (maxMinutes != null) appliedContract.put("maxMinutes", maxMinutes);
         if (complexity != null) {
             Map<String, Object> range = new LinkedHashMap<>();
+            range.put("strength", complexity.strength());
             if (complexity.minimum() != null) range.put("minimum", complexity.minimum());
             if (complexity.maximum() != null) range.put("maximum", complexity.maximum());
             appliedContract.put("complexity", range);
         }
         if (experienceQuestion != null) appliedContract.put("experienceQuestion", experienceQuestion);
-        if (descriptionQuery != null) appliedContract.put("descriptionQuery", descriptionQuery);
+        if (descriptionQueryEnglish != null) appliedContract.put("descriptionQueryEnglish", descriptionQueryEnglish);
         List<Integer> verifiedIds = candidates.stream()
                 .map(game -> game.ranking().bggId())
                 .toList();
@@ -461,7 +482,10 @@ final class RecommendationActions {
         long pageBudget = 1;
         boolean completedPage = false;
         int candidateWindowSize = properties.modelCandidateLimit();
-        while (eligible.size() < candidateWindowSize) {
+        // Preserve each page's alternatives without paging merely to fill the optional model window.
+        int requestedCandidates = search.requestedCount() == null
+                ? properties.resultCount() : Math.max(1, search.requestedCount());
+        while (eligible.size() < requestedCandidates) {
             state.recordCatalogCall();
             int currentOffset = offset;
             CatalogObservation page;
@@ -475,8 +499,8 @@ final class RecommendationActions {
                                 List.of(),
                                 List.of(),
                                 families,
-                                null,
-                                null,
+                                search.minimumPublicationYear(),
+                                search.maximumPublicationYear(),
                                 null,
                                 null,
                                 textQuery == null ? null : new com.rulepilot.catalog.BoardGameRecommendationCatalog.TextQuery(
@@ -561,7 +585,7 @@ final class RecommendationActions {
             JsonNode node,
             String evidenceText,
             int evidenceTurn) {
-        requireObject(node, Set.of());
+        requireObject(node, Set.of("strength"));
         if (!node.has("minimum") && !node.has("maximum")) {
             throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
         }
@@ -574,7 +598,9 @@ final class RecommendationActions {
         if (minimum != null && maximum != null && minimum.compareTo(maximum) > 0) {
             throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
         }
-        return ConstraintRange.hard(minimum, maximum, evidenceText, evidenceTurn);
+        return new ConstraintRange<>(minimum, maximum,
+                enumValue(ConstraintRange.Strength.class, node.path("strength"), "WEIGHT_STRENGTH_INVALID"),
+                evidenceText, evidenceTurn);
     }
 
     private TitleFilter titleFilter(JsonNode node) {
@@ -848,12 +874,12 @@ final class RecommendationActions {
     private String invalidActionGuidance(String code) {
         return switch (code) {
             case "INVALID_JSON" ->
-                "Return a fresh action with valid JSON arguments and correctly escaped strings.";
+                "Return a new complete argument object for the same action using the supplied schema; the rejected candidate is already in the conversation. Do not return a patch.";
             case "SEARCH_EVIDENCE_NOT_CURRENT", "DISCOVERY_EVIDENCE_NOT_CURRENT" ->
                 "Use the evidence ID attached to the current user turn.";
             case "SEARCH_TYPE_CONFLICT" ->
                 "Remove every BGG product type that appears in both includeTypes and excludeTypes.";
-            default -> "Correct the typed arguments using the current action schema and observations.";
+            default -> "Return a new complete argument object using the supplied schema and observed identities; the rejected candidate is already in the conversation. Do not return a patch.";
         };
     }
 
@@ -902,11 +928,7 @@ final class RecommendationActions {
     Map<String, Object> gameObservation(Game game, boolean includePublisherDescription) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("bggId", game.ranking().bggId());
-        value.put("name", game.ranking().sourceName());
-        putIfKnown(value, "year", game.ranking().publicationYear());
         if (game.details() == null) return value;
-        var details = game.details();
-        putIfText(value, "officialChineseName", details.officialChineseName());
         List<CandidateObservation> gameObservations = selector.observations(game).stream()
                 .filter(observation -> includePublisherDescription
                         || !"publisherDescription".equals(observation.attribute()))
@@ -915,7 +937,7 @@ final class RecommendationActions {
                 .collect(java.util.stream.Collectors.toMap(
                         CandidateObservation::id,
                         observation -> List.of(
-                                observationKindCode(observation),
+                                observationSource(observation),
                                 modelObservationValue(observation)),
                         (first, ignored) -> first,
                         LinkedHashMap::new));
@@ -934,21 +956,16 @@ final class RecommendationActions {
         return value.substring(0, end).stripTrailing() + "…";
     }
 
-    private String observationKindCode(CandidateObservation observation) {
+    private String observationSource(CandidateObservation observation) {
+        if (observation.kind() == CandidateObservation.Kind.STRUCTURED_METADATA
+                && Set.of("bestWith", "recommendedWith", "complexity", "languageDependence",
+                        "bggRank", "bggRatingCount", "bggAverageRating").contains(observation.attribute())) return "BGG community poll/statistic";
         return switch (observation.kind()) {
-            case STRUCTURED_METADATA -> "M";
-            case TAXONOMY -> "T";
-            case ATTRIBUTED_REPORT -> "A";
-            case RULEBOOK_FACT -> "R";
+            case STRUCTURED_METADATA -> "BGG catalog specification or attributed description";
+            case TAXONOMY -> "Literal BGG classification";
+            case ATTRIBUTED_REPORT -> "Attributed public report";
+            case RULEBOOK_FACT -> "Rulebook fact";
         };
-    }
-
-    private void putIfKnown(Map<String, Object> target, String key, Object value) {
-        if (value != null) target.put(key, value);
-    }
-
-    private void putIfText(Map<String, Object> target, String key, String value) {
-        if (value != null && !value.isBlank()) target.put(key, value);
     }
 
     List<Map<String, Object>> sourceObservations(List<Source> sources) {
@@ -993,8 +1010,9 @@ final class RecommendationActions {
 
     private void requireObject(JsonNode node, Set<String> required) {
         if (node == null || !node.isObject()) throw new InvalidAction("ARGUMENT_OBJECT_REQUIRED");
-        if (required.stream().anyMatch(field -> !node.has(field))) {
-            throw new InvalidAction("REQUIRED_ARGUMENT_MISSING");
+        List<String> missing = required.stream().filter(field -> !node.has(field)).sorted().toList();
+        if (!missing.isEmpty()) {
+            throw new InvalidAction("REQUIRED_ARGUMENT_MISSING", null, Map.of("missingFields", missing));
         }
     }
 
@@ -1013,10 +1031,17 @@ final class RecommendationActions {
         return value;
     }
 
-    private String descriptionQuery(JsonNode node) {
+    private String descriptionQueryEnglish(JsonNode node) {
         String value = text(node);
         if (value.codePointCount(0, value.length()) > 200) {
             throw new InvalidAction("DESCRIPTION_QUERY_INVALID");
+        }
+        // The catalog index uses PostgreSQL's English dictionary. Keep unsupported scripts out
+        // of descriptive retrieval; title identity lookup has a separate multilingual contract.
+        if (value.codePoints().anyMatch(codePoint -> Character.isLetter(codePoint)
+                && Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN)) {
+            throw new InvalidAction("DESCRIPTION_QUERY_SCRIPT_UNSUPPORTED",
+                    "descriptionQueryEnglish uses PostgreSQL English full-text search. Supply Latin-script English concepts; use requiredTitle for a named identity.");
         }
         return value;
     }

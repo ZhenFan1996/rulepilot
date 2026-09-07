@@ -3126,7 +3126,7 @@ test('deployment keeps protected integration credentials out of packages and com
     /discard_transaction_secrets\(\)[\s\S]*?staged_docling_credential "\$release_id"/)
 })
 
-test('deployment isolates the recommendation startup model from shared Qwen roles', () => {
+test('deployment isolates the recommendation startup model and agrees with its publication boundary', () => {
   assert.match(deploymentCompose, /EMBEDDING_PROVIDER: \$\{EMBEDDING_PROVIDER:-qwen\}/)
   assert.match(deploymentWorkflow, /managed_runtime_keys='[^']* EMBEDDING_PROVIDER [^']*'/)
   assert.match(deploymentWorkflow, /'EMBEDDING_PROVIDER=qwen'/)
@@ -3140,19 +3140,15 @@ test('deployment isolates the recommendation startup model from shared Qwen role
     /managed_runtime_keys='[^']* BGG_RECOMMENDATION_HEDGE_DELAY [^']*'/)
   assert.match(deploymentWorkflow,
     /managed_runtime_keys='[^']* BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS [^']*'/)
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen'/)
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL=qwen3\.7-plus'/)
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_PUBLICATION_MODEL=qwen-turbo'/)
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_HEDGE_DELAY=PT2S'/)
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS=2000'/)
+  const expectedProvider = productionReleaseGuard.match(/^readonly EXPECTED_RECOMMENDATION_PROVIDER=(\S+)$/m)?.[1]
+  const expectedModel = productionReleaseGuard.match(/^readonly EXPECTED_RECOMMENDATION_MODEL=(\S+)$/m)?.[1]
+  assert.ok(expectedProvider && expectedModel)
+  assert.ok(deploymentWorkflow.includes(`'BGG_RECOMMENDATION_MODEL_PROVIDER=${expectedProvider}'`))
+  assert.ok(deploymentWorkflow.includes(`'BGG_RECOMMENDATION_MODEL=${expectedModel}'`))
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT5S'/)
   assert.match(deploymentWorkflow, /'WEB_SEARCH_MODEL=qwen3\.8-flash'/)
   assert.match(deploymentCompose,
     /BGG_RECOMMENDATION_MODEL: \$\{BGG_RECOMMENDATION_MODEL:-\}/)
-  assert.match(deploymentCompose,
-    /BGG_RECOMMENDATION_PUBLICATION_MODEL: \$\{BGG_RECOMMENDATION_PUBLICATION_MODEL:-\}/)
-  assert.match(deploymentCompose,
-    /BGG_RECOMMENDATION_HEDGE_DELAY: \$\{BGG_RECOMMENDATION_HEDGE_DELAY:-PT0S\}/)
   assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'QWEN_MODEL=qwen3\.7-plus'/)
@@ -3370,8 +3366,6 @@ test('release guard owns the exact candidate publication boundary before commit'
     /read_environment_value RULEPILOT_USER_USERNAME[\s\S]*?read_environment_value RULEPILOT_USER_PASSWORD/)
   assert.doesNotMatch(boundary,
     /read_environment_value BGG_RECOMMENDATION_MODEL_(?:PROVIDER|MODEL)/)
-  assert.match(productionReleaseGuard,
-    /readonly EXPECTED_RECOMMENDATION_PROVIDER=qwen[\s\S]*?readonly EXPECTED_RECOMMENDATION_MODEL=qwen3\.7-plus/)
   assert.match(boundary,
     /RULEPILOT_EXPECTED_PROVIDER=\$EXPECTED_RECOMMENDATION_PROVIDER[\s\S]*?RULEPILOT_EXPECTED_MODEL=\$EXPECTED_RECOMMENDATION_MODEL/)
   assert.match(boundary,

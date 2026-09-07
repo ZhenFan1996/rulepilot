@@ -271,6 +271,16 @@ public interface BoardGameRecommendationCatalog {
         }
 
         public Details {
+            // BGG uses zero for unavailable specifications; persisted snapshots must obey the same contract.
+            minPlayers = knownPositive(minPlayers);
+            maxPlayers = knownPositive(maxPlayers);
+            playingTimeMinutes = knownPositive(playingTimeMinutes);
+            minimumPlayTimeMinutes = knownPositive(minimumPlayTimeMinutes);
+            maximumPlayTimeMinutes = knownPositive(maximumPlayTimeMinutes);
+            minimumAge = knownPositive(minimumAge);
+            suggestedMinimumAge = knownPositive(suggestedMinimumAge);
+            languageDependenceLevel = knownPositive(languageDependenceLevel);
+            averageWeight = averageWeight != null && averageWeight.signum() > 0 ? averageWeight : null;
             officialChineseName = officialChineseName == null ? "" : officialChineseName;
             categories = List.copyOf(categories);
             mechanics = List.copyOf(mechanics);
@@ -281,6 +291,10 @@ public interface BoardGameRecommendationCatalog {
             publishers = List.copyOf(publishers);
             description = description == null ? "" : description;
             imageUrl = imageUrl == null ? "" : imageUrl;
+        }
+
+        private static Integer knownPositive(Integer value) {
+            return value != null && value > 0 ? value : null;
         }
     }
 }
