@@ -50,7 +50,7 @@ const copy = {
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '核对了 {count} 款候选。', more: '换一批',
     researchSources: '资料来源',
-    verificationDetails: '资料与核对记录', previousExplanation: '原有说明', publisherDescriptionGrounded: '参考 BGG 出版方简介',
+    verificationDetails: '资料与核对记录',
     explanationUnavailable: '候选已核对，本轮说明未通过核对。',
     streamingChoices: '已核对的选择',
     shortfall: '本轮已核对 · {available} / {requested} 款',
@@ -77,7 +77,7 @@ const copy = {
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Checked {count} candidates.', more: 'Try another batch',
     researchSources: 'Sources',
-    verificationDetails: 'Sources and checks', previousExplanation: 'Previous notes', publisherDescriptionGrounded: 'Uses BGG publisher description',
+    verificationDetails: 'Sources and checks',
     explanationUnavailable: 'The candidates were verified; the explanation did not pass verification this turn.',
     streamingChoices: 'Verified choices',
     shortfall: 'Verified this turn · {available} / {requested}',
@@ -1647,7 +1647,7 @@ onBeforeUnmount(() => {
 
                   <div v-if="message.response?.games.length" class="mt-4">
                     <p v-if="message.response.shortfall" class="mb-2 inline-flex rounded-full border border-copper/25 bg-copper/5 px-2.5 py-1 text-[0.6875rem] font-semibold text-copper">{{ responseT(message.response, 'shortfall', { available: message.response.shortfall.availableCount, requested: message.response.shortfall.requestedCount }) }}</p>
-                    <TransitionGroup tag="div" name="tile" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                    <TransitionGroup tag="div" name="tile" class="grid gap-4">
                       <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame" @details="openDetails" />
                     </TransitionGroup>
                     <button v-if="message.response === response" type="button" :disabled="loading" class="mt-2 min-h-11 text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40" @click="moreGames(message.response)">{{ responseT(message.response, 'more') }}</button>
@@ -1666,18 +1666,6 @@ onBeforeUnmount(() => {
                         <span class="recommendation-tool-label font-semibold">{{ responseT(message.response, 'toolTrail') }}</span>
                         <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
                       </div>
-                      <section v-if="message.response.games.some(entry => entry.replyParts?.length)" class="space-y-3 border-t border-ink/8 pt-3">
-                        <h3 class="font-semibold">{{ responseT(message.response, 'previousExplanation') }}</h3>
-                        <template v-for="entry in message.response.games" :key="entry.game.bggId">
-                          <section v-if="entry.replyParts?.length" data-testid="recommendation-previous-explanation" class="space-y-2">
-                            <h4 class="font-semibold text-muted">{{ entry.game.name }}</h4>
-                            <div v-for="(part, index) in entry.replyParts" :key="index">
-                              <SafeMarkdown :source="part.text" class="text-sm leading-6" />
-                              <span v-if="part.publisherDescriptionGrounded" class="text-[0.6875rem] text-indigo">{{ responseT(message.response, 'publisherDescriptionGrounded') }}</span>
-                            </div>
-                          </section>
-                        </template>
-                      </section>
                     </div>
                   </details>
                 </article>
@@ -1718,7 +1706,7 @@ onBeforeUnmount(() => {
               <article v-if="loading && pendingRecommendationGames.length" data-conversation-message data-has-recommendations="true" data-testid="pending-recommendation-parts" class="min-w-0 w-full">
                 <span class="mb-1.5 block pl-1 font-display text-sm italic text-copper">{{ translated(activeTurnLocale ?? locale, 'streamingChoices') }}</span>
                 <div class="rounded-2xl border border-copper/20 bg-canvas/45 p-3 sm:p-4">
-                  <TransitionGroup tag="div" name="tile" class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                  <TransitionGroup tag="div" name="tile" class="grid gap-4">
                     <RecommendationGameCard v-for="entry in pendingRecommendationGames" :key="entry.game.bggId" :entry="entry" :loading="true" :response-locale="activeTurnLocale ?? locale" />
                   </TransitionGroup>
                 </div>

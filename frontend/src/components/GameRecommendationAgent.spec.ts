@@ -168,7 +168,7 @@ describe('GameRecommendationAgent', () => {
     expect(evidence.attributes('rel')).toContain('noopener')
   })
 
-  it('keeps restored explanation parts readable without adding them to the original reply', async () => {
+  it('restores the model introduction beside its game instead of hiding it in source details', async () => {
     const assistantMessage = '先看这款，下面是当时核对过的资料。'
     const oldExplanation = '适合你提到的**自然主题**。\n\n第一次玩可以一起熟悉卡牌。'
     const latestResponse: RecommendationAgentResponse = {
@@ -198,13 +198,13 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="assistant-recommendation-message"]').text()).toBe(assistantMessage)
     const details = wrapper.get('details[data-testid="recommendation-verification-details"]')
     expect(details.attributes('open')).toBeUndefined()
-    const explanation = details.get('[data-testid="recommendation-previous-explanation"]')
-    expect(explanation.get('h4').text()).toBe(game.name)
+    const card = wrapper.get('[data-testid="recommendation-game-card"]')
+    const explanation = card.get('[data-testid="recommendation-game-introduction"]')
     expect(explanation.get('strong').text()).toBe('自然主题')
     expect(explanation.findAll('p').map(paragraph => paragraph.text()))
       .toEqual(['适合你提到的自然主题。', '第一次玩可以一起熟悉卡牌。'])
-    expect(explanation.text()).toContain('参考 BGG 出版方简介')
-    expect(wrapper.get('[data-testid="recommendation-game-card"]').text()).not.toContain('自然主题')
+    expect(details.text()).not.toContain('自然主题')
+    expect(card.text()).toContain('自然主题')
   })
 
   it.each(['live', 'restored'])('keeps verified cards without assigning a missing reply to earlier dialogue: %s', async (delivery) => {

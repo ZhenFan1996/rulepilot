@@ -125,10 +125,9 @@ final class RecommendationReActLoop {
                 evidenceReview,
                 actionExecutor,
                 this,
-                properties,
                 json);
         decisionBrief = new RecommendationDecisionBrief(json);
-        toolCatalog = new RecommendationToolCatalog(selector, properties, json, evidenceReview, actionExecutor);
+        toolCatalog = new RecommendationToolCatalog(selector, json, evidenceReview, actionExecutor);
     }
 
     void stopBoundedCalls() {

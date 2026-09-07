@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import SafeMarkdown from '@/components/SafeMarkdown.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import type { RecommendedGame } from '@/components/gameRecommendationTypes'
 import { useLocale, type AppLocale } from '@/lib/locale'
@@ -48,7 +49,7 @@ function hideBrokenImage(event: Event) {
 
 <template>
   <article
-    class="game-tile min-w-0 p-3 sm:p-4"
+    class="game-tile grid min-w-0 gap-4 p-3 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] sm:gap-6 sm:p-5"
     data-testid="recommendation-game-card"
     :data-bgg-id="entry.game.bggId"
     :data-game-name="entry.game.name"
@@ -68,10 +69,15 @@ function hideBrokenImage(event: Event) {
       <p v-if="quickFacts.length" data-testid="recommendation-game-quick-facts" class="mt-2 line-clamp-2 text-xs leading-5 text-muted">{{ quickFacts.join(' · ') }}</p>
     </button>
 
-    <div class="mt-3 flex flex-wrap gap-3">
-      <button type="button" :disabled="loading" class="min-h-11 rounded-lg bg-felt px-4 text-sm font-semibold text-white disabled:opacity-40" @click="$emit('select', entry.game)">{{ labels.select }}</button>
-      <button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-felt disabled:opacity-40" @click="$emit('introduce', entry.game.bggId, entry.game.name, cardLocale)">{{ labels.introduce }}</button>
-      <button type="button" class="min-h-11 text-sm font-semibold text-indigo" @click="$emit('details', entry.game)">{{ labels.details }} →</button>
+    <div class="flex min-w-0 flex-col justify-between gap-4">
+      <section v-if="entry.replyParts?.length" data-testid="recommendation-game-introduction" class="space-y-3 text-sm leading-7 text-ink/75">
+        <SafeMarkdown v-for="(part, index) in entry.replyParts" :key="index" :source="part.text" />
+      </section>
+      <div class="flex flex-wrap gap-x-4 gap-y-2">
+        <button type="button" :disabled="loading" class="min-h-11 rounded-lg bg-felt px-4 text-sm font-semibold text-white disabled:opacity-40" @click="$emit('select', entry.game)">{{ labels.select }}</button>
+        <button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-felt disabled:opacity-40" @click="$emit('introduce', entry.game.bggId, entry.game.name, cardLocale)">{{ labels.introduce }}</button>
+        <button type="button" class="min-h-11 text-sm font-semibold text-indigo" @click="$emit('details', entry.game)">{{ labels.details }} →</button>
+      </div>
     </div>
   </article>
 </template>
