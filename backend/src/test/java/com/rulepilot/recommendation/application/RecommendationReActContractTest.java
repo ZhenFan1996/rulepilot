@@ -41,6 +41,29 @@ import org.junit.jupiter.api.Test;
 class RecommendationReActContractTest {
 
     @Test
+    void aConflictingActionBatchReturnsFeedbackBeforeAnySharedStateMutation() throws Exception {
+        var first = new ToolCall("first", BoardGameRecommendationAgent.SEARCH_TOOL,
+                "{\"evidence\":\"U1\",\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[]}");
+        var second = new ToolCall("second", BoardGameRecommendationAgent.SEARCH_TOOL,
+                "{\"evidence\":\"U1\",\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[]}");
+        var batch = new Turn("", List.of(first, second), CompletionStatus.COMPLETE);
+        var model = new ScriptedModel(batch,
+                action("corrected", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"requestedGameCount\":1,\"includeTypes\":[\"FAMILY\"],\"excludeTypes\":[]}"),
+                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"newRecommendationCount\":1,\"selections\":[{\"bggId\":448,\"internalEvidenceIds\":[\"B448:playerCount\"]}],\"playerReply\":\"This game supports your group.\"}"));
+        var loop = loop(model, new RecordingCatalog(game(448, "Group Choice", BggGameType.FAMILY, 2, 4, 30, "1.5")));
+        var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(), "Recommend a family game."),
+                "en", "player", ignored -> {});
+
+        assertThat(response.games()).singleElement().satisfies(game -> assertThat(game.game().ranking().bggId()).isEqualTo(448));
+        assertThat(toolObservation(model.requests.get(1), "first").path("code").asText()).isEqualTo("INCOMPATIBLE_ACTIONS");
+        assertThat(model.requests.get(1).messages()).filteredOn(message -> message.role() == BoardGameRecommendationModel.Role.ASSISTANT)
+                .singleElement().satisfies(message -> assertThat(message.toolCalls()).containsExactly(first, second));
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void streamsTheNaturalFirstModelUpdateBeforeRunningItsChosenAction() throws Exception {
         Game game = game(449, "Open Direction", BggGameType.PARTY, 3, 6, 45, "1.6");
         RecordingCatalog catalog = new RecordingCatalog(game);
@@ -57,7 +80,7 @@ class RecommendationReActContractTest {
                 action(
                         "first-decision-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款符合硬条件。\",\"selections\":[{"
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款符合硬条件。\",\"selections\":[{"
                                 + "\"bggId\":449,"
                                 + "\"internalEvidenceIds\":[\"B449:playerCount\",\"B449:durationMinutes\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -112,7 +135,7 @@ class RecommendationReActContractTest {
                 action(
                         "stream-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":2,\"playerReply\":\"这两款都通过了核对。\",\"selections\":["
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"这两款都通过了核对。\",\"selections\":["
                                 + "{\"bggId\":451,\"internalEvidenceIds\":[\"B451:playerCount\"]},"
                                 + "{\"bggId\":999,\"internalEvidenceIds\":[\"B451:playerCount\"]},"
                                 + "{\"bggId\":452,\"internalEvidenceIds\":[\"B452:playerCount\"]}]}"));
@@ -151,7 +174,7 @@ class RecommendationReActContractTest {
                 while leaving that more specific question open.
                 """;
         String arguments = new ObjectMapper().writeValueAsString(java.util.Map.of(
-                "requestedGameCount", 1,
+                "newRecommendationCount", 1,
                 "playerReply", playerReply,
                 "selections", List.of(java.util.Map.of(
                         "bggId", 451,
@@ -190,7 +213,7 @@ class RecommendationReActContractTest {
                            {"match":"CONTAINS","scope":"SERIES","value":"Ironworks"}]}
                         """),
                 action("exclude-publication", BoardGameRecommendationAgent.RECOMMEND_TOOL, """
-                        {"requestedGameCount":1,"playerReply":"Merchant Harbors supports your group.","selections":[
+                        {"newRecommendationCount":1,"playerReply":"Merchant Harbors supports your group.","selections":[
                           {"bggId":483,"internalEvidenceIds":["B483:playerCount"]},
                           {"bggId":484,"internalEvidenceIds":["B484:playerCount"]}]}
                         """));
@@ -231,7 +254,7 @@ class RecommendationReActContractTest {
                 action(
                         "collection-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":3,\"playerReply\":\"目录里现有三款 Ironworks 系列作品。\","
+                        "{\"newRecommendationCount\":3,\"playerReply\":\"目录里现有三款 Ironworks 系列作品。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":481,"
                                 + "\"internalEvidenceIds\":[\"B481:playerCount\"]},"
@@ -298,7 +321,7 @@ class RecommendationReActContractTest {
                 action(
                         "publish",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":2,\"playerReply\":\"这两款都符合本轮条件；前者更轻快，后者更偏策略。\","
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"这两款都符合本轮条件；前者更轻快，后者更偏策略。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":501,"
                                 + "\"internalEvidenceIds\":[\"B501:playerCount\",\"B501:durationMinutes\"]},"
@@ -381,8 +404,6 @@ class RecommendationReActContractTest {
         assertThat(model.requests).flatExtracting(Request::tools)
                 .extracting(tool -> tool.inputSchema())
                 .noneMatch(schema -> schema.contains("additionalProperties"));
-        assertThat(model.requests)
-                .allSatisfy(request -> assertThat(request.maxOutputTokens()).isEqualTo(2000));
         loop.stopBoundedCalls();
     }
 
@@ -402,7 +423,7 @@ class RecommendationReActContractTest {
                 action(
                         "publish-description-ranked",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":2,\"playerReply\":\"两款都满足三人和一小时的硬条件，简介证据提供了不同主题方向。\","
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"两款都满足三人和一小时的硬条件，简介证据提供了不同主题方向。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":541,"
                                 + "\"internalEvidenceIds\":[\"B541:publisherDescription\"]},"
@@ -460,7 +481,7 @@ class RecommendationReActContractTest {
                 action(
                         "typed-publish",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款符合本轮全部硬条件。\","
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款符合本轮全部硬条件。\","
                                 + "\"selections\":[{\"bggId\":553,"
                                 + "\"internalEvidenceIds\":[\"B553:playerCount\",\"B553:durationMinutes\","
                                 + "\"B553:complexity\",\"B553:bggType\"]}]}"));
@@ -509,7 +530,7 @@ class RecommendationReActContractTest {
                 action(
                         "publish-after-research",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":2,\"playerReply\":\"这两款都符合目录条件；玩家体验资料补充了取舍。\","
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"这两款都符合目录条件；玩家体验资料补充了取舍。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":561,"
                                 + "\"internalEvidenceIds\":[\"B561:durationMinutes\",\"R561:1\"]},"
@@ -596,7 +617,7 @@ class RecommendationReActContractTest {
                                 + "{\"bggId\":571,"
                                 + "\"internalEvidenceIds\":[\"B571:playerCount\",\"B571:complexity\"]},"
                                 + "{\"bggId\":572,"
-                                + "\"internalEvidenceIds\":[\"B572:playerCount\",\"B572:durationMinutes\"]}],\"requestedGameCount\":1}"));
+                                + "\"internalEvidenceIds\":[\"B572:playerCount\",\"B572:durationMinutes\"]}],\"newRecommendationCount\":1}"));
         BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
             @Override
             public boolean configured() {
@@ -677,7 +698,7 @@ class RecommendationReActContractTest {
                 action(
                         "corrected-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":2,\"playerReply\":\"现有证据只能比较复杂度和时长，互动强弱仍不确定。\","
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"现有证据只能比较复杂度和时长，互动强弱仍不确定。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":576,\"internalEvidenceIds\":[\"B576:complexity\"]},"
                                 + "{\"bggId\":577,\"internalEvidenceIds\":[\"B577:durationMinutes\"]}]}"));
@@ -728,7 +749,7 @@ class RecommendationReActContractTest {
                 action(
                         "offline-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":2,\"playerReply\":\"离线时只能比较已核验的时长和复杂度；实际三人体验仍然未知。\","
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"离线时只能比较已核验的时长和复杂度；实际三人体验仍然未知。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":581,\"internalEvidenceIds\":[\"B581:complexity\"]},"
                                 + "{\"bggId\":582,\"internalEvidenceIds\":[\"B582:durationMinutes\"]}]}"));
@@ -846,7 +867,7 @@ class RecommendationReActContractTest {
                 action(
                         "foreign-evidence",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"推荐第一款。\","
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"推荐第一款。\","
                                 + "\"selections\":[{\"bggId\":701,"
                                 + "\"internalEvidenceIds\":[\"B702:playerCount\"]}]}"));
         RecommendationReActLoop evidenceLoop = loop(evidenceModel, evidenceCatalog);
@@ -881,7 +902,7 @@ class RecommendationReActContractTest {
                 action(
                         "hard-boundary-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"推荐未验证的候选。\","
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"推荐未验证的候选。\","
                                 + "\"selections\":[{\"bggId\":999,"
                                 + "\"internalEvidenceIds\":[\"B801:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -915,7 +936,7 @@ class RecommendationReActContractTest {
                 action(
                         "mixed-boundary-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":2,\"playerReply\":\"两款都推荐。\","
+                        "{\"newRecommendationCount\":2,\"playerReply\":\"两款都推荐。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":999,\"internalEvidenceIds\":[\"B901:playerCount\"]},"
                                 + "{\"bggId\":902,"
@@ -955,7 +976,7 @@ class RecommendationReActContractTest {
                 action(
                         "bounded-result-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":5,\"playerReply\":\"这五款都通过了核对。\","
+                        "{\"newRecommendationCount\":5,\"playerReply\":\"这五款都通过了核对。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":951,\"internalEvidenceIds\":[\"B951:complexity\"]},"
                                 + "{\"bggId\":952,\"internalEvidenceIds\":[\"B952:complexity\"]},"
@@ -1007,24 +1028,24 @@ class RecommendationReActContractTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(ints = {0, 1})
-    void observedEvidenceSupportsInformationWithoutForcingRecommendationCards(int requestedGameCount) throws Exception {
+    void observedEvidenceSupportsInformationWithoutForcingRecommendationCards(int publicationCount) throws Exception {
         RecordingCatalog catalog = new RecordingCatalog(
                 game(981, "First Route", BggGameType.FAMILY, 2, 4, 30, "1.5"),
                 game(982, "Second Route", BggGameType.FAMILY, 2, 4, 30, "1.5"));
         ScriptedModel model = new ScriptedModel(
                 action("identity-search", BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"evidence\":\"U1\",\"requestedGameCount\":" + requestedGameCount + ",\"includeTypes\":[],\"excludeTypes\":[]}"),
+                        "{\"evidence\":\"U1\",\"requestedGameCount\":1,\"includeTypes\":[],\"excludeTypes\":[]}"),
                 action("identity-publication", BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":" + requestedGameCount + ",\"selections\":[{\"bggId\":982,\"internalEvidenceIds\":[\"B982:name\",\"B982:publisherDescription\"]}],"
+                        "{\"newRecommendationCount\":" + publicationCount + ",\"selections\":[{\"bggId\":982,\"internalEvidenceIds\":[\"B982:name\",\"B982:publisherDescription\"]}],"
                                 + "\"playerReply\":\"I would choose Second Route.\"}"));
         RecommendationReActLoop loop = loop(model, catalog);
         var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(), "Pick one game."),
                 "en", "player", ignored -> {});
         assertThat(response.assistantMessage()).isEqualTo("I would choose Second Route.");
-        assertThat(response.games()).hasSize(requestedGameCount);
-        if (requestedGameCount == 0) assertThat(response.researchSources()).singleElement()
+        assertThat(response.games()).hasSize(publicationCount);
+        if (publicationCount == 0) assertThat(response.researchSources()).singleElement()
                 .satisfies(source -> assertThat(source.url()).isEqualTo("https://boardgamegeek.com/boardgame/982"));
-        assertThat(response.outcome()).isEqualTo(requestedGameCount == 0 ? Outcome.CONVERSATION : Outcome.RECOMMENDATIONS);
+        assertThat(response.outcome()).isEqualTo(publicationCount == 0 ? Outcome.CONVERSATION : Outcome.RECOMMENDATIONS);
         JsonNode schema = new ObjectMapper().readTree(model.requests.getLast().tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                 .findFirst().orElseThrow().inputSchema());
@@ -1055,7 +1076,7 @@ class RecommendationReActContractTest {
                 action(
                         "long-description-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款叙事策略游戏值得先看。\",\"selections\":[{\"bggId\":956,"
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款叙事策略游戏值得先看。\",\"selections\":[{\"bggId\":956,"
                                 + "\"internalEvidenceIds\":[\"B956:publisherDescription\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
@@ -1096,7 +1117,7 @@ class RecommendationReActContractTest {
                 action(
                         "expanded-terminal-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":3,\"playerReply\":\"只推荐 Cedar One；另外两款的已核验复杂度可以作为对照。\","
+                        "{\"newRecommendationCount\":3,\"playerReply\":\"只推荐 Cedar One；另外两款的已核验复杂度可以作为对照。\","
                                 + "\"selections\":["
                                 + "{\"bggId\":971,\"internalEvidenceIds\":[\"B971:complexity\"]},"
                                 + "{\"bggId\":972,\"internalEvidenceIds\":[\"B972:complexity\"]},"
@@ -1153,7 +1174,7 @@ class RecommendationReActContractTest {
                 action(
                         "encoded-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款适合轻松开局。\","
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款适合轻松开局。\","
                                 + "\"selections\":\"[{\\\"bggId\\\":976,"
                                 + "\\\"internalEvidenceIds\\\":[\\\"B976:playerCount\\\"]}]\"}"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -1186,7 +1207,7 @@ class RecommendationReActContractTest {
                 action(
                         "decoy-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"不能发布。\",\"selections\":\"{\\\"bggId\\\":977}\"}"));
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"不能发布。\",\"selections\":\"{\\\"bggId\\\":977}\"}"));
         RecommendationReActLoop loop = loop(model, catalog);
 
         var response = loop.converse(
@@ -1209,7 +1230,7 @@ class RecommendationReActContractTest {
         ScriptedModel model = new ScriptedModel(action(
                 "shown-follow-up",
                 BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                "{\"requestedGameCount\":1,\"playerReply\":\"我先只讨论已经展示的候选。\","
+                "{\"newRecommendationCount\":1,\"playerReply\":\"我先只讨论已经展示的候选。\","
                         + "\"selections\":[{\"bggId\":981,"
                         + "\"internalEvidenceIds\":[\"B981:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(shown, unpublished));
@@ -1268,7 +1289,7 @@ class RecommendationReActContractTest {
                         """),
                 action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         """
-                        {"selections":[{"bggId":902,"internalEvidenceIds":["B902:playerCount"]}],
+                        {"newRecommendationCount":1,"selections":[{"bggId":902,"internalEvidenceIds":["B902:playerCount"]}],
                          "playerReply":"这款不同的游戏支持三人。"}
                         """));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(reference, alternative));
@@ -1296,7 +1317,7 @@ class RecommendationReActContractTest {
                         """.formatted(strength)),
                 action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         """
-                        {"selections":[{"bggId":903,"internalEvidenceIds":["B903:complexity"]}],
+                        {"newRecommendationCount":1,"selections":[{"bggId":903,"internalEvidenceIds":["B903:complexity"]}],
                          "playerReply":"这款复杂度为3.2，比偏好的重度更轻。"}
                         """));
         RecommendationReActLoop loop = loop(model, new RecordingCatalog(candidate));
@@ -1360,7 +1381,7 @@ class RecommendationReActContractTest {
                 action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
                         "{\"evidence\":\"U1\",\"requestedGameCount\":1,\"includeTypes\":[],\"excludeTypes\":[],\"excludedTitles\":[{\"match\":\"EXACT\",\"scope\":\"TITLE\",\"value\":\"Old Foundry\"}]}"),
                 action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款支持四人。\",\"selections\":[{\"bggId\":1001,"
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款支持四人。\",\"selections\":[{\"bggId\":1001,"
                                 + "\"internalEvidenceIds\":[\"B1001:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
         try {
@@ -1397,7 +1418,7 @@ class RecommendationReActContractTest {
                 action("corrected", BoardGameRecommendationAgent.SEARCH_TOOL,
                         corrected),
                 action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款支持四人。\",\"selections\":[{\"bggId\":1001,"
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款支持四人。\",\"selections\":[{\"bggId\":1001,"
                                 + "\"internalEvidenceIds\":[\"B1001:playerCount\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
         try {
@@ -1441,7 +1462,7 @@ class RecommendationReActContractTest {
                 action(
                         "mechanic-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款符合你们想玩的方向。\","
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款符合你们想玩的方向。\","
                                 + "\"selections\":[{\"bggId\":1001,"
                                 + "\"internalEvidenceIds\":[\"B1001:playerCount\",\"B1001:mechanics\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);
@@ -1499,7 +1520,7 @@ class RecommendationReActContractTest {
                 action(
                         "cooperative-publication",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                        "{\"requestedGameCount\":1,\"playerReply\":\"这款是核验过的双人纯合作游戏。\","
+                        "{\"newRecommendationCount\":1,\"playerReply\":\"这款是核验过的双人纯合作游戏。\","
                                 + "\"selections\":[{\"bggId\":1012,"
                                 + "\"internalEvidenceIds\":[\"B1012:playerCount\",\"B1012:durationMinutes\",\"B1012:mechanics\"]}]}"));
         RecommendationReActLoop loop = loop(model, catalog);

@@ -3145,15 +3145,10 @@ test('deployment isolates the recommendation startup model and agrees with its p
   assert.ok(expectedProvider && expectedModel)
   assert.ok(deploymentWorkflow.includes(`'BGG_RECOMMENDATION_MODEL_PROVIDER=${expectedProvider}'`))
   assert.ok(deploymentWorkflow.includes(`'BGG_RECOMMENDATION_MODEL=${expectedModel}'`))
-  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MAX_OUTPUT_TOKENS=2000'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT5S'/)
   assert.match(deploymentWorkflow, /'WEB_SEARCH_MODEL=qwen3\.8-flash'/)
   assert.match(deploymentCompose,
     /BGG_RECOMMENDATION_MODEL: \$\{BGG_RECOMMENDATION_MODEL:-\}/)
-  assert.match(deploymentCompose,
-    /BGG_RECOMMENDATION_PUBLICATION_MODEL: \$\{BGG_RECOMMENDATION_PUBLICATION_MODEL:-\}/)
-  assert.match(deploymentCompose,
-    /BGG_RECOMMENDATION_HEDGE_DELAY: \$\{BGG_RECOMMENDATION_HEDGE_DELAY:-PT0S\}/)
   assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'QWEN_MODEL=qwen3\.7-plus'/)

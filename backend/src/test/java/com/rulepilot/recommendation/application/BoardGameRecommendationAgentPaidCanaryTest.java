@@ -403,18 +403,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             String baseUrl,
             String modelName,
             Capture capture) {
-        String publicationModelName = System.getenv("RULEPILOT_RECOMMENDATION_CANARY_PUBLICATION_MODEL");
-        publicationModelName = publicationModelName == null || publicationModelName.isBlank()
-                ? modelName
-                : publicationModelName.strip();
-        capture.publicationModel = publicationModelName;
         ChatModelFactory factory = new ChatModelFactory(ObservationRegistry.NOOP, RECOMMENDATION_TIMEOUT);
         BoardGameRecommendationModel delegate = modelDelegate(
                 provider,
                 modelName,
-                publicationModelName,
                 factory.create(provider, apiKey, baseUrl, modelName));
-        String selectedPublicationModelName = publicationModelName;
         return new BoardGameRecommendationModel() {
             @Override
             public boolean configured() {
@@ -423,11 +416,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
             @Override
             public Turn next(BoardGameRecommendationModel.Request request) {
-                boolean publicationTurn = request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
-                        && request.tools().size() == 1;
-                String selectedModel = publicationTurn ? selectedPublicationModelName : modelName;
                 long started = System.nanoTime();
-                int callIndex = capture.begin("react", selectedModel, request);
+                int callIndex = capture.begin("react", modelName, request);
                 try {
                     Turn result = delegate.next(request);
                     capture.complete(callIndex, result, elapsed(started));
@@ -443,12 +433,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     BoardGameRecommendationModel.Request request,
                     String ownerUsername,
                     java.util.function.Consumer<ToolCall> accumulatedActionListener) {
-                String selectedModel = request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
-                                && request.tools().size() == 1
-                        ? selectedPublicationModelName
-                        : modelName;
                 long started = System.nanoTime();
-                int callIndex = capture.begin("react_stream", selectedModel, request);
+                int callIndex = capture.begin("react_stream", modelName, request);
                 AtomicLong firstOutputMs = new AtomicLong(-1);
                 try {
                     Turn result = delegate.nextStreaming(request, null, action -> {
@@ -471,7 +457,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private BoardGameRecommendationModel modelDelegate(
             String provider,
             String modelName,
-            String publicationModelName,
             ChatModel chatModel) {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         var resolvedModel = new RuntimeModelConfiguration.ResolvedModel(
@@ -488,9 +473,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 environment("RULEPILOT_RECOMMENDATION_CANARY_TEMPERATURE", "0.0"));
         return new SpringAiBoardGameRecommendationModel(
                 configuration,
-                temperature,
-                publicationModelName,
-                Duration.parse(environment("RULEPILOT_RECOMMENDATION_CANARY_HEDGE_DELAY", "PT8S")));
+                temperature);
     }
 
     private BoardGameRecommendationWebResearch configuredResearchThatMustNotRun() {
@@ -581,7 +564,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         report.put("generatedAt", Instant.now().toString());
         report.put("provider", capture.provider);
         report.put("model", capture.model);
-        report.put("publicationModel", capture.publicationModel);
         report.put("temperature", Double.parseDouble(
                 environment("RULEPILOT_RECOMMENDATION_CANARY_TEMPERATURE", "0.0")));
         report.put("rawModelCalls", capture.calls);
@@ -734,7 +716,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private static final class Capture {
         private final String provider;
         private final String model;
-        private String publicationModel;
         private final List<Map<String, Object>> calls = new ArrayList<>();
         private final List<CapturedToolCall> toolCalls = new ArrayList<>();
         private String currentTurn = "unlabeled";

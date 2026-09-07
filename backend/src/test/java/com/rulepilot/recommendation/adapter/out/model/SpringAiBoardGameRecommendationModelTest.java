@@ -65,7 +65,7 @@ class SpringAiBoardGameRecommendationModelTest {
                     .create("deepseek", "test-key", "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "deepseek-v4-pro");
             var configuration = mock(RuntimeModelConfiguration.class);
             when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
-                    .thenReturn(new RuntimeModelConfiguration.ResolvedModel(model, "deepseek", "deepseek-v4-pro", true));
+                    .thenReturn(new RuntimeModelConfiguration.ResolvedModel(model, "deepseek", "deepseek-v4-pro", false));
             var adapter = new SpringAiBoardGameRecommendationModel(configuration);
             var search = new ToolCall("search-1", "search", "{}");
             var prior = new BoardGameRecommendationModel.Turn("", List.of(search), CompletionStatus.COMPLETE, 1, 1, "private-prior-state");
@@ -76,6 +76,7 @@ class SpringAiBoardGameRecommendationModelTest {
                     null, visible::add);
 
             assertThat(received.get().path("tool_choice").asText()).isEqualTo("auto");
+            assertThat(received.get().path("thinking").path("type").asText()).isEqualTo("enabled");
             assertThat(received.get().path("messages").get(1).path("reasoning_content").asText())
                     .isEqualTo("private-prior-state");
             assertThat(turn.privateReasoning()).isEqualTo("private-fragment-complete");
@@ -86,6 +87,46 @@ class SpringAiBoardGameRecommendationModelTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void preservesAnUnexpectedToolNameForApplicationOwnedAvailabilityFeedback() {
+        var configuration = mock(RuntimeModelConfiguration.class);
+        var model = mock(StreamingChatModel.class);
+        when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().model("deepseek-v4-pro").build());
+        when(model.supportsIncrementalToolCallChunks()).thenReturn(true);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(model, "deepseek", "deepseek-v4-pro", true));
+        when(model.streamToolCallChunks(any(Prompt.class)))
+                .thenReturn(Flux.just(chunk("unexpected", "search", "{}", "tool_calls")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        var turn = adapter.nextStreaming(request(List.of(new ToolSpec("publish", "Publish", "{}")),
+                ToolChoice.REQUIRED), null, ignored -> {});
+
+        assertThat(turn.toolCalls()).containsExactly(new ToolCall("unexpected", "search", "{}"));
+        verify(model, never()).call(any(Prompt.class));
+    }
+
+    @Test
+    void reassemblesRawArgumentDeltasWithoutInterpretingRepeatedPrefixes() {
+        var configuration = mock(RuntimeModelConfiguration.class);
+        var model = mock(StreamingChatModel.class);
+        when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().model("test-model").build());
+        when(model.supportsIncrementalToolCallChunks()).thenReturn(true);
+        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(model, "compatible", "test-model", false));
+        when(model.streamToolCallChunks(any(Prompt.class))).thenReturn(Flux.just(
+                chunk("nested", "lookup", "{\"query\":", ""),
+                chunk("", "", "{\"query\":\"harbor\"}", ""),
+                chunk("", "", "}", "tool_calls")));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        var turn = adapter.nextStreaming(request(List.of(new ToolSpec("lookup", "Lookup", "{}")),
+                ToolChoice.AUTO), null, ignored -> {});
+
+        assertThat(turn.toolCalls()).singleElement().satisfies(call ->
+                assertThat(call.argumentsJson()).isEqualTo("{\"query\":{\"query\":\"harbor\"}}"));
     }
 
     @Test
@@ -104,7 +145,7 @@ class SpringAiBoardGameRecommendationModelTest {
                 chunk("call-1", "recommend_games", "", ""),
                 chunk("", "", "\"bggId\":1}]", ""),
                 chunk("", "", ",\"playerReply\":\"好了\"}", "tool_calls")));
-        var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0, "qwen-turbo");
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0);
         List<ToolCall> accumulated = new ArrayList<>();
 
         var turn = adapter.nextStreaming(
@@ -148,7 +189,7 @@ class SpringAiBoardGameRecommendationModelTest {
                 chunk(0, "search", "search_bgg", "{\"decisionBrief\":{", ""),
                 chunk(1, "research", "research_fit", "{\"bggIds\":[1]}", ""),
                 chunk(0, "", "", "\"chosenAction\":\"search_bgg\"}}", "tool_calls")));
-        var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0, "");
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.0);
         List<ToolCall> accumulated = new ArrayList<>();
 
         var turn = adapter.nextStreaming(
@@ -194,7 +235,7 @@ class SpringAiBoardGameRecommendationModelTest {
                         new AssistantMessage.ToolCall(
                                 "", "function", "", ",\"playerReply\":\"好了\"}"))));
         var adapter = new SpringAiBoardGameRecommendationModel(
-                configuration, 0.0, "qwen-turbo");
+                configuration, 0.0);
         List<ToolCall> accumulated = new ArrayList<>();
 
         var turn = adapter.nextStreaming(
@@ -298,8 +339,9 @@ class SpringAiBoardGameRecommendationModelTest {
         });
     }
 
-    @Test
-    void usesNativeThinkingWithAutoToolChoiceForDeepSeek() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(ToolChoice.class)
+    void honorsResolvedDeepSeekGenerationModeAndApplicationToolChoice(ToolChoice choice) {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "deepseek", "deepseek-v4-flash");
         when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
@@ -310,16 +352,16 @@ class SpringAiBoardGameRecommendationModelTest {
                 new AssistantMessage.ToolCall("ask-1", "function", "ask", "{\"question\":\"几个人玩？\"}")));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration);
 
-        adapter.next(request(List.of(new ToolSpec("ask", "Ask one useful question", "{\"type\":\"object\"}"))));
+        adapter.next(request(List.of(new ToolSpec("ask", "Ask one useful question", "{\"type\":\"object\"}")), choice));
 
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("auto");
+        assertThat(options.getToolChoice()).isEqualTo(choice == ToolChoice.REQUIRED ? "required" : "auto");
         assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getMaxTokens()).isEqualTo(4_096);
         assertThat(options.getExtraBody())
-                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "enabled"), "reasoning_effort", "low"));
+                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
     }
 
     @Test
@@ -412,129 +454,6 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void usesTheConfiguredPublicationModelForAPersistedPlatformQwenTerminalAction() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = mock(ChatModel.class);
-        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
-                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
-                        chatModel, "qwen", "qwen3.7-plus", false, false, true));
-        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
-                .apiKey("test-key")
-                .baseUrl("https://provider.example/v1")
-                .model("qwen3.7-plus")
-                .build());
-        when(chatModel.call(any(Prompt.class))).thenReturn(response(
-                "tool_calls",
-                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
-        var adapter = new SpringAiBoardGameRecommendationModel(
-                configuration, 0.0, "qwen3.7-flash");
-
-        adapter.next(request(
-                List.of(new ToolSpec(
-                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
-                ToolChoice.REQUIRED));
-
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).call(prompt.capture());
-        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3.7-flash");
-        assertThat(options.getToolChoice()).isEqualTo(Map.of(
-                "type", "function",
-                "function", Map.of("name", "recommend_games")));
-    }
-
-    @Test
-    void keepsAPersonalQwenSelectionOnItsOwnersModel() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = compatibleModel(configuration, "qwen", "personal-qwen");
-        when(chatModel.call(any(Prompt.class))).thenReturn(response(
-                "tool_calls",
-                new AssistantMessage.ToolCall("publish-1", "function", "recommend_games", "{}")));
-        var adapter = new SpringAiBoardGameRecommendationModel(
-                configuration, 0.0, "qwen3.6-flash");
-
-        adapter.next(request(
-                List.of(new ToolSpec(
-                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
-                ToolChoice.REQUIRED));
-
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).call(prompt.capture());
-        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("personal-qwen");
-    }
-
-    @Test
-    void hedgesASlowPersistedPlatformQwenCallAndUsesTheFirstCompletedResponse() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = mock(ChatModel.class);
-        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
-                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
-                        chatModel, "qwen", "qwen3.7-plus", false, false, true));
-        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
-                .apiKey("test-key")
-                .baseUrl("https://provider.example/v1")
-                .model("qwen3.7-plus")
-                .build());
-        var calls = new java.util.concurrent.atomic.AtomicInteger();
-        var releasePrimary = new java.util.concurrent.CountDownLatch(1);
-        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
-            if (calls.incrementAndGet() == 1) {
-                releasePrimary.await();
-            }
-            return response(
-                    "tool_calls",
-                    new AssistantMessage.ToolCall(
-                            "publish-1", "function", "recommend_games", "{}"));
-        });
-        var adapter = new SpringAiBoardGameRecommendationModel(
-                configuration, 0.0, "", java.time.Duration.ofMillis(5));
-
-        var turn = adapter.next(request(
-                List.of(new ToolSpec(
-                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
-                ToolChoice.REQUIRED));
-
-        assertThat(turn.toolCalls()).extracting(call -> call.name()).containsExactly("recommend_games");
-        assertThat(calls).hasValue(2);
-        releasePrimary.countDown();
-        adapter.stopHedgedCalls();
-    }
-
-    @Test
-    void doesNotHedgeASlowPersonalQwenCall() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = mock(ChatModel.class);
-        when(configuration.resolvedModelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
-                .thenReturn(new RuntimeModelConfiguration.ResolvedModel(
-                        chatModel, "qwen", "personal-qwen", false, false, false));
-        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
-                .apiKey("test-key")
-                .baseUrl("https://provider.example/v1")
-                .model("personal-qwen")
-                .build());
-        var calls = new java.util.concurrent.atomic.AtomicInteger();
-        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
-            calls.incrementAndGet();
-            Thread.sleep(20);
-            return response(
-                    "tool_calls",
-                    new AssistantMessage.ToolCall(
-                            "publish-1", "function", "recommend_games", "{}"));
-        });
-        var adapter = new SpringAiBoardGameRecommendationModel(
-                configuration, 0.0, "", java.time.Duration.ofMillis(1));
-
-        adapter.next(request(
-                List.of(new ToolSpec(
-                        "recommend_games", "Publish verified games", "{\"type\":\"object\"}")),
-                ToolChoice.REQUIRED));
-
-        assertThat(calls).hasValue(1);
-        adapter.stopHedgedCalls();
-    }
-
-    @Test
     void usesNativeRequiredModeForOpenAiAfterCandidatesHaveBeenVerified() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = compatibleModel(configuration, "openai", "gpt-test");
@@ -576,7 +495,7 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isNull();
         assertThat(options.getExtraBody())
-                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "enabled"), "reasoning_effort", "low"));
+                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
     }
 
     @Test

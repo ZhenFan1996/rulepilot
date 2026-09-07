@@ -32,9 +32,8 @@ final class RecommendationPublication {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RecommendationPublication.class);
 
-    private static final Set<String> SEARCH_PUBLICATION_FIELDS = Set.of("selections");
     private static final Set<String> PUBLICATION_FIELDS =
-            Set.of("requestedGameCount", "selections");
+            Set.of("newRecommendationCount", "selections");
     private static final Set<String> SELECTION_REQUIRED_FIELDS = Set.of("bggId");
 
     private final BoardGameRecommendationSelector selector;
@@ -68,7 +67,7 @@ final class RecommendationPublication {
 
         JsonNode root = parse(argumentsJson);
         boolean searchOwnsCount = state.activeSearch != null;
-        requireObject(root, searchOwnsCount ? SEARCH_PUBLICATION_FIELDS : PUBLICATION_FIELDS);
+        requireObject(root, PUBLICATION_FIELDS);
         List<Integer> currentlyRecommendable = runtime.recommendableIds(state);
         List<Integer> allowedCandidateIds = pending.candidateBggIds().stream()
                 .filter(currentlyRecommendable::contains)
@@ -78,12 +77,13 @@ final class RecommendationPublication {
                 })
                 .toList();
         Integer explicitSearchCount = searchOwnsCount ? state.activeSearch.requestedCount() : null;
+        int publicationCount = integer(root.path("newRecommendationCount"), 0);
         int requestedCount = searchOwnsCount
                 ? explicitSearchCount == null
                         ? Math.min(defaultResultCount, allowedCandidateIds.size())
                         : explicitSearchCount
-                : integer(root.path("requestedGameCount"), 0);
-        int maximumCards = Math.min(requestedCount, allowedCandidateIds.size());
+                : publicationCount;
+        int maximumCards = Math.min(publicationCount, Math.min(requestedCount, allowedCandidateIds.size()));
         JsonNode rawSelections = root.path("selections");
         JsonNode selections = selectionArray(rawSelections);
         if (!rawSelections.isArray()) {
@@ -141,10 +141,10 @@ final class RecommendationPublication {
                 playerReply = null;
             }
         }
-        if (requestedCount == 0 && playerReply == null) throw invalid(Code.RECOMMENDATION_REPLY_INVALID);
+        if (selectedGames.isEmpty() && playerReply == null) throw invalid(Code.RECOMMENDATION_REPLY_INVALID);
         PublicationDraft draft = new PublicationDraft(playerReply, candidates);
         RecommendationShortfall shortfall = (explicitSearchCount != null || !searchOwnsCount)
-                        && selectedGames.size() < requestedCount
+                        && !selectedGames.isEmpty() && selectedGames.size() < requestedCount
                 ? new RecommendationShortfall(requestedCount, selectedGames.size())
                 : null;
         return new PreparedPublication(
@@ -228,10 +228,10 @@ final class RecommendationPublication {
     }
 
     private int previewLimit(RecommendationAgentState state, String accumulatedArguments) {
-        int requested = state.activeSearch == null
-                ? completedPositiveIntegerField(accumulatedArguments, "requestedGameCount")
+        int count = completedPositiveIntegerField(accumulatedArguments, "newRecommendationCount");
+        int permitted = state.activeSearch == null ? count
                 : state.activeSearch.requestedCount() == null ? defaultResultCount : state.activeSearch.requestedCount();
-        return Math.max(0, requested);
+        return Math.max(0, Math.min(count, permitted));
     }
 
     private int completedPositiveIntegerField(String json, String field) {
@@ -336,7 +336,7 @@ final class RecommendationPublication {
         List<BoardGameRecommendationAgent.ResearchSource> sources =
                 runtime.responseSources(state, games, publishedEvidenceIds);
         ConversationResponse response = new ConversationResponse(
-                permit.requestedCount() == 0 ? Outcome.CONVERSATION : Outcome.RECOMMENDATIONS,
+                games.isEmpty() ? Outcome.CONVERSATION : Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
                 assistantMessage,
                 state.selectionProfile(),

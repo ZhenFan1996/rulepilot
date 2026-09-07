@@ -271,7 +271,7 @@ final class RecommendationToolCatalog {
                 state.pendingPublicationSeed, "pending recommendation publication is required");
         int maximumBindings = candidateIds.size();
         String recommendationScope = state.activeSearch == null
-                ? "The requestedGameCount argument bounds new recommendations in both playerReply and cards."
+                ? "newRecommendationCount must respect the number of new games requested in the current conversation; default to " + properties.resultCount() + " when unspecified."
                 : "The current request permits at most "
                         + (state.activeSearch.requestedCount() == null
                                 ? properties.resultCount() : state.activeSearch.requestedCount())
@@ -282,14 +282,11 @@ final class RecommendationToolCatalog {
                         .map(CandidateObservation::id))
                 .distinct()
                 .toList();
-        boolean searchOwnsCount = state.activeSearch != null;
-        String requestedGameCountProperty = searchOwnsCount ? "" : "\"requestedGameCount\":{\"type\":\"integer\",\"description\":\"Number of new games to recommend now, independent of player count and retrieved candidates. Preserve the player's requested quantity; when unspecified use the product default. Use 0 only when answering information without recommending any new game.\",\"minimum\":0,\"default\":" + properties.resultCount() + "},";
-        String requiredFields = searchOwnsCount ? "[\"selections\",\"playerReply\"]"
-                : "[\"requestedGameCount\",\"selections\",\"playerReply\"]";
+        String publicationCountProperty = "\"newRecommendationCount\":{\"type\":\"integer\",\"description\":\"Number of new recommendation cards to publish. Use zero when answering information or declining to recommend because a necessary condition remains unverified; selections still bind all game-specific evidence used in playerReply.\",\"minimum\":0},";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Publish the complete natural response from verified candidates. Generate selections before playerReply so verified games can be shown while the natural response continues. Write the complete answer in playerReply about the selected games, using supplied observations. With requestedGameCount 0, answer the information question or ask the useful clarification; selections only bind supporting evidence and produce no recommendation cards. Match the scope and brevity of the question. Do not add unselected recommendations or fill unknown facts with likely values. Attribute evidence to its actual source; catalog votes are not publisher assurances. Selections are ordered evidence bindings: put requested new recommendations first, followed by comparison subjects. Additional evidence bindings support requested comparisons, not additional recommendations. " + recommendationScope,
-                "{\"type\":\"object\",\"properties\":{" + requestedGameCountProperty
+                "Publish the complete natural response from verified candidates. Generate newRecommendationCount, then selections, then playerReply. Selections are ordered evidence bindings: first the games being recommended, then any other subjects needed for the answer. Zero cards can still bind evidence when explaining limitations or comparing games. Write the complete answer in playerReply using supplied observations. Match the scope and brevity of the question. Do not add unselected recommendations or fill unknown facts with likely values. Attribute evidence to its actual source; catalog votes are not publisher assurances. " + recommendationScope,
+                "{\"type\":\"object\",\"properties\":{" + publicationCountProperty
                         + "\"selections\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
                         + maximumBindings
                         + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"properties\":{\"bggId\":{\"type\":\"integer\",\"enum\":"
@@ -298,7 +295,7 @@ final class RecommendationToolCatalog {
                         + jsonArray(replyEvidenceIds)
                         + "}}},\"required\":[\"bggId\",\"internalEvidenceIds\"]}},\"playerReply\":{\"type\":\"string\",\"minLength\":1"
                         + "}},\"required\":"
-                        + requiredFields
+                        + "[\"newRecommendationCount\",\"selections\",\"playerReply\"]"
                         + "}");
     }
 
