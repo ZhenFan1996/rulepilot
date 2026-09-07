@@ -97,6 +97,43 @@ describe('GameRecommendationAgent', () => {
     return wrapper
   }
 
+  it('shows saved game progress only in conversations that contain that game', async () => {
+    const oldSession = {
+      conversationId: '927ce433-ccea-49a0-9d39-00dc00e63580',
+      revision: 1, profile, processing: false, processingSince: null,
+      transcript: [{ role: 'user', text: '旧聊天里的游戏' }],
+      knownGames: [], shownBggIds: [game.bggId], latestResponse: null,
+    }
+    const newSession = {
+      ...oldSession, conversationId: '23f59d11-51c7-473f-9656-676c58667240',
+      revision: 0, transcript: [], shownBggIds: [],
+    }
+    sessionStorage.setItem('rulepilot:recommendation-journeys:v1:player', JSON.stringify([game]))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (url.endsWith('/sessions')) return Response.json(options?.method === 'POST'
+        ? newSession : [newSession, oldSession])
+      return Response.json(oldSession)
+    }))
+    const wrapper = await mountAgent('player')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="player-journey-continuation"]')).toHaveLength(1)
+    const button = (text: string) => wrapper.findAll('button').find(item => item.text() === text)!
+
+    await button('建立新聊天').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="recommendation-empty-state"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="player-journey-continuation"]').exists()).toBe(false)
+
+    await button('聊天记录').trigger('click')
+    await flushPromises()
+    await button('旧聊天里的游戏').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="player-journey-continuation"]').attributes('data-bgg-id'))
+      .toBe(String(game.bggId))
+  })
+
   it('shows the assistant natural-language reply without rewriting it', async () => {
     const assistantMessage = '先不用补成表格；你说的安静、合作和短局，我会一起带进下一轮。'
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
