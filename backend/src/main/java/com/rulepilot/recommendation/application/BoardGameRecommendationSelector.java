@@ -49,6 +49,11 @@ class BoardGameRecommendationSelector {
                 .allMatch(assessment -> assessment.claim().relation() == CandidateClaim.Relation.SATISFIED);
     }
 
+    boolean matchesPreferences(Game game, RecommendationProfile profile) {
+        return fitAssessments(game, profile, false).stream()
+                .allMatch(assessment -> assessment.claim().relation() == CandidateClaim.Relation.SATISFIED);
+    }
+
     Candidate researchCandidate(Game game) {
         Details details = game.details();
         return new Candidate(

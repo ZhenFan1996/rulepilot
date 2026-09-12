@@ -480,9 +480,11 @@ final class RecommendationActions {
         long pageBudget = 1;
         boolean completedPage = false;
         int candidateWindowSize = properties.modelCandidateLimit();
-        // Preserve each page's alternatives without paging merely to fill the optional model window.
-        while (eligible.isEmpty()
-                || search.requestedCount() != null && eligible.size() < search.requestedCount()) {
+        int preferredTarget = Math.min(candidateWindowSize,
+                search.requestedCount() == null ? 1 : Math.max(1, search.requestedCount()));
+        long preferredCount = 0;
+        // A ranked page of hard-eligible games does not yet satisfy the player's soft preferences.
+        while (preferredCount < preferredTarget) {
             state.recordCatalogCall();
             int currentOffset = offset;
             CatalogObservation page;
@@ -528,10 +530,16 @@ final class RecommendationActions {
                     continue;
                 }
                 eligible.putIfAbsent(bggId, game);
-                if (eligible.size() == candidateWindowSize) break;
             }
-            if (eligible.size() >= candidateWindowSize
-                    || page.pageExhausted()
+            List<Game> ordered = eligible.values().stream()
+                    .sorted(java.util.Comparator.comparing(
+                            game -> !selector.matchesPreferences(game, selectionProfile)))
+                    .limit(candidateWindowSize)
+                    .toList();
+            eligible.clear();
+            ordered.forEach(game -> eligible.put(game.ranking().bggId(), game));
+            preferredCount = ordered.stream().filter(game -> selector.matchesPreferences(game, selectionProfile)).count();
+            if (page.pageExhausted()
                     || (!pageIds.isEmpty() && pageIds.equals(previousPageIds))
                     || pagesScanned >= pageBudget) {
                 break;
@@ -922,7 +930,8 @@ final class RecommendationActions {
         return response;
     }
 
-    Map<String, Object> gameObservation(Game game, boolean includePublisherDescription) {
+    Map<String, Object> gameObservation(
+            Game game, boolean includePublisherDescription, RecommendationProfile profile) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("bggId", game.ranking().bggId());
         if (game.details() == null) return value;
@@ -939,6 +948,10 @@ final class RecommendationActions {
                         (first, ignored) -> first,
                         LinkedHashMap::new));
         value.put("observations", observations);
+        value.put("fitClaims", selector.fitClaims(game, profile, false).stream()
+                .map(claim -> Map.of("subject", claim.subject(), "strength", claim.strength(),
+                        "relation", claim.relation()))
+                .toList());
         return value;
     }
 
