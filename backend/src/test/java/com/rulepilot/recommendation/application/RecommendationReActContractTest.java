@@ -1307,6 +1307,45 @@ class RecommendationReActContractTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {10, 20})
+    void softPreferencesReachMatchingCandidatesBeyondTheRankedWindow(int higherRankedCount) throws Exception {
+        List<Game> ranked = new ArrayList<>();
+        for (int index = 0; index < higherRankedCount; index++) {
+            ranked.add(game(2000 + index, "Ranked Candidate " + index, BggGameType.STRATEGY, 2, 5, 60, "4.1"));
+        }
+        ranked.add(game(2100, "Preference Match", BggGameType.STRATEGY, 2, 5, 60, "2.7"));
+        var catalog = org.mockito.Mockito.mock(BoardGameRecommendationCatalog.class);
+        org.mockito.Mockito.when(catalog.searchGames(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+            CatalogFilters filters = invocation.getArgument(0);
+            int end = Math.min(ranked.size(), filters.offset() + filters.maximum());
+            return new CandidateSet(ranked.size(), ranked.subList(filters.offset(), end), end == ranked.size());
+        });
+        ScriptedModel model = new ScriptedModel(
+                action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        """
+                        {"evidence":"U1","requestedGameCount":1,"includeTypes":[],"excludeTypes":[],"players":5,
+                         "complexity":{"strength":"SOFT","minimum":2.4,"maximum":2.9}}
+                        """),
+                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        """
+                        {"newRecommendationCount":1,"selections":[{"bggId":2100,"internalEvidenceIds":["B2100:complexity"]}],
+                         "playerReply":"This game's reported complexity fits the preferred range."}
+                        """));
+        var loop = loop(model, catalog);
+        try {
+            var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(),
+                    "For five players, ideally weight 2.4 to 2.9."), "en", "player", ignored -> {});
+            assertThat(response.games()).extracting(value -> value.game().ranking().bggId()).containsExactly(2100);
+            JsonNode candidates = toolObservation(model.requests.getLast(), "search").path("turnState").path("verifiedGames");
+            assertThat(candidates.get(0).path("bggId").asInt()).isEqualTo(2100);
+            assertThat(candidates.get(0).path("fitClaims").findValuesAsText("relation")).containsOnly("SATISFIED");
+            assertThat(candidates.get(1).path("fitClaims").findValuesAsText("relation")).contains("CONFLICT");
+        } finally {
+            loop.stopBoundedCalls();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.EnumSource(ConstraintRange.Strength.class)
     void qualitativeComplexityPreferencesDoNotBecomeHardExclusions(ConstraintRange.Strength strength) {
