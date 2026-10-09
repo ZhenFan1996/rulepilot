@@ -84,6 +84,15 @@ verify_running_services() {
 
 	compose exec -T minio mc ready local >/dev/null
 	echo "PASS MinIO readiness"
+	compose exec -T minio sh -ec '
+		bucket="rulepilot-smoke-$(date +%s)-$$"
+		mc alias set probe http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+		mc mb "probe/$bucket" >/dev/null
+		trap '\''mc rm "probe/$bucket/object" >/dev/null; mc rb "probe/$bucket" >/dev/null'\'' EXIT
+		printf "%s" "rulepilot-storage-probe" | mc pipe "probe/$bucket/object" >/dev/null
+		test "$(mc cat "probe/$bucket/object")" = "rulepilot-storage-probe"
+	'
+	echo "PASS MinIO authenticated object write and read"
 
 	wait_for_http http://localhost:9090/-/ready Prometheus
 	wait_for_http http://tempo:3200/ready Tempo

@@ -45,6 +45,10 @@ make dev-stop
 make compose-down
 ```
 
+MinIO 与 `mc` 从固定的官方提交构建，版本由 `infra/minio/Dockerfile` 声明；镜像内保留对应源码归档与
+许可证。首次 `make compose-up` 会构建存储镜像。生产应用部署只检查现有存储，不会替换它；变更存储镜像
+须先在维护窗口验证对象读写、保留原镜像和数据卷，再单独更新 MinIO，最后部署应用。
+
 ## 常用命令
 
 | 命令 | 用途 |
