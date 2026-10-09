@@ -68,7 +68,7 @@ final class VisualRulebookTeachingEvidenceFreshness implements RulebookTeachingE
                     ? ReuseAssessment.TERMINAL_FAILURE
                     : ReuseAssessment.RETRYABLE_FAILURE;
         }
-        var plan = plans.findLatest(documentVersionId, owner);
+        var plan = plans.findLatest(documentVersionId, owner, preparation.orElseThrow().outputLanguage());
         if (plan.isEmpty()) return ReuseAssessment.REFRESH_REQUIRED;
         var latestGeneration = runs.findLatestOwned(
                         com.rulepilot.assistant.AssistantRunMode.TEACHING,

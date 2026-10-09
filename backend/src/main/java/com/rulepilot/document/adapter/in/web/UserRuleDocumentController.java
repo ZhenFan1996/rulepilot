@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.in.web;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.BoardGameMetadataMatching.Candidate;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
@@ -83,6 +84,7 @@ public class UserRuleDocumentController {
             @RequestParam(required = false) String officialCoverUrl,
             @RequestParam(defaultValue = "false") boolean startTeaching,
             @RequestParam(required = false) String learningGoal,
+            @RequestParam(defaultValue = "zh-CN") String language,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -98,7 +100,7 @@ public class UserRuleDocumentController {
                     file.getInputStream(),
                     principal.getName(),
                     startTeaching,
-                    learningGoal);
+                    learningGoal, PlayerLocale.fromRequest(language));
             return RuleDocumentController.UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read uploaded file", exception);
@@ -114,6 +116,7 @@ public class UserRuleDocumentController {
             @RequestParam(required = false) String officialCoverUrl,
             @RequestParam(defaultValue = "false") boolean startTeaching,
             @RequestParam(required = false) String learningGoal,
+            @RequestParam(defaultValue = "zh-CN") String language,
             @RequestParam("photos") List<MultipartFile> photos,
             Principal principal) {
         try {
@@ -126,7 +129,7 @@ public class UserRuleDocumentController {
                     photoPages(photos),
                     principal.getName(),
                     startTeaching,
-                    learningGoal);
+                    learningGoal, PlayerLocale.fromRequest(language));
             return RuleDocumentController.UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read photographed rulebook pages", exception);
@@ -176,7 +179,7 @@ public class UserRuleDocumentController {
                         request.sourceEdition(),
                         request.sourceLanguage(),
                         request.sourceLanguageVerified()),
-                request.identityConfirmed()), principal.getName());
+                request.identityConfirmed(), PlayerLocale.fromRequest(request.language())), principal.getName());
         return officialImportResponse(launch.job(), launch.reused());
     }
 
@@ -344,7 +347,7 @@ public class UserRuleDocumentController {
             String sourceEdition,
             String sourceLanguage,
             boolean sourceLanguageVerified,
-            boolean identityConfirmed) {}
+            boolean identityConfirmed, String language) {}
 
     record TeachingHandoffRetryRequest(UUID expectedPreparationRunId) {}
 
@@ -358,6 +361,7 @@ public class UserRuleDocumentController {
             String officialSourceUrl,
             DocumentSourceType sourceType,
             String learningGoal,
+            PlayerLocale outputLanguage,
             OfficialRulebookImportJob.Stage stage,
             long downloadedBytes,
             Long totalBytes,
@@ -391,6 +395,7 @@ public class UserRuleDocumentController {
                     job.sourceUrl(),
                     job.sourceType(),
                     job.teachingHandoff().learningGoal(),
+                    job.teachingHandoff().outputLanguage(),
                     job.stage(),
                     job.downloadedBytes(),
                     job.totalBytes(),

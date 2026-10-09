@@ -1,5 +1,5 @@
 <chapter>
-  <outputLocale>zh-CN</outputLocale>
+  <outputLocale>{outputLanguage}</outputLocale>
   <title>{section}</title>
   <objective>{objective}</objective>
 </chapter>

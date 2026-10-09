@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import java.util.Map;
@@ -39,17 +40,23 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
                 .hasMessageContaining("unknown evidence reference");
     }
 
-    @Test
-    void rejectsASectionThatDoesNotDeclareTheBaseLessonLocale() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(PlayerLocale.class)
+    void acceptsOnlyTheRequestedLocaleAndPreservesEvidence(PlayerLocale language) throws Exception {
+        UUID evidenceId = UUID.randomUUID();
         var draft = SpringAiTeachingLessonModel.parseStructuredDraft("""
-                {"locale":"en","title":"Setup","steps":[{
+                {"locale":"%s","title":"Setup","steps":[{
                   "heading":"Check components","kind":"DO","text":"Check the components.",
                   "citationIds":["E1"],"ruleFacts":[]}]}
-                """);
+                """.formatted(language.languageTag()));
         SpringAiTeachingLessonModel subject = new SpringAiTeachingLessonModel(
                 mock(RuntimeModelConfiguration.class), mock(VersionedAgentPrompts.class));
 
-        assertThatThrownBy(() -> subject.toSectionDraft(draft, Map.of("E1", UUID.randomUUID())))
+        assertThat(subject.toSectionDraft(draft, Map.of("E1", evidenceId), language).steps().getFirst().citationIds())
+                .containsExactly(evidenceId);
+        var other = language == PlayerLocale.EN
+                ? PlayerLocale.ZH_CN : PlayerLocale.EN;
+        assertThatThrownBy(() -> subject.toSectionDraft(draft, Map.of("E1", evidenceId), other))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("wrong output locale");
     }

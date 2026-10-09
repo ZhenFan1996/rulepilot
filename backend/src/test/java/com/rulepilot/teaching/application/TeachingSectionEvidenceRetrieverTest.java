@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
@@ -33,7 +34,7 @@ class TeachingSectionEvidenceRetrieverTest {
                     List.of("setup", "starting pieces"),
                     List.of("setup"))),
             "player",
-            Instant.now());
+            Instant.now(), PlayerLocale.ZH_CN);
 
     @Test
     void rejectsConflictingSnapshotsBeforeTheyReachComposition() {
@@ -89,7 +90,7 @@ class TeachingSectionEvidenceRetrieverTest {
                         List.of("setup"),
                         List.of(2))),
                 "player",
-                Instant.now());
+                Instant.now(), PlayerLocale.ZH_CN);
         RuleEvidence placeholder = new RuleEvidence(
                 UUID.randomUUID(),
                 documentVersionId,

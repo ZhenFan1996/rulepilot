@@ -1,5 +1,6 @@
 package com.rulepilot.document.domain;
 
+import com.rulepilot.shared.PlayerLocale;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -64,7 +65,7 @@ public record OfficialRulebookImportJob(
             DocumentSourceType sourceType,
             String sourceUrl,
             Instant now) {
-        return queued(id, ownerUsername, editionId, title, sourceType, sourceUrl, false, null, now);
+        return queued(id, ownerUsername, editionId, title, sourceType, sourceUrl, false, null, now, PlayerLocale.ZH_CN);
     }
 
     public static OfficialRulebookImportJob queued(
@@ -76,12 +77,12 @@ public record OfficialRulebookImportJob(
             String sourceUrl,
             boolean startTeaching,
             String learningGoal,
-            Instant now) {
+            Instant now, PlayerLocale outputLanguage) {
         return new OfficialRulebookImportJob(
                 id, ownerUsername, editionId, title, sourceType, sourceUrl, Stage.QUEUED,
                 0, null, null, false, null,
                 null,
-                startTeaching ? TeachingHandoff.requested(learningGoal, now) : TeachingHandoff.notRequested(),
+                startTeaching ? TeachingHandoff.requested(learningGoal, now, outputLanguage) : TeachingHandoff.notRequested(),
                 now, now, null);
     }
 
@@ -144,9 +145,10 @@ public record OfficialRulebookImportJob(
             UUID preparationRunId,
             String errorCode,
             int automaticRecoveryCount,
-            Instant updatedAt) {
+            Instant updatedAt, PlayerLocale outputLanguage) {
 
         public TeachingHandoff {
+            java.util.Objects.requireNonNull(outputLanguage, "teaching language is required");
             if (state == null || automaticRecoveryCount < 0 || automaticRecoveryCount > 1) {
                 throw new IllegalArgumentException("teaching handoff state is required");
             }
@@ -169,12 +171,12 @@ public record OfficialRulebookImportJob(
         }
 
         public static TeachingHandoff notRequested() {
-            return new TeachingHandoff(TeachingHandoffState.NOT_REQUESTED, null, null, null, 0, null);
+            return new TeachingHandoff(TeachingHandoffState.NOT_REQUESTED, null, null, null, 0, null, PlayerLocale.ZH_CN);
         }
 
-        public static TeachingHandoff requested(String learningGoal, Instant now) {
+        public static TeachingHandoff requested(String learningGoal, Instant now, PlayerLocale outputLanguage) {
             return new TeachingHandoff(
-                    TeachingHandoffState.WAITING_FOR_DOCUMENT, normalizeGoal(learningGoal), null, null, 0, now);
+                    TeachingHandoffState.WAITING_FOR_DOCUMENT, normalizeGoal(learningGoal), null, null, 0, now, outputLanguage);
         }
 
         private static String normalizeGoal(String learningGoal) {

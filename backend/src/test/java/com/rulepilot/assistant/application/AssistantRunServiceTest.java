@@ -10,6 +10,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.BudgetLimits;
 import com.rulepilot.assistant.AssistantRunMode;
@@ -37,7 +38,7 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING_PREPARATION,
                 UUID.randomUUID(),
                 "player",
-                queuedAt);
+                queuedAt, PlayerLocale.ZH_CN);
         when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
         var snapshot = new com.rulepilot.assistant.AssistantRuns.RunSnapshot(
                 queued.id(),
@@ -49,7 +50,7 @@ class AssistantRunServiceTest {
                 queued.createdAt(),
                 queued.updatedAt(),
                 queued.completedAt(),
-                queued.lastErrorCode());
+                queued.lastErrorCode(), PlayerLocale.ZH_CN);
         UUID activationId = UUID.randomUUID();
         Instant admittedAt = Instant.now();
         service.activateQueued(snapshot, activationId, admittedAt);
@@ -68,7 +69,7 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING,
                 UUID.randomUUID(),
                 "player",
-                queuedAt);
+                queuedAt, PlayerLocale.ZH_CN);
         when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
         var snapshot = snapshot(queued);
         UUID activationId = UUID.randomUUID();
@@ -88,7 +89,7 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING,
                 UUID.randomUUID(),
                 "player",
-                Instant.now().minusSeconds(30));
+                Instant.now().minusSeconds(30), PlayerLocale.ZH_CN);
         when(execution.lockUnactivated(queued.id())).thenReturn(true);
         when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
         when(repository.update(any(), any(), any())).thenReturn(true);
@@ -135,7 +136,7 @@ class AssistantRunServiceTest {
                 AssistantRunMode.TEACHING,
                 UUID.randomUUID(),
                 "player",
-                Instant.now().minusSeconds(30));
+                Instant.now().minusSeconds(30), PlayerLocale.ZH_CN);
         UUID activationId = UUID.randomUUID();
         when(execution.lockUnactivatedOrOwned(queued.id(), activationId)).thenReturn(true);
         when(repository.find(queued.id())).thenReturn(java.util.Optional.of(queued));
@@ -171,7 +172,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(30);
         AssistantRun retrieving = AssistantRun.start(
-                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
                 .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
                 .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
@@ -200,7 +201,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(30);
         AssistantRun completed = AssistantRun.start(
-                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
                 .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
                 .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
@@ -247,7 +248,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minus(Duration.ofMinutes(3));
         AssistantRun retrieving = AssistantRun.start(
-                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
                 .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
                 .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
@@ -267,7 +268,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(60);
         AssistantRun interrupted = AssistantRun.start(
-                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1));
         when(repository.findNonTerminal(AssistantRunMode.TEACHING)).thenReturn(List.of(interrupted));
         when(repository.update(any(), any(), any())).thenReturn(true);
@@ -470,7 +471,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(60);
         AssistantRun retrieving = AssistantRun.start(
-                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
                 .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
                 .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
@@ -494,7 +495,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(60);
         AssistantRun retrieving = AssistantRun.start(
-                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
                 .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
                 .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
@@ -521,7 +522,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(60);
         AssistantRun retrieving = AssistantRun.start(
-                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
                 .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
                 .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
@@ -566,7 +567,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(10);
         AssistantRun active = AssistantRun.start(
-                AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt);
+                AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN);
         when(execution.requestCancellationIfActive(active.id(), "player")).thenReturn(true);
         when(repository.find(active.id())).thenReturn(java.util.Optional.of(active));
         when(repository.update(any(), any(), any())).thenReturn(true);
@@ -591,7 +592,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(60);
         AssistantRun composing = AssistantRun.start(
-                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.ANSWER_COMPOSITION, startedAt.plusSeconds(1));
         when(repository.find(composing.id())).thenReturn(java.util.Optional.of(composing));
         when(repository.update(any(), any(), any())).thenReturn(true);
@@ -622,7 +623,7 @@ class AssistantRunServiceTest {
                 600_000,
                 Duration.ofMinutes(30));
         UUID planId = UUID.randomUUID();
-        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, planId, "player", Instant.now());
+        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, planId, "player", Instant.now(), PlayerLocale.ZH_CN);
         when(repository.findLatest(AssistantRunMode.TEACHING, planId, "player")).thenReturn(java.util.Optional.of(run));
         when(repository.steps(run.id())).thenReturn(List.of());
         when(execution.activities(run.id())).thenReturn(List.of());
@@ -640,7 +641,7 @@ class AssistantRunServiceTest {
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = service(repository, execution);
         UUID planId = UUID.randomUUID();
-        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, planId, "player", Instant.now());
+        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, planId, "player", Instant.now(), PlayerLocale.ZH_CN);
         when(repository.findLatest(AssistantRunMode.TEACHING, planId, "player"))
                 .thenReturn(java.util.Optional.of(run));
         when(repository.steps(run.id())).thenReturn(List.of());
@@ -660,7 +661,7 @@ class AssistantRunServiceTest {
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = service(repository, execution);
         AssistantRun run = AssistantRun.start(
-                AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", Instant.now());
+                AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", Instant.now(), PlayerLocale.ZH_CN);
         when(repository.find(run.id())).thenReturn(java.util.Optional.of(run));
         when(repository.steps(run.id())).thenReturn(List.of());
         when(execution.activities(run.id())).thenReturn(List.of());
@@ -681,7 +682,7 @@ class AssistantRunServiceTest {
         AssistantRunService service = service(repository, execution);
         Instant startedAt = Instant.now().minusSeconds(5);
         AssistantRun failed = AssistantRun.start(
-                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", startedAt)
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", startedAt, PlayerLocale.ZH_CN)
                 .fail("QUESTION_WORKFLOW_FAILED", startedAt.plusSeconds(1));
         StepSnapshot failureStep = new StepSnapshot(
                 1,
@@ -706,7 +707,7 @@ class AssistantRunServiceTest {
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = service(repository, execution);
         AssistantRun active = AssistantRun.start(
-                AssistantRunMode.TEACHING, UUID.randomUUID(), "player", Instant.now());
+                AssistantRunMode.TEACHING, UUID.randomUUID(), "player", Instant.now(), PlayerLocale.ZH_CN);
         when(repository.findNonTerminalOwned(AssistantRunMode.TEACHING, "player"))
                 .thenReturn(List.of(active));
 
@@ -747,6 +748,6 @@ class AssistantRunServiceTest {
                 run.createdAt(),
                 run.updatedAt(),
                 run.completedAt(),
-                run.lastErrorCode());
+                run.lastErrorCode(), PlayerLocale.ZH_CN);
     }
 }

@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AnswerRegressionSet;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.application.StructuredRuleAnswerService.AnswerCreation;
@@ -62,7 +63,7 @@ public class AnswerRegressionService {
                                 documentVersionId,
                                 testCase.previousQuestion(),
                                 null,
-                                com.rulepilot.assistant.PlayerLocale.ZH_CN),
+                                PlayerLocale.ZH_CN),
                         username,
                         documentVersionId);
                 long latency = Duration.between(started, Instant.now()).toMillis();

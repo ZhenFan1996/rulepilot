@@ -1,5 +1,6 @@
 package com.rulepilot.assistant;
 
+import com.rulepilot.shared.PlayerLocale;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -21,6 +22,9 @@ public interface AssistantRuns {
             WorkloadDemand workloadDemand) {
         return start(mode, subjectId, ownerUsername);
     }
+
+    RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername,
+            WorkloadDemand workloadDemand, PlayerLocale outputLanguage);
 
     /** Re-bases a queued run's wall deadline at worker admission without changing its visible RECEIVED state. */
     default RunSnapshot activateQueued(RunSnapshot queued) {
@@ -120,7 +124,7 @@ public interface AssistantRuns {
             Instant createdAt,
             Instant updatedAt,
             Instant completedAt,
-            String lastErrorCode) {}
+            String lastErrorCode, PlayerLocale outputLanguage) {}
 
     record StepSnapshot(
             long sequence,

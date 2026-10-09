@@ -108,6 +108,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
     sourceLanguage: 'zh-CN',
     sourceLanguageVerified: true,
     identityConfirmed: true,
+    language: 'zh-CN',
   })
   await expect(page.getByText('规则书与讲解正在后台准备')).toBeVisible()
   await expect(page.getByText('正在下载规则书内容')).toBeVisible()

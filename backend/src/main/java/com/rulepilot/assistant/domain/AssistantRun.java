@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.domain;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import java.time.Instant;
@@ -17,7 +18,7 @@ public record AssistantRun(
         Instant createdAt,
         Instant updatedAt,
         Instant completedAt,
-        String lastErrorCode) {
+        String lastErrorCode, PlayerLocale outputLanguage) {
 
     private static final Map<AssistantRunState, Set<AssistantRunState>> TEACHING_TRANSITIONS = Map.ofEntries(
             Map.entry(AssistantRunState.RECEIVED, Set.of(AssistantRunState.DOCUMENT_READINESS)),
@@ -68,6 +69,7 @@ public record AssistantRun(
                             AssistantRunState.DEGRADED)));
 
     public AssistantRun {
+        java.util.Objects.requireNonNull(outputLanguage, "run language is required");
         if (id == null || mode == null || subjectId == null || state == null || createdAt == null || updatedAt == null) {
             throw new IllegalArgumentException("assistant run identity, mode, subject, state, and timestamps are required");
         }
@@ -82,13 +84,13 @@ public record AssistantRun(
         }
     }
 
-    public static AssistantRun start(AssistantRunMode mode, UUID subjectId, String ownerUsername, Instant now) {
+    public static AssistantRun start(AssistantRunMode mode, UUID subjectId, String ownerUsername, Instant now, PlayerLocale outputLanguage) {
         if (ownerUsername == null) {
             throw new IllegalArgumentException("assistant run owner is required");
         }
         return new AssistantRun(
                 UUID.randomUUID(), mode, subjectId, ownerUsername.strip(), AssistantRunState.RECEIVED,
-                1, now, now, null, null);
+                1, now, now, null, null, outputLanguage);
     }
 
     public AssistantRun advance(AssistantRunState nextState, Instant now) {
@@ -121,7 +123,7 @@ public record AssistantRun(
         }
         return new AssistantRun(
                 id, mode, subjectId, ownerUsername, nextState, revision + 1, createdAt, now,
-                nextState.terminal() ? now : null, errorCode);
+                nextState.terminal() ? now : null, errorCode, outputLanguage);
     }
 
     private Map<AssistantRunState, Set<AssistantRunState>> transitions() {

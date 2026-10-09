@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.application.CitationScopeVerifier;
@@ -56,7 +57,7 @@ class TeachingSectionDraftComposerTest {
                 1, "repair", "Repair", "Explain repair.", true, false,
                 List.of("repair"), List.of(), List.of(8));
         TeachingPlan plan = new TeachingPlan(
-                UUID.randomUUID(), versionId, "Game", "Learn.", List.of(planned), "owner", Instant.EPOCH);
+                UUID.randomUUID(), versionId, "Game", "Learn.", List.of(planned), "owner", Instant.EPOCH, PlayerLocale.ZH_CN);
         RuleEvidence evidence = new RuleEvidence(
                 evidenceId, versionId, "RULE", "Repair", "Spend one action to repair a system.", 8, 8);
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(

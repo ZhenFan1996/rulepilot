@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.domain;
 
+import com.rulepilot.shared.PlayerLocale;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -13,9 +14,11 @@ public record TeachingPlan(
         WholeGameContext wholeGameContext,
         List<PlannedSection> sections,
         String createdBy,
-        Instant createdAt) {
+        Instant createdAt,
+        PlayerLocale outputLanguage) {
 
     public TeachingPlan {
+        java.util.Objects.requireNonNull(outputLanguage, "teaching language is required");
         learningGoal = learningGoal == null || learningGoal.isBlank() ? null : learningGoal;
         if (id == null || documentVersionId == null || createdAt == null) {
             throw new IllegalArgumentException("plan identity is required");
@@ -40,7 +43,8 @@ public record TeachingPlan(
             String premise,
             List<PlannedSection> sections,
             String createdBy,
-            Instant createdAt) {
+            Instant createdAt,
+            PlayerLocale outputLanguage) {
         this(
                 id,
                 documentVersionId,
@@ -50,7 +54,7 @@ public record TeachingPlan(
                 WholeGameContext.legacy(premise),
                 sections,
                 createdBy,
-                createdAt);
+                createdAt, outputLanguage);
     }
 
     public TeachingPlan(
@@ -60,7 +64,8 @@ public record TeachingPlan(
             String premise,
             List<PlannedSection> sections,
             String createdBy,
-            Instant createdAt) {
+            Instant createdAt,
+            PlayerLocale outputLanguage) {
         this(
                 id,
                 documentVersionId,
@@ -70,7 +75,7 @@ public record TeachingPlan(
                 WholeGameContext.legacy(premise),
                 sections,
                 createdBy,
-                createdAt);
+                createdAt, outputLanguage);
     }
 
     public record WholeGameContext(

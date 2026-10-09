@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
@@ -203,7 +204,7 @@ class OfficialRulebookImportJobServiceTest {
                 null,
                 new OfficialRulebookImportIdentity.SourceClaim(
                         editionId, "Opaque Edition", "zh_cn", true),
-                true);
+                true, PlayerLocale.ZH_CN);
 
         service.enqueue(command, "alice");
 
@@ -229,7 +230,7 @@ class OfficialRulebookImportJobServiceTest {
                 true,
                 null,
                 new OfficialRulebookImportIdentity.SourceClaim(editionId, null, null, false),
-                false);
+                false, PlayerLocale.ZH_CN);
 
         assertThatThrownBy(() -> service.enqueue(command, "alice"))
                 .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure -> {
@@ -263,7 +264,7 @@ class OfficialRulebookImportJobServiceTest {
                                 null,
                                 new OfficialRulebookImportIdentity.SourceClaim(
                                         editionId, "Opaque Edition", "English", true),
-                                true),
+                                true, PlayerLocale.ZH_CN),
                         "alice"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("language tag");
@@ -303,7 +304,7 @@ class OfficialRulebookImportJobServiceTest {
                 "Preserve this teaching preference",
                 new OfficialRulebookImportIdentity.SourceClaim(
                         selectedEditionId, "Second Edition", "en", true),
-                true);
+                true, PlayerLocale.ZH_CN);
 
         assertThatThrownBy(() -> service.enqueue(command, "alice"))
                 .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure -> {
@@ -350,7 +351,7 @@ class OfficialRulebookImportJobServiceTest {
                 "Keep the second-edition teaching goal",
                 new OfficialRulebookImportIdentity.SourceClaim(
                         selectedEditionId, "Second Edition", "en", true),
-                false);
+                false, PlayerLocale.ZH_CN);
 
         assertThatThrownBy(() -> service.enqueue(unconfirmed, "alice"))
                 .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure ->
@@ -367,7 +368,7 @@ class OfficialRulebookImportJobServiceTest {
                 true,
                 "Keep the second-edition teaching goal",
                 unconfirmed.sourceIdentity(),
-                true);
+                true, PlayerLocale.ZH_CN);
         var launch = service.enqueue(confirmed, "alice");
 
         assertThat(launch.reused()).isFalse();
@@ -421,7 +422,7 @@ class OfficialRulebookImportJobServiceTest {
                 null,
                 new OfficialRulebookImportIdentity.SourceClaim(
                         selectedEditionId, "Second Edition", "en", true),
-                false);
+                false, PlayerLocale.ZH_CN);
 
         assertThatThrownBy(() -> service.enqueue(command, "alice"))
                 .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure -> {
@@ -464,7 +465,7 @@ class OfficialRulebookImportJobServiceTest {
         UUID oldPreparationRunId = UUID.randomUUID();
         var completed = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), "alice", editionId, "Example Rules",
-                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW, PlayerLocale.ZH_CN);
         jobs.insert(completed);
         jobs.complete(completed.id(), documentVersionId, false, NOW);
         jobs.claimReadyTeachingForDocument(documentVersionId, 1, NOW);
@@ -503,7 +504,7 @@ class OfficialRulebookImportJobServiceTest {
         Instant originalActivity = NOW.minus(Duration.ofHours(1));
         var completed = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), "alice", editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                SOURCE, true, null, originalActivity);
+                SOURCE, true, null, originalActivity, PlayerLocale.ZH_CN);
         jobs.insert(completed);
         jobs.complete(completed.id(), documentVersionId, false, originalActivity);
         jobs.claimReadyTeachingForDocument(documentVersionId, 1, originalActivity);
@@ -727,7 +728,7 @@ class OfficialRulebookImportJobServiceTest {
             String source) {
         var job = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), "alice", editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                source, true, null, NOW.minusSeconds(30));
+                source, true, null, NOW.minusSeconds(30), PlayerLocale.ZH_CN);
         jobs.insert(job);
         jobs.complete(job.id(), documentVersionId, false, NOW.minusSeconds(20));
         jobs.claimReadyTeachingForDocument(documentVersionId, 1, NOW.minusSeconds(10));
@@ -823,7 +824,7 @@ class OfficialRulebookImportJobServiceTest {
                 SOURCE,
                 true,
                 "重点讲清开局和第一轮。",
-                NOW);
+                NOW, PlayerLocale.ZH_CN);
         jobs.insert(failed);
         jobs.fail(failed.id(), "SOURCE_UNAVAILABLE", NOW);
         TaskExecutor executor = mock(TaskExecutor.class);
@@ -874,7 +875,7 @@ class OfficialRulebookImportJobServiceTest {
         UUID failedRunId = UUID.randomUUID();
         var job = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), "alice", automaticTeachingCommand().editionId(), "Example Rules",
-                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW, PlayerLocale.ZH_CN);
         jobs.insert(job);
         jobs.complete(job.id(), versionId, false, NOW);
         jobs.claimReadyTeachingForDocument(versionId, 1, NOW);
@@ -899,7 +900,7 @@ class OfficialRulebookImportJobServiceTest {
         UUID newerRunId = UUID.randomUUID();
         var job = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), "alice", automaticTeachingCommand().editionId(), "Example Rules",
-                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW, PlayerLocale.ZH_CN);
         jobs.insert(job);
         jobs.complete(job.id(), versionId, false, NOW);
         jobs.claimReadyTeachingForDocument(versionId, 1, NOW);
@@ -921,7 +922,7 @@ class OfficialRulebookImportJobServiceTest {
         UUID versionId = UUID.randomUUID();
         var job = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), "alice", automaticTeachingCommand().editionId(), "Example Rules",
-                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW, PlayerLocale.ZH_CN);
         jobs.insert(job);
         jobs.complete(job.id(), versionId, false, NOW);
         jobs.claimReadyTeachingForDocument(versionId, 1, NOW);
@@ -996,7 +997,7 @@ class OfficialRulebookImportJobServiceTest {
 
     private OfficialRulebookImportJobService.Command command() {
         return new OfficialRulebookImportJobService.Command(
-                null, "Example Rules", DocumentSourceType.BASE_RULEBOOK, SOURCE, true);
+                null, "Example Rules", DocumentSourceType.BASE_RULEBOOK, SOURCE, true, PlayerLocale.ZH_CN);
     }
 
     private OfficialRulebookImportJobService.Command automaticTeachingCommand() {
@@ -1011,7 +1012,7 @@ class OfficialRulebookImportJobServiceTest {
                 "重点讲清开局和第一轮。",
                 new OfficialRulebookImportIdentity.SourceClaim(
                         editionId, "Opaque Edition", "en", true),
-                true);
+                true, PlayerLocale.ZH_CN);
     }
 
     private UploadRuleDocumentService.UploadResult uploadResult(UUID versionId) {
@@ -1095,11 +1096,11 @@ class OfficialRulebookImportJobServiceTest {
         }
 
         @Override
-        public void requestTeaching(UUID jobId, String learningGoal, Instant now) {
+        public void requestTeaching(UUID jobId, String learningGoal, Instant now, PlayerLocale outputLanguage) {
             var job = values.get(jobId);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(),
-                    TeachingHandoff.requested(learningGoal, now), now, job.completedAt()));
+                    TeachingHandoff.requested(learningGoal, now, outputLanguage), now, job.completedAt()));
         }
 
         @Override
@@ -1113,7 +1114,7 @@ class OfficialRulebookImportJobServiceTest {
             reconciled.remove(jobId);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(),
-                    TeachingHandoff.requested(job.teachingHandoff().learningGoal(), now),
+                    TeachingHandoff.requested(job.teachingHandoff().learningGoal(), now, PlayerLocale.ZH_CN),
                     now, job.completedAt()));
             return true;
         }
@@ -1135,7 +1136,7 @@ class OfficialRulebookImportJobServiceTest {
                             expectedPreparationRunId,
                             errorCode,
                             job.teachingHandoff().automaticRecoveryCount(),
-                            now),
+                            now, PlayerLocale.ZH_CN),
                     now, job.completedAt()));
             return true;
         }
@@ -1215,7 +1216,7 @@ class OfficialRulebookImportJobServiceTest {
                         null,
                         null,
                         job.teachingHandoff().automaticRecoveryCount(),
-                        now);
+                        now, PlayerLocale.ZH_CN);
                 values.put(job.id(), copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                         job.documentVersionId(), job.duplicate(), job.errorCode(), launching, now, job.completedAt()));
             }
@@ -1233,7 +1234,7 @@ class OfficialRulebookImportJobServiceTest {
                     preparationRunId,
                     null,
                     job.teachingHandoff().automaticRecoveryCount(),
-                    now);
+                    now, PlayerLocale.ZH_CN);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(), launched, now, job.completedAt()));
         }
@@ -1247,7 +1248,7 @@ class OfficialRulebookImportJobServiceTest {
                     null,
                     errorCode,
                     job.teachingHandoff().automaticRecoveryCount(),
-                    now);
+                    now, PlayerLocale.ZH_CN);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(), failed, now, job.completedAt()));
         }
@@ -1292,7 +1293,7 @@ class OfficialRulebookImportJobServiceTest {
                             null,
                             "IMPORT_FAILED",
                             job.teachingHandoff().automaticRecoveryCount(),
-                            now);
+                            now, PlayerLocale.ZH_CN);
             values.put(jobId, copy(job, OfficialRulebookImportJob.Stage.FAILED,
                     job.downloadedBytes(), job.totalBytes(), null, false, errorCode, handoff, now, now));
             stages.add(OfficialRulebookImportJob.Stage.FAILED);

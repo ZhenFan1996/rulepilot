@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.PublicRulebookReferenceLookup.Reference;
 import com.rulepilot.document.UploadedRulebookTeachingHandoffs;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
@@ -49,11 +50,14 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
     }
 
     @Transactional
-    public HandoffView request(UUID documentVersionId, String learningGoal, String ownerUsername) {
+    public HandoffView request(UUID documentVersionId, String learningGoal, String ownerUsername, PlayerLocale outputLanguage) {
         String owner = checkedOwner(ownerUsername);
         String goal = normalizedGoal(learningGoal);
         var snapshot = handoffs.request(
-                UUID.randomUUID(), documentVersionId, owner, goal, Instant.now(clock));
+                UUID.randomUUID(), documentVersionId, owner, goal, Instant.now(clock), outputLanguage);
+        if (snapshot.outputLanguage() != outputLanguage) {
+            throw new IllegalStateException("teaching is already active in another language");
+        }
         return view(snapshot);
     }
 
@@ -107,7 +111,7 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
                         snapshot.id(),
                         snapshot.documentVersionId(),
                         snapshot.ownerUsername(),
-                        snapshot.learningGoal()))
+                        snapshot.learningGoal(), snapshot.outputLanguage()))
                 .toList();
     }
 

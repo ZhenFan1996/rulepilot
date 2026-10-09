@@ -48,7 +48,7 @@ interface RulebookIdentityProblem { code?: string }
 interface TeachingPlanResponse { id: string; documentVersionId: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
-  run: { id: string; subjectId: string; state: string; lastErrorCode: string | null }
+  run: { id: string; subjectId: string; state: string; lastErrorCode: string | null; outputLanguage?: 'ZH_CN' | 'EN' }
   activities?: Array<{
     sequence: number
     operation: string
@@ -73,6 +73,7 @@ interface RulebookIntakeSnapshot {
 interface LessonPreparation {
   versionId: string
   learningGoal?: string
+  language?: string
 }
 
 interface RulebookUploadPanelHandle {
@@ -890,6 +891,7 @@ function titleFromFile(selected: File) {
 function currentPreferences(versionId: string): LessonPreparation {
   return {
     versionId,
+    language: locale.value,
     ...(learningGoal.value.trim() ? { learningGoal: learningGoal.value.trim() } : {}),
   }
 }
@@ -912,6 +914,7 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({
         learningGoal: preferences.learningGoal ?? null,
+        language: preferences.language ?? locale.value,
       }),
     })
     if (!isCurrentPreparation(preparationGeneration, versionId, requestIdentityGeneration)) return
@@ -1007,7 +1010,8 @@ async function waitForTeachingPreparation(
       updatePreparationMessage(snapshot.run.state, snapshot.activities)
       if (snapshot.run.state === 'COMPLETED') {
         await openPreparedLesson(
-          preferences, csrf, generation, requestIdentityGeneration,
+          { ...preferences, language: snapshot.run.outputLanguage === 'EN' ? 'en' : 'zh-CN' },
+          csrf, generation, requestIdentityGeneration,
         )
         return
       }
@@ -1033,7 +1037,7 @@ async function openPreparedLesson(
   const controller = new AbortController()
   activePreparationController = controller
   const latestResponse = await checkedFetch(
-    `/api/v1/document-versions/${preferences.versionId}/teaching-plans/latest`,
+    `/api/v1/document-versions/${preferences.versionId}/teaching-plans/latest?language=${encodeURIComponent(preferences.language ?? locale.value)}`,
     { signal: controller.signal },
   )
   if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
@@ -1312,6 +1316,7 @@ async function uploadRulebook() {
     else if (selectedFile) form.append('title', titleFromFile(selectedFile))
     form.append('sourceType', sourceType.value)
     form.append('startTeaching', 'true')
+    form.append('language', locale.value)
     if (learningGoal.value.trim()) form.append('learningGoal', learningGoal.value.trim())
     if (officialSourceUrl.value.trim()) form.append('officialSourceUrl', officialSourceUrl.value.trim())
     if (selectedFile) form.append('file', selectedFile)
@@ -1402,6 +1407,7 @@ async function importOfficialRulebook() {
         rightsConfirmed: officialImportRightsConfirmed.value,
         startTeaching: true,
         learningGoal: learningGoal.value.trim() || null,
+        language: locale.value,
         discoveredForEditionId: discoveryIdentity?.editionId ?? null,
         sourceEdition: selectedCandidate?.edition || null,
         sourceLanguage: selectedCandidate?.languageVerified ? selectedCandidate.language : null,

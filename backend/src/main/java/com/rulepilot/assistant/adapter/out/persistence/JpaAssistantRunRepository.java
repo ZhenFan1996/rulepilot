@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.adapter.out.persistence;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns.StepSnapshot;
@@ -28,10 +29,10 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                         """
                         insert into assistant_run (
                             id, mode, subject_id, owner_username, state, revision,
-                            created_at, updated_at, completed_at, last_error_code
+                            created_at, updated_at, completed_at, last_error_code, output_language
                         ) values (
                             :id, :mode, :subjectId, :owner, :state, :revision,
-                            :createdAt, :updatedAt, :completedAt, :errorCode
+                            :createdAt, :updatedAt, :completedAt, :errorCode, :outputLanguage
                         )
                         """)
                 .setParameter("id", run.id())
@@ -44,6 +45,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 .setParameter("updatedAt", run.updatedAt())
                 .setParameter("completedAt", run.completedAt())
                 .setParameter("errorCode", run.lastErrorCode())
+                .setParameter("outputLanguage", run.outputLanguage().name())
                 .executeUpdate();
         insertStep(run.id(), run.revision(), null, run.state(), summary, run.updatedAt());
     }
@@ -82,7 +84,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 .createNativeQuery(
                         """
                         select id, mode, subject_id, owner_username, state, revision,
-                               created_at, updated_at, completed_at, last_error_code
+                               created_at, updated_at, completed_at, last_error_code, output_language
                         from assistant_run
                         where id = :runId
                         """)
@@ -101,7 +103,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 .createNativeQuery(
                         """
                         select id, mode, subject_id, owner_username, state, revision,
-                               created_at, updated_at, completed_at, last_error_code
+                               created_at, updated_at, completed_at, last_error_code, output_language
                         from assistant_run
                         where mode = :mode and subject_id = :subjectId and owner_username = :owner
                         order by created_at desc, id desc
@@ -120,7 +122,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 .createNativeQuery(
                         """
                         select id, mode, subject_id, owner_username, state, revision,
-                               created_at, updated_at, completed_at, last_error_code
+                               created_at, updated_at, completed_at, last_error_code, output_language
                         from assistant_run
                         where mode = :mode
                           and state not in ('COMPLETED', 'INSUFFICIENT_EVIDENCE', 'FAILED', 'DEGRADED')
@@ -139,7 +141,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 .createNativeQuery(
                         """
                         select id, mode, subject_id, owner_username, state, revision,
-                               created_at, updated_at, completed_at, last_error_code
+                               created_at, updated_at, completed_at, last_error_code, output_language
                         from assistant_run
                         where mode = :mode
                           and owner_username = :owner
@@ -229,6 +231,6 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 (Instant) row[6],
                 (Instant) row[7],
                 (Instant) row[8],
-                (String) row[9]);
+                (String) row[9], PlayerLocale.valueOf((String) row[10]));
     }
 }

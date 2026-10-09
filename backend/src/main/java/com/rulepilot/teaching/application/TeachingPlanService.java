@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
@@ -78,7 +79,7 @@ public class TeachingPlanService {
             UUID documentVersionId,
             String learningGoal,
             String createdBy,
-            UUID assistantRunId) {
+            UUID assistantRunId, PlayerLocale outputLanguage) {
         var scope = documentScopes.findVersion(documentVersionId)
                 .filter(found -> found.createdBy().equals(createdBy))
                 .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
@@ -100,7 +101,7 @@ public class TeachingPlanService {
                         .toList();
         pages = withVisualAidAvailability(documentVersionId, pages, documentPages);
         var outlineRequest = new OutlineRequest(
-                pages, List.of(), learningGoal, createdBy);
+                pages, List.of(), learningGoal, createdBy, outputLanguage);
         var outline = organizeInitialOutline(playerGameTitle, outlineRequest, pages, assistantRunId);
         try {
             plans.validate(outline);
@@ -132,7 +133,7 @@ public class TeachingPlanService {
                 documentVersionId,
                 learningGoal,
                 createdBy,
-                outline), outline.gameTitle());
+                outline, outputLanguage), outline.gameTitle());
     }
 
     WorkloadDemand preparationWorkload(UUID documentVersionId, String createdBy) {
@@ -277,6 +278,11 @@ public class TeachingPlanService {
     @Transactional(readOnly = true)
     public Optional<TeachingPlan> latest(UUID documentVersionId, String createdBy) {
         return repository.findLatest(documentVersionId, createdBy);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<TeachingPlan> latest(UUID documentVersionId, String createdBy, PlayerLocale outputLanguage) {
+        return repository.findLatest(documentVersionId, createdBy, outputLanguage);
     }
 
     @Transactional(readOnly = true)

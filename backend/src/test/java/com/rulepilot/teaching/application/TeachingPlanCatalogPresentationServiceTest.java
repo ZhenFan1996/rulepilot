@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
@@ -68,6 +69,6 @@ class TeachingPlanCatalogPresentationServiceTest {
                 "Rulebook-derived premise",
                 List.of(),
                 owner,
-                Instant.parse("2026-08-06T00:00:00Z"));
+                Instant.parse("2026-08-06T00:00:00Z"), PlayerLocale.ZH_CN);
     }
 }

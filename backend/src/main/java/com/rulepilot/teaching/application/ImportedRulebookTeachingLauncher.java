@@ -81,7 +81,7 @@ public class ImportedRulebookTeachingLauncher {
     private void launch(ReadyHandoff handoff) {
         try {
             var launched = plans.launch(
-                    handoff.documentVersionId(), handoff.learningGoal(), handoff.ownerUsername());
+                    handoff.documentVersionId(), handoff.learningGoal(), handoff.ownerUsername(), handoff.outputLanguage());
             handoffs.markLaunched(handoff.importJobId(), launched.assistantRunId());
         } catch (RuntimeException failure) {
             handoffs.markFailed(handoff.importJobId(), failureCode(failure));

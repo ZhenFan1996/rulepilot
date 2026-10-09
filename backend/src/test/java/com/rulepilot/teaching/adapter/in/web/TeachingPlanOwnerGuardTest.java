@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.application.TeachingPlanService;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
@@ -39,6 +40,6 @@ class TeachingPlanOwnerGuardTest {
 
     private TeachingPlan plan(String owner) {
         return new TeachingPlan(
-                UUID.randomUUID(), UUID.randomUUID(), "Game", "Premise", List.of(), owner, Instant.parse("2026-07-18T12:00:00Z"));
+                UUID.randomUUID(), UUID.randomUUID(), "Game", "Premise", List.of(), owner, Instant.parse("2026-07-18T12:00:00Z"), PlayerLocale.ZH_CN);
     }
 }

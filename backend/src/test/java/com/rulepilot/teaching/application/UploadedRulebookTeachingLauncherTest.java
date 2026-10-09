@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.document.UploadedRulebookTeachingHandoffs;
 import java.util.ArrayList;
@@ -24,9 +25,9 @@ class UploadedRulebookTeachingLauncherTest {
         UUID versionId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         handoffs.ready.add(new UploadedRulebookTeachingHandoffs.ReadyHandoff(
-                handoffId, versionId, "alice", "先讲清开局。"));
+                handoffId, versionId, "alice", "先讲清开局。", PlayerLocale.EN));
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(versionId, "先讲清开局。", "alice"))
+        when(plans.launch(versionId, "先讲清开局。", "alice", PlayerLocale.EN))
                 .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
         var launcher = new UploadedRulebookTeachingLauncher(handoffs, plans, 4);
 
@@ -42,9 +43,9 @@ class UploadedRulebookTeachingLauncherTest {
         UUID handoffId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         handoffs.ready.add(new UploadedRulebookTeachingHandoffs.ReadyHandoff(
-                handoffId, versionId, "alice", null));
+                handoffId, versionId, "alice", null, PlayerLocale.EN));
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(versionId, null, "alice")).thenThrow(new IllegalStateException("executor full"));
+        when(plans.launch(versionId, null, "alice", PlayerLocale.EN)).thenThrow(new IllegalStateException("executor full"));
         var launcher = new UploadedRulebookTeachingLauncher(handoffs, plans, 4);
 
         launcher.launchReadyHandoffs();
@@ -78,9 +79,9 @@ class UploadedRulebookTeachingLauncherTest {
         UUID versionId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         handoffs.ready.add(new UploadedRulebookTeachingHandoffs.ReadyHandoff(
-                handoffId, versionId, "alice", null));
+                handoffId, versionId, "alice", null, PlayerLocale.EN));
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(versionId, null, "alice"))
+        when(plans.launch(versionId, null, "alice", PlayerLocale.EN))
                 .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
         var launcher = new UploadedRulebookTeachingLauncher(handoffs, plans, 4);
         var start = new CountDownLatch(1);
@@ -104,7 +105,7 @@ class UploadedRulebookTeachingLauncherTest {
         first.join();
         second.join();
         assertThat(handoffs.launched).containsExactly(new LaunchRecord(handoffId, runId));
-        verify(plans).launch(versionId, null, "alice");
+        verify(plans).launch(versionId, null, "alice", PlayerLocale.EN);
     }
 
     @Test
@@ -114,12 +115,12 @@ class UploadedRulebookTeachingLauncherTest {
         UUID matchingVersionId = UUID.randomUUID();
         UUID otherVersionId = UUID.randomUUID();
         handoffs.ready.add(new UploadedRulebookTeachingHandoffs.ReadyHandoff(
-                matchingHandoffId, matchingVersionId, "alice", null));
+                matchingHandoffId, matchingVersionId, "alice", null, PlayerLocale.EN));
         handoffs.ready.add(new UploadedRulebookTeachingHandoffs.ReadyHandoff(
-                UUID.randomUUID(), otherVersionId, "bob", null));
+                UUID.randomUUID(), otherVersionId, "bob", null, PlayerLocale.EN));
         UUID runId = UUID.randomUUID();
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(matchingVersionId, null, "alice"))
+        when(plans.launch(matchingVersionId, null, "alice", PlayerLocale.EN))
                 .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
         var launcher = new UploadedRulebookTeachingLauncher(handoffs, plans, 4);
 

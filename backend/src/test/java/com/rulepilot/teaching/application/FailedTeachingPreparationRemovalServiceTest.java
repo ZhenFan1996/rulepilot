@@ -5,6 +5,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
@@ -111,7 +112,7 @@ class FailedTeachingPreparationRemovalServiceTest {
                 now,
                 now,
                 state.terminal() ? now : null,
-                state == AssistantRunState.FAILED ? "TEACHING_PREPARATION_FAILED" : null);
+                state == AssistantRunState.FAILED ? "TEACHING_PREPARATION_FAILED" : null, PlayerLocale.ZH_CN);
         var budget = new AgentExecutionControl.BudgetSnapshot(
                 24_000, 0, 0, 0, now.plusSeconds(60), null);
         return new AssistantRuns.RunDetails(snapshot, List.of(), budget, List.of());

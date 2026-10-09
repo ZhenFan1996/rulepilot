@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.document.domain.DocumentSourceType;
@@ -68,11 +69,11 @@ class UploadRuleDocumentServiceTest {
                 InputStream.nullInputStream(),
                 "alice",
                 true,
-                "先讲清开局。 ");
+                "先讲清开局。 ", PlayerLocale.ZH_CN);
 
         verify(processingQueue).enqueue(org.mockito.ArgumentMatchers.eq(result.version().id()), any(Instant.class));
         verify(events).publishEvent(any(DocumentOutboxQueued.class));
-        verify(teachingHandoffs).request(result.version().id(), "先讲清开局。 ", "alice");
+        verify(teachingHandoffs).request(result.version().id(), "先讲清开局。 ", "alice", PlayerLocale.ZH_CN);
     }
 
     @Test
@@ -89,7 +90,7 @@ class UploadRuleDocumentServiceTest {
                         InputStream.nullInputStream(),
                         "alice",
                         false,
-                        "先讲清开局。"))
+                        "先讲清开局。", PlayerLocale.ZH_CN))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("teaching goal requires an automatic teaching handoff");
         verify(storageService, never()).storePdf(any(), anyLong(), anyString(), anyString());

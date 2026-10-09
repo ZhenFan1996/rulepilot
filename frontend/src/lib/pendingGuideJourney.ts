@@ -27,6 +27,7 @@ export interface PendingGuideImport {
 }
 
 export interface PendingGuidePreparationRun {
+  outputLanguage?: 'ZH_CN' | 'EN'
   id: string
   subjectId: string
   state: string

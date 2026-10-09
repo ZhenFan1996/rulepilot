@@ -2,8 +2,8 @@ package com.rulepilot.teaching.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.domain.LessonLocalization;
 import java.time.Instant;
 import java.util.UUID;

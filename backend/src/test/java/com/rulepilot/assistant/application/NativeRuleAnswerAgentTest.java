@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AssistantReadTools;
@@ -24,7 +25,6 @@ import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolModel.ModelRequest;
 import com.rulepilot.assistant.NativeToolModel.ModelToolCall;
 import com.rulepilot.assistant.NativeToolModel.ModelTurn;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;

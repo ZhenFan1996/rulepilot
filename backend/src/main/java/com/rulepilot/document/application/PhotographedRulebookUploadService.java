@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.domain.DocumentSourceType;
 import java.io.ByteArrayInputStream;
 import java.util.List;
@@ -44,7 +45,7 @@ public class PhotographedRulebookUploadService {
                 pages,
                 username,
                 false,
-                null);
+                null, PlayerLocale.ZH_CN);
     }
 
     public UploadRuleDocumentService.UploadResult upload(
@@ -56,7 +57,7 @@ public class PhotographedRulebookUploadService {
             List<PhotoPage> pages,
             String username,
             boolean startTeaching,
-            String learningGoal) {
+            String learningGoal, PlayerLocale outputLanguage) {
         validate(pages);
         PhotographedRulebookAssembler.AssembledRulebook assembled = assembler.assemble(pages);
         return documents.upload(
@@ -71,7 +72,7 @@ public class PhotographedRulebookUploadService {
                 new ByteArrayInputStream(assembled.pdf()),
                 username,
                 startTeaching,
-                learningGoal);
+                learningGoal, outputLanguage);
     }
 
     private void validate(List<PhotoPage> pages) {

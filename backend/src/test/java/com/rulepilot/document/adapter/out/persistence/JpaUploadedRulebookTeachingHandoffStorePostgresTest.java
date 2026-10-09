@@ -3,6 +3,7 @@ package com.rulepilot.document.adapter.out.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore;
 import jakarta.persistence.EntityManager;
 import java.sql.DriverManager;
@@ -90,8 +91,9 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 versionId,
                 "upload-handoff-player",
                 "先讲清开局。",
-                requestedAt));
+                requestedAt, PlayerLocale.EN));
 
+        assertThat(requested.outputLanguage()).isEqualTo(PlayerLocale.EN);
         assertThat(requested.state())
                 .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
         List<UploadedRulebookTeachingHandoffStore.Snapshot> notReady =
@@ -103,6 +105,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 inTransactionReturning(store -> store.claimReadyForDocument(versionId, 4, requestedAt.plusSeconds(2)));
 
         assertThat(claimed).singleElement().satisfies(item -> {
+            assertThat(item.outputLanguage()).isEqualTo(PlayerLocale.EN);
             assertThat(item.id()).isEqualTo(handoffId);
             assertThat(item.documentVersionId()).isEqualTo(versionId);
             assertThat(item.state()).isEqualTo(UploadedRulebookTeachingHandoffStore.State.LAUNCHING);
@@ -121,7 +124,8 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 versionId,
                 "upload-handoff-player",
                 null,
-                requestedAt.plusSeconds(4)));
+                requestedAt.plusSeconds(4), PlayerLocale.EN));
+        assertThat(retried.outputLanguage()).isEqualTo(PlayerLocale.EN);
         assertThat(retried.id()).isEqualTo(handoffId);
         assertThat(retried.state())
                 .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
@@ -135,9 +139,9 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         UUID matchingHandoffId = UUID.randomUUID();
         UUID otherHandoffId = UUID.randomUUID();
         inTransactionReturning(store -> store.request(
-                matchingHandoffId, matchingVersionId, "upload-handoff-player", null, requestedAt));
+                matchingHandoffId, matchingVersionId, "upload-handoff-player", null, requestedAt, PlayerLocale.ZH_CN));
         inTransactionReturning(store -> store.request(
-                otherHandoffId, otherVersionId, "upload-handoff-player", null, requestedAt));
+                otherHandoffId, otherVersionId, "upload-handoff-player", null, requestedAt, PlayerLocale.ZH_CN));
 
         var claimed = inTransactionReturning(store -> store.claimReadyForDocument(
                 matchingVersionId, 4, requestedAt.plusSeconds(1)));
@@ -160,7 +164,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                         versionId,
                         "mallory",
                         null,
-                        Instant.parse("2026-08-10T10:00:00Z"))))
+                        Instant.parse("2026-08-10T10:00:00Z"), PlayerLocale.ZH_CN)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("uploaded rulebook document does not exist");
     }
@@ -175,7 +179,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 versionId,
                 "upload-handoff-player",
                 null,
-                requestedAt));
+                requestedAt, PlayerLocale.ZH_CN));
         jdbc.update("UPDATE document_version SET processing_status = 'FAILED' WHERE id = ?", versionId);
 
         int failed = inTransactionReturning(store ->
@@ -199,7 +203,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         insertPreparationRun(failedRunId, versionId, "FAILED", now);
         insertPreparationRun(newerRunId, versionId, "RECEIVED", now.plusSeconds(4));
         inTransactionReturning(store -> store.request(
-                handoffId, versionId, "upload-handoff-player", null, now));
+                handoffId, versionId, "upload-handoff-player", null, now, PlayerLocale.ZH_CN));
         inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
         inTransaction(store -> store.completeLaunch(handoffId, failedRunId, now.plusSeconds(2)));
 
@@ -224,7 +228,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         UUID failedRunId = UUID.randomUUID();
         insertPreparationRun(failedRunId, versionId, "FAILED", now);
         inTransactionReturning(store -> store.request(
-                handoffId, versionId, "upload-handoff-player", "先讲清准备流程。", now));
+                handoffId, versionId, "upload-handoff-player", "先讲清准备流程。", now, PlayerLocale.ZH_CN));
         inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
         inTransaction(store -> store.completeLaunch(handoffId, failedRunId, now.plusSeconds(2)));
 
@@ -271,13 +275,13 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 dismissedVersionId,
                 "upload-handoff-player",
                 "讲清准备流程。",
-                now));
+                now, PlayerLocale.ZH_CN));
         inTransactionReturning(store -> store.request(
                 retainedHandoffId,
                 retainedVersionId,
                 "upload-handoff-player",
                 "讲清回合流程。",
-                now));
+                now, PlayerLocale.ZH_CN));
 
         int dismissed = inTransactionReturning(store -> store.dismissOwnedForDocumentVersion(
                 dismissedVersionId, "upload-handoff-player"));
@@ -308,7 +312,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         UUID cancelledRunId = UUID.randomUUID();
         insertPreparationRun(cancelledRunId, versionId, "FAILED", now);
         inTransactionReturning(store -> store.request(
-                handoffId, versionId, "upload-handoff-player", null, now));
+                handoffId, versionId, "upload-handoff-player", null, now, PlayerLocale.ZH_CN));
         inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
         inTransaction(store -> store.completeLaunch(handoffId, cancelledRunId, now.plusSeconds(2)));
 

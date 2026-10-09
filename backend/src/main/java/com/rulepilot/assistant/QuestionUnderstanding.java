@@ -1,5 +1,6 @@
 package com.rulepilot.assistant;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.assistant.domain.LearningIntent;
 import java.util.List;

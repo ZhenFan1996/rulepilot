@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -7,7 +8,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.LessonLocalizationModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
@@ -49,7 +49,7 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
 
     @Override
     public SectionTranslation translate(LessonSection section, PlayerLocale targetLanguage, String modelConfigurationOwner) {
-        if (targetLanguage != PlayerLocale.EN || !available(modelConfigurationOwner)) {
+        if (targetLanguage == null || !available(modelConfigurationOwner)) {
             throw new IllegalStateException("lesson localization model is unavailable");
         }
         RuntimeModelConfiguration.ResolvedModel selected =

@@ -68,6 +68,7 @@ export interface PlayerJourneyDocumentProgress {
 
 export interface PlayerJourneyRun {
   run: {
+    outputLanguage?: 'ZH_CN' | 'EN'
     id: string
     subjectId: string
     state: string

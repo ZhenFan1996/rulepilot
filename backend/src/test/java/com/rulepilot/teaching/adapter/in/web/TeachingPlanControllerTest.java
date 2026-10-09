@@ -5,11 +5,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.teaching.application.TeachingPlanLauncher;
 import com.rulepilot.teaching.application.TeachingPlanService;
 import java.security.Principal;
-import java.util.Arrays;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -25,23 +25,21 @@ class TeachingPlanControllerTest {
         when(launcher.launch(
                         versionId,
                         "先学会怎么带大家开局，再多讲容易混淆的行动衔接。",
-                        "alice"))
+                        "alice", PlayerLocale.EN))
                 .thenReturn(expected);
         var controller = new TeachingPlanController(plans, launcher);
 
         var result = controller.create(
                 versionId,
                 new TeachingPlanController.CreatePlanRequest(
-                        "先学会怎么带大家开局，再多讲容易混淆的行动衔接。"),
+                        "先学会怎么带大家开局，再多讲容易混淆的行动衔接。", "en"),
                 (Principal) () -> "alice");
 
         assertThat(result).isEqualTo(expected);
         verify(launcher).launch(
                 versionId,
                 "先学会怎么带大家开局，再多讲容易混淆的行动衔接。",
-                "alice");
-        assertThat(Arrays.stream(TeachingPlanController.CreatePlanRequest.class.getRecordComponents())
-                        .map(component -> component.getName()))
-                .containsExactly("learningGoal");
+                "alice", PlayerLocale.EN);
+
     }
 }

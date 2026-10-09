@@ -109,9 +109,9 @@ public class TeachingPlanRemovalService {
         });
     }
 
-    private record DuplicateKey(UUID documentVersionId) {
+    private record DuplicateKey(UUID documentVersionId, com.rulepilot.shared.PlayerLocale outputLanguage) {
         static DuplicateKey from(TeachingPlan plan) {
-            return new DuplicateKey(plan.documentVersionId());
+            return new DuplicateKey(plan.documentVersionId(), plan.outputLanguage());
         }
     }
 

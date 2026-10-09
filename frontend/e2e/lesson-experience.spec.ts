@@ -107,6 +107,26 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
 })
 
+test('reads a native English guide without requiring a translation', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('rulepilot:locale', 'en'))
+  await mockSharedApis(page)
+  await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({
+    json: { ...plan, outputLanguage: 'EN', premise: 'Light the route.',
+      sections: [{ position: 1, title: 'Prepare the route', visualEvidenceRecommended: false }] },
+  }))
+  await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', route => route.fulfill({
+    json: { id: 'lesson-en', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [{
+      ...sections[0], title: 'Prepare the route', visualKind: 'NONE', visualCaption: '',
+      steps: [{ position: 1, heading: 'Place the lighthouse', kind: 'DO',
+        text: 'Place the first lighthouse face up at the start of the route.', sourcePages: [2] }],
+    }] },
+  }))
+  await page.goto('/lesson/plan-1')
+  await expect(page.getByText('Place the first lighthouse face up at the start of the route.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Prepare English guide' })).toHaveCount(0)
+  await expect(page.getByText('先找到航线最左侧的起点。', { exact: true })).toHaveCount(0)
+})
+
 test('keeps available chapters and the answer workspace usable while the mobile guide continues', async ({ page }, testInfo) => {
   let answerRequest: Record<string, unknown> | null = null
   await page.setViewportSize({ width: 390, height: 844 })

@@ -1,4 +1,4 @@
-package com.rulepilot.assistant;
+package com.rulepilot.shared;
 
 /** The small player-visible language set; source rulebook language remains independent from this preference. */
 public enum PlayerLocale {
@@ -9,6 +9,10 @@ public enum PlayerLocale {
 
     PlayerLocale(String promptName) {
         this.promptName = promptName;
+    }
+
+    public String languageTag() {
+        return this == EN ? "en" : "zh-CN";
     }
 
     public String promptName() {

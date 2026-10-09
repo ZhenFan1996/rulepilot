@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -94,7 +95,7 @@ class TeachingLessonAssemblyPolicyTest {
                 new WholeGameContext(List.of(), unresolved),
                 List.of(planned(1), planned(2)),
                 "owner",
-                Instant.EPOCH);
+                Instant.EPOCH, PlayerLocale.ZH_CN);
     }
 
     private TeachingPlan.PlannedSection planned(int position) {

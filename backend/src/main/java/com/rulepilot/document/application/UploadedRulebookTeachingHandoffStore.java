@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -7,7 +8,7 @@ import java.util.UUID;
 
 public interface UploadedRulebookTeachingHandoffStore {
 
-    Snapshot request(UUID handoffId, UUID documentVersionId, String ownerUsername, String learningGoal, Instant now);
+    Snapshot request(UUID handoffId, UUID documentVersionId, String ownerUsername, String learningGoal, Instant now, PlayerLocale outputLanguage);
 
     Optional<Snapshot> findOwned(UUID handoffId, String ownerUsername);
 
@@ -60,7 +61,7 @@ public interface UploadedRulebookTeachingHandoffStore {
             String errorCode,
             int automaticRecoveryCount,
             Instant createdAt,
-            Instant updatedAt) {
+            Instant updatedAt, PlayerLocale outputLanguage) {
         public Snapshot {
             if (automaticRecoveryCount < 0) {
                 throw new IllegalArgumentException("uploaded teaching recovery count is invalid");

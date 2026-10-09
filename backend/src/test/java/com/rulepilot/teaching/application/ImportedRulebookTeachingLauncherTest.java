@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.document.RulebookTeachingHandoffs;
 import java.util.ArrayList;
@@ -24,9 +25,9 @@ class ImportedRulebookTeachingLauncherTest {
         UUID versionId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(
-                jobId, versionId, "alice", "重点讲清开局和第一轮。"));
+                jobId, versionId, "alice", "重点讲清开局和第一轮。", PlayerLocale.EN));
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(versionId, "重点讲清开局和第一轮。", "alice"))
+        when(plans.launch(versionId, "重点讲清开局和第一轮。", "alice", PlayerLocale.EN))
                 .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
         var launcher = new ImportedRulebookTeachingLauncher(handoffs, plans, 4);
 
@@ -41,9 +42,9 @@ class ImportedRulebookTeachingLauncherTest {
         FakeHandoffs handoffs = new FakeHandoffs();
         UUID jobId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
-        handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(jobId, versionId, "alice", null));
+        handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(jobId, versionId, "alice", null, PlayerLocale.EN));
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(versionId, null, "alice")).thenThrow(new IllegalStateException("executor full"));
+        when(plans.launch(versionId, null, "alice", PlayerLocale.EN)).thenThrow(new IllegalStateException("executor full"));
         var launcher = new ImportedRulebookTeachingLauncher(handoffs, plans, 4);
 
         launcher.launchReadyHandoffs();
@@ -75,9 +76,9 @@ class ImportedRulebookTeachingLauncherTest {
         UUID jobId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
-        handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(jobId, versionId, "alice", null));
+        handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(jobId, versionId, "alice", null, PlayerLocale.EN));
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(versionId, null, "alice"))
+        when(plans.launch(versionId, null, "alice", PlayerLocale.EN))
                 .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
         var launcher = new ImportedRulebookTeachingLauncher(handoffs, plans, 4);
         var start = new CountDownLatch(1);
@@ -101,7 +102,7 @@ class ImportedRulebookTeachingLauncherTest {
         first.join();
         second.join();
         assertThat(handoffs.launched).containsExactly(new LaunchRecord(jobId, runId));
-        verify(plans).launch(versionId, null, "alice");
+        verify(plans).launch(versionId, null, "alice", PlayerLocale.EN);
     }
 
     @Test
@@ -111,12 +112,12 @@ class ImportedRulebookTeachingLauncherTest {
         UUID matchingVersionId = UUID.randomUUID();
         UUID otherVersionId = UUID.randomUUID();
         handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(
-                matchingJobId, matchingVersionId, "alice", null));
+                matchingJobId, matchingVersionId, "alice", null, PlayerLocale.EN));
         handoffs.ready.add(new RulebookTeachingHandoffs.ReadyHandoff(
-                UUID.randomUUID(), otherVersionId, "bob", null));
+                UUID.randomUUID(), otherVersionId, "bob", null, PlayerLocale.EN));
         UUID runId = UUID.randomUUID();
         TeachingPlanLauncher plans = mock(TeachingPlanLauncher.class);
-        when(plans.launch(matchingVersionId, null, "alice"))
+        when(plans.launch(matchingVersionId, null, "alice", PlayerLocale.EN))
                 .thenReturn(new TeachingPlanLauncher.PlanLaunch(runId, AssistantRunState.RECEIVED, false));
         var launcher = new ImportedRulebookTeachingLauncher(handoffs, plans, 4);
 

@@ -3,11 +3,11 @@ package com.rulepilot.assistant.adapter.in.web;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivitySnapshot;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.application.PlayerFacingAnswerPresenter;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;

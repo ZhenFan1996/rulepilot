@@ -3,6 +3,7 @@ package com.rulepilot.assistant.domain;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import java.time.Instant;
@@ -14,18 +15,19 @@ class AssistantRunTest {
     @Test
     void teachingPreparationCompletesAfterLessonPlanning() {
         AssistantRun run = AssistantRun.start(
-                        AssistantRunMode.TEACHING_PREPARATION, UUID.randomUUID(), "teacher", STARTED)
+                        AssistantRunMode.TEACHING_PREPARATION, UUID.randomUUID(), "teacher", STARTED, PlayerLocale.EN)
                 .advance(AssistantRunState.DOCUMENT_READINESS, STARTED.plusSeconds(1))
                 .advance(AssistantRunState.LESSON_PLANNING, STARTED.plusSeconds(2))
                 .advance(AssistantRunState.COMPLETED, STARTED.plusSeconds(3));
 
+        assertThat(run.outputLanguage()).isEqualTo(PlayerLocale.EN);
         assertThat(run.state()).isEqualTo(AssistantRunState.COMPLETED);
         assertThat(run.completedAt()).isEqualTo(STARTED.plusSeconds(3));
     }
 
     @Test
     void visualEnrichmentTracksCandidateSelectionBeforePublishingCrops() {
-        AssistantRun run = AssistantRun.start(AssistantRunMode.VISUAL_ENRICHMENT, UUID.randomUUID(), "teacher", STARTED);
+        AssistantRun run = AssistantRun.start(AssistantRunMode.VISUAL_ENRICHMENT, UUID.randomUUID(), "teacher", STARTED, PlayerLocale.ZH_CN);
 
         run = advance(run, AssistantRunState.DOCUMENT_READINESS, 1);
         run = advance(run, AssistantRunState.RETRIEVING, 2);
@@ -41,7 +43,7 @@ class AssistantRunTest {
 
     @Test
     void advancesATeachingRunThroughGroundedLessonComposition() {
-        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, UUID.randomUUID(), "teacher", STARTED);
+        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, UUID.randomUUID(), "teacher", STARTED, PlayerLocale.ZH_CN);
 
         run = advance(run, AssistantRunState.DOCUMENT_READINESS, 1);
         run = advance(run, AssistantRunState.LESSON_PLANNING, 2);
@@ -59,7 +61,7 @@ class AssistantRunTest {
 
     @Test
     void questionClarificationSettlesTheNativeAgentRun() {
-        AssistantRun run = AssistantRun.start(AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED);
+        AssistantRun run = AssistantRun.start(AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED, PlayerLocale.ZH_CN);
 
         run = advance(run, AssistantRunState.ANSWER_COMPOSITION, 1);
         run = advance(run, AssistantRunState.NEED_CLARIFICATION, 2);
@@ -75,15 +77,15 @@ class AssistantRunTest {
     @Test
     void questionRunCanTerminateFromThePhaseThatActuallyProducedItsOutcome() {
         AssistantRun chat = AssistantRun.start(
-                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.ANSWER_COMPOSITION, STARTED.plusSeconds(1))
                 .advance(AssistantRunState.COMPLETED, STARTED.plusSeconds(2));
         AssistantRun clarification = AssistantRun.start(
-                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.ANSWER_COMPOSITION, STARTED.plusSeconds(1))
                 .advance(AssistantRunState.NEED_CLARIFICATION, STARTED.plusSeconds(2));
         AssistantRun boundaryFailure = AssistantRun.start(
-                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED)
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", STARTED, PlayerLocale.ZH_CN)
                 .advance(AssistantRunState.ANSWER_COMPOSITION, STARTED.plusSeconds(1))
                 .advance(AssistantRunState.DEGRADED, STARTED.plusSeconds(2));
 
@@ -94,7 +96,7 @@ class AssistantRunTest {
 
     @Test
     void rejectsCrossWorkflowAndTerminalTransitions() {
-        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, UUID.randomUUID(), "teacher", STARTED);
+        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, UUID.randomUUID(), "teacher", STARTED, PlayerLocale.ZH_CN);
 
         assertThatThrownBy(() -> run.advance(AssistantRunState.QUESTION_UNDERSTANDING, STARTED.plusSeconds(1)))
                 .isInstanceOf(IllegalStateException.class);

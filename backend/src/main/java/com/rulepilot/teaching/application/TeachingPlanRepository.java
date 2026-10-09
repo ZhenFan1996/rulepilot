@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
 import java.util.Optional;
@@ -25,7 +26,11 @@ public interface TeachingPlanRepository {
      */
     List<PlanReference> findRecentReferences(int limit);
 
-    Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy);
+    default Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy) {
+        return findLatest(documentVersionId, createdBy, null);
+    }
+
+    Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy, PlayerLocale outputLanguage);
 
     void delete(UUID planId);
 

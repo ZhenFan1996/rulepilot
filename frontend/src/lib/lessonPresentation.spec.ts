@@ -55,11 +55,13 @@ describe('player-facing lesson groups', () => {
     const plans = groupPlansForReading([
       { id: 'newer-planned', documentVersionId: 'rulebook-1', gameTitle: 'Ahoy Rules', createdAt: '2026-07-24T09:00:00Z' },
       { id: 'older-readable', documentVersionId: 'rulebook-1', gameTitle: 'Ahoy Rules', createdAt: '2026-07-23T09:00:00Z' },
+      { id: 'english', documentVersionId: 'rulebook-1', outputLanguage: 'EN', gameTitle: 'Ahoy Rules', createdAt: '2026-07-22T09:00:00Z' },
       { id: 'separate-upload', documentVersionId: 'rulebook-2', gameTitle: 'Ahoy Rules', createdAt: '2026-07-24T10:00:00Z' },
     ], (plan) => plan.id === 'older-readable' ? 10 : 0)
 
     expect(plans).toEqual([
       expect.objectContaining({ title: 'Ahoy Rules', count: 2, plan: expect.objectContaining({ id: 'older-readable' }) }),
+      expect.objectContaining({ title: 'Ahoy Rules', count: 1, plan: expect.objectContaining({ id: 'english' }) }),
       expect.objectContaining({ title: 'Ahoy Rules', count: 1, plan: expect.objectContaining({ id: 'separate-upload' }) }),
     ])
     expect(plans[0]?.plans).toHaveLength(2)

@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.application.TeachingPlanService;
 import com.rulepilot.teaching.application.TeachingPlanRemovalService;
 import com.rulepilot.teaching.application.TeachingPlanSummary;
@@ -87,6 +88,6 @@ class TeachingPlanDetailsControllerTest {
                 List.of(new TeachingPlan.PlannedSection(
                         1, "setup", "Setup", "Prepare the table", true, false,
                         List.of("component placement"), List.of("setup"), List.of(2))),
-                owner, Instant.parse("2026-07-18T12:00:00Z"));
+                owner, Instant.parse("2026-07-18T12:00:00Z"), PlayerLocale.ZH_CN);
     }
 }

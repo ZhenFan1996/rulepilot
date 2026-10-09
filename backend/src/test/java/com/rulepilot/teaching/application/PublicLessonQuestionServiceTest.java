@@ -9,9 +9,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.RuleAnswering;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Instant;

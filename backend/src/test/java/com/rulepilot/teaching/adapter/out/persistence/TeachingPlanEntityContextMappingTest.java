@@ -2,6 +2,7 @@ package com.rulepilot.teaching.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
@@ -31,7 +32,7 @@ class TeachingPlanEntityContextMappingTest {
                                 2, "second-topic", "第二章", "讲清第二项。", true, false,
                                 List.of("R-two"), List.of("whole_game_context_v1"), List.of(3))),
                 "player",
-                Instant.parse("2026-08-16T09:00:00Z"));
+                Instant.parse("2026-08-16T09:00:00Z"), PlayerLocale.ZH_CN);
 
         TeachingPlan restored = TeachingPlanPersistenceRoundTrip.serializeAndReload(original);
 

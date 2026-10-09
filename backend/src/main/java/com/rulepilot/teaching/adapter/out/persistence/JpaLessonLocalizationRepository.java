@@ -1,8 +1,8 @@
 package com.rulepilot.teaching.adapter.out.persistence;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.application.LessonLocalizationRepository;
 import com.rulepilot.teaching.domain.LessonLocalization;
 import com.rulepilot.teaching.domain.LessonLocalization.SectionTranslation;

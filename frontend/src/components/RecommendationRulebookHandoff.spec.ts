@@ -320,7 +320,7 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/v1/assistant-runs/preparation-run-1') {
         return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
       }
-      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') {
         return Response.json(planFixture('plan-1', 'version-1'))
       }
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
@@ -383,6 +383,7 @@ describe('RecommendationRulebookHandoff', () => {
       officialSourceUrl: 'https://publisher.example/files/wingspan-rulebook.pdf',
       rightsConfirmed: true,
       startTeaching: true,
+      language: 'zh-CN',
       discoveredForEditionId: 'edition-1',
       sourceEdition: 'Base game',
       sourceLanguage: 'en',
@@ -540,7 +541,7 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/v1/assistant-runs/preparation-run-gallery') {
         return Response.json(runSnapshot('preparation-run-gallery', 'COMPLETED', 'version-gallery'))
       }
-      if (path === '/api/v1/document-versions/version-gallery/teaching-plans/latest') {
+      if (path === '/api/v1/document-versions/version-gallery/teaching-plans/latest?language=zh-CN') {
         return Response.json(planFixture('plan-gallery', 'version-gallery'))
       }
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-gallery') {
@@ -568,6 +569,7 @@ describe('RecommendationRulebookHandoff', () => {
       officialSourceUrl: 'https://www.gstonegames.com/game/doc-1234.html',
       rightsConfirmed: true,
       startTeaching: true,
+      language: 'zh-CN',
     })
     expect(requestBody).toMatchObject({
       discoveredForEditionId: 'edition-1',
@@ -609,7 +611,7 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/v1/assistant-runs/preparation-complete') {
         return Response.json(runSnapshot('preparation-complete', 'COMPLETED', 'version-ready'))
       }
-      if (path === '/api/v1/document-versions/version-ready/teaching-plans/latest') {
+      if (path === '/api/v1/document-versions/version-ready/teaching-plans/latest?language=zh-CN') {
         return Response.json(planFixture('plan-complete', 'version-ready'))
       }
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-complete') {
@@ -661,7 +663,7 @@ describe('RecommendationRulebookHandoff', () => {
         if (path === '/api/v1/assistant-runs/preparation-run-1') {
           return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
         }
-        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') {
           return Response.json(planFixture('plan-1', 'version-1', true))
         }
         if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
@@ -738,7 +740,7 @@ describe('RecommendationRulebookHandoff', () => {
         }, { status: 202 })
       }
       if (path === '/api/v1/assistant-runs/preparation-retry') return Response.json(runSnapshot('preparation-retry', 'COMPLETED', 'version-1'))
-      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') return Response.json(planFixture('plan-1', 'version-1'))
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
       if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') return Response.json(lessonFixture('lesson-1'))
       return new Response(null, { status: 404 })
@@ -844,7 +846,7 @@ describe('RecommendationRulebookHandoff', () => {
         teachingNextAction: 'OPEN_PROGRESS',
       }, { status: 202 })
       if (path === '/api/v1/assistant-runs/preparation-run-1') return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
-      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') return Response.json(planFixture('plan-1', 'version-1'))
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
         const snapshot = runSnapshot('teaching-degraded', 'DEGRADED')
         const degraded = { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'REVIEW_UNAVAILABLE' } }
@@ -897,7 +899,7 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/v1/assistant-runs/preparation-run-1') {
         return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
       }
-      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') {
         return Response.json(planFixture('plan-1', 'version-1'))
       }
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
@@ -956,7 +958,7 @@ describe('RecommendationRulebookHandoff', () => {
         if (path === '/api/v1/assistant-runs/preparation-run-1') {
           return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
         }
-        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') {
           return Response.json(planFixture('plan-1', 'version-1'))
         }
         if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
@@ -997,7 +999,7 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/v1/assistant-runs/preparation-run-1') {
         return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
       }
-      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') {
         return Response.json(planFixture('plan-1', 'version-1'))
       }
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
@@ -1063,7 +1065,7 @@ describe('RecommendationRulebookHandoff', () => {
             }],
           })
         }
-        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest?language=zh-CN') {
           return Response.json(planFixture('plan-1', 'version-1'))
         }
         if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'
@@ -1513,7 +1515,8 @@ describe('RecommendationRulebookHandoff', () => {
     wrapper.unmount()
   })
 
-  it('does not download when discovery is unavailable and preserves a manual edition-aware fallback', async () => {
+  it('does not reuse a Chinese journey for English and keeps manual acquisition available', async () => {
+    setLocale('en')
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -1522,6 +1525,10 @@ describe('RecommendationRulebookHandoff', () => {
         edition: { id: 'edition-1', name: 'BGG 版本' },
         alreadyImported: true,
       })
+      if (path.startsWith('/api/v1/documents/official-imports?')) return Response.json([{
+        id: 'old-chinese-job', editionId: 'edition-1', stage: 'COMPLETED', documentVersionId: 'old-version',
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'old-chinese-preparation', outputLanguage: 'ZH_CN',
+      }])
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) {
         return Response.json({ configured: false, identity: discoveryIdentity, candidates: [] })
       }
@@ -1530,10 +1537,9 @@ describe('RecommendationRulebookHandoff', () => {
     const { wrapper } = await mountHandoff()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('当前没有找到可审阅的规则书来源')
     const fallback = wrapper.get('a')
     expect(fallback.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=recommendation-agent')
-    expect(fallback.text()).toContain('自己的规则书')
+    expect(fallback.text()).toContain('rulebook')
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
   })
 })

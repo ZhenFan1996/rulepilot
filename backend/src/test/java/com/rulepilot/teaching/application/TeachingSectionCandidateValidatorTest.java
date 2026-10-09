@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.application.CitationScopeVerifier;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
@@ -30,7 +31,7 @@ class TeachingSectionCandidateValidatorTest {
                 "Repair systems",
                 "Explain repairs.",
                 List.of(),
-                List.of(new EvidenceInput(citation, "RULE", "Repair", evidence.excerpt(), 8, 8)));
+                List.of(new EvidenceInput(citation, "RULE", "Repair", evidence.excerpt(), 8, 8)), PlayerLocale.ZH_CN);
         String naturalText = "系统受损时，你可以花一次行动修复它；若眼下更需要火力，也可以稍后再处理。";
         SectionDraft draft = new SectionDraft(
                 "修复系统",
@@ -58,7 +59,7 @@ class TeachingSectionCandidateValidatorTest {
                 "Turn",
                 "Take a turn.",
                 List.of(),
-                List.of(new EvidenceInput(allowed, "RULE", "Turn", allowedEvidence.excerpt(), 4, 4)));
+                List.of(new EvidenceInput(allowed, "RULE", "Turn", allowedEvidence.excerpt(), 4, 4)), PlayerLocale.ZH_CN);
         SectionDraft draft = new SectionDraft(
                 "Turn",
                 List.of(new StepDraft("Act", TeachingMove.DO, "Use unrelated evidence.", List.of(outside))));
@@ -81,7 +82,7 @@ class TeachingSectionCandidateValidatorTest {
                 "Learn.",
                 List.of(planned()),
                 "owner",
-                Instant.EPOCH);
+                Instant.EPOCH, PlayerLocale.ZH_CN);
     }
 
     private TeachingPlan.PlannedSection planned() {

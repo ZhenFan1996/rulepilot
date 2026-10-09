@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.PublicRulebookReferenceLookup.Reference;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness.ReuseAssessment;
@@ -50,13 +51,13 @@ class UploadedRulebookTeachingHandoffServiceTest {
         UUID versionId = UUID.randomUUID();
         UUID editionId = UUID.randomUUID();
         var snapshot = snapshot(handoffId, versionId, "先讲清开局。", UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
-        when(store.request(any(UUID.class), eq(versionId), eq("alice"), eq("先讲清开局。"), eq(NOW)))
+        when(store.request(any(UUID.class), eq(versionId), eq("alice"), eq("先讲清开局。"), eq(NOW), org.mockito.ArgumentMatchers.eq(PlayerLocale.ZH_CN)))
                 .thenReturn(snapshot);
         when(documents.findReferences(List.of(versionId))).thenReturn(Map.of(
                 versionId, new Reference(versionId, editionId, "SETI Rules", null, null)));
         var service = service(store, documents);
 
-        var result = service.request(versionId, " 先讲清开局。 ", " alice ");
+        var result = service.request(versionId, " 先讲清开局。 ", " alice ", PlayerLocale.ZH_CN);
 
         assertThat(result.documentVersionId()).isEqualTo(versionId);
         assertThat(result.editionId()).isEqualTo(editionId);
@@ -79,7 +80,7 @@ class UploadedRulebookTeachingHandoffServiceTest {
 
         assertThat(service.claimReadyForDocument(versionId, 4)).containsExactly(
                 new com.rulepilot.document.UploadedRulebookTeachingHandoffs.ReadyHandoff(
-                        handoffId, versionId, "alice", null));
+                        handoffId, versionId, "alice", null, PlayerLocale.ZH_CN));
     }
 
     @Test
@@ -125,7 +126,7 @@ class UploadedRulebookTeachingHandoffServiceTest {
                 null,
                 0,
                 NOW,
-                NOW)));
+                NOW, PlayerLocale.ZH_CN)));
         when(store.retry(handoffId, failedRunId, "alice", NOW)).thenReturn(waiting);
         when(documents.findReferences(List.of(versionId))).thenReturn(Map.of(
                 versionId, new Reference(versionId, editionId, "SETI Rules", null, null)));
@@ -242,7 +243,7 @@ class UploadedRulebookTeachingHandoffServiceTest {
                 null,
                 1,
                 NOW,
-                NOW);
+                NOW, PlayerLocale.ZH_CN);
         when(store.findRecentOwned("alice", 20)).thenReturn(List.of(recovered));
         when(documents.findReferences(List.of(versionId))).thenReturn(Map.of(
                 versionId, new Reference(versionId, editionId, "SETI Rules", null, null)));
@@ -275,6 +276,6 @@ class UploadedRulebookTeachingHandoffServiceTest {
                 null,
                 0,
                 NOW,
-                NOW);
+                NOW, PlayerLocale.ZH_CN);
     }
 }

@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
@@ -112,14 +113,15 @@ public class TeachingPlanLauncher {
 
     public synchronized PlanLaunch launch(
             UUID documentVersionId,
-            String ownerUsername) {
-        return launch(documentVersionId, null, ownerUsername);
+            String ownerUsername, PlayerLocale outputLanguage) {
+        return launch(documentVersionId, null, ownerUsername, outputLanguage);
     }
 
     public synchronized PlanLaunch launch(
             UUID documentVersionId,
             String learningGoal,
-            String ownerUsername) {
+            String ownerUsername, PlayerLocale outputLanguage) {
+        java.util.Objects.requireNonNull(outputLanguage, "teaching language is required");
         String normalizedLearningGoal = normalizeLearningGoal(learningGoal);
         var existing = runs.findLatestOwned(
                         AssistantRunMode.TEACHING_PREPARATION, documentVersionId, ownerUsername)
@@ -127,6 +129,9 @@ public class TeachingPlanLauncher {
                 .filter(run -> !run.state().terminal());
         if (existing.isPresent()) {
             RunSnapshot run = existing.get();
+            if (run.outputLanguage() != outputLanguage) {
+                throw new IllegalStateException("teaching preparation is already active in another language");
+            }
             return new PlanLaunch(run.id(), run.state(), true);
         }
 
@@ -135,7 +140,7 @@ public class TeachingPlanLauncher {
                 AssistantRunMode.TEACHING_PREPARATION,
                 documentVersionId,
                 ownerUsername,
-                workload);
+                workload, outputLanguage);
         boolean extended = TeachingPlanService.requiresExtendedPreparationLane(workload);
         TaskExecutor admittedExecutor = extended ? extendedPreparationExecutor : startupExecutor;
         Duration admissionTimeout = extended ? extendedAdmissionTimeout : startupAdmissionTimeout;
@@ -167,7 +172,7 @@ public class TeachingPlanLauncher {
                     return;
                 }
                 try {
-                    prepare(claimed, documentVersionId, normalizedLearningGoal, ownerUsername);
+                    prepare(claimed, documentVersionId, normalizedLearningGoal, ownerUsername, outputLanguage);
                 } finally {
                     admission.finish();
                 }
@@ -254,7 +259,7 @@ public class TeachingPlanLauncher {
             RunSnapshot initial,
             UUID documentVersionId,
             String learningGoal,
-            String ownerUsername) {
+            String ownerUsername, PlayerLocale outputLanguage) {
         RunSnapshot current = initial;
         PreparationFailurePhase failurePhase = null;
         try {
@@ -268,8 +273,9 @@ public class TeachingPlanLauncher {
             failurePhase = PreparationFailurePhase.PLAN_RESOLUTION;
             long planResolutionStartedAt = System.nanoTime();
             var planResolution = recordPhase("plan-resolution", planResolutionStartedAt, () -> {
-                var existingPlan = plans.latest(documentVersionId, ownerUsername)
-                        .filter(plan -> Objects.equals(plan.learningGoal(), learningGoal));
+                var existingPlan = plans.latest(documentVersionId, ownerUsername, outputLanguage)
+                        .filter(plan -> Objects.equals(plan.learningGoal(), learningGoal)
+                                && plan.outputLanguage() == outputLanguage);
                 if (existingPlan.isPresent()) {
                     plans.refreshVisualEvidence(documentVersionId, ownerUsername, planningRun.id());
                     return new PlanResolution(existingPlan.get(), true);
@@ -278,7 +284,7 @@ public class TeachingPlanLauncher {
                         documentVersionId,
                         learningGoal,
                         ownerUsername,
-                        planningRun.id()), false);
+                        planningRun.id(), outputLanguage), false);
             });
             long planResolutionNanos = System.nanoTime() - planResolutionStartedAt;
             TeachingPlan plan = planResolution.plan();

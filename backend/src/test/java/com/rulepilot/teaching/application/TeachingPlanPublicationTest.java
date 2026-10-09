@@ -5,6 +5,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.DocumentTeachingPreparation;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.lang.reflect.Method;
@@ -36,7 +37,7 @@ class TeachingPlanPublicationTest {
     void keepsTheTransactionOnTheShortPublicationBoundary() throws NoSuchMethodException {
         Method publication = TeachingPlanPublication.class.getMethod("publish", TeachingPlan.class, String.class);
         Method creation = TeachingPlanService.class.getMethod(
-                "create", UUID.class, String.class, String.class, UUID.class);
+                "create", UUID.class, String.class, String.class, UUID.class, PlayerLocale.class);
 
         assertThat(publication.isAnnotationPresent(Transactional.class)).isTrue();
         assertThat(creation.isAnnotationPresent(Transactional.class)).isFalse();
@@ -59,6 +60,6 @@ class TeachingPlanPublicationTest {
                         List.of("core_loop"),
                         List.of(2))),
                 "alice",
-                Instant.now());
+                Instant.now(), PlayerLocale.ZH_CN);
     }
 }

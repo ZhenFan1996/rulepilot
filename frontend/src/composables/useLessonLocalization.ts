@@ -19,6 +19,7 @@ interface CsrfToken {
 interface LessonLocalizationOptions<TLesson> {
   locale: Readonly<Ref<AppLocale>>
   planId: Readonly<Ref<string>>
+  sourceLanguage: () => AppLocale
   sourceLesson: Ref<TLesson | null>
   displayedLesson: Ref<TLesson | null>
   currentRequest: () => number
@@ -37,8 +38,8 @@ export function useLessonLocalization<TLesson>(options: LessonLocalizationOption
   let readSequence = 0
   let activeReadController: AbortController | null = null
 
-  function endpoint(planId: string) {
-    return `/api/v1/teaching-plans/${planId}/illustrated-lessons/latest/localizations/en`
+  function endpoint(planId: string, language = options.locale.value) {
+    return `/api/v1/teaching-plans/${planId}/illustrated-lessons/latest/localizations/${language}`
   }
 
   function isCurrent(request: number, planId: string) {
@@ -67,7 +68,7 @@ export function useLessonLocalization<TLesson>(options: LessonLocalizationOption
       disposed ||
       !isCurrent(request, planId) ||
       !options.canRead() ||
-      options.locale.value !== 'en' ||
+      options.locale.value === options.sourceLanguage() ||
       !options.sourceLesson.value ||
       !['PENDING', 'RUNNING'].includes(status.value ?? '')
     ) return
@@ -92,7 +93,7 @@ export function useLessonLocalization<TLesson>(options: LessonLocalizationOption
     clearRefresh()
     const source = options.sourceLesson.value
     if (!source) return
-    if (options.locale.value !== 'en') {
+    if (options.locale.value === options.sourceLanguage()) {
       cancelReads()
       status.value = 'READY'
       options.displayedLesson.value = source
@@ -117,7 +118,7 @@ export function useLessonLocalization<TLesson>(options: LessonLocalizationOption
         await options.requestLogin()
         return
       }
-      if (!response.ok) throw new Error('English guide is unavailable.')
+      if (!response.ok) throw new Error('Guide translation is unavailable.')
       const localized = await response.json() as LocalizedLessonResponse<TLesson>
       if (!isCurrentRead(request, targetPlanId, read, controller)) return
       if ((localized.lesson && !options.isLessonForPlan(localized.lesson, targetPlanId))
@@ -138,26 +139,27 @@ export function useLessonLocalization<TLesson>(options: LessonLocalizationOption
     }
   }
 
-  async function prepareEnglishGuide() {
+  async function prepareGuide() {
     if (!options.sourceLesson.value || preparing.value) return
     const targetPlanId = options.planId.value
     const request = options.currentRequest()
+    const targetLanguage = options.locale.value
     cancelReads()
     preparing.value = true
     try {
       const csrf = await options.csrfToken()
-      if (!isCurrent(request, targetPlanId)) return
-      const response = await fetch(endpoint(targetPlanId), {
+      if (!isCurrent(request, targetPlanId) || options.locale.value !== targetLanguage) return
+      const response = await fetch(endpoint(targetPlanId, targetLanguage), {
         method: 'POST',
         credentials: 'include',
         headers: { [csrf.headerName]: csrf.token },
       })
-      if (!response.ok) throw new Error('English guide could not be queued.')
+      if (!response.ok) throw new Error('Guide translation could not be queued.')
       const localized = await response.json() as LocalizedLessonResponse<TLesson>
-      if (!isCurrent(request, targetPlanId)) return
+      if (!isCurrent(request, targetPlanId) || options.locale.value !== targetLanguage) return
       status.value = localized.status
     } catch {
-      if (!isCurrent(request, targetPlanId)) return
+      if (!isCurrent(request, targetPlanId) || options.locale.value !== targetLanguage) return
       status.value = 'FAILED'
     } finally {
       if (isCurrent(request, targetPlanId)) {
@@ -182,7 +184,7 @@ export function useLessonLocalization<TLesson>(options: LessonLocalizationOption
     status,
     preparing,
     applySelectedLocale,
-    prepareEnglishGuide,
+    prepareGuide,
     cancelReads,
     reset,
     dispose,

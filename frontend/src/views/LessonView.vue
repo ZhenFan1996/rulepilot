@@ -41,6 +41,7 @@ import { useLocale } from '@/lib/locale'
 interface TeachingPlan {
   id: string
   documentVersionId: string
+  outputLanguage?: 'ZH_CN' | 'EN'
   gameTitle: string
   premise: string
   wholeGameContext?: { unresolvedTopics: string[] }
@@ -386,7 +387,7 @@ const {
   status: localizationStatus,
   preparing: localizationPreparing,
   applySelectedLocale,
-  prepareEnglishGuide,
+  prepareGuide,
   cancelReads: cancelLocalizationReads,
   reset: resetLessonLocalization,
   dispose: disposeLessonLocalization,
@@ -394,6 +395,7 @@ const {
   locale,
   planId,
   sourceLesson,
+  sourceLanguage: () => plan.value?.outputLanguage === 'EN' ? 'en' : 'zh-CN',
   displayedLesson: lesson,
   currentRequest: () => latestLessonLoad,
   isCurrent: (request, targetPlanId) => isCurrentLessonLoad(request, targetPlanId),
@@ -775,10 +777,10 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <section v-if="locale === 'en' && lesson && localizationStatus !== 'READY'" class="border-b border-indigo/15 bg-indigo/5 px-5 py-3" role="status">
+      <section v-if="lesson && localizationStatus !== 'READY'" class="border-b border-indigo/15 bg-indigo/5 px-5 py-3" role="status">
         <div class="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 text-sm leading-6 text-indigo">
-          <p>{{ localizationStatus === 'FAILED' ? 'The English guide could not be prepared. The cited Chinese guide is still available.' : 'The English guide is being prepared. The cited Chinese guide remains available while it finishes.' }}</p>
-          <button v-if="!['PENDING', 'RUNNING'].includes(localizationStatus ?? '')" type="button" :disabled="localizationPreparing" class="min-h-10 rounded-xl bg-indigo px-4 text-sm font-semibold text-white disabled:opacity-50" @click="prepareEnglishGuide">{{ localizationPreparing ? 'Preparing…' : 'Prepare English guide' }}</button>
+          <p>{{ locale === 'en' ? (localizationStatus === 'FAILED' ? 'Translation failed. The original guide remains available.' : 'This guide was created in Chinese. Prepare an English translation to read it in English.') : (localizationStatus === 'FAILED' ? '翻译失败，原文讲解仍可阅读。' : '这份讲解以英文生成，可准备中文译本。') }}</p>
+          <button v-if="!['PENDING', 'RUNNING'].includes(localizationStatus ?? '')" type="button" :disabled="localizationPreparing" class="min-h-10 rounded-xl bg-indigo px-4 text-sm font-semibold text-white disabled:opacity-50" @click="prepareGuide">{{ locale === 'en' ? (localizationPreparing ? 'Preparing…' : 'Prepare English guide') : (localizationPreparing ? '准备中…' : '准备中文讲解') }}</button>
         </div>
       </section>
 

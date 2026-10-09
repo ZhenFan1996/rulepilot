@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDependencyDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
@@ -23,7 +24,7 @@ class TeachingPlanFactoryTest {
                 List.of(new TopicDependencyDraft("setup", "repair", "Set up before play.")),
                 List.of("One external scenario sheet is unavailable"));
 
-        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "owner", outline);
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "owner", outline, PlayerLocale.ZH_CN);
 
         assertThat(plan.sections()).extracting(section -> section.topicKey()).containsExactly("setup", "repair");
         assertThat(plan.sections().get(1).sourcePageNumbers()).containsExactly(8, 9);

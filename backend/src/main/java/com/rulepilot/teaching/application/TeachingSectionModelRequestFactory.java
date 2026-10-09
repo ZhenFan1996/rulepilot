@@ -21,7 +21,7 @@ final class TeachingSectionModelRequestFactory {
                 planned.objective(),
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
-                plan.createdBy());
+                plan.createdBy(), plan.outputLanguage());
     }
 
     private EvidenceInput toModelEvidence(RuleEvidence evidence) {

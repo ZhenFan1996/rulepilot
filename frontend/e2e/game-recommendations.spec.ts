@@ -462,7 +462,7 @@ async function mockPublicDiscovery(
   await page.route('**/api/v1/assistant-runs/preparation-run-retry', route => route.fulfill({
     json: assistantRun('preparation-run-retry', 'COMPLETED', 2),
   }))
-  await page.route('**/api/v1/document-versions/version-1/teaching-plans/latest', route => route.fulfill({ json: teachingPlan }))
+  await page.route('**/api/v1/document-versions/version-1/teaching-plans/latest?language=*', route => route.fulfill({ json: teachingPlan }))
   await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({ json: teachingPlan }))
   await page.route('**/api/v1/assistant-runs/latest?*', route => {
     const url = route.request().url()

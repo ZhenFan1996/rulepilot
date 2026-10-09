@@ -253,7 +253,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await vi.runOnlyPendingTimersAsync()
   })
 
-  it('sends a free-form learning goal to the outline planner without client-side mode routing', async () => {
+  it('sends the selected English language independently of a Chinese learning goal', async () => {
+    setLocale('en')
     vi.useFakeTimers()
     const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING')
     vi.stubGlobal('fetch', fetchMock)
@@ -261,16 +262,14 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const { wrapper } = await mountDocuments()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('这次最想学会什么？')
-    expect(wrapper.text()).toContain('用自然语言说就好')
     const detailedLearningGoal = '先让我能带大家开局，再重点讲行动之间怎么衔接；容易混淆的地方多举例。'.repeat(12)
     await wrapper.get('[data-testid="rulebook-learning-goal"]').setValue(detailedLearningGoal)
-    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Generate lesson in background')!.trigger('click')
     await flushPromises()
 
     const planningRequest = fetchMock.mock.calls.find(([input, options]) =>
       String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')
-    expect(JSON.parse(String(planningRequest?.[1]?.body))).toEqual({ learningGoal: detailedLearningGoal })
+    expect(JSON.parse(String(planningRequest?.[1]?.body))).toEqual({ learningGoal: detailedLearningGoal, language: 'en' })
     wrapper.unmount()
     await vi.runOnlyPendingTimersAsync()
   })
@@ -763,6 +762,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
       sourceLanguage: null,
       sourceLanguageVerified: false,
       identityConfirmed: false,
+      language: 'zh-CN',
     })
     expect(importOptions?.headers).toEqual({
       'Content-Type': 'application/json',

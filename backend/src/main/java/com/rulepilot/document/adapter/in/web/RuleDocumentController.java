@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.in.web;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.application.RuleDocumentRepository;
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.document.application.PhotographedRulebookUploadService;
@@ -52,6 +53,7 @@ public class RuleDocumentController {
             @RequestParam(required = false) String officialCoverUrl,
             @RequestParam(defaultValue = "false") boolean startTeaching,
             @RequestParam(required = false) String learningGoal,
+            @RequestParam(defaultValue = "zh-CN") String language,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -67,7 +69,7 @@ public class RuleDocumentController {
                     file.getInputStream(),
                     principal.getName(),
                     startTeaching,
-                    learningGoal);
+                    learningGoal, PlayerLocale.fromRequest(language));
             return UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read uploaded file", exception);
@@ -84,6 +86,7 @@ public class RuleDocumentController {
             @RequestParam(required = false) String officialCoverUrl,
             @RequestParam(defaultValue = "false") boolean startTeaching,
             @RequestParam(required = false) String learningGoal,
+            @RequestParam(defaultValue = "zh-CN") String language,
             @RequestParam("photos") List<MultipartFile> photos,
             Principal principal) {
         try {
@@ -96,7 +99,7 @@ public class RuleDocumentController {
                     photoPages(photos),
                     principal.getName(),
                     startTeaching,
-                    learningGoal);
+                    learningGoal, PlayerLocale.fromRequest(language));
             return UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read photographed rulebook pages", exception);

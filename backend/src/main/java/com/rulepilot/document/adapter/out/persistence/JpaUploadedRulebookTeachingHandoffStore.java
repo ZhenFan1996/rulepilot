@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.out.persistence;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -30,21 +31,22 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
             UUID documentVersionId,
             String ownerUsername,
             String learningGoal,
-            Instant now) {
+            Instant now, PlayerLocale outputLanguage) {
         int changed = entityManager
                 .createNativeQuery(
                         """
                         INSERT INTO uploaded_rulebook_teaching_handoff (
-                            id, document_version_id, owner_username, learning_goal, state,
+                            id, document_version_id, owner_username, learning_goal, output_language, state,
                             preparation_run_id, error_code, created_at, updated_at
                         )
-                        SELECT :handoffId, version.id, document.created_by, :learningGoal,
+                        SELECT :handoffId, version.id, document.created_by, :learningGoal, :outputLanguage,
                                'WAITING_FOR_DOCUMENT', NULL, NULL, :now, :now
                         FROM document_version version
                         JOIN rule_document document ON document.id = version.document_id
                         WHERE version.id = :versionId AND document.created_by = :owner
                         ON CONFLICT (document_version_id) DO UPDATE
                         SET learning_goal = EXCLUDED.learning_goal,
+                            output_language = EXCLUDED.output_language,
                             state = 'WAITING_FOR_DOCUMENT',
                             preparation_run_id = NULL,
                             error_code = NULL,
@@ -52,11 +54,22 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
                             reconciled_at = NULL,
                             updated_at = EXCLUDED.updated_at
                         WHERE uploaded_rulebook_teaching_handoff.state = 'FAILED'
+                           OR (uploaded_rulebook_teaching_handoff.output_language <> EXCLUDED.output_language
+                               AND uploaded_rulebook_teaching_handoff.state = 'LAUNCHED'
+                               AND EXISTS (SELECT 1 FROM assistant_run run
+                                   WHERE run.id = uploaded_rulebook_teaching_handoff.preparation_run_id
+                                     AND run.state IN ('COMPLETED', 'DEGRADED', 'FAILED', 'CANCELLED'))
+                               AND NOT EXISTS (SELECT 1 FROM assistant_run run JOIN teaching_plan plan
+                                   ON plan.id = run.subject_id
+                                   WHERE plan.document_version_id = EXCLUDED.document_version_id
+                                     AND run.mode = 'TEACHING'
+                                     AND run.state NOT IN ('COMPLETED', 'DEGRADED', 'FAILED', 'CANCELLED')))
                         """)
                 .setParameter("handoffId", handoffId)
                 .setParameter("versionId", documentVersionId)
                 .setParameter("owner", ownerUsername)
                 .setParameter("learningGoal", learningGoal)
+                .setParameter("outputLanguage", outputLanguage.name())
                 .setParameter("now", now)
                 .executeUpdate();
         entityManager.flush();
@@ -420,6 +433,7 @@ class UploadedRulebookTeachingHandoffEntity {
     @Column(name = "document_version_id", nullable = false) UUID documentVersionId;
     @Column(name = "owner_username", nullable = false) String ownerUsername;
     @Column(name = "learning_goal", columnDefinition = "text") String learningGoal;
+    @Column(name = "output_language", nullable = false) String outputLanguage;
     @Column(nullable = false) String state;
     @Column(name = "preparation_run_id") UUID preparationRunId;
     @Column(name = "error_code") String errorCode;
@@ -441,6 +455,6 @@ class UploadedRulebookTeachingHandoffEntity {
                 errorCode,
                 automaticRecoveryCount,
                 createdAt,
-                updatedAt);
+                updatedAt, PlayerLocale.valueOf(outputLanguage));
     }
 }

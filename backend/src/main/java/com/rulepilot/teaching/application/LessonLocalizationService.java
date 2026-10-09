@@ -1,6 +1,6 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.LessonLocalization;
 import java.util.UUID;
@@ -28,7 +28,7 @@ public class LessonLocalizationService {
     }
 
     public synchronized LocalizationView prepare(UUID planId, String owner, PlayerLocale language) {
-        if (language == PlayerLocale.ZH_CN) throw new IllegalArgumentException("source lesson is already Chinese");
+        if (language == persistence.sourceLanguage(planId)) throw new IllegalArgumentException("lesson is already in the requested language");
         var preparation = persistence.prepare(planId, owner, language);
         if (!preparation.reused()) {
             try {
@@ -42,17 +42,20 @@ public class LessonLocalizationService {
     }
 
     public LocalizationView view(IllustratedLesson source, PlayerLocale language) {
-        if (language == PlayerLocale.ZH_CN) return new LocalizationView(PlayerLocale.ZH_CN, LessonLocalization.Status.READY, source, null);
+        PlayerLocale sourceLanguage = persistence.sourceLanguage(source.teachingPlanId());
+        if (language == sourceLanguage) return new LocalizationView(language, LessonLocalization.Status.READY, source, null);
         return persistence.find(source.id(), language)
                 .map(localization -> view(localization, source))
-                .orElseGet(() -> new LocalizationView(language, null, source, null));
+                .orElseGet(() -> new LocalizationView(sourceLanguage, null, source, null));
     }
 
     private LocalizationView view(LessonLocalization localization, IllustratedLesson source) {
         IllustratedLesson translated = source != null && localization.status() == LessonLocalization.Status.READY
                 ? localization.applyTo(source)
                 : source;
-        return new LocalizationView(localization.language(), localization.status(), translated, localization.failureCode());
+        return new LocalizationView(source != null && localization.status() != LessonLocalization.Status.READY
+                ? persistence.sourceLanguage(source.teachingPlanId()) : localization.language(),
+                localization.status(), translated, localization.failureCode());
     }
 
     public record LocalizationView(

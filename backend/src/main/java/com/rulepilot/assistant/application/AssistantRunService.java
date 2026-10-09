@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
@@ -90,8 +91,15 @@ public class AssistantRunService implements AssistantRuns {
             UUID subjectId,
             String ownerUsername,
             WorkloadDemand workloadDemand) {
+        return start(mode, subjectId, ownerUsername, workloadDemand, PlayerLocale.ZH_CN);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername,
+            WorkloadDemand workloadDemand, PlayerLocale outputLanguage) {
         BudgetLimits limits = limitsFor(mode, workloadDemand);
-        AssistantRun run = AssistantRun.start(mode, subjectId, ownerUsername, Instant.now(clock));
+        AssistantRun run = AssistantRun.start(mode, subjectId, ownerUsername, Instant.now(clock), outputLanguage);
         repository.insert(run, "Run received");
         execution.initialize(run.id(), limits, run.createdAt());
         return snapshot(run);
@@ -468,6 +476,6 @@ public class AssistantRunService implements AssistantRuns {
     private RunSnapshot snapshot(AssistantRun run) {
         return new RunSnapshot(
                 run.id(), run.mode(), run.subjectId(), run.ownerUsername(), run.state(), run.revision(),
-                run.createdAt(), run.updatedAt(), run.completedAt(), run.lastErrorCode());
+                run.createdAt(), run.updatedAt(), run.completedAt(), run.lastErrorCode(), run.outputLanguage());
     }
 }
