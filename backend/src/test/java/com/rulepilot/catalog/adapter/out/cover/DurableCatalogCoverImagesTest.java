@@ -15,9 +15,12 @@ import com.rulepilot.catalog.CatalogCoverImages.Ready;
 import com.rulepilot.catalog.CatalogCoverImages.Retryable;
 import com.rulepilot.catalog.CatalogGameSelectionLookup;
 import com.rulepilot.catalog.CatalogGameSelectionLookup.GameSelection;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.adapter.out.cover.CoverImageFetcher.SourceAbsentException;
 import com.rulepilot.catalog.adapter.out.cover.CoverThumbnailCache.Thumbnail;
 import java.util.Optional;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class DurableCatalogCoverImagesTest {
@@ -27,7 +30,22 @@ class DurableCatalogCoverImagesTest {
 
     private final CatalogGameSelectionLookup games = mock(CatalogGameSelectionLookup.class);
     private final DurableCoverThumbnailService thumbnails = mock(DurableCoverThumbnailService.class);
-    private final DurableCatalogCoverImages covers = new DurableCatalogCoverImages(games, thumbnails);
+    private final BoardGameGeekCatalog bgg = mock(BoardGameGeekCatalog.class);
+    private final DurableCatalogCoverImages covers = new DurableCatalogCoverImages(games, thumbnails, bgg);
+
+    @Test
+    void recoversACoverAfterItsSourceMetadataWasEvicted() {
+        givenGame("", "");
+        DiscoveryGame refreshed = mock(DiscoveryGame.class);
+        when(refreshed.bggId()).thenReturn(42);
+        when(refreshed.thumbnailUrl()).thenReturn(THUMBNAIL);
+        when(refreshed.imageUrl()).thenReturn(IMAGE);
+        when(bgg.gameDetails(List.of(42))).thenReturn(List.of(refreshed));
+        when(thumbnails.thumbnailFor(THUMBNAIL, COMPACT_PROFILE))
+                .thenReturn(new Thumbnail(new byte[] {1, 2, 3}));
+
+        assertThat(covers.load(42, COMPACT)).isInstanceOf(Ready.class);
+    }
 
     @Test
     void compactPrefersTheThumbnailSourceAndUsesOnlyTheCompactProfile() {
@@ -41,6 +59,7 @@ class DurableCatalogCoverImagesTest {
         });
         verify(games).findStored(42);
         verify(games, never()).find(42);
+        org.mockito.Mockito.verifyNoInteractions(bgg);
         verify(thumbnails).thumbnailFor(THUMBNAIL, COMPACT_PROFILE);
         verify(thumbnails, never()).thumbnailFor(IMAGE, COMPACT_PROFILE);
         verify(thumbnails, never()).thumbnailFor(
@@ -92,6 +111,13 @@ class DurableCatalogCoverImagesTest {
         assertThat(covers.load(42, COMPACT)).isInstanceOf(Absent.class);
 
         when(games.findStored(42)).thenThrow(new IllegalStateException("projection unavailable"));
+        assertThat(covers.load(42, COMPACT)).isInstanceOf(Retryable.class);
+    }
+
+    @Test
+    void metadataRecoveryFailureRemainsRetryable() {
+        givenGame("", "");
+        when(bgg.gameDetails(List.of(42))).thenThrow(new IllegalStateException("metadata source unavailable"));
         assertThat(covers.load(42, COMPACT)).isInstanceOf(Retryable.class);
     }
 

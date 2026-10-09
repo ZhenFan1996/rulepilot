@@ -7,6 +7,7 @@ import static com.rulepilot.catalog.adapter.out.cover.DurableCoverThumbnailServi
 import com.rulepilot.catalog.CatalogCoverImages;
 import com.rulepilot.catalog.CatalogGameSelectionLookup;
 import com.rulepilot.catalog.CatalogGameSelectionLookup.GameSelection;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog;
 import com.rulepilot.catalog.adapter.out.cover.CoverImageFetcher.SourceAbsentException;
 import com.rulepilot.catalog.adapter.out.cover.CoverThumbnailCache.Thumbnail;
 import java.security.MessageDigest;
@@ -28,10 +29,13 @@ public class DurableCatalogCoverImages implements CatalogCoverImages {
 
     private final CatalogGameSelectionLookup games;
     private final DurableCoverThumbnailService thumbnails;
+    private final BoardGameGeekCatalog bgg;
 
-    public DurableCatalogCoverImages(CatalogGameSelectionLookup games, DurableCoverThumbnailService thumbnails) {
+    public DurableCatalogCoverImages(
+            CatalogGameSelectionLookup games, DurableCoverThumbnailService thumbnails, BoardGameGeekCatalog bgg) {
         this.games = games;
         this.thumbnails = thumbnails;
+        this.bgg = bgg;
     }
 
     @Override
@@ -45,6 +49,17 @@ public class DurableCatalogCoverImages implements CatalogCoverImages {
         Optional<GameSelection> selected;
         try {
             selected = games.findStored(bggId);
+            if (selected.isPresent()
+                    && source(selected.orElseThrow().thumbnailUrl()).isEmpty()
+                    && source(selected.orElseThrow().imageUrl()).isEmpty()) {
+                // Source metadata expires independently of durable image bytes. A cache miss is not image absence.
+                GameSelection stored = selected.orElseThrow();
+                selected = bgg.gameDetails(List.of(bggId)).stream()
+                        .filter(game -> game.bggId() == bggId)
+                        .findFirst()
+                        .map(game -> new GameSelection(bggId, stored.name(), stored.chineseName(),
+                                stored.publicationYear(), game.thumbnailUrl(), game.imageUrl()));
+            }
         } catch (RuntimeException unavailable) {
             return new Retryable(RETRY_AFTER);
         }
