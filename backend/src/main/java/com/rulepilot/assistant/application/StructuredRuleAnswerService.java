@@ -1,9 +1,9 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.domain.LearningIntent;

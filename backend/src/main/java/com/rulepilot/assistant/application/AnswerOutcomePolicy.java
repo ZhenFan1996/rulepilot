@@ -1,6 +1,6 @@
 package com.rulepilot.assistant.application;
 
-import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;

@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.out.persistence;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -75,7 +76,7 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
     public List<TeachingPlanSummary> findSummariesByCreatedBy(String createdBy) {
         List<Object[]> planRows = entityManager
                 .createQuery(
-                        "select p.id, p.documentVersionId, p.gameTitle, p.premise, p.wholeGameContext, p.createdBy, p.createdAt "
+                        "select p.id, p.documentVersionId, p.gameTitle, p.premise, p.wholeGameContext, p.createdBy, p.createdAt, p.outputLanguage "
                                 + "from TeachingPlanEntity p where p.createdBy = :createdBy order by p.createdAt desc",
                         Object[].class)
                 .setParameter("createdBy", createdBy)
@@ -112,7 +113,7 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                         sectionsByPlan.getOrDefault((UUID) row[0], List.of()),
                         null,
                         (String) row[5],
-                        (Instant) row[6]))
+                        (Instant) row[6], (PlayerLocale) row[7]))
                 .toList();
     }
 
@@ -139,12 +140,13 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
     }
 
     @Override
-    public Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy) {
+    public Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy, PlayerLocale outputLanguage) {
         return entityManager
                 .createQuery(
-                        "select p from TeachingPlanEntity p where p.documentVersionId = :versionId and p.createdBy = :createdBy order by p.createdAt desc",
+                        "select p from TeachingPlanEntity p where p.documentVersionId = :versionId and p.createdBy = :createdBy and (:language is null or p.outputLanguage = :language) order by p.createdAt desc",
                         TeachingPlanEntity.class)
                 .setParameter("versionId", documentVersionId)
+                .setParameter("language", outputLanguage)
                 .setParameter("createdBy", createdBy)
                 .setMaxResults(1)
                 .getResultList()
@@ -212,6 +214,10 @@ class TeachingPlanEntity {
     @Column(name = "learning_goal", columnDefinition = "text")
     String learningGoal;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @Column(name = "output_language", nullable = false)
+    PlayerLocale outputLanguage;
+
     @Column(name = "game_title", nullable = false, columnDefinition = "text")
     String gameTitle;
 
@@ -234,6 +240,7 @@ class TeachingPlanEntity {
         this.id = plan.id();
         this.documentVersionId = plan.documentVersionId();
         this.learningGoal = plan.learningGoal();
+        this.outputLanguage = plan.outputLanguage();
         this.gameTitle = plan.gameTitle();
         this.premise = plan.premise();
         this.wholeGameContext = writeContext(plan.wholeGameContext());
@@ -251,7 +258,7 @@ class TeachingPlanEntity {
                 readContext(wholeGameContext, premise),
                 sections,
                 createdBy,
-                createdAt);
+                createdAt, outputLanguage);
     }
 
     private static String writeContext(TeachingPlan.WholeGameContext context) {

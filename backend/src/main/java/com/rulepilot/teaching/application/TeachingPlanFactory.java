@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
@@ -18,19 +19,19 @@ public class TeachingPlanFactory {
     public TeachingPlan create(
             UUID documentVersionId,
             String createdBy,
-            OutlineDraft outline) {
+            OutlineDraft outline, PlayerLocale outputLanguage) {
         return create(
                 documentVersionId,
                 null,
                 createdBy,
-                outline);
+                outline, outputLanguage);
     }
 
     public TeachingPlan create(
             UUID documentVersionId,
             String learningGoal,
             String createdBy,
-            OutlineDraft outline) {
+            OutlineDraft outline, PlayerLocale outputLanguage) {
         validate(outline);
         Set<String> keys = new HashSet<>();
         List<PlannedSection> topics = java.util.stream.IntStream.range(0, outline.topics().size())
@@ -62,7 +63,7 @@ public class TeachingPlanFactory {
                 wholeGameContext(outline),
                 topics,
                 createdBy,
-                Instant.now());
+                Instant.now(), outputLanguage);
     }
 
     void validate(OutlineDraft outline) {

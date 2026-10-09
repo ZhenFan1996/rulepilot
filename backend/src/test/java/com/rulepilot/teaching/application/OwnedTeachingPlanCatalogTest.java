@@ -21,7 +21,7 @@ class OwnedTeachingPlanCatalogTest {
         UUID lessonId = UUID.randomUUID();
         var plan = new TeachingPlanSummary(
                 planId, UUID.randomUUID(), "Game", "Premise", List.of(), null,
-                "alice", Instant.parse("2026-08-21T05:00:00Z"));
+                "alice", Instant.parse("2026-08-21T05:00:00Z"), com.rulepilot.shared.PlayerLocale.EN);
         when(plans.findSummariesByCreatedBy("alice")).thenReturn(List.of(plan));
         when(lessons.findLatestProgressSummariesByPlans(List.of(planId))).thenReturn(List.of(
                 new IllustratedLessonRepository.ProgressSummary(
@@ -31,6 +31,7 @@ class OwnedTeachingPlanCatalogTest {
         var result = new OwnedTeachingPlanCatalog(plans, lessons).list("alice");
 
         assertThat(result).hasSize(1);
+        assertThat(result.getFirst().outputLanguage()).isEqualTo(com.rulepilot.shared.PlayerLocale.EN);
         assertThat(result.getFirst().lesson().id()).isEqualTo(lessonId);
         assertThat(result.getFirst().lesson().sections())
                 .extracting(TeachingPlanSummary.SectionProgress::evidenceStatus)

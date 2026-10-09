@@ -42,6 +42,7 @@ import {
 interface TeachingPlan {
   id: string
   documentVersionId: string
+  outputLanguage?: 'ZH_CN' | 'EN'
   gameTitle: string
   premise: string
   createdAt: string
@@ -803,6 +804,7 @@ function planLaunchLabel(planId: string) {
 
 async function retryPendingJourney(journey: (typeof pendingJourneys.value)[number]) {
   if (retryingJourneyId.value || journey.retryAction !== 'PREPARE_TEACHING' || !journey.documentVersionId) return
+  const outputLanguage = preparationRuns.value.find(run => run.id === journey.preparationRunId)?.outputLanguage ?? 'ZH_CN'
   retryingJourneyId.value = journey.id
   const nextErrors = { ...journeyRetryErrors.value }
   delete nextErrors[journey.id]
@@ -822,7 +824,7 @@ async function retryPendingJourney(journey: (typeof pendingJourneys.value)[numbe
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify(durableRetryPath
         ? { expectedPreparationRunId: journey.preparationRunId }
-        : { learningGoal: null }),
+        : { learningGoal: null, language: outputLanguage === 'EN' ? 'en' : 'zh-CN' }),
     })
     if (!response.ok) throw new Error(pendingCopy.value.retryFailed)
     if (durableRetryPath) {
@@ -834,6 +836,7 @@ async function retryPendingJourney(journey: (typeof pendingJourneys.value)[numbe
         ...preparationRuns.value.filter(run => run.id !== launch.assistantRunId),
         {
           id: launch.assistantRunId,
+          outputLanguage,
           subjectId: journey.documentVersionId,
           state: launch.state,
           updatedAt: new Date().toISOString(),
@@ -1182,6 +1185,7 @@ onBeforeUnmount(() => {
               <div class="min-w-0">
                 <p class="text-xs font-medium text-muted">{{ createdLabel(plan.createdAt) }}</p>
                 <h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ displayPlanTitle(plan) }}</h2>
+                <p class="mt-1 text-xs text-muted">{{ plan.outputLanguage === 'EN' ? 'English' : '中文' }}</p>
               </div>
             </div>
             <PlayerWorkStatusText

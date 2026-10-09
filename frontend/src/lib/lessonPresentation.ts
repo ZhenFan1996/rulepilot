@@ -49,7 +49,7 @@ export function deduplicatePublicLessons<T extends PublicLessonIdentity>(lessons
   return result
 }
 
-export function groupPlansForReading<T extends { gameTitle: string; documentVersionId?: string; createdAt?: string }>(
+export function groupPlansForReading<T extends { gameTitle: string; documentVersionId?: string; createdAt?: string; outputLanguage?: 'ZH_CN' | 'EN' }>(
   plans: T[],
   priority: (plan: T) => number = () => 0,
 ): PresentedPlan<T>[] {
@@ -57,7 +57,8 @@ export function groupPlansForReading<T extends { gameTitle: string; documentVers
   const result: PresentedPlan<T>[] = []
   for (const plan of plans) {
     const title = playerFacingTitle(plan.gameTitle)
-    const key = plan.documentVersionId?.trim() ? `document:${plan.documentVersionId}` : `title:${titleKey(title)}`
+    const identity = plan.documentVersionId?.trim() ? `document:${plan.documentVersionId}` : `title:${titleKey(title)}`
+    const key = `${identity}:${plan.outputLanguage ?? 'ZH_CN'}`
     const previousPosition = positions.get(key)
     if (previousPosition === undefined) {
       positions.set(key, result.length)

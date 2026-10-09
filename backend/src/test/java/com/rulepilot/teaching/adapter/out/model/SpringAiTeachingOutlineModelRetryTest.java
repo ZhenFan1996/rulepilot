@@ -8,6 +8,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -49,7 +50,9 @@ class SpringAiTeachingOutlineModelRetryTest {
                         "reason":"Publish the readable chapter and report the gap"}
                         """));
 
-        var outline = fixture.model.organize(request());
+        var original = request();
+        var outline = fixture.model.organize(new OutlineRequest(original.pages(), original.pageImages(),
+                original.learningGoal(), original.modelConfigurationOwner(), PlayerLocale.EN));
 
         assertThat(outline.topics()).singleElement().satisfies(topic -> {
             assertThat(topic.key()).isEqualTo("play-turn");
@@ -63,6 +66,7 @@ class SpringAiTeachingOutlineModelRetryTest {
         assertThat(completion.getInstructions().stream().filter(AssistantMessage.class::isInstance))
                 .hasSize(2);
         String context = promptText(completion);
+        assertThat(context).contains("\"outputLocale\":\"en\"");
         for (PageInput page : request().pages()) {
             assertThat(context.indexOf(page.text())).isGreaterThanOrEqualTo(0);
             assertThat(context.indexOf(page.text())).isEqualTo(context.lastIndexOf(page.text()));
@@ -308,14 +312,14 @@ class SpringAiTeachingOutlineModelRetryTest {
                         new PageInput(1, "SETUP: Place one marker. TAKE TURN: Move one marker."),
                         new PageInput(2, "SYSTEMS AND REPAIR: Repair a damaged system.", true, true)),
                 List.of(),
-                "player");
+                "player", PlayerLocale.ZH_CN);
     }
 
     private static OutlineRequest onePageRequest() {
         return new OutlineRequest(
                 List.of(new PageInput(1, "TAKE TURN: Move one marker.")),
                 List.of(),
-                "player");
+                "player", PlayerLocale.ZH_CN);
     }
 
     private static ChatResponse response(String content) {

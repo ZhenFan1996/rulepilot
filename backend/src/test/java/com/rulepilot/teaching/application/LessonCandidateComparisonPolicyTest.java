@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -74,7 +75,7 @@ class LessonCandidateComparisonPolicyTest {
                         List.of("setup"),
                         List.of("setup"))),
                 "admin",
-                Instant.parse("2026-08-05T00:00:00Z"));
+                Instant.parse("2026-08-05T00:00:00Z"), PlayerLocale.ZH_CN);
     }
 
     private IllustratedLesson lesson(

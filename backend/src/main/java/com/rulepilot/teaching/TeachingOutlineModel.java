@@ -1,5 +1,6 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.shared.PlayerLocale;
 import java.util.List;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
@@ -65,8 +66,9 @@ public interface TeachingOutlineModel {
             List<PageInput> pages,
             List<PageImageInput> pageImages,
             String learningGoal,
-            String modelConfigurationOwner) {
+            String modelConfigurationOwner, PlayerLocale outputLanguage) {
         public OutlineRequest {
+            java.util.Objects.requireNonNull(outputLanguage, "teaching language is required");
             if (pages == null || pages.isEmpty() || pageImages == null) {
                 throw new IllegalArgumentException("teaching outline request is invalid");
             }
@@ -76,16 +78,16 @@ public interface TeachingOutlineModel {
             modelConfigurationOwner = optional(modelConfigurationOwner);
         }
 
-        public OutlineRequest(List<PageInput> pages, List<PageImageInput> pageImages, String modelConfigurationOwner) {
-            this(pages, pageImages, null, modelConfigurationOwner);
+        public OutlineRequest(List<PageInput> pages, List<PageImageInput> pageImages, String modelConfigurationOwner, PlayerLocale outputLanguage) {
+            this(pages, pageImages, null, modelConfigurationOwner, outputLanguage);
         }
 
-        public OutlineRequest(List<PageInput> pages, List<PageImageInput> pageImages) {
-            this(pages, pageImages, null, null);
+        public OutlineRequest(List<PageInput> pages, List<PageImageInput> pageImages, PlayerLocale outputLanguage) {
+            this(pages, pageImages, null, null, outputLanguage);
         }
 
-        public OutlineRequest(List<PageInput> pages) {
-            this(pages, List.of(), null, null);
+        public OutlineRequest(List<PageInput> pages, PlayerLocale outputLanguage) {
+            this(pages, List.of(), null, null, outputLanguage);
         }
 
         public String learningGoalForPrompt() {

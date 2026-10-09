@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.out.persistence;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.application.OfficialRulebookImportJobRepository;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
@@ -155,13 +156,14 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void requestTeaching(UUID jobId, String learningGoal, Instant now) {
+    public void requestTeaching(UUID jobId, String learningGoal, Instant now, PlayerLocale outputLanguage) {
         int updated = entityManager
                 .createQuery(
                         """
                         update OfficialRulebookImportJobEntity job
                         set job.teachingHandoffState = 'WAITING_FOR_DOCUMENT',
                             job.teachingLearningGoal = :learningGoal,
+                            job.teachingOutputLanguage = :outputLanguage,
                             job.teachingPreparationRunId = null,
                             job.teachingErrorCode = null,
                             job.teachingHandoffReconciledAt = null,
@@ -170,9 +172,10 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                             job.updatedAt = :now
                         where job.id = :jobId
                           and job.stage <> 'FAILED'
-                          and job.teachingHandoffState in ('NOT_REQUESTED', 'FAILED')
+                          and job.teachingHandoffState in ('NOT_REQUESTED', 'FAILED', 'LAUNCHED')
                         """)
                 .setParameter("learningGoal", learningGoal)
+                .setParameter("outputLanguage", outputLanguage.name())
                 .setParameter("now", now)
                 .setParameter("jobId", jobId)
                 .executeUpdate();
@@ -587,6 +590,7 @@ class OfficialRulebookImportJobEntity {
     @Column(name = "teaching_error_code") String teachingErrorCode;
     @Column(name = "teaching_handoff_updated_at") Instant teachingHandoffUpdatedAt;
     @Column(name = "teaching_handoff_reconciled_at") Instant teachingHandoffReconciledAt;
+    @Column(name = "teaching_output_language", nullable = false) String teachingOutputLanguage;
     @Column(name = "teaching_automatic_recovery_count", nullable = false) int teachingAutomaticRecoveryCount;
     @Column(name = "created_at", nullable = false) Instant createdAt;
     @Column(name = "updated_at", nullable = false) Instant updatedAt;
@@ -611,6 +615,7 @@ class OfficialRulebookImportJobEntity {
         entity.downloadCompletedAt = job.downloadCompletedAt();
         entity.teachingHandoffState = job.teachingHandoff().state().name();
         entity.teachingLearningGoal = job.teachingHandoff().learningGoal();
+        entity.teachingOutputLanguage = job.teachingHandoff().outputLanguage().name();
         entity.teachingPreparationRunId = job.teachingHandoff().preparationRunId();
         entity.teachingErrorCode = job.teachingHandoff().errorCode();
         entity.teachingHandoffUpdatedAt = job.teachingHandoff().updatedAt();
@@ -633,7 +638,7 @@ class OfficialRulebookImportJobEntity {
                         teachingPreparationRunId,
                         teachingErrorCode,
                         teachingAutomaticRecoveryCount,
-                        teachingHandoffUpdatedAt),
+                        teachingHandoffUpdatedAt, PlayerLocale.valueOf(teachingOutputLanguage)),
                 createdAt, updatedAt, completedAt);
     }
 }

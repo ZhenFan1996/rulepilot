@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Instant;
@@ -16,7 +17,7 @@ public record TeachingPlanSummary(
         List<SectionSummary> sections,
         LessonProgress lesson,
         String createdBy,
-        Instant createdAt) {
+        Instant createdAt, PlayerLocale outputLanguage) {
 
     public TeachingPlanSummary {
         if (id == null || documentVersionId == null || createdAt == null
@@ -37,8 +38,8 @@ public record TeachingPlanSummary(
             List<SectionSummary> sections,
             LessonProgress lesson,
             String createdBy,
-            Instant createdAt) {
-        this(id, documentVersionId, gameTitle, premise, List.of(), sections, lesson, createdBy, createdAt);
+            Instant createdAt, PlayerLocale outputLanguage) {
+        this(id, documentVersionId, gameTitle, premise, List.of(), sections, lesson, createdBy, createdAt, outputLanguage);
     }
 
     public static TeachingPlanSummary from(TeachingPlan plan) {
@@ -51,7 +52,7 @@ public record TeachingPlanSummary(
                 plan.sections().stream().map(SectionSummary::from).toList(),
                 null,
                 plan.createdBy(),
-                plan.createdAt());
+                plan.createdAt(), plan.outputLanguage());
     }
 
     TeachingPlanSummary withLesson(IllustratedLessonRepository.ProgressSummary progress) {
@@ -59,7 +60,7 @@ public record TeachingPlanSummary(
         return new TeachingPlanSummary(
                 id, documentVersionId, gameTitle, premise, unresolvedTopics, sections,
                 LessonProgress.from(progress),
-                createdBy, createdAt);
+                createdBy, createdAt, outputLanguage);
     }
 
     public record SectionSummary(

@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
@@ -133,7 +134,7 @@ class GroundedTeachingAgentTest {
                         new TeachingPlan.TopicDependency("preserved", "remaining", "Keep its prerequisite context.")), List.of()),
                 List.of(section(1, "published", false), section(2, "preserved", false), section(3, "remaining", false)),
                 "player",
-                Instant.EPOCH);
+                Instant.EPOCH, PlayerLocale.ZH_CN);
         AssistantReadTools tools = request -> List.of(evidence(versionId, request.query()));
         RecordingInvocations firstInvocations = new RecordingInvocations();
         TeachingLessonModel interruptedModel = request -> {
@@ -225,7 +226,7 @@ class GroundedTeachingAgentTest {
                 List.of(section(1, "unavailable", false), section(2, "readable", true),
                         section(3, "dependent", true), section(4, "text-only", false)),
                 "player",
-                Instant.EPOCH);
+                Instant.EPOCH, PlayerLocale.ZH_CN);
     }
 
     private TeachingPlan.PlannedSection section(int position, String topicKey, boolean visualRecommended) {

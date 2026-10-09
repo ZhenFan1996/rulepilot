@@ -2,8 +2,8 @@ package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;

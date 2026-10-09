@@ -2,6 +2,7 @@ package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
@@ -106,7 +107,7 @@ class AnswerRunLifecycleTest {
                 now,
                 now,
                 state.terminal() ? now : null,
-                null);
+                null, PlayerLocale.ZH_CN);
     }
 
     private static final class RecordingRuns implements AssistantRuns {
@@ -124,6 +125,12 @@ class AnswerRunLifecycleTest {
         }
 
         @Override
+        public RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername,
+                WorkloadDemand workload, PlayerLocale outputLanguage) {
+            return start(mode, subjectId, ownerUsername);
+        }
+
+        @Override
         public RunSnapshot advance(UUID runId, long expectedRevision, AssistantRunState nextState, String stepSummary) {
             advances.add(new Advance(expectedRevision, nextState, stepSummary));
             Instant now = Instant.parse("2026-07-24T04:00:00Z");
@@ -137,7 +144,7 @@ class AnswerRunLifecycleTest {
                     now,
                     now,
                     nextState.terminal() ? now : null,
-                    null);
+                    null, PlayerLocale.ZH_CN);
         }
 
         @Override
@@ -154,7 +161,7 @@ class AnswerRunLifecycleTest {
                     now,
                     now,
                     nextState.terminal() ? now : null,
-                    null);
+                    null, PlayerLocale.ZH_CN);
         }
 
         @Override
@@ -241,7 +248,7 @@ class AnswerRunLifecycleTest {
                     now,
                     now,
                     state.terminal() ? now : null,
-                    null);
+                    null, PlayerLocale.ZH_CN);
         }
     }
 

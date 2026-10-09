@@ -1,6 +1,6 @@
 package com.rulepilot.teaching;
 
-import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.LessonLocalization.SectionTranslation;
 

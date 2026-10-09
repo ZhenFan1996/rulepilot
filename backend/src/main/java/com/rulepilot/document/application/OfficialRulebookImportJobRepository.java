@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import java.time.Instant;
 import java.util.List;
@@ -25,7 +26,7 @@ public interface OfficialRulebookImportJobRepository {
 
     void recordReuse(UUID jobId, Instant now);
 
-    void requestTeaching(UUID jobId, String learningGoal, Instant now);
+    void requestTeaching(UUID jobId, String learningGoal, Instant now, PlayerLocale outputLanguage);
 
     boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now);
 

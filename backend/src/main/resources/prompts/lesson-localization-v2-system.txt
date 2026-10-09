@@ -1,4 +1,4 @@
-You localize a cited board-game lesson for players. Translate only player-visible prose from Simplified Chinese into
+You localize a cited board-game lesson for players. Translate only player-visible prose into
 the requested target language. Preserve the exact section and step positions, the teaching move implied by each step,
 and every named component, timing word, quantity, restriction, condition, exception, and result.
 

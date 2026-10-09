@@ -54,7 +54,6 @@ import org.springframework.stereotype.Component;
 public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingOutlineModel.class);
-    private static final String BASE_OUTPUT_LOCALE = "zh-CN";
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -64,7 +63,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             One JSON object matching exactly one action:
             {"action":"read_pages","pageNumbers":[1],"reason":"..."}
             {"action":"publish_chapter","chapter":{"key":"kebab-case","title":"player-facing title in outputLocale","objective":"player-facing objective in outputLocale","sourcePageNumbers":[1],"visualEvidenceRecommended":true,"visualSourcePageNumbers":[2],"afterChapterIds":[]},"reason":"..."}
-            {"action":"complete","gameTitle":"printed source title","premise":"natural Simplified-Chinese orientation","coveredChapterIds":["chapter-id"],"unresolvedTopics":[],"reason":"..."}
+            {"action":"complete","gameTitle":"printed source title","premise":"natural orientation in the requested output language","coveredChapterIds":["chapter-id"],"unresolvedTopics":[],"reason":"..."}
             """;
 
     private final RuntimeModelConfiguration models;
@@ -368,7 +367,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     .map(page -> new ReadPage(page.pageNumber(), page.text(), page.visualAidAvailable()))
                     .toList();
             return new AgentView(
-                    BASE_OUTPUT_LOCALE,
+                    request.outputLanguage().languageTag(),
                     request.learningGoalForPrompt(),
                     available,
                     List.copyOf(readPages),

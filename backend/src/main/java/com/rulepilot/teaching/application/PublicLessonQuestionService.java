@@ -1,7 +1,7 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswering;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;

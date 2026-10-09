@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.document.TeachingHandoffDismissals;
 import com.rulepilot.teaching.domain.IllustratedLesson;
@@ -41,7 +42,9 @@ class TeachingPlanRemovalServiceTest {
         UUID versionId = UUID.randomUUID();
         TeachingPlan olderComplete = plan(versionId, "alice", Instant.parse("2026-07-20T01:00:00Z"));
         TeachingPlan newerUnstarted = plan(versionId, "alice", Instant.parse("2026-07-23T01:00:00Z"));
-        when(plans.findAllByCreatedBy("alice")).thenReturn(List.of(olderComplete, newerUnstarted));
+        TeachingPlan english = new TeachingPlan(UUID.randomUUID(), versionId, "Game", "Premise",
+                List.of(), "alice", Instant.parse("2026-07-19T01:00:00Z"), PlayerLocale.EN);
+        when(plans.findAllByCreatedBy("alice")).thenReturn(List.of(olderComplete, newerUnstarted, english));
         when(lessons.findLatestByPlan(olderComplete.id())).thenReturn(Optional.of(lesson(olderComplete, IllustratedLesson.LessonStatus.COMPLETE)));
         when(lessons.findLatestByPlan(newerUnstarted.id())).thenReturn(Optional.empty());
 
@@ -57,7 +60,7 @@ class TeachingPlanRemovalServiceTest {
 
     private TeachingPlan plan(UUID versionId, String owner, Instant createdAt) {
         return new TeachingPlan(
-                UUID.randomUUID(), versionId, "Game", "Premise", List.of(), owner, createdAt);
+                UUID.randomUUID(), versionId, "Game", "Premise", List.of(), owner, createdAt, PlayerLocale.ZH_CN);
     }
 
     private IllustratedLesson lesson(TeachingPlan plan, IllustratedLesson.LessonStatus status) {

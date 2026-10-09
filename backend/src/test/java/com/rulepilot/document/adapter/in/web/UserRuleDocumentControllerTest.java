@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.BoardGameMetadataMatching.Candidate;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.application.PhotographedRulebookUploadService;
@@ -101,13 +102,13 @@ class UserRuleDocumentControllerTest {
                 "https://publisher.example/rules.pdf",
                 true,
                 "重点讲清开局和第一轮。",
-                now);
+                now, PlayerLocale.ZH_CN);
         var command = new OfficialRulebookImportJobService.Command(
                 editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
                 "https://publisher.example/rules.pdf", true, true, "重点讲清开局和第一轮。",
                 new OfficialRulebookImportIdentity.SourceClaim(
                         editionId, "English Edition", "en", true),
-                true);
+                true, PlayerLocale.ZH_CN);
         when(imports.enqueue(command, "alice"))
                 .thenReturn(new OfficialRulebookImportJobService.Launch(job, false));
         when(catalog.findEdition(editionId)).thenReturn(java.util.Optional.of(
@@ -127,7 +128,7 @@ class UserRuleDocumentControllerTest {
                         "English Edition",
                         "en",
                         true,
-                        true),
+                        true, "zh-CN"),
                 () -> "alice");
 
         assertThat(response.id()).isEqualTo(jobId);
@@ -225,7 +226,7 @@ class UserRuleDocumentControllerTest {
                         UUID.randomUUID(),
                         "TEACHING_PREPARATION_STORAGE_FAILED",
                         0,
-                        now),
+                        now, PlayerLocale.ZH_CN),
                 now,
                 now,
                 now);
@@ -253,7 +254,7 @@ class UserRuleDocumentControllerTest {
         Instant now = Instant.parse("2026-08-16T00:00:00Z");
         var retryJob = OfficialRulebookImportJob.queued(
                 retryJobId, "alice", null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                "https://publisher.example/rules.pdf", true, "先讲设置。", now);
+                "https://publisher.example/rules.pdf", true, "先讲设置。", now, PlayerLocale.ZH_CN);
         when(imports.retryImport(failedJobId, "alice"))
                 .thenReturn(new OfficialRulebookImportJobService.Launch(retryJob, false));
 
@@ -303,7 +304,7 @@ class UserRuleDocumentControllerTest {
                         preparationRunId,
                         null,
                         0,
-                        handoffLaunchedAt),
+                        handoffLaunchedAt, PlayerLocale.ZH_CN),
                 createdAt,
                 handoffLaunchedAt,
                 importCompletedAt);
@@ -335,7 +336,7 @@ class UserRuleDocumentControllerTest {
         Instant now = Instant.parse("2026-08-14T00:00:00Z");
         var job = OfficialRulebookImportJob.queued(
                 jobId, "alice", null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                "https://publisher.example/rules.pdf", true, null, now);
+                "https://publisher.example/rules.pdf", true, null, now, PlayerLocale.ZH_CN);
         when(imports.retryTeaching(jobId, failedRunId, "alice")).thenReturn(job);
 
         var response = controller.retryOfficialRulebookTeaching(
@@ -364,7 +365,7 @@ class UserRuleDocumentControllerTest {
         Instant now = Instant.parse("2026-08-14T00:00:00Z");
         var job = OfficialRulebookImportJob.queued(
                 jobId, "alice", null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                "https://publisher.example/rules.pdf", true, null, now);
+                "https://publisher.example/rules.pdf", true, null, now, PlayerLocale.ZH_CN);
         when(imports.ensureTeachingCurrent(jobId, preparationRunId, "alice")).thenReturn(job);
 
         var response = controller.ensureOfficialRulebookTeachingCurrent(

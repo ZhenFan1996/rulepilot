@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -48,7 +49,6 @@ import tools.jackson.core.JacksonException;
 public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingLessonModel.class);
-    private static final String BASE_OUTPUT_LOCALE = "zh-CN";
     private static final BeanOutputConverter<ModelSectionDraft> TEACHING_OUTPUT_CONVERTER =
             new BeanOutputConverter<>(ModelSectionDraft.class);
     private static final ObjectMapper STRICT_TEACHING_OUTPUT = new ObjectMapper()
@@ -198,6 +198,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         int contractTokens = estimateTokens(systemPrompt(qwen))
                 + estimateTokens(promptWithoutParameters(prompts.teachingUser()))
                 + (qwen ? estimateTokens(QWEN_TEACHING_SCHEMA) : 0)
+                + estimateTokens(request.outputLanguage().languageTag())
                 + estimateTokens(request.title())
                 + estimateTokens(request.objective());
         int evidenceTokens = estimateTokens(modelEvidence(request).toString());
@@ -226,6 +227,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         String result = template;
         for (String parameter : List.of(
                 "section",
+                "outputLanguage",
                 "objective",
                 "continuity",
                 "evidence",
@@ -290,6 +292,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                     .system(systemPrompt(usesQwen(role, owner)))
                     .user(user -> {
                         user.text(prompts.teachingUser())
+                                .param("outputLanguage", request.outputLanguage().languageTag())
                                 .param("section", request.title())
                                 .param("objective", request.objective())
                                 .param("continuity", request.priorSections())
@@ -312,7 +315,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                     invalidJson);
         }
         try {
-            SectionDraft sectionDraft = toSectionDraft(draft, evidenceIds);
+            SectionDraft sectionDraft = toSectionDraft(draft, evidenceIds, request.outputLanguage());
             int promptTokens = usageValue(usage == null ? null : usage.getPromptTokens());
             int completionTokens = usageValue(usage == null ? null : usage.getCompletionTokens());
             long cacheReadTokens = cacheReadTokens(usage);
@@ -415,7 +418,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             ObjectNode schema = (ObjectNode) mapper.readTree(
                     new BeanOutputConverter<>(ModelSectionDraft.class).getJsonSchema());
             ObjectNode properties = (ObjectNode) schema.path("properties");
-            ((ObjectNode) properties.path("locale")).putArray("enum").add(BASE_OUTPUT_LOCALE);
+            ((ObjectNode) properties.path("locale")).putArray("enum").add("zh-CN").add("en");
             ((ObjectNode) properties.path("title")).put("minLength", 1);
             ObjectNode steps = (ObjectNode) properties.path("steps");
             steps.put("minItems", 1);
@@ -506,7 +509,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Map<UUID, String> references = new LinkedHashMap<>();
         evidenceIds(request).forEach((reference, id) -> references.put(id, reference));
         return new ModelSectionDraft(
-                BASE_OUTPUT_LOCALE,
+                request.outputLanguage().languageTag(),
                 draft.title(),
                 draft.steps().stream()
                         .map(step -> new ModelStepDraft(
@@ -521,11 +524,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .toList());
     }
 
-    SectionDraft toSectionDraft(ModelSectionDraft draft, Map<String, UUID> evidenceIds) {
+    SectionDraft toSectionDraft(ModelSectionDraft draft, Map<String, UUID> evidenceIds, PlayerLocale outputLanguage) {
         if (draft == null) {
             throw new IllegalArgumentException("teaching model returned no draft");
         }
-        if (!BASE_OUTPUT_LOCALE.equals(draft.locale())) {
+        if (!outputLanguage.languageTag().equals(draft.locale())) {
             throw new IllegalArgumentException("teaching model returned a lesson in the wrong output locale");
         }
         if (draft.steps().stream().anyMatch(java.util.Objects::isNull)) {

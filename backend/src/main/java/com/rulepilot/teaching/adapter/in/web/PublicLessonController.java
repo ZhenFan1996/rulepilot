@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.in.web;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.RetryableDocumentProcessingException;
@@ -8,7 +9,6 @@ import com.rulepilot.teaching.application.PublicLessonReader;
 import com.rulepilot.teaching.application.PublicLessonQuestionService;
 import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.application.PublicCoverThumbnailService;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.catalog.PublicGameIdentityLookup;
 import java.net.URI;
 import java.time.Duration;
@@ -229,8 +229,7 @@ public class PublicLessonController {
                     source.publicGame(),
                     source.unresolvedTopics(),
                     localized.lesson(),
-                    localized.lesson() == null ? "zh-CN" : localized.language() == PlayerLocale.EN
-                            && localized.status() == com.rulepilot.teaching.domain.LessonLocalization.Status.READY ? "en" : "zh-CN",
+                    localized.language() == PlayerLocale.EN ? "en" : "zh-CN",
                     localized.status() == null ? "NOT_PREPARED" : localized.status().name());
         }
     }

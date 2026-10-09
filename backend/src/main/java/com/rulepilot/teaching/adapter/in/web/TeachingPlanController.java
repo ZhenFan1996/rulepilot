@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.in.web;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.application.TeachingPlanService;
 import com.rulepilot.teaching.application.TeachingPlanLauncher;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -36,14 +37,15 @@ public class TeachingPlanController {
         return launcher.launch(
                 versionId,
                 request.learningGoal(),
-                principal.getName());
+                principal.getName(), PlayerLocale.fromRequest(request.language()));
     }
 
     @GetMapping("/latest")
-    TeachingPlan latest(@PathVariable UUID versionId, Principal principal) {
-        return plans.latest(versionId, principal.getName())
+    TeachingPlan latest(@PathVariable UUID versionId,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String language, Principal principal) {
+        return plans.latest(versionId, principal.getName(), language == null ? null : PlayerLocale.fromRequest(language))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "teaching plan does not exist"));
     }
 
-    record CreatePlanRequest(String learningGoal) {}
+    record CreatePlanRequest(String learningGoal, String language) {}
 }

@@ -72,6 +72,7 @@ interface RulebookCandidateResponse {
 }
 
 interface OfficialImportJob extends PlayerJourneyImportJob {
+  outputLanguage?: 'ZH_CN' | 'EN'
   title?: string
   editionId?: string
   sourceDomain?: string
@@ -841,7 +842,8 @@ async function restoreServerJourney(request: number) {
   if (request !== sequence || !Array.isArray(jobs)) return false
   let matching = jobs
     .map(normalizeImportJob)
-    .find(job => job.editionId === imported.value?.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED')
+    .find(job => job.editionId === imported.value?.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED'
+      && (job.outputLanguage ?? 'ZH_CN') === (locale.value === 'en' ? 'EN' : 'ZH_CN'))
   if (!matching) return false
   if (matching.stage === 'COMPLETED'
     && matching.documentVersionId
@@ -1011,6 +1013,7 @@ async function enqueueImport() {
         officialSourceUrl: candidate.url,
         rightsConfirmed: true,
         startTeaching: true,
+        language: locale.value,
         discoveredForEditionId: discoveryIdentity.value?.editionId ?? null,
         sourceEdition: candidate.edition || null,
         sourceLanguage: candidate.languageVerified ? candidate.language : null,
@@ -1102,7 +1105,7 @@ async function refreshJourney(request = sequence) {
 
     if (versionId && preparationRun.value?.run.state === 'COMPLETED' && !plan.value) {
       plan.value = await checkedJson<PlayerJourneyPlan>(
-        `/api/v1/document-versions/${encodeURIComponent(versionId)}/teaching-plans/latest`, true,
+        `/api/v1/document-versions/${encodeURIComponent(versionId)}/teaching-plans/latest?language=${preparationRun.value.run.outputLanguage === 'EN' ? 'en' : 'zh-CN'}`, true,
       )
       if (request !== sequence) return
     }

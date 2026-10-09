@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.application.PhotographedRulebookUploadService.PhotoPage;
 import com.rulepilot.document.domain.DocumentSourceType;
 import java.io.InputStream;
@@ -41,7 +42,7 @@ class PhotographedRulebookUploadServiceTest {
                 any(InputStream.class),
                 eq("alice"),
                 eq(false),
-                isNull());
+                isNull(), org.mockito.ArgumentMatchers.eq(PlayerLocale.ZH_CN));
     }
 
     @Test
@@ -59,7 +60,7 @@ class PhotographedRulebookUploadServiceTest {
                 List.of(page),
                 "alice",
                 true,
-                "重点讲组件摆放。");
+                "重点讲组件摆放。", PlayerLocale.ZH_CN);
 
         verify(documents).upload(
                 eq(null),
@@ -73,7 +74,7 @@ class PhotographedRulebookUploadServiceTest {
                 any(InputStream.class),
                 eq("alice"),
                 eq(true),
-                eq("重点讲组件摆放。"));
+                eq("重点讲组件摆放。"), org.mockito.ArgumentMatchers.eq(PlayerLocale.ZH_CN));
     }
 
     @Test
@@ -100,7 +101,7 @@ class PhotographedRulebookUploadServiceTest {
                 any(InputStream.class),
                 eq("alice"),
                 eq(false),
-                isNull());
+                isNull(), org.mockito.ArgumentMatchers.eq(PlayerLocale.ZH_CN));
     }
 
     @Test

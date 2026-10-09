@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,7 +14,6 @@ import com.rulepilot.assistant.NativeToolAgent.RunStatus;
 import com.rulepilot.assistant.NativeToolAgent.TerminalContract;
 import com.rulepilot.assistant.NativeToolAgent.TerminalValidation;
 import com.rulepilot.assistant.NativeToolScopes;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.AnswerBasis;

@@ -1,12 +1,12 @@
 package com.rulepilot.teaching.adapter.in.web;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.application.IllustratedLessonService;
 import com.rulepilot.teaching.application.TeachingPlanSummary;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.domain.IllustratedLesson;
-import com.rulepilot.assistant.PlayerLocale;
 import java.security.Principal;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;

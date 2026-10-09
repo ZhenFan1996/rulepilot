@@ -1,5 +1,6 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
 import java.util.List;
@@ -238,24 +239,25 @@ public interface TeachingLessonModel {
             String objective,
             List<PriorSectionContext> priorSections,
             List<EvidenceInput> evidence,
-            String modelConfigurationOwner) {
+            String modelConfigurationOwner, PlayerLocale outputLanguage) {
 
         public SectionRequest(
                 String topicKey,
                 String title,
                 String objective,
                 List<PriorSectionContext> priorSections,
-                List<EvidenceInput> evidence) {
+                List<EvidenceInput> evidence, PlayerLocale outputLanguage) {
             this(
                     topicKey,
                     title,
                     objective,
                     priorSections,
                     evidence,
-                    null);
+                    null, outputLanguage);
         }
 
         public SectionRequest {
+            Objects.requireNonNull(outputLanguage, "teaching language is required");
             if (topicKey == null || topicKey.isBlank()
                     || title == null || title.isBlank()
                     || objective == null || objective.isBlank()

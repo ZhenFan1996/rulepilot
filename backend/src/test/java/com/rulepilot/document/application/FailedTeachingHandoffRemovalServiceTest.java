@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.document.FailedTeachingHandoffRemovals.HandoffState;
 import com.rulepilot.document.FailedTeachingHandoffRemovals.Origin;
 import com.rulepilot.document.domain.DocumentSourceType;
@@ -58,7 +59,7 @@ class FailedTeachingHandoffRemovalServiceTest {
                 "TEACHING_HANDOFF_LAUNCH_FAILED",
                 0,
                 NOW.minusSeconds(60),
-                NOW);
+                NOW, PlayerLocale.ZH_CN);
         when(uploads.findOwned(handoffId, "alice")).thenReturn(Optional.of(snapshot));
         when(uploads.dismissOwned(
                         handoffId,
@@ -92,7 +93,7 @@ class FailedTeachingHandoffRemovalServiceTest {
                 null,
                 0,
                 NOW.minusSeconds(60),
-                NOW);
+                NOW, PlayerLocale.ZH_CN);
         when(uploads.findOwned(handoffId, "alice")).thenReturn(Optional.of(snapshot));
         when(documents.findVersion(versionId)).thenReturn(Optional.empty());
 
@@ -137,7 +138,7 @@ class FailedTeachingHandoffRemovalServiceTest {
                         runId,
                         null,
                         0,
-                        NOW),
+                        NOW, PlayerLocale.ZH_CN),
                 NOW.minusSeconds(120),
                 NOW,
                 NOW);

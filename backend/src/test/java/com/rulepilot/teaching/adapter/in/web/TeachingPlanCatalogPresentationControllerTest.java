@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
 import com.rulepilot.teaching.application.TeachingPlanCatalogPresentationService;
 import com.rulepilot.teaching.application.TeachingPlanService;
@@ -28,7 +29,7 @@ class TeachingPlanCatalogPresentationControllerTest {
         UUID editionId = UUID.randomUUID();
         TeachingPlan plan = new TeachingPlan(
                 planId, UUID.randomUUID(), "Rules title", "Premise", List.of(), "alice",
-                Instant.parse("2026-08-06T00:00:00Z"));
+                Instant.parse("2026-08-06T00:00:00Z"), PlayerLocale.ZH_CN);
         var game = new CatalogGamePresentationLookup.Presentation(
                 editionId,
                 "Wingspan",

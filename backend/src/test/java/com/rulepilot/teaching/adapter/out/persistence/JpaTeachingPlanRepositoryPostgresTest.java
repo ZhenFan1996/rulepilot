@@ -2,6 +2,7 @@ package com.rulepilot.teaching.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import jakarta.persistence.EntityManager;
 import java.sql.DriverManager;
@@ -90,7 +91,7 @@ class JpaTeachingPlanRepositoryPostgresTest {
                                 2, "apply-change", "应用变化", "应用条件。", true, true,
                                 List.of("R-beta"), List.of("whole_game_context_v1"), List.of(3), List.of(4))),
                 "persistence-player",
-                Instant.parse("2026-08-16T09:00:00Z"));
+                Instant.parse("2026-08-16T09:00:00Z"), PlayerLocale.EN);
 
         inTransaction(repository -> {
             repository.save(original);
@@ -98,8 +99,17 @@ class JpaTeachingPlanRepositoryPostgresTest {
         });
         TeachingPlan restored = inTransaction(repository -> repository.findById(original.id()).orElseThrow());
 
+        assertThat(restored.outputLanguage()).isEqualTo(PlayerLocale.EN);
         assertThat(restored.wholeGameContext()).isEqualTo(context);
         assertThat(restored.sections()).isEqualTo(original.sections());
+        TeachingPlan chinese = new TeachingPlan(UUID.randomUUID(), versionId, original.learningGoal(),
+                original.gameTitle(), original.premise(), original.wholeGameContext(), original.sections(),
+                original.createdBy(), original.createdAt().plusSeconds(1), PlayerLocale.ZH_CN);
+        inTransaction(repository -> repository.save(chinese));
+        assertThat(inTransaction(repository -> repository.findLatest(versionId, original.createdBy(),
+                PlayerLocale.EN).orElseThrow()).id()).isEqualTo(original.id());
+        assertThat(inTransaction(repository -> repository.findLatest(versionId, original.createdBy(),
+                PlayerLocale.ZH_CN).orElseThrow()).id()).isEqualTo(chinese.id());
     }
 
     @Test
@@ -116,7 +126,7 @@ class JpaTeachingPlanRepositoryPostgresTest {
                         1, "setup", "设置", "摆好组件。", true, true,
                         List.of("不应返回给列表的检索词"), List.of("internal-tag"), List.of(9))),
                 "persistence-player",
-                Instant.parse("2026-08-16T10:00:00Z"));
+                Instant.parse("2026-08-16T10:00:00Z"), PlayerLocale.EN);
 
         inTransaction(repository -> {
             repository.save(original);

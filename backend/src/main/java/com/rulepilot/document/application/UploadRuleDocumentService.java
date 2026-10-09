@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
@@ -68,7 +69,7 @@ public class UploadRuleDocumentService {
                 content,
                 username,
                 false,
-                null);
+                null, PlayerLocale.ZH_CN);
     }
 
     @Transactional
@@ -84,7 +85,7 @@ public class UploadRuleDocumentService {
             InputStream content,
             String username,
             boolean startTeaching,
-            String learningGoal) {
+            String learningGoal, PlayerLocale outputLanguage) {
         if (!startTeaching && learningGoal != null && !learningGoal.isBlank()) {
             throw new IllegalArgumentException("teaching goal requires an automatic teaching handoff");
         }
@@ -114,7 +115,7 @@ public class UploadRuleDocumentService {
         if (duplicate.isPresent()) {
             storage.delete(stored.objectKey());
             DocumentVersion version = duplicate.orElseThrow();
-            if (startTeaching) teachingHandoffs.request(version.id(), learningGoal, username);
+            if (startTeaching) teachingHandoffs.request(version.id(), learningGoal, username, outputLanguage);
             return new UploadResult(document, version, true);
         }
 
@@ -131,7 +132,7 @@ public class UploadRuleDocumentService {
             DocumentVersion saved = repository.save(version);
             processingQueue.enqueue(saved.id(), Instant.now(clock));
             events.publishEvent(new DocumentOutboxQueued());
-            if (startTeaching) teachingHandoffs.request(saved.id(), learningGoal, username);
+            if (startTeaching) teachingHandoffs.request(saved.id(), learningGoal, username, outputLanguage);
             return new UploadResult(document, saved, false);
         } catch (RuntimeException exception) {
             storage.delete(stored.objectKey());

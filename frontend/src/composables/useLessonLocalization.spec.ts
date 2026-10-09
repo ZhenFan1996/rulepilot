@@ -10,7 +10,7 @@ interface LessonFixture {
   title: string
 }
 
-function createLocalization() {
+function createLocalization(sourceLanguage: AppLocale = 'zh-CN') {
   const locale = ref<AppLocale>('en')
   const planId = ref('plan-1')
   const sourceLesson = ref<LessonFixture | null>({ id: 'source', teachingPlanId: 'plan-1', title: 'Source guide' })
@@ -22,6 +22,7 @@ function createLocalization() {
     locale,
     planId,
     sourceLesson,
+    sourceLanguage: () => sourceLanguage,
     displayedLesson,
     currentRequest: () => request.value,
     isCurrent: (candidate, targetPlanId) => candidate === request.value && targetPlanId === planId.value,
@@ -38,6 +39,30 @@ describe('useLessonLocalization', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.useRealTimers()
+  })
+
+  it('reads a native English guide directly and can switch to a Chinese translation', async () => {
+    const localized = { id: 'source', teachingPlanId: 'plan-1', title: '中文讲解' }
+    const fetchMock = vi.fn(async () => Response.json({
+      language: 'ZH_CN', status: 'READY', lesson: localized, failureCode: null,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const fixture = createLocalization('en')
+    await fixture.localization.applySelectedLocale()
+    expect(fixture.localization.status.value).toBe('READY')
+    expect(fixture.displayedLesson.value).toEqual(fixture.sourceLesson.value)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    fixture.locale.value = 'zh-CN'
+    await fixture.localization.applySelectedLocale()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest/localizations/zh-CN', expect.any(Object),
+    )
+    expect(fixture.displayedLesson.value).toEqual(localized)
+
+    fixture.locale.value = 'en'
+    await fixture.localization.applySelectedLocale()
+    expect(fixture.displayedLesson.value).toEqual(fixture.sourceLesson.value)
   })
 
   it('keeps the source guide visible while English preparation is pending and refreshes to the ready guide', async () => {
@@ -80,7 +105,7 @@ describe('useLessonLocalization', () => {
     vi.stubGlobal('fetch', fetchMock)
     const fixture = createLocalization()
 
-    await fixture.localization.prepareEnglishGuide()
+    await fixture.localization.prepareGuide()
 
     expect(fixture.csrfToken).toHaveBeenCalledOnce()
     expect(fetchMock).toHaveBeenCalledWith(

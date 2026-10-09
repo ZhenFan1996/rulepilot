@@ -84,7 +84,7 @@ public class IllustratedLessonService {
                 AssistantRunMode.TEACHING,
                 subjectId,
                 ownerUsername,
-                agent.workload(plan));
+                agent.workload(plan), plan.outputLanguage());
     }
 
     public GenerationOutcome generate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {

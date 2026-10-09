@@ -1,6 +1,6 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.LessonLocalizationModel;
 import com.rulepilot.teaching.domain.LessonLocalization;
 import java.util.List;

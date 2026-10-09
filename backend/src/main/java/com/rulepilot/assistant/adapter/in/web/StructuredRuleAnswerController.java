@@ -1,10 +1,10 @@
 package com.rulepilot.assistant.adapter.in.web;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivitySnapshot;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantRuns;
-import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.application.AnswerFeedbackService;
 import com.rulepilot.assistant.application.DocumentNativeToolAccess;

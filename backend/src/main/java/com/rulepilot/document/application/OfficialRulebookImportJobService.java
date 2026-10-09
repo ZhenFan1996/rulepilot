@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
@@ -153,7 +154,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         Instant now = Instant.now(clock);
         var job = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), owner, checked.editionId(), checked.title(), checked.sourceType(),
-                checked.officialSourceUrl(), checked.startTeaching(), checked.learningGoal(), now);
+                checked.officialSourceUrl(), checked.startTeaching(), checked.learningGoal(), now, checked.outputLanguage());
         jobs.insert(job);
         try {
             executor.execute(() -> execute(job));
@@ -235,7 +236,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 teachingRequested,
                 failed.teachingHandoff().learningGoal(),
                 OfficialRulebookImportIdentity.SourceClaim.unknown(),
-                failed.editionId() != null), owner);
+                failed.editionId() != null, failed.teachingHandoff().outputLanguage()), owner);
     }
 
     public List<OfficialRulebookImportJob> recentOwned(String ownerUsername) {
@@ -322,7 +323,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                         job.id(),
                         job.documentVersionId(),
                         job.ownerUsername(),
-                        job.teachingHandoff().learningGoal()))
+                        job.teachingHandoff().learningGoal(), job.teachingHandoff().outputLanguage()))
                 .toList();
     }
 
@@ -402,6 +403,17 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         if (!command.startTeaching()) {
             return job;
         }
+        if (job.teachingHandoff().outputLanguage() != command.outputLanguage()
+                && job.teachingHandoff().state() != TeachingHandoffState.NOT_REQUESTED
+                && job.teachingHandoff().state() != TeachingHandoffState.FAILED) {
+            if (job.teachingHandoff().state() != TeachingHandoffState.LAUNCHED
+                    || teachingEvidenceFreshness.assess(job.documentVersionId(),
+                            job.teachingHandoff().preparationRunId(), job.ownerUsername()) == ReuseAssessment.IN_PROGRESS) {
+                throw new IllegalStateException("teaching is already active in another language");
+            }
+            jobs.requestTeaching(job.id(), command.learningGoal(), Instant.now(clock), command.outputLanguage());
+            return requireOwned(job.id(), job.ownerUsername());
+        }
         if (job.teachingHandoff().state() == TeachingHandoffState.LAUNCHED
                 && job.documentVersionId() != null) {
             ReuseAssessment assessment = teachingEvidenceFreshness.assess(
@@ -423,7 +435,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 && job.teachingHandoff().state() != TeachingHandoffState.FAILED) {
             return job;
         }
-        jobs.requestTeaching(job.id(), command.learningGoal(), Instant.now(clock));
+        jobs.requestTeaching(job.id(), command.learningGoal(), Instant.now(clock), command.outputLanguage());
         return requireOwned(job.id(), job.ownerUsername());
     }
 
@@ -535,7 +547,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             boolean startTeaching,
             String learningGoal,
             OfficialRulebookImportIdentity.SourceClaim sourceIdentity,
-            boolean identityConfirmed) {
+            boolean identityConfirmed, PlayerLocale outputLanguage) {
 
         public Command(
                 UUID editionId,
@@ -544,7 +556,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 String officialSourceUrl,
                 boolean rightsConfirmed,
                 boolean startTeaching,
-                String learningGoal) {
+                String learningGoal, PlayerLocale outputLanguage) {
             this(
                     editionId,
                     title,
@@ -554,7 +566,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     startTeaching,
                     learningGoal,
                     OfficialRulebookImportIdentity.SourceClaim.unknown(),
-                    false);
+                    false, outputLanguage);
         }
 
         public Command(
@@ -562,7 +574,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 String title,
                 DocumentSourceType sourceType,
                 String officialSourceUrl,
-                boolean rightsConfirmed) {
+                boolean rightsConfirmed, PlayerLocale outputLanguage) {
             this(
                     editionId,
                     title,
@@ -572,10 +584,11 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     false,
                     null,
                     OfficialRulebookImportIdentity.SourceClaim.unknown(),
-                    false);
+                    false, outputLanguage);
         }
 
         Command checked() {
+            Objects.requireNonNull(outputLanguage, "teaching language is required");
             if (!rightsConfirmed) throw new IllegalArgumentException("official source rights confirmation is required");
             if (title == null || title.isBlank() || title.strip().length() > 160 || sourceType == null) {
                 throw new IllegalArgumentException("official rulebook import metadata is invalid");
@@ -607,7 +620,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     startTeaching,
                     normalizedGoal,
                     checkedSource,
-                    identityConfirmed);
+                    identityConfirmed, outputLanguage);
         }
     }
 

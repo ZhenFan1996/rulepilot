@@ -1,6 +1,6 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.LessonLocalization;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -88,6 +88,12 @@ public class LessonLocalizationPersistence {
     public void fail(UUID lessonId, PlayerLocale language, String failureCode) {
         LessonLocalization localization = required(lessonId, language);
         localizations.save(localization.fail(failureCode, Instant.now(clock)));
+    }
+
+    @Transactional(readOnly = true)
+    public PlayerLocale sourceLanguage(UUID planId) {
+        return plans.findById(planId).orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"))
+                .outputLanguage();
     }
 
     @Transactional(readOnly = true)

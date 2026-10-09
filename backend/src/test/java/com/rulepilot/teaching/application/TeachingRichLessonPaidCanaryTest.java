@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
@@ -110,7 +111,7 @@ class TeachingRichLessonPaidCanaryTest {
                             corpus.outlinePages(),
                             List.of(),
                             "请自然地阅读规则书并发布玩家第一次开局真正需要的章节；证据不足时明确保留缺口。",
-                            OWNER));
+                            OWNER, PlayerLocale.ZH_CN));
             artifact.put("outlineLatencyMs", elapsedMillis(outlineStarted));
             artifact.put("outline", outline);
 
@@ -118,7 +119,7 @@ class TeachingRichLessonPaidCanaryTest {
                     versionId,
                     "请自然地阅读规则书并发布玩家第一次开局真正需要的章节。",
                     OWNER,
-                    outline);
+                    outline, PlayerLocale.ZH_CN);
             TeachingPlan plan = TeachingPlanPersistenceRoundTrip.serializeAndReload(generated);
             assertThat(plan).isEqualTo(generated);
 

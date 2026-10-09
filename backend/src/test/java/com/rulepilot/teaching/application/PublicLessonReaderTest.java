@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.catalog.PublicGameCoverLookup;
 import com.rulepilot.catalog.PublicGameIdentityLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
@@ -216,7 +217,7 @@ class PublicLessonReaderTest {
                 List.of(new TeachingPlan.PlannedSection(1, "setup", "Setup", "Set up the board.", true, true,
                         List.of("setup"), List.of("setup"))),
                 "owner-is-not-public",
-                Instant.parse("2026-07-21T00:00:00Z"));
+                Instant.parse("2026-07-21T00:00:00Z"), PlayerLocale.ZH_CN);
         IllustratedLesson.LessonStep step = new IllustratedLesson.LessonStep(
                 1, "Place board", IllustratedLesson.TeachingMove.DO, "Place the board in the center.",
                 List.of(2), List.of(chunkId));

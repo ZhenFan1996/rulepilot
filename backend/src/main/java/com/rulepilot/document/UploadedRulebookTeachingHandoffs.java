@@ -1,5 +1,6 @@
 package com.rulepilot.document;
 
+import com.rulepilot.shared.PlayerLocale;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,9 +33,10 @@ public interface UploadedRulebookTeachingHandoffs {
             UUID handoffId,
             UUID documentVersionId,
             String ownerUsername,
-            String learningGoal) {
+            String learningGoal, PlayerLocale outputLanguage) {
 
         public ReadyHandoff {
+            java.util.Objects.requireNonNull(outputLanguage, "teaching language is required");
             if (handoffId == null
                     || documentVersionId == null
                     || ownerUsername == null

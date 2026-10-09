@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.shared.PlayerLocale;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import java.time.Instant;
@@ -87,6 +88,6 @@ class TeachingRunWorkloadPolicyTest {
                 "A game-independent workload fixture.",
                 sections,
                 "player",
-                Instant.now());
+                Instant.now(), PlayerLocale.ZH_CN);
     }
 }

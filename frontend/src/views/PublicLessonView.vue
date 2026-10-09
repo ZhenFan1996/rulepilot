@@ -155,8 +155,8 @@ const heroTitle = computed(() => questionMode.value
   : displayTitle.value)
 const heroEyebrow = computed(() => questionMode.value ? t('questions.eyebrow') : t('public.hero.eyebrow'))
 const heroDescription = computed(() => questionMode.value ? t('public.question.description') : t('public.hero.description'))
-const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
-const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
+const guideTranslationPending = computed(() => publicLesson.value != null && (publicLesson.value.contentLanguage ?? 'zh-CN') !== locale.value)
+const guideTranslationFailed = computed(() => guideTranslationPending.value && publicLesson.value?.localizationStatus === 'FAILED')
 const publicAnswerRetryGuidance = computed(() => publicAnswerFailureRecovery.value
   ? answerFailureRetrySuitability(publicAnswerFailureRecovery.value, locale.value)
   : '')
@@ -1020,8 +1020,8 @@ onUnmounted(() => {
           <template v-if="publicLesson.officialSourceUrl" #actions>
             <a :href="`/api/public/lessons/${encodeURIComponent(planId)}/rulebook`" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center rounded-xl bg-[#e2b85e] px-4 text-sm font-bold text-[#20302d] elevation-sm">{{ t('public.hero.openRulebook') }}</a>
           </template>
-          <template v-if="englishGuidePending" #status>
-            <p class="rounded-xl border border-indigo/15 bg-indigo/5 px-4 py-3 text-sm leading-6 text-muted" role="status">{{ englishGuideFailed ? t('public.locale.failed') : t('public.locale.preparing') }}</p>
+          <template v-if="guideTranslationPending" #status>
+            <p class="rounded-xl border border-indigo/15 bg-indigo/5 px-4 py-3 text-sm leading-6 text-muted" role="status">{{ guideTranslationFailed ? t('public.locale.failed') : t('public.locale.preparing') }}</p>
           </template>
         </LessonGuideHero>
 
