@@ -325,7 +325,8 @@ final class RecommendationToolCatalog {
         memory.put("verifiedGames", contextGames.stream()
                 .map(game -> actionExecutor.gameObservation(
                         game,
-                        detailedGameIds.contains(game.ranking().bggId())))
+                        detailedGameIds.contains(game.ranking().bggId()),
+                        state.selectionProfile()))
                 .toList());
         putIfNotEmpty(memory, "publicContextEvidence", state.publicContextEvidence.values().stream()
                 .map(actionExecutor::publicContextObservation)
