@@ -2,22 +2,23 @@
 
 [![CI](https://github.com/ZhenFan1996/rulepilot/actions/workflows/ci.yml/badge.svg)](https://github.com/ZhenFan1996/rulepilot/actions/workflows/ci.yml)
 
-RulePilot 是一个证据优先的桌游助手：根据玩家偏好推荐游戏；玩家选中后绑定可信规则书；再生成带页码
-依据的上桌讲解，并围绕当前规则书回答追问。推荐、规则书、讲解和答疑是连续体验，也是可分别成功与恢复
-的四个结果。
+RulePilot is an evidence-first board game assistant. It recommends games based on player preferences, binds a trusted
+rulebook to the selected game, generates lessons with page citations to help players get started at the table, and
+answers follow-up questions using the active rulebook. Recommendation, rulebook acquisition, teaching, and Q&A form
+one continuous experience, with each outcome able to succeed and recover independently.
 
-项目逻辑、生产架构、技术选型、失败边界和面试讲法见
-[PROJECT_MODEL.md](PROJECT_MODEL.md)。工程修改约束见 [AGENTS.md](AGENTS.md)。
+See [PROJECT_MODEL.md](PROJECT_MODEL.md) for the product logic, production architecture, technology choices, failure
+boundaries, and guidance for explaining the project in interviews. See [AGENTS.md](AGENTS.md) for the engineering contract.
 
-## 技术栈
+## Technology stack
 
-Java 21、Spring Boot 4、Spring Modulith、Spring AI、Vue 3、TypeScript、Vite、PostgreSQL/pgvector、
-Redis、RabbitMQ、MinIO、OpenTelemetry、Prometheus、Tempo、Grafana、JUnit/Testcontainers、Vitest 和
-Playwright。
+Java 21, Spring Boot 4, Spring Modulith, Spring AI, Vue 3, TypeScript, Vite, PostgreSQL/pgvector,
+Redis, RabbitMQ, MinIO, OpenTelemetry, Prometheus, Tempo, Grafana, JUnit/Testcontainers, Vitest, and
+Playwright.
 
-## 本地启动
+## Local development
 
-需要 Java 21、Node.js 24、Docker、Docker Compose 和 GNU Make。
+Requires Java 21, Node.js 24, Docker, Docker Compose, and GNU Make.
 
 ```sh
 git clone git@github.com:ZhenFan1996/rulepilot.git
@@ -27,45 +28,49 @@ make compose-up
 make dev
 ```
 
-访问 Web：<http://127.0.0.1:5173>；后端健康检查：<http://127.0.0.1:8080/actuator/health>；Grafana：
-<http://127.0.0.1:3000>。默认使用确定性 Fake Provider，不调用付费模型。启用真实 Provider 时，本地启动器会在
-旧 `.env` 尚未声明 `RULEPILOT_MODELS_STARTUP_ALLOWED_USERS` 的情况下，仅向已配置的本地玩家与演示管理员账号
-开放启动凭证；显式设置（包括留空）始终优先。真实凭证只放 `.env`，不得提交。
+Open the web app at <http://127.0.0.1:5173>, check backend health at <http://127.0.0.1:8080/actuator/health>, and access
+Grafana at <http://127.0.0.1:3000>. The default configuration uses a deterministic fake provider and does not call paid
+models. When a real provider is enabled, if an older `.env` does not declare `RULEPILOT_MODELS_STARTUP_ALLOWED_USERS`,
+the local launcher grants access to startup credentials only to the configured local player and demo administrator
+accounts. An explicit setting, including an empty value, always takes precedence. Keep real credentials in `.env` and
+never commit them.
 
-载入项目自制的 CC0 演示规则书：
+Load the project's self-authored CC0 demo rulebook:
 
 ```sh
 make demo-data
 ```
 
-停止开发进程和本地基础设施：
+Stop the development processes and local infrastructure:
 
 ```sh
 make dev-stop
 make compose-down
 ```
 
-MinIO 与 `mc` 从固定的官方提交构建，版本由 `infra/minio/Dockerfile` 声明；镜像内保留对应源码归档与
-许可证。Compose 保留原镜像别名，但使用本地构建，不再拉取已不可用的上游镜像。生产应用部署只检查
-现有存储，不会替换它；更新存储镜像须单独维护，先验证对象读写并保留原镜像和数据卷。
+MinIO and `mc` are built from pinned official commits, with versions declared in `infra/minio/Dockerfile`. The images
+retain the corresponding source archives and licenses. Compose keeps the original image aliases but builds locally
+instead of pulling upstream images that are no longer available. Production application deployments only check
+existing storage and do not replace it. Update storage images as a separate maintenance operation: verify object reads
+and writes first, and retain the original images and data volumes.
 
-## 常用命令
+## Common commands
 
-| 命令 | 用途 |
+| Command | Purpose |
 | --- | --- |
-| `make help` | 查看全部命令 |
-| `make bootstrap` | 检查仓库基础结构 |
-| `make backend-test` | 后端单元、应用与集成契约 |
-| `make frontend-test` | TypeScript、lint、Vitest 与 build |
-| `make e2e` | Playwright 用户旅程 |
-| `make verify` | 合并前统一验证 |
+| `make help` | List all available commands |
+| `make bootstrap` | Check the repository foundation |
+| `make backend-test` | Run backend unit, application, and integration contract tests |
+| `make frontend-test` | Run TypeScript checks, lint, Vitest, and build |
+| `make e2e` | Run Playwright user journeys |
+| `make verify` | Run unified verification before merging |
 
 ```text
-backend/    Spring Modulith 模块化单体
-frontend/   Vue 3 Web / PWA
-infra/      Compose 与可观测性配置
-scripts/    开发、验证、评测和生产操作
-examples/   自制演示与评测数据
+backend/    Spring Modulith modular monolith
+frontend/   Vue 3 web app / PWA
+infra/      Compose and observability configuration
+scripts/    Development, verification, evaluation, and production operations
+examples/   Self-authored demo and evaluation data
 ```
 
-不要提交凭证、`.env`、用户上传内容、真实商业规则书或生成模型原始数据。
+Do not commit credentials, `.env`, user uploads, actual commercial rulebooks, or raw generative model data.
