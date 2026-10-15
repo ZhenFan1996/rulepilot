@@ -98,10 +98,7 @@ onBeforeUnmount(() => {
       <section class="home-intro" aria-labelledby="home-title">
         <div class="home-intro__copy">
           <h1 id="home-title" class="home-intro__title">{{ t('home.title') }}</h1>
-
-        </div>
-        <img :src="tabletopPrint" alt="" aria-hidden="true" class="home-intro__illustration" width="300" height="200">
-        <div class="home-intro__actions">
+          <div class="home-intro__actions">
             <RouterLink
               :to="{ name: 'teach' }"
               class="home-primary-action inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-copper px-6 font-semibold text-on-accent transition hover:bg-copper-dark focus-visible:outline-offset-4"
@@ -115,7 +112,9 @@ onBeforeUnmount(() => {
             >
               {{ t('home.discoverAction') }}
             </RouterLink>
+          </div>
         </div>
+        <img :src="tabletopPrint" alt="" aria-hidden="true" class="home-intro__illustration" width="300" height="200">
       </section>
 
       <nav class="home-types" :aria-label="locale === 'zh-CN' ? '按类型浏览桌游' : 'Browse games by type'">
@@ -214,10 +213,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .home-page { display: grid; gap: 1.5rem; }
-.home-intro__illustration { display: none; width: 100%; height: 100px; object-fit: contain; }
-.home-intro { display: grid; align-items: center; gap: 2rem; padding-block: 0.25rem 1rem; }
-.home-intro__title { margin: 0; font-size: clamp(2.2rem, 4.4vw, 3.75rem); font-weight: 750; letter-spacing: -0.03em; line-height: 1.3; }
-.home-intro__actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.home-intro__illustration { display: none; width: 100%; height: auto; object-fit: contain; }
+.home-intro { display: grid; align-items: center; gap: 2rem; padding-block: 0.75rem 1.25rem; }
+.home-intro__title { margin: 0; font-family: var(--font-display); font-size: clamp(2rem, 3.6vw, 3rem); font-weight: 650; letter-spacing: -0.035em; line-height: 1.2; text-wrap: balance; }
+.home-intro__actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; }
 .home-types { display: flex; flex-wrap: wrap; align-items: center; gap: 0; border-block: 1px solid var(--color-border); font-size: 0.875rem; }
 .home-types > span { color: var(--color-muted); padding: 0.75rem 1rem; }
 .home-types a { display: inline-flex; align-items: center; min-height: 3rem; flex: 1; justify-content: center; gap: 0.55rem; padding: 0.35rem 0.75rem; color: var(--color-ink); font-weight: 600; }
@@ -250,9 +249,8 @@ onBeforeUnmount(() => {
 .home-random-card small { display: block; margin-top: 0.3rem; font-size: 0.75rem; color: var(--color-muted); }
 .home-random-card:hover strong { color: var(--color-indigo); }
 @media (min-width: 1024px) {
-  .home-intro { grid-template-columns: minmax(0, 1fr) 150px auto; gap: 2rem; padding-bottom: 0; }
+  .home-intro { grid-template-columns: minmax(0, 1fr) 13rem; gap: 3rem; }
   .home-intro__illustration { display: block; }
-  .home-intro__actions { flex-direction: row; }
   .home-random { grid-template-columns: 14rem minmax(0, 1fr); align-items: center; }
   .home-game-grid { grid-template-columns: minmax(0, 1.15fr) repeat(2, minmax(0, 1fr)); column-gap: 1.75rem; row-gap: 1rem; }
   .home-game-grid > li:first-child { grid-row: span 3; }
@@ -274,7 +272,6 @@ onBeforeUnmount(() => {
   .home-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); font-size: 0.75rem; }
   .home-types > span { display: none; }
   .home-types a { border-left: 0; padding: 0.25rem; gap: 0.25rem; min-height: 2.75rem; }
-  .home-types svg { width: 17px; height: 17px; }
   .home-hot__heading { flex-wrap: nowrap; align-items: center; gap: 0.75rem; }
   .home-hot__heading .tabletop-lede { font-size: 0.75rem; }
   .home-bgg-mark { flex: none; }
@@ -282,7 +279,7 @@ onBeforeUnmount(() => {
   .home-bgg-mark img { width: 5.75rem; }
   .home-intro { padding-top: 0; gap: 1.25rem; }
   .home-random { padding: 1.25rem 0; }
-  .home-intro__actions > a { flex: 1; padding-inline: 0.75rem; }
+  .home-intro__actions > a { flex: 1 1 auto; padding-inline: 1rem; font-size: 0.875rem; white-space: nowrap; }
   .home-game-grid { gap: 1rem; }
-  }
+}
 </style>

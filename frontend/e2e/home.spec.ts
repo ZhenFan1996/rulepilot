@@ -12,7 +12,9 @@ const homeGames = Array.from({ length: 10 }, (_, index) => ({
 }))
 
 async function mockHomeGames(page: Page) {
-  await page.route('**/api/v1/bgg/recommendations?*', route => route.fulfill({ json: homeGames }))
+  await page.route('**/api/v1/bgg/recommendations?*', route => route.fulfill({ json: route.request().url().includes('locale=en')
+    ? homeGames.map(game => ({ ...game, name: game.originalName, nameLocalized: false }))
+    : homeGames }))
   await page.route('**/api/auth/session', route => route.fulfill({ status: 401, json: {} }))
 }
 
@@ -39,7 +41,11 @@ test('keeps rulebook and game discovery actions reachable alongside BGG games', 
     .not.toEqual(initialRandomHrefs)
   await expect(page.locator('img[alt="Powered by BoardGameGeek"]')).toHaveCount(1)
 
-  await page.screenshot({ path: testInfo.outputPath('home-desktop.png'), fullPage: true })
+  await page.getByRole('button', { name: 'EN', exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('What are we playing')
+  await expect(page.locator('.home-game-card__title').first()).toHaveText('Wingspan')
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.screenshot({ path: testInfo.outputPath('home-desktop.png') })
 })
 
 test('keeps hot games, random picks, and the primary journey usable on a mobile viewport', async ({ page }) => {

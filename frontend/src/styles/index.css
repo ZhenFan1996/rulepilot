@@ -31,6 +31,11 @@
   background: #f2f4f1;
 }
 
+:root:lang(en) {
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-display: var(--font-sans);
+}
+
 :root.dark {
   color-scheme: dark;
   --color-canvas: #172823;

@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
           <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-mobile-navigation-active" class="absolute -right-3 -top-2 grid min-w-4 place-items-center rounded-full bg-copper px-1 text-[0.58rem] leading-4 text-on-accent">{{ backgroundActiveCount }}</span>
           <span v-else-if="item.name === 'work-status' && backgroundFinishedCount" class="absolute -right-1.5 -top-1 size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
         </span>
-        <span>{{ t(item.labelKey) }}</span>
+        <span class="grid min-h-[2.5em] place-items-center leading-tight">{{ t(item.labelKey) }}</span>
       </RouterLink>
     </nav>
   </div>
