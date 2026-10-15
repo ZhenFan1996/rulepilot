@@ -269,9 +269,9 @@ onBeforeUnmount(() => {
       </div>
       <template v-else-if="session">
         <header class="mt-5 flex items-center gap-5 border-b border-ink/10 pb-8">
-          <span class="grid h-16 w-16 place-items-center rounded-full bg-ink font-display text-2xl font-semibold text-canvas" aria-hidden="true">{{ initial }}</span>
-          <div>
-            <h1 class="font-display text-4xl font-semibold tracking-tight">{{ session.username }}</h1>
+          <span class="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-ink font-display text-2xl font-semibold text-canvas" aria-hidden="true">{{ initial }}</span>
+          <div class="min-w-0">
+            <h1 class="tabletop-title">{{ session.username }}</h1>
             <p class="mt-2 text-sm text-muted">{{ session.roles.join(' · ') }}</p>
           </div>
         </header>

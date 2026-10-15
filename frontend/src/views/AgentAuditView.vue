@@ -52,7 +52,7 @@ watch(() => route.query.runId, (value) => {
       <div class="mx-auto max-w-6xl">
         <header class="max-w-3xl">
           <p class="text-xs font-semibold uppercase tracking-[0.14em] text-copper">{{ t('agentAudit.eyebrow') }}</p>
-          <h1 class="mt-2 font-display text-4xl font-semibold">{{ t('agentAudit.title') }}</h1>
+          <h1 class="tabletop-title pt-2">{{ t('agentAudit.title') }}</h1>
           <p class="mt-4 leading-7 text-muted">{{ t('agentAudit.description') }}</p>
           <p class="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ t('agentAudit.boundary') }}</p>
         </header>

@@ -48,7 +48,7 @@ const initials = computed(() => props.title.trim().slice(0, 2).toLocaleUpperCase
         <p class="text-xs font-medium text-muted">{{ eyebrow }}</p>
         <h1 class="mt-1 break-words font-semibold leading-tight tracking-tight text-ink" :class="compact ? 'text-2xl' : 'text-2xl sm:text-3xl'">{{ title }}</h1>
         <p v-if="rulebookTitle && rulebookTitle !== title" class="mt-2 text-sm font-medium text-muted">{{ rulebookTitle }}</p>
-        <p class="max-w-2xl text-sm text-muted sm:text-base" :class="compact ? 'mt-3 leading-6' : 'mt-3 leading-6'">{{ description }}</p>
+        <p class="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">{{ description }}</p>
         <div v-if="$slots.actions" class="mt-5 flex flex-wrap gap-3"><slot name="actions" /></div>
       </div>
     </div>

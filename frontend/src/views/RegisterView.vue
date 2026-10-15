@@ -124,9 +124,9 @@ async function register() {
 
 <template>
   <main id="main-content" tabindex="-1" class="grid min-h-screen place-items-center bg-canvas px-5 py-12 text-ink">
-    <section class="w-full max-w-md border border-ink/10 bg-paper p-7 sm:p-9">
+    <section class="w-full max-w-md rounded-xl border border-ink/10 bg-paper p-5 sm:p-8">
       <div class="flex items-center justify-between gap-4"><RouterLink :to="{ name: 'home' }" aria-label="RulePilot"><ProductMark /></RouterLink><LanguageSwitcher /></div>
-      <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">{{ t('auth.register.title') }}</h1>
+      <h1 class="tabletop-title pt-8">{{ t('auth.register.title') }}</h1>
       <p class="mt-3 leading-7 text-muted">{{ t('auth.register.description') }}</p>
       <p v-if="returnPath" data-testid="auth-return-context" class="mt-3 rounded-lg bg-indigo/7 px-4 py-3 text-sm leading-6 text-indigo">
         {{ t('auth.register.return') }}
@@ -150,7 +150,7 @@ async function register() {
         </label>
 
         <p v-if="errorMessage" id="auth-register-error" ref="errorSummary" tabindex="-1" class="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700 focus-visible:outline-offset-4" role="alert">{{ errorMessage }}</p>
-        <button type="submit" :disabled="isSubmitting" class="w-full rounded-lg bg-indigo px-5 py-3.5 font-semibold text-white hover:bg-indigo/90 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="submit" :disabled="isSubmitting" class="w-full rounded-lg bg-indigo px-5 py-3.5 font-semibold text-on-accent hover:bg-indigo/90 disabled:cursor-not-allowed disabled:opacity-50">
           {{ submitLabel }}
         </button>
       </form>

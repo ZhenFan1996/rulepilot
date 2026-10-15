@@ -296,7 +296,7 @@ onBeforeUnmount(() => {
           <div class="game-detail-summary">
             <div data-testid="game-detail-identity" class="game-detail-identity min-w-0 self-center">
               <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
-              <h1 class="mt-2 font-display text-[1.85rem] font-semibold leading-[1.05] tracking-tight [overflow-wrap:anywhere] sm:text-4xl lg:text-5xl">{{ displayName }}</h1>
+              <h1 class="tabletop-title pt-2">{{ displayName }}</h1>
               <p v-if="game?.officialNameLocalized" class="mt-2 text-xs font-medium leading-5 text-copper sm:text-sm">{{ game.originalName }} · {{ copy.officialName }}</p>
               <p v-if="game" class="mt-2 text-sm text-muted">{{ game.publicationYear ?? copy.unknownYear }}</p>
               <p v-if="loading" data-testid="game-detail-loading" class="mt-3 text-sm text-muted" role="status">{{ copy.loading }}</p>

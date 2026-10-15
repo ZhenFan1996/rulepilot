@@ -87,20 +87,20 @@ defineExpose({ clearSelectedFileInput, focusOfficialSource, openLocalFilePicker,
     </div>
     <p class="text-sm font-semibold text-muted">{{ t('documents.capture.label') }}</p>
     <div class="mt-3 grid gap-3 sm:grid-cols-3">
-      <label for="rulebook-file" class="group flex min-h-32 flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/5'">
-        <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14.5 2.75H6.75a2 2 0 0 0-2 2v14.5a2 2 0 0 0 2 2h10.5a2 2 0 0 0 2-2V8.75z" /><path d="M14 2.75v6h5.25M8 13h8M8 16.5h6" /></svg>
-        <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.pdf.title') }}</span>
-        <span class="mt-1 text-sm leading-5 text-muted">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
+      <label for="rulebook-file" class="group grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 sm:flex sm:min-h-36 sm:flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/5'">
+        <svg class="row-span-2 h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14.5 2.75H6.75a2 2 0 0 0-2 2v14.5a2 2 0 0 0 2 2h10.5a2 2 0 0 0 2-2V8.75z" /><path d="M14 2.75v6h5.25M8 13h8M8 16.5h6" /></svg>
+        <span class="font-semibold leading-6 sm:mt-3">{{ t('documents.capture.pdf.title') }}</span>
+        <span class="col-start-2 mt-1 break-words text-sm leading-5 text-muted">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
       </label>
-      <label for="rulebook-camera" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/[0.1]'">
-        <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
-        <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.camera.title') }}</span>
-        <span class="mt-1 text-sm leading-5 text-muted">{{ t('documents.capture.camera.detail') }}</span>
+      <label for="rulebook-camera" class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 sm:flex sm:min-h-36 sm:flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/[0.1]'">
+        <svg class="row-span-2 h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
+        <span class="font-semibold leading-6 sm:mt-3">{{ t('documents.capture.camera.title') }}</span>
+        <span class="col-start-2 mt-1 break-words text-sm leading-5 text-muted">{{ t('documents.capture.camera.detail') }}</span>
       </label>
-      <label for="rulebook-gallery" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-indigo/50 hover:bg-indigo/[0.1]'">
-        <svg class="h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
-        <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.gallery.title') }}</span>
-        <span class="mt-1 text-sm leading-5 text-muted">{{ t('documents.capture.gallery.detail') }}</span>
+      <label for="rulebook-gallery" class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-3 sm:flex sm:min-h-36 sm:flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-indigo/50 hover:bg-indigo/[0.1]'">
+        <svg class="row-span-2 h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
+        <span class="font-semibold leading-6 sm:mt-3">{{ t('documents.capture.gallery.title') }}</span>
+        <span class="col-start-2 mt-1 break-words text-sm leading-5 text-muted">{{ t('documents.capture.gallery.detail') }}</span>
       </label>
     </div>
     <input id="rulebook-file" ref="rulebookFileInput" :disabled="intakeControlsDisabled" accept="application/pdf,.pdf" type="file" class="sr-only" @change="emit('select-file', $event)">

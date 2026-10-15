@@ -178,7 +178,7 @@ onMounted(load)
   <AppShell>
     <section class="tabletop-page max-w-7xl">
       <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
-      <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">{{ copy.title }}</h1>
+      <h1 class="tabletop-title pt-3">{{ copy.title }}</h1>
       <p class="mt-3 max-w-3xl leading-7 text-muted">{{ copy.description }}</p>
       <p v-if="message" class="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ message }}</p>
       <div v-if="loading" class="mt-8 rounded-2xl border border-ink/10 bg-paper p-8 text-muted" role="status">{{ copy.loading }}</div>

@@ -746,18 +746,33 @@ test('keeps the recommendation workspace visibly alive while the server is still
   await expect(liveWork).toHaveCount(0)
 })
 
-test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
+test('keeps catalog search and filters usable in both languages across narrow layouts', async ({ page }) => {
   await mockPublicDiscovery(page)
-  await page.goto('/discover/catalog')
+  for (const language of ['zh-CN', 'en']) {
+    await page.goto(`/discover/catalog?lang=${language}`)
+    await expect(page.locator('#game-catalog').getByRole('link', { name: /展翅翱翔/ })).toBeVisible()
+    for (const width of [320, 390, 768, 1024]) {
+      await page.setViewportSize({ width, height: 844 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
+      await expect(page.getByRole('search').getByRole('button')).toBeVisible()
+      await expect(page.getByTestId('catalog-filter-form').getByRole('combobox').first()).toBeVisible()
+    }
+  }
+})
 
-  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
-  await expect(page.getByRole('navigation', { name: '主要导航' })).toBeVisible()
-  await expect(page.locator('#game-catalog').getByRole('link', { name: /展翅翱翔/ })).toBeVisible()
-  const hasHorizontalOverflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
-  )
-  expect(hasHorizontalOverflow).toBe(false)
+test('keeps the English recommendation composer above phone navigation on entry', async ({ page }) => {
+  await mockPublicDiscovery(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/discover?lang=en')
+  const input = page.getByLabel('Tell us what you want to play')
+  await expect(input).toBeInViewport()
+  expect(await input.evaluate(element => {
+    const inputBox = element.getBoundingClientRect()
+    const navigation = document.querySelector('.mobile-navigation')!.getBoundingClientRect()
+    return inputBox.bottom <= navigation.top
+  })).toBe(true)
+  await input.fill('A relaxed game for four friends')
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
 })
 
 test('shows streamed rulebook readiness without waiting for the next recommendation poll', async ({ page }) => {

@@ -673,7 +673,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="self-center">
             <p class="text-sm font-semibold text-copper">{{ copy.eyebrow }}</p>
-            <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ game.game.name }}</h1>
+            <h1 class="tabletop-title pt-2">{{ game.game.name }}</h1>
             <div v-if="details?.averageRating || details?.averageWeight" class="mt-4 flex flex-wrap gap-2 text-sm">
               <span v-if="details.averageRating" class="rounded-full bg-canvas px-3 py-1.5">{{ copy.rating }} {{ details.averageRating.toFixed(1) }}</span>
               <span v-if="details.averageWeight" class="rounded-full bg-canvas px-3 py-1.5">{{ copy.weight }} {{ details.averageWeight.toFixed(1) }} / 5</span>

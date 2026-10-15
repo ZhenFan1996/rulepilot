@@ -71,8 +71,8 @@ const copy = {
   },
   en: {
     title: 'Game preferences',
-    initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
-    inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
+    initial: 'What would you like to play? Tell me about your group, a game you enjoy, or the mood you’re after.',
+    inputLabel: 'Tell us what you want to play', inputPlaceholder: 'A game you like, your group, or a mood…', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
     reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', failureReply: 'This turn did not produce a recommendation that was safe to commit, so I did not guess or invent candidates. Your request and existing preferences are still here; you can retry directly.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', modelConfigurationError: 'This recommendation did not complete and was not written into the conversation. Your request is still saved; first configure and save a recommendation model. With the configuration unchanged, the same request cannot succeed and will not retry automatically.', retry: 'Retry', modelSettings: 'Open model settings', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Checked {count} candidates.', more: 'Try another batch',
@@ -1604,14 +1604,14 @@ onBeforeUnmount(() => {
             <p class="recommendation-understanding-copy mt-3 text-sm leading-6">{{ response.userModel.summary }}</p>
             <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-indigo">{{ confidenceLabel(hypothesis.confidence, response.responseLocale) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ responseT(response, 'basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
-          <div v-if="sessionKnown" class="mt-5 flex flex-wrap gap-x-4 gap-y-2">
+          <div v-if="sessionKnown" class="mt-3 flex flex-wrap gap-x-4 gap-y-2">
             <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="startNewConversation">{{ t('newChat') }}</button>
             <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" :aria-expanded="conversationHistoryOpen" @click="toggleConversationHistory">{{ t('chatHistory') }}</button>
             <button v-if="canResetRecommendation" type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
           </div>
           <ul v-if="conversationHistoryOpen" class="mt-2 grid gap-2 rounded-xl border border-ink/10 bg-paper p-2">
             <li v-for="session in conversationHistory" :key="session.conversationId">
-              <button type="button" class="w-full rounded-lg px-3 py-2 text-left text-xs leading-5 text-white/70 hover:bg-white/10" :class="session.conversationId === conversationId ? 'bg-white/10 font-semibold text-white' : ''" @click="openConversationFromHistory(session)">{{ conversationHistoryTitle(session) }}</button>
+              <button type="button" class="w-full rounded-lg px-3 py-2 text-left text-xs leading-5 text-muted hover:bg-ink/5" :class="session.conversationId === conversationId ? 'bg-indigo/10 font-semibold text-indigo' : ''" @click="openConversationFromHistory(session)">{{ conversationHistoryTitle(session) }}</button>
             </li>
           </ul>
         </div>
@@ -1623,7 +1623,7 @@ onBeforeUnmount(() => {
           </nav>
 
           <div v-show="conversationRole === 'recommendation'">
-            <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[76vh] min-h-80 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[38rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[54rem]">
+            <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[60dvh] scroll-pb-8 stack-y-md overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
               <div v-if="messages.length === 0 && !loading && !failed" data-testid="recommendation-empty-state" class="rounded-2xl border border-ink/8 bg-canvas px-4 py-4 text-sm leading-6 text-muted">
                 <p>{{ t('initial') }}</p>
               </div>
@@ -1727,7 +1727,7 @@ onBeforeUnmount(() => {
                 </div>
               </article>
             </div>
-            <div v-if="clarification?.options.length && !loading && !failed" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
+            <div v-if="clarification?.options.length && !loading && !failed" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 py-2 text-left text-sm leading-5 text-muted hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert">
               <p>{{ failureMessage }}</p>
               <PlayerFailureDetails

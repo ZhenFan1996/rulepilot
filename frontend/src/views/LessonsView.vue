@@ -1093,12 +1093,12 @@ onBeforeUnmount(() => {
 <template>
   <AppShell :login-action-owned="loginRequired" @session-identity="updateSessionIdentity">
     <section class="tabletop-page max-w-6xl">
-      <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+      <div class="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
           <h1 ref="pageHeading" tabindex="-1" class="tabletop-title outline-none">{{ loginRequired ? signedOutCopy.pageTitle : t('lessons.title') }}</h1>
           <p class="mt-4 max-w-2xl leading-7 text-muted">{{ loginRequired ? signedOutCopy.pageDescription : t('lessons.description') }}</p>
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex shrink-0 flex-wrap gap-2">
           <button v-if="!loginRequired && visiblePlans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
           <RouterLink v-if="!loginRequired" :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-on-accent">{{ t('lessons.upload') }}</RouterLink>
         </div>

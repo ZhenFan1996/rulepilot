@@ -453,7 +453,7 @@ onBeforeUnmount(() => {
     <div class="tabletop-page max-w-6xl">
       <div class="max-w-3xl">
         <p class="text-sm font-medium text-copper">{{ t('models.eyebrow') }}</p>
-        <h1 ref="pageHeading" tabindex="-1" class="mt-3 font-display text-4xl font-semibold tracking-tight outline-none">{{ t('models.title') }}</h1>
+        <h1 ref="pageHeading" tabindex="-1" class="tabletop-title pt-3 outline-none">{{ t('models.title') }}</h1>
         <p class="mt-4 leading-7 text-muted">{{ t('models.description') }}</p>
       </div>
 

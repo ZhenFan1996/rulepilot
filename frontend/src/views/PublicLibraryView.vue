@@ -51,12 +51,12 @@ onMounted(() => { void load() })
 <template>
   <AppShell>
     <section class="tabletop-page max-w-6xl">
-      <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+      <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 class="tabletop-title">{{ t('library.heading') }}</h1>
           <p class="mt-4 max-w-2xl leading-7 text-muted">{{ t('library.description') }}</p>
         </div>
-        <label class="relative block w-full sm:w-72">
+        <label class="relative block w-full shrink-0 sm:max-w-sm lg:w-72">
           <span class="sr-only">{{ t('library.search') }}</span>
           <TabletopGlyph name="compass" :size="18" class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted" />
           <input v-model="search" type="search" :placeholder="t('library.search')" class="min-h-11 w-full rounded-xl border border-ink/12 bg-paper py-3 pl-11 pr-4 text-sm outline-none transition placeholder:text-ink/40 focus:border-indigo focus:ring-2 focus:ring-indigo/15">

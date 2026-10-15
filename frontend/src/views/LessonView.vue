@@ -765,7 +765,7 @@ onUnmounted(() => {
   <AppShell>
     <div data-testid="private-lesson-surface" class="min-h-screen bg-canvas pb-10 text-ink">
       <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
-        <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
+        <div class="mx-auto flex flex-wrap max-w-4xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
           <LessonModeNav
             v-if="lesson"

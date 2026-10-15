@@ -73,18 +73,18 @@ const copy = {
   },
   en: {
     title: 'Game catalog',
-    description: 'Search BGG games and browse by heat, player rating, and detailed type. Localized titles appear only when an official BGG edition records them.',
-    assistant: 'Ask the recommendation assistant',
-    searchLabel: 'Search the full catalog', searchPlaceholder: 'Enter a title or original name', search: 'Search', searching: 'Searching…',
+    description: 'Find board games by title, rating, or type.',
+    assistant: 'Help me choose',
+    searchLabel: 'Search games', searchPlaceholder: 'Game title', search: 'Search', searching: 'Searching…',
     browseTitle: 'Browse every game',
-    sortLabel: 'Sort', sortHot: 'Current heat first', sortRating: 'Player rating first', sortRank: 'BGG rank first', typeLabel: 'BGG ranking family', apply: 'Apply', clear: 'Reset',
+    sortLabel: 'Sort', sortHot: 'Trending', sortRating: 'Player rating', sortRank: 'BGG rank', typeLabel: 'Game type', apply: 'Apply', clear: 'Reset',
     all: 'All base games', abstract: 'Abstract', customizable: 'Customizable', children: "Children's", family: 'Family', party: 'Party', strategy: 'Strategy', thematic: 'Thematic', war: 'War', expansion: 'Expansions',
     scope: 'BGG lists {sourceCount} records; {total} match these filters.', sourceDate: 'Updated {date}', loading: 'Loading the BGG catalog',
     unavailableTitle: 'The game catalog is still being prepared', unavailableDescription: 'Recommendations, your games, and rulebooks are still available.',
     errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again', pageError: 'This page could not be loaded. Your current page is still here.', retryPage: 'Retry this page',
     players: '{min}–{max} players', minutes: 'About {minutes} min', rating: 'Player rating {rating}', geekRating: 'Geek rating {rating}', votes: '{count} ratings', weight: 'Complexity {weight} / 5',
     rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', coverAlt: '{game} BGG cover',
-    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', shown: '{shown} games on this page', officialSource: 'Data provided by BoardGameGeek',
+    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another game type.', shown: '{shown} games on this page', officialSource: 'Data provided by BoardGameGeek',
     pagination: 'Game catalog pages', pageSummary: 'Page {current} of {total}', previousPage: 'Previous', nextPage: 'Next', goToPage: 'Go to page {page}',
   },
 } as const
@@ -405,28 +405,28 @@ onBeforeUnmount(() => {
       </header>
 
       <section id="game-catalog" class="scroll-mt-6 border-t border-ink/10 pt-5">
-        <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 class="text-lg font-semibold">{{ t('browseTitle') }}</h2>
           </div>
           <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-12 items-center" :aria-label="t('officialSource')">
-            <img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[171px]" width="342" height="76">
+            <img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-28 sm:w-36" width="342" height="76">
           </a>
         </div>
 
-        <div class="tabletop-panel player-board mt-6 grid gap-4 p-5 lg:grid-cols-[minmax(18rem,1.4fr)_minmax(11rem,0.7fr)_minmax(11rem,0.7fr)_auto] lg:items-end">
-          <form class="lg:contents" role="search" @submit.prevent="searchGames">
-            <label class="grid gap-2 text-xs font-semibold text-muted" for="bgg-catalog-search">{{ t('searchLabel') }}
+        <div class="tabletop-panel player-board mt-5 grid grid-cols-2 gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,2fr)_repeat(2,minmax(0,1fr))] lg:items-end">
+          <form class="col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2 lg:col-span-1" role="search" @submit.prevent="searchGames">
+            <label class="grid min-w-0 gap-2 text-xs font-semibold text-muted" for="bgg-catalog-search">{{ t('searchLabel') }}
               <input id="bgg-catalog-search" v-model="searchQuery" type="search" :placeholder="t('searchPlaceholder')" class="min-h-12 min-w-0 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-normal outline-none focus:border-copper">
             </label>
-            <button type="submit" :disabled="loading" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-50 lg:order-last">{{ t('search') }}</button>
+            <button type="submit" :disabled="loading" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-50">{{ t('search') }}</button>
           </form>
           <form data-testid="catalog-filter-form" class="contents" @submit.prevent="applyFilters">
-            <label class="grid gap-2 text-xs font-semibold text-muted">{{ t('sortLabel') }}
-              <select v-model="sort" class="min-h-12 rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option value="hot">{{ t('sortHot') }}</option><option value="rating">{{ t('sortRating') }}</option><option value="rank">{{ t('sortRank') }}</option></select>
+            <label class="grid min-w-0 gap-2 text-xs font-semibold text-muted">{{ t('sortLabel') }}
+              <select v-model="sort" class="min-h-12 min-w-0 w-full rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option value="hot">{{ t('sortHot') }}</option><option value="rating">{{ t('sortRating') }}</option><option value="rank">{{ t('sortRank') }}</option></select>
             </label>
-            <label class="grid gap-2 text-xs font-semibold text-muted">{{ t('typeLabel') }}
-              <select v-model="type" class="min-h-12 rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option v-for="item in typeOptions" :key="item" :value="item">{{ t(item) }}</option></select>
+            <label class="grid min-w-0 gap-2 text-xs font-semibold text-muted">{{ t('typeLabel') }}
+              <select v-model="type" class="min-h-12 min-w-0 w-full rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option v-for="item in typeOptions" :key="item" :value="item">{{ t(item) }}</option></select>
             </label>
             <button type="submit" :disabled="loading" class="sr-only">{{ t('apply') }}</button>
           </form>

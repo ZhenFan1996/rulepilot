@@ -251,11 +251,11 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
 
 <template>
   <AppShell>
-    <div class="tabletop-page grid max-w-6xl gap-10 lg:grid-cols-[0.82fr_1.18fr]">
+    <div class="tabletop-page grid grid-cols-1 max-w-6xl gap-10 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
       <section>
         <RouterLink :to="{ name: 'catalog' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← {{ t('catalog.back') }}</RouterLink>
         <p class="mt-5 text-sm font-medium text-copper">{{ t('catalog.eyebrow') }}</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">{{ t('catalog.title') }}</h1>
+        <h1 class="tabletop-title pt-3">{{ t('catalog.title') }}</h1>
         <p class="mt-4 max-w-xl leading-7 text-muted">{{ t('catalog.description') }}</p>
 
         <form class="tabletop-panel player-board mt-8 p-5" @submit.prevent="createGame">
