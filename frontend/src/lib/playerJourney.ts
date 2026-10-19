@@ -540,6 +540,10 @@ export function typedFailurePolicy(
   requestedRetryAction: PlayerJourneyRetryAction,
   serverAuthorizedRetry: boolean,
 ): PlayerJourneyFailurePolicy {
+  if (requestedRetryAction === 'GENERATE_LESSON'
+    && (errorCode === 'DEGRADED' || errorCode === 'INSUFFICIENT_EVIDENCE')) {
+    return preservedFailure(errorCode, requestedRetryAction, 'restart-from-completed')
+  }
   if (LOCAL_DEGRADATION_CODES.has(errorCode)) {
     return {
       errorCode,
@@ -614,10 +618,10 @@ export function playerJourneyFailurePresentation(
   }
   if (policy.failureClassification === 'internal-correction') {
     return {
-      title: english ? 'Internal typed-result correction stopped' : '内部结构化结果修正已停止',
+      title: english ? 'This part is not ready yet' : '这部分尚未完成',
       detail: english
-        ? 'This is not a player-input rejection. The same Agent receives the complete candidate and validation record and must return a complete replacement; exact repetition, no progress, or a resource stop can end that step.'
-        : '这不是玩家输入被拒绝。同一个 Agent 会收到完整候选与校验记录，并必须返回完整替代结果；完全重复、无进展或资源停止会结束这一步。',
+        ? 'Your completed content is saved. You do not need to rewrite your request.'
+        : '已完成的内容会保留，无需改写你的问题。',
       actionLabel: null,
     }
   }
@@ -634,9 +638,9 @@ export function playerJourneyFailurePresentation(
     return {
       title: english ? 'The run stopped with completed work preserved' : '本轮已停止，完成内容已保留',
       detail: english
-        ? 'The run stopped at a whole-run boundary. Confirmed pages and published chapters remain, and a new run can continue from that durable work.'
-        : '本轮在整任务边界停止；已确认页面和已发布章节仍然保留，可以从这些持久化内容启动新一轮。',
-      actionLabel: english ? 'Restart from completed work' : '从已完成内容重新开始',
+        ? 'Your completed chapters are saved. Continue to finish the missing chapters.'
+        : '已完成章节已保存，继续生成会补齐剩余章节。',
+      actionLabel: english ? 'Continue generating' : '继续生成',
     }
   }
   if (policy.failureRecovery === 'choose-source') {
@@ -650,10 +654,10 @@ export function playerJourneyFailurePresentation(
   }
   if (policy.failureClassification === 'repair-required') {
     return {
-      title: english ? 'Repair is required before continuing' : '需要先修复后再继续',
+      title: english ? 'Temporarily unavailable' : '暂时无法继续',
       detail: english
-        ? 'Retrying unchanged is not safe. Repair the invalid input, source, authorization, service, or persistence boundary first; the rulebook and published chapters remain available.'
-        : '这不是可以安全原样重试的失败；请先修复无效输入、来源、权限、服务或保存边界，再继续。规则书和已发布章节仍然保留。',
+        ? 'Your rulebook and completed chapters are saved. Check access to the rulebook, or try again later.'
+        : '规则书和已完成章节已保存。请检查规则书是否可以访问，或稍后再试。',
       actionLabel: null,
     }
   }

@@ -190,13 +190,13 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
   retry: '重试当前步骤', stop: '停止本次生成', restart: '从已完成内容重新开始', retryFailed: '本次重试没有启动，后台不会自动继续重试。请检查连接后再手动操作。', stopFailed: '本次停止请求没有完成，当前运行可能仍在继续。请检查连接后再操作。', remove: '删除讲解', removeConfirm: '确认删除这份讲解及其生成任务？规则书会保留，已生成章节会被删除。', removeYes: '确认删除', removeNo: '先保留', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；正在运行的下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。', safeStopped: '可以关闭这个小窗继续聊天；已确认内容会保留，已停止的任务不会在后台自行重新开始。页面上的“讲解状态”入口会一直显示。',
-  progress: '当前步骤进度', inProgress: '进行中', waiting: '等待你继续', stopped: '已停止', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。',
+  progress: '当前步骤进度', inProgress: '进行中', waiting: '等待你继续', stopped: '已停止', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度',
   currentFailure: '本次属于',
   currentFailureDetail: {
     'local-degradation': '可用内容已经保留，只有可选或局部工作未完成；主流程不会因此回退。',
     'retry-preserved': '当前运行已经停止，已确认页面和已发布章节保留；系统不会在后台自行重新开始。',
     'repair-required': '当前错误不适合原样重试；请按下面实际提供的操作处理，若没有操作入口则需等待服务恢复或联系支持。',
-    'internal-correction': '这不是玩家输入失败；同一个 Agent 会收到完整候选与校验记录并返回完整替代结果。完全重复、无进展或资源停止会结束这一步。',
+    'internal-correction': '这部分暂未完成，已完成的章节已保留，无需改写你的要求。',
   },
   failureRecoveryDetail: {
     'retry-step': '后端允许你明确重试当前步骤；只有点击下面的按钮才会开始。',
@@ -221,13 +221,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     AGENT_TIMEOUT: '本轮达到后端记录的截止时间；已确认内容会保留，可以原样启动新任务。',
   },
   generationLocalFailureTitle: '局部降级：可用内容保留',
-  generationLocalFailure: '单页、单章或配图不可用只影响对应局部；其他成功页面和已经发布的正文都会保留。',
   generationPreservedStopTitle: '可原样重试，进度保留',
-  generationPreservedStop: '模型服务、排队、截止时间、传输或取消会停止当前任务，但已确认页面和已发布章节保留；可以用相同输入启动新任务。',
   generationRepairTitle: '需要你或运维修复后继续',
-  generationRepair: '登录或权限、无效输入、错误来源、所有权、版本、保存、身份或引用问题需要先修复，再重新发起。',
-  generationInternalCorrectionTitle: '内部 JSON 修正，不是玩家输入失败',
-  generationInternalCorrection: '同一个 Agent 会收到完整候选、code、path、reason、schema 和 allowed IDs，并必须返回完整替代结果；完全重复、无进展或资源停止才结束这一步。',
+  generationInternalCorrectionTitle: '这部分尚未完成',
   visualRuleGroupSummaryTitle: '每页规则组最新状态',
   visualRuleGroupSummaryHint: '只按每页已发出的最新真实活动汇总；还没有活动的页面不会计入，下方保留每次玩家可见尝试。',
   visualRuleGroupStatus: {
@@ -240,15 +236,6 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   visualRuleGroupPages: (pages: readonly number[]) => `第 ${pages.join('、')} 页`,
   generationAttemptMarkerHint: '“!”表示这一条真实尝试未完成或未通过校验，“?”表示活动状态无法识别；两者都不代表整份讲解失败，请以上方每页最新状态和整条任务状态为准。',
   planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
-  generationProcess: [
-    '图片页直接按原图和页码整理规则，文字页直接读取原文；结构化格式不合格时，完整候选和校验记录会交回同一个 Agent，并要求返回完整替代结果',
-    '按页面整理规则组，并记录规则书要求的外部资料',
-    '通读整本规则书，形成整局认识并规划章节',
-    '读取当前章节绑定的规则页与引用',
-    '依据原文生成玩家可以直接照做的讲解步骤',
-    '校验引用归属、规则书版本与章节结构',
-    '通过后立即发布当前章节，再继续下一章',
-  ],
   generationFallback: {
     queued: '讲解准备任务已排队，等待后台开始通读规则书',
     readiness: '正在确认规则书页面已经可以用于讲解',
@@ -311,13 +298,13 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
   retry: 'Retry this step', stop: 'Stop this run', restart: 'Start a new run from completed work', retryFailed: 'This retry did not start. Nothing is retrying in the background; check your connection and try the action again.', stopFailed: 'The stop request did not complete, so this run may still be active. Check your connection and try again.', remove: 'Delete guide', removeConfirm: 'Delete this guide and its generation work? The rulebook stays, but published chapters are removed.', removeYes: 'Delete guide', removeNo: 'Keep it', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Downloads and guide runs that are still active will continue. The “Guide status” shortcut stays visible, and My guides is always available.', safeStopped: 'You may close this panel and keep chatting. Confirmed content remains available, and stopped work will not restart in the background. The “Guide status” shortcut stays visible.',
-  progress: 'Current-step progress', inProgress: 'In progress', waiting: 'Waiting for you', stopped: 'Stopped', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.',
+  progress: 'Current-step progress', inProgress: 'In progress', waiting: 'Waiting for you', stopped: 'Stopped', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress',
   currentFailure: 'This run is classified as',
   currentFailureDetail: {
     'local-degradation': 'Usable content remains available; only optional or page-local work did not finish, and the main flow does not roll back.',
     'retry-preserved': 'This run has stopped. Confirmed pages and published chapters remain available, and the system will not restart it in the background.',
     'repair-required': 'Repeating the same request is not a safe recovery. Use only the actions actually shown below; if none is available, wait for service recovery or contact support.',
-    'internal-correction': 'This is not a player-input failure. The same Agent receives the complete candidate and validation record and returns a complete replacement. Exact repetition, no progress, or a resource stop ends the step.',
+    'internal-correction': 'This part is not ready yet. Completed chapters are saved; you do not need to rewrite your request.',
   },
   failureRecoveryDetail: {
     'retry-step': 'The backend allows an explicit retry of this step; it starts only when you use the button below.',
@@ -342,13 +329,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     AGENT_TIMEOUT: 'The run reached the backend-recorded deadline. Confirmed content remains available, and the same input can start a fresh task.',
   },
   generationLocalFailureTitle: 'Local degradation: usable content remains',
-  generationLocalFailure: 'An unavailable page, chapter, or visual affects only that item. Other successful pages and published text remain available.',
   generationPreservedStopTitle: 'Retry unchanged; progress preserved',
-  generationPreservedStop: 'Provider, queue, deadline, transport, or cancellation stops preserve confirmed pages and published chapters; the same input can start a fresh task.',
   generationRepairTitle: 'You or operations must repair this before continuing',
-  generationRepair: 'Authentication, invalid input, source, ownership, version, persistence, identity, or citation errors must be repaired before starting again.',
-  generationInternalCorrectionTitle: 'Internal JSON correction, not a player-input failure',
-  generationInternalCorrection: 'The same Agent receives the complete candidate, code, path, reason, schema, and allowed IDs and must return a complete replacement. Exact repetition, no progress, or a resource stop ends the step.',
+  generationInternalCorrectionTitle: 'This part is not ready yet',
   visualRuleGroupSummaryTitle: 'Latest rule-group state by page',
   visualRuleGroupSummaryHint: 'This uses only the latest real activity emitted for each page. Pages without an activity are not counted, and every player-visible attempt remains below.',
   visualRuleGroupStatus: {
@@ -363,15 +346,6 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
     : `Pages ${pages.join(', ')}`,
   generationAttemptMarkerHint: '“!” marks one real attempt that did not complete or pass validation, while “?” marks an unrecognized activity status. Neither means the entire guide failed; use the latest per-page state above and the overall run state.',
   planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
-  generationProcess: [
-    'Build page-bound rule facts from image pages and text layers; typed-format failures return the complete candidate and exact validation record to the same Agent for a complete replacement',
-    'Organise each page into rule groups and record any external material the rulebook requires',
-    'Read the whole rulebook, form a whole-game view, and plan the chapters',
-    'Read the source pages and citations bound to the current chapter',
-    'Generate player-actionable teaching steps directly from the source',
-    'Check citation ownership, rulebook version, and chapter structure',
-    'Publish the current chapter immediately, then continue with the next one',
-  ],
   generationFallback: {
     queued: 'Guide preparation is queued and waiting to start reading the rulebook',
     readiness: 'Confirming that the rulebook pages are ready for guide generation',
@@ -1822,35 +1796,6 @@ onBeforeUnmount(() => {
           :aria-label="copy.generationSteps"
         >
           <p class="text-xs font-bold uppercase tracking-[0.1em] text-copper">{{ copy.generationSteps }}</p>
-          <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationProcessHint }}</p>
-          <ol class="mt-3 grid gap-2 sm:grid-cols-2">
-            <li
-              v-for="(step, index) in copy.generationProcess"
-              :key="step"
-              class="flex items-start gap-2 rounded-lg border border-copper/10 bg-paper/70 px-3 py-2 text-xs leading-5 text-muted"
-            >
-              <span class="grid size-5 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-[10px] font-bold text-copper" aria-hidden="true">{{ index + 1 }}</span>
-              <span>{{ step }}</span>
-            </li>
-          </ol>
-          <div data-testid="recommendation-teaching-failure-boundary" class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-            <div data-failure-classification="local-degradation" :data-current-failure="projection.failureClassification === 'local-degradation' ? 'true' : undefined" class="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2" :class="projection.failureClassification === 'local-degradation' ? 'ring-2 ring-emerald-500/40' : ''">
-              <p class="text-xs font-semibold text-emerald-800">{{ copy.generationLocalFailureTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationLocalFailure }}</p>
-            </div>
-            <div data-failure-classification="retry-preserved" :data-current-failure="projection.failureClassification === 'retry-preserved' ? 'true' : undefined" class="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2" :class="projection.failureClassification === 'retry-preserved' ? 'ring-2 ring-amber-500/40' : ''">
-              <p class="text-xs font-semibold text-amber-800">{{ copy.generationPreservedStopTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationPreservedStop }}</p>
-            </div>
-            <div data-failure-classification="repair-required" :data-current-failure="projection.failureClassification === 'repair-required' ? 'true' : undefined" class="rounded-lg border border-red-200 bg-red-50/70 px-3 py-2" :class="projection.failureClassification === 'repair-required' ? 'ring-2 ring-red-500/40' : ''">
-              <p class="text-xs font-semibold text-red-800">{{ copy.generationRepairTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationRepair }}</p>
-            </div>
-            <div data-failure-classification="internal-correction" :data-current-failure="projection.failureClassification === 'internal-correction' ? 'true' : undefined" class="rounded-lg border border-indigo/20 bg-indigo/5 px-3 py-2" :class="projection.failureClassification === 'internal-correction' ? 'ring-2 ring-indigo/30' : ''">
-              <p class="text-xs font-semibold text-indigo">{{ copy.generationInternalCorrectionTitle }}</p>
-              <p class="mt-1 text-xs leading-5 text-muted">{{ copy.generationInternalCorrection }}</p>
-            </div>
-          </div>
           <section
             v-if="visualPageRuleGroupSummary.length"
             data-testid="recommendation-visual-rule-group-summary"

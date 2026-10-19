@@ -22,7 +22,7 @@ class PlayerFacingLessonLanguagePolicyTest {
                 LessonStatus.DRAFT_READY,
                 section(EvidenceStatus.CITED_DRAFT, "规则没有说明之后怎样处理。", true));
 
-        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(citedDraft)).isTrue();
+        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(citedDraft)).isFalse();
         assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(
                         lesson(LessonStatus.INCOMPLETE, citedDraft.sections().getFirst())))
                 .isFalse();
@@ -35,27 +35,12 @@ class PlayerFacingLessonLanguagePolicyTest {
     }
 
     @Test
-    void exposesOnlyCitedChaptersFromAMixedDraftReadyLesson() {
-        LessonSection cited = section(EvidenceStatus.CITED_DRAFT, "有引用的流程。", true);
-        LessonSection insufficient = new LessonSection(
-                2,
-                "ending",
-                List.of("ending"),
-                "结束",
-                true,
-                EvidenceStatus.INSUFFICIENT_EVIDENCE,
-                VisualKind.REFERENCE_CARD,
-                "等待来源",
-                List.of(),
-                List.of(),
-                List.of(new LessonStep(
-                        1, "暂时跳过", TeachingMove.WATCH, "尚无可验证来源。", List.of(), List.of())));
-        IllustratedLesson stored = lesson(LessonStatus.DRAFT_READY, List.of(cited, insufficient));
-
-        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(stored)).isTrue();
-        assertThat(PlayerFacingLessonLanguagePolicy.publicProjection(stored).sections())
-                .containsExactly(cited);
-        assertThat(stored.sections()).containsExactly(cited, insufficient);
+    void publishesOnlyCompleteCitedGuides() {
+        var complete = lesson(LessonStatus.COMPLETE, section(EvidenceStatus.SUPPORTED, "规则没有说明之后怎样处理。", true));
+        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(complete)).isTrue();
+        assertThat(PlayerFacingLessonLanguagePolicy.publicProjection(complete)).isSameAs(complete);
+        assertThat(PlayerFacingLessonLanguagePolicy.isPubliclyReadable(
+                lesson(LessonStatus.COMPLETE, section(EvidenceStatus.INSUFFICIENT_EVIDENCE, "缺少来源", true)))).isFalse();
     }
 
     private IllustratedLesson lesson(LessonStatus status, LessonSection section) {

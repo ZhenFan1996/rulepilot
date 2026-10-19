@@ -1213,13 +1213,13 @@ onUnmounted(() => {
           data-testid="public-lesson-unresolved-topics"
           class="mx-auto mt-6 max-w-4xl rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-6 text-amber-950"
         >
-          <p class="font-semibold">{{ locale === 'en' ? 'Locally unavailable topics' : '局部未完成主题' }}</p>
-          <p class="mt-1 text-xs">{{ locale === 'en' ? 'Published chapters remain available. These topics were not published because their evidence boundary did not pass.' : '已发布章节继续可用；以下主题因证据边界未通过而没有发布。' }}</p>
+          <p class="font-semibold">{{ locale === 'en' ? 'Questions to check in the rulebook' : '仍需结合规则书核对的问题' }}</p>
+          <p class="mt-1 text-xs">{{ locale === 'en' ? 'These points remain uncertain. You can keep reading the completed chapters and check the original rules.' : '以下事项尚未确认，可以继续阅读已完成章节，并结合原规则核对。' }}</p>
           <ul class="mt-2 list-disc pl-5"><li v-for="topic in publicLesson.unresolvedTopics" :key="topic">{{ topic }}</li></ul>
         </aside>
 
         <LessonChapterList
-          v-else
+          v-if="!questionMode"
           :sections="publicLesson.lesson.sections"
           id-prefix="public-chapter"
           :page-image-url="sourcePageUrl"

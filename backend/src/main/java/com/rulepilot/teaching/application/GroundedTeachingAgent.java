@@ -39,9 +39,11 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "teaching-agent-v67-planned-visual-pages";
+    static final String GENERATOR_VERSION = "teaching-agent-v68-observed-images";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
-            Set.of(GENERATOR_VERSION);
+            // Public v67 drafts still exist. Keep their supported chapters on resume; retire v67 reuse after
+            // those persisted drafts have completed or been explicitly retired.
+            Set.of(GENERATOR_VERSION, "teaching-agent-v67-planned-visual-pages");
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final AuditedAgentInvocations invocations;
@@ -220,7 +222,6 @@ public class GroundedTeachingAgent {
 
     private void scheduleSections(BaseLessonContinuation continuation) {
         Map<String, CompletableFuture<SectionOutcome>> byTopic = new java.util.LinkedHashMap<>();
-        Map<String, CompletableFuture<SectionOutcome>> publications = new java.util.LinkedHashMap<>();
         Map<String, List<String>> prerequisites = new java.util.LinkedHashMap<>();
         continuation.plan.wholeGameContext().topicDependencies().forEach(dependency -> prerequisites
                 .computeIfAbsent(dependency.dependentTopicKey(), ignored -> new ArrayList<>())
@@ -231,7 +232,6 @@ public class GroundedTeachingAgent {
                 SectionOutcome outcome = new SectionOutcome(
                         planned, reusable, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
                 byTopic.put(planned.topicKey(), CompletableFuture.completedFuture(outcome));
-                publications.put(planned.topicKey(), byTopic.get(planned.topicKey()));
                 recordPublication(
                         continuation.assistantRunId, planned, outcome.publicationOutcome(), outcome.publicationCategory());
                 continue;
@@ -254,27 +254,8 @@ public class GroundedTeachingAgent {
                     continuation.assistantRunId), continuation.sectionTasks)
                     .exceptionally(failure -> unavailableSection(planned, failure));
             byTopic.put(planned.topicKey(), content);
-            CompletableFuture<SectionOutcome> publication = content;
-            if (planned.visualEvidenceRecommended()) {
-                // Only visual assembly needs prior visual results for duplicate-crop suppression. Dependent prose
-                // and chapters with no planned visual can already proceed from the validated text.
-                List<CompletableFuture<SectionOutcome>> priorPublications = prerequisiteTopics.stream()
-                        .map(publications::get)
-                        .toList();
-                publication = content.thenCombineAsync(
-                        CompletableFuture.allOf(priorPublications.toArray(CompletableFuture[]::new)),
-                        (outcome, ignored) -> outcome.section() == null ? outcome : outcome.withSection(enrichValidatedSection(
-                                continuation.plan,
-                                planned,
-                                outcome.section(),
-                                completedSections(priorPublications),
-                                continuation.assistantRunId)),
-                        continuation.sectionTasks)
-                        .exceptionally(failure -> unavailableSection(planned, failure));
-            }
-            publication.whenComplete((outcome, failure) -> continuation.settledSections.add(
+            content.whenComplete((outcome, failure) -> continuation.settledSections.add(
                     new SettledSection(planned, outcome, failure)));
-            publications.put(planned.topicKey(), publication);
         }
         if (continuation.unsettledSections == 0) continuation.sectionTasks.shutdown();
     }
@@ -393,6 +374,7 @@ public class GroundedTeachingAgent {
                     planned,
                     priorSections,
                     resolution.evidence(),
+                    prepareVisuals(plan, planned, resolution.evidence(), assistantRunId),
                     assistantRunId,
                     sectionIndex);
             LessonSection published = basePublication.publish(composed);
@@ -427,50 +409,20 @@ public class GroundedTeachingAgent {
         progressPublisher.accept(lessonAssembly.snapshot(lessonId, plan, sections, GENERATOR_VERSION, createdAt));
     }
 
-    private LessonSection enrichValidatedSection(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            LessonSection section,
-            List<LessonSection> alreadyPublished,
-            UUID assistantRunId) {
-        if (visualEnricher == null
-                || section.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE
-                || !visualEnricher.supportsVisualEvidence(plan.createdBy())) {
-            return section;
-        }
+    private List<com.rulepilot.teaching.TeachingLessonModel.VisualInput> prepareVisuals(
+            TeachingPlan plan, TeachingPlan.PlannedSection planned,
+            List<com.rulepilot.assistant.AssistantReadTools.RuleEvidence> evidence, UUID runId) {
+        if (!planned.visualEvidenceRecommended() || visualEnricher == null
+                || !visualEnricher.supportsVisualEvidence(plan.createdBy())) return List.of();
         try {
-            var enriched = visualEnricher.enrichSection(
-                    plan.documentVersionId(),
-                    planned,
-                    section,
-                    List.copyOf(alreadyPublished),
-                    plan.createdBy(),
-                    assistantRunId,
-                    new VisualLessonEnricher.VisualProgressListener() {});
-            invocations.record(
-                    assistantRunId,
-                    ActivityType.VALIDATION,
-                    "enrichTeachingSectionVisual|" + planned.position(),
-                    VisualLessonEnricher.isSuccessfulOutcome(enriched.outcome().outcome())
-                            ? ActivityOutcome.SUCCEEDED
-                            : ActivityOutcome.REJECTED,
-                    enriched.outcome().summary());
-            return enriched.section();
+            return visualEnricher.prepare(plan, planned, evidence, runId);
         } catch (AgentExecutionStoppedException stopped) {
-            if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) {
-                throw stopped;
-            }
-            log.warn(
-                    "Optional visual enrichment stopped for teaching topic {}; retaining cited text ({})",
-                    planned.topicKey(),
-                    stopped.reason());
-            return section;
-        } catch (RuntimeException visualFailure) {
-            log.warn(
-                    "Optional visual enrichment failed for teaching topic {}; publishing cited text: {}",
-                    planned.topicKey(),
-                    visualFailure.getMessage());
-            return section;
+            if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) throw stopped;
+            log.warn("Optional source image observation stopped for {}: {}", planned.topicKey(), stopped.reason());
+            return List.of();
+        } catch (RuntimeException failure) {
+            log.warn("Optional source image observation unavailable for {}: {}", planned.topicKey(), failure.getMessage());
+            return List.of();
         }
     }
 

@@ -201,7 +201,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 + estimateTokens(request.outputLanguage().languageTag())
                 + estimateTokens(request.title())
                 + estimateTokens(request.objective());
-        int evidenceTokens = estimateTokens(modelEvidence(request).toString());
+        int evidenceTokens = estimateTokens(modelEvidence(request).toString()) + estimateTokens(modelVisuals(request).toString());
         int continuityTokens = request.priorSections().isEmpty()
                 ? 0
                 : estimateTokens(request.priorSections().toString());
@@ -231,6 +231,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 "objective",
                 "continuity",
                 "evidence",
+                "visuals",
                 "repair")) {
             result = result.replace("{" + parameter + "}", "");
         }
@@ -297,6 +298,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                 .param("objective", request.objective())
                                 .param("continuity", request.priorSections())
                                 .param("evidence", modelEvidence(request))
+                                .param("visuals", modelVisuals(request))
                                 .param("repair", repairInstruction);
                     });
             ChatResponse response = requestSpec.call().chatResponse();
@@ -498,6 +500,20 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return readable.isEmpty() ? excerpt : readable.toString();
     }
 
+    private String modelVisuals(SectionRequest request) {
+        Map<UUID, String> references = new LinkedHashMap<>();
+        evidenceIds(request).forEach((ref, id) -> references.put(id, ref));
+        var observations = request.visuals().stream().map(visual -> Map.<String, Object>of(
+                "imageId", visual.imageId(), "page", visual.focus().pageNumber(),
+                "visibleDescription", visual.focus().visibleDescription(),
+                "evidenceRefs", visual.evidenceIds().stream().map(references::get).toList())).toList();
+        try {
+            return STRICT_TEACHING_OUTPUT.writeValueAsString(observations);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("could not serialize visual observations", failure);
+        }
+    }
+
     private Map<String, UUID> evidenceIds(SectionRequest request) {
         Map<String, UUID> references = new LinkedHashMap<>();
         IntStream.range(0, request.evidence().size())
@@ -520,7 +536,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                                 fact.role(),
                                                 fact.text(),
                                                 fact.citationIds().stream().map(references::get).toList()))
-                                        .toList()))
+                                        .toList(), step.imageIds()))
                         .toList());
     }
 
@@ -545,7 +561,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                                 fact.role(),
                                                 fact.text(),
                                                 resolveReferences(fact.citationIds(), evidenceIds)))
-                                        .toList()))
+                                        .toList(), step.imageIds()))
                         .toList());
     }
 
@@ -591,8 +607,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             TeachingMove kind,
             String text,
             List<String> citationIds,
-            List<ModelRuleFact> ruleFacts) {
+            List<ModelRuleFact> ruleFacts,
+            List<String> imageIds) {
+        ModelStepDraft(String heading, TeachingMove kind, String text, List<String> citationIds,
+                List<ModelRuleFact> ruleFacts) {
+            this(heading, kind, text, citationIds, ruleFacts, List.of());
+        }
         ModelStepDraft {
+            imageIds = imageIds == null ? List.of() : List.copyOf(imageIds);
             citationIds = citationIds == null ? List.of() : citationIds.stream().distinct().toList();
             ruleFacts = ruleFacts == null ? List.of() : ruleFacts.stream().distinct().toList();
         }

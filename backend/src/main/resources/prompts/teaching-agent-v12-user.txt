@@ -12,6 +12,10 @@
 {evidence}
 </untrusted_rule_evidence>
 
+<untrusted_visual_observations>
+{visuals}
+</untrusted_visual_observations>
+
 <untrusted_rejection_observation>
 {repair}
 </untrusted_rejection_observation>

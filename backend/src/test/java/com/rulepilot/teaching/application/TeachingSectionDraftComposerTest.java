@@ -66,7 +66,7 @@ class TeachingSectionDraftComposerTest {
                 directInvocations());
 
         TeachingSectionDraftCandidate result = composer.compose(
-                plan, planned, List.of(), List.of(evidence), UUID.randomUUID(), 0);
+                plan, planned, List.of(), List.of(evidence), List.of(), UUID.randomUUID(), 0);
 
         assertThat(result.section().steps().getFirst().text()).isEqualTo("花费一次行动修复受损系统。");
         assertThat(observed.get()).satisfies(rejection -> {

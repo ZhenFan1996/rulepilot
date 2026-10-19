@@ -75,6 +75,31 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void keepsAcquiringWhenARepeatedReadHasANewIndependentSibling() {
+        NativeAgentTool search = tool("search_rule_evidence");
+        NativeAgentTool pages = tool("read_rule_pages");
+        AtomicInteger decisions = new AtomicInteger();
+        NativeToolModel model = request -> switch (decisions.incrementAndGet()) {
+            case 1 -> turn(call("first", search.name(), "{}"));
+            case 2 -> turn(call("repeat", search.name(), "{}"), call("new", pages.name(), "{\"page\":3}"));
+            case 3 -> {
+                assertThat(request.tools()).extracting(NativeToolModel.ToolSpec::name)
+                        .contains(search.name(), pages.name());
+                yield turn(call("follow-up", pages.name(), "{\"page\":4}"));
+            }
+            default -> finalTurn("supported conclusion");
+        };
+
+        var result = agent(model, List.of(search, pages), new RecordingInvocations(null))
+                .run(request(Set.of(search.name(), pages.name()), TerminalContract.none()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("supported conclusion");
+        assertThat(result.observations()).anySatisfy(observation ->
+                assertThat(observation.observation().data()).containsEntry("arguments", "{\"page\":4}"));
+    }
+
+    @Test
     void rejectsDependentSiblingBatchAsOneTypedActionWithoutExecutingIt() {
         AtomicInteger executions = new AtomicInteger();
         NativeAgentTool search = counting("search_rule_evidence", executions);
@@ -155,11 +180,11 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
-    void stopsWhenTheSameRejectedCompletionMakesNoProgress() {
+    void stopsWhenRewordingRepeatsTheSameUnresolvedPublicationFailure() {
         String rejected = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Move.\"}";
         QueueModel model = new QueueModel(
                 finalTurn(rejected),
-                finalTurn(rejected),
+                finalTurn("{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"You can move.\"}"),
                 finalTurn("{\"kind\":\"CHAT\",\"shortVerdict\":\"must not run\"}"));
         RecordingInvocations audited = new RecordingInvocations(null);
         TerminalContract contract = TerminalContract.json(

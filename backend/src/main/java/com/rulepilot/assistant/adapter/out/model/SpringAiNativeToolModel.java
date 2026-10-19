@@ -141,11 +141,15 @@ public class SpringAiNativeToolModel implements NativeToolModel {
     }
 
     @Override
+    public boolean supportsVision(Role role, String ownerUsername) {
+        return models.supportsVision(modelRole(role), ownerUsername);
+    }
+
+    @Override
     public boolean supports(Role role, String ownerUsername) {
         RuntimeModelConfiguration.Role configuredRole = modelRole(role);
-        return role != Role.VISUAL
-                || (!models.usesFake(configuredRole, ownerUsername)
-                        && models.supportsVision(configuredRole, ownerUsername));
+        return !models.usesFake(configuredRole, ownerUsername)
+                && (role != Role.VISUAL || models.supportsVision(configuredRole, ownerUsername));
     }
 
     private Message message(ConversationMessage message) {

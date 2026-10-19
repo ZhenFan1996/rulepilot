@@ -274,6 +274,11 @@ public record IllustratedLesson(
             }
         }
 
+        public String imageId(UUID documentVersionId) {
+            String identity = documentVersionId + ":" + pageNumber + ":" + x + ":" + y + ":" + width + ":" + height;
+            return UUID.nameUUIDFromBytes(identity.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        }
+
         private static VisualSourceKind inferredSourceKind(int x, int y, int width, int height) {
             return x == 0 && y == 0 && width == 1_000 && height == 1_000
                     ? VisualSourceKind.FULL_PAGE

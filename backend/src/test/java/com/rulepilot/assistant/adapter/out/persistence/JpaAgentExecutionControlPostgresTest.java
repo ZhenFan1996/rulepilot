@@ -73,6 +73,17 @@ class JpaAgentExecutionControlPostgresTest {
     }
 
     @Test
+    void clarificationCanFinishWithoutLosingTheAnswerAtPersistence() {
+        UUID runId = createRun("QUESTION_ANSWER");
+        jdbc.update("UPDATE assistant_run SET state = 'NEED_CLARIFICATION', completed_at = updated_at WHERE id = ?", runId);
+        assertThat(jdbc.queryForObject("SELECT completed_at IS NOT NULL FROM assistant_run WHERE id = ?",
+                Boolean.class, runId)).isTrue();
+        assertThatThrownBy(() -> jdbc.update(
+                "UPDATE assistant_run SET completed_at = NULL WHERE id = ?", runId))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test
     void teachingRecordsUsageBeyondItsThresholdAndContinues() {
         UUID runId = createRun("TEACHING");
         inTransaction(control -> {

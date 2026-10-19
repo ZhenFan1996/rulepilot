@@ -308,8 +308,10 @@ public interface VisualRegionLocator {
             List<UUID> supportedEvidenceIds,
             List<Integer> supportedStepPositions,
             boolean claimContradicted,
-            VisualSourceKind sourceKind) {
+            VisualSourceKind sourceKind,
+            String visibleDescription) {
         public LocatedRegion {
+            visibleDescription = visibleDescription == null ? "" : visibleDescription;
             if (pageNumber < 1
                     || x < 0 || y < 0 || width < 20 || height < 20 || x + width > 1_000 || y + height > 1_000
                     || supportedEvidenceIds == null || supportedEvidenceIds.isEmpty()
@@ -325,6 +327,13 @@ public interface VisualRegionLocator {
             }
             supportedEvidenceIds = List.copyOf(supportedEvidenceIds);
             supportedStepPositions = List.copyOf(supportedStepPositions);
+        }
+
+        public LocatedRegion(int pageNumber, int x, int y, int width, int height,
+                List<UUID> supportedEvidenceIds, List<Integer> supportedStepPositions,
+                boolean claimContradicted, VisualSourceKind sourceKind) {
+            this(pageNumber, x, y, width, height, supportedEvidenceIds, supportedStepPositions,
+                    claimContradicted, sourceKind, "");
         }
 
         public LocatedRegion(
@@ -388,7 +397,7 @@ public interface VisualRegionLocator {
                     supportedEvidenceIds,
                     supportedStepPositions,
                     true,
-                    sourceKind);
+                    sourceKind, visibleDescription);
         }
 
         private static VisualSourceKind inferredSourceKind(int x, int y, int width, int height) {

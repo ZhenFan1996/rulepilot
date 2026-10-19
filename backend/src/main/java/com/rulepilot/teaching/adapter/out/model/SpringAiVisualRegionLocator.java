@@ -55,7 +55,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             discuss coordinates. Inspect candidate images in manifest attachmentIndex order.
 
             Return one JSON object with exactly batchAction and reviews. batchAction is STOP or CONTINUE. Use CONTINUE
-            when inspecting another available batch is useful or requesting refinement; otherwise use STOP. Every review has exactly stepPosition, action, and candidateId.
+            when inspecting another available batch is useful or requesting refinement; otherwise use STOP. Every review has exactly stepPosition, action, candidateId, and visibleDescription.
+            visibleDescription describes only literal visible objects, labels, arrows, and relationships in the crop,
+            including any ambiguity or unreadable detail. It is required and nonblank for ACCEPT_CANDIDATE; use an
+            empty string for other actions. This observation is supplied BEFORE lesson prose is written. The offered
+            claims are source evidence slots, not generated teaching steps. Do not invent rules from the picture.
             action is ACCEPT_CANDIDATE, REFINE_CANDIDATE, or NO_VISUAL.
             ACCEPT_CANDIDATE requires one offered candidateId. REFINE_CANDIDATE requires an id from
             refinableCandidateIds and batchAction CONTINUE. Use refinement when a useful object is bundled with
@@ -403,10 +407,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 }
                 continue;
             }
-            List<VisualRegionLocator.Claim> claims = ownedClaims(review, request);
+            List<VisualRegionLocator.Claim> claims = ownedClaims(review, request).stream()
+                    .filter(claim -> claim.sourcePages().contains(candidate.pageNumber())).toList();
             if (claims.isEmpty()) {
                 if (validationError == null) {
-                    validationError = "stepPosition does not own any validated rule evidence";
+                    validationError = "stepPosition does not own evidence on candidate page " + candidate.pageNumber()
+                            + "; allowed stepPosition values: " + request.claims().stream()
+                                    .filter(claim -> claim.sourcePages().contains(candidate.pageNumber()))
+                                    .map(VisualRegionLocator.Claim::stepPosition).distinct().toList();
                 }
                 continue;
             }
@@ -430,7 +438,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     claims.stream().map(VisualRegionLocator.Claim::evidenceId).distinct().toList(),
                     List.of(review.stepPosition()),
                     false,
-                    candidate.sourceKind()));
+                    candidate.sourceKind(), review.visibleDescription()));
         }
         if (validationError != null) {
             return unavailable(

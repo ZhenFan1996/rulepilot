@@ -71,6 +71,46 @@ class NativeRuleAnswerAgentTest {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void selectsOnlyOfferedImagesSupportedByThePublishedAnswer(boolean selectImage) {
+        UUID id = UUID.randomUUID();
+        String excerpt = "Place the marker on the start space.";
+        var evidence = new RuleEvidenceHit(id, versionId, "RULE", "Setup", excerpt, 2, 2, 1.0);
+        String terminal = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Place the marker on the start space.\","
+                + "\"citationIds\":[\"" + id + "\"],\"imageIds\":"
+                + (selectImage ? "[\"owned\",\"unowned\",\"invented\"]" : "[]") + "}";
+        var nativeAgent = new StubNativeAgent(terminal, List.of(exactRead(id, excerpt, 2)), 1);
+        var visuals = List.of(
+                new com.rulepilot.assistant.RuleAnswering.VisualEvidence("owned", versionId, 2,
+                        "A marker sits on a labeled start space.", Set.of(id)),
+                new com.rulepilot.assistant.RuleAnswering.VisualEvidence("unowned", versionId, 2,
+                        "An unrelated component.", Set.of(UUID.randomUUID())));
+        var outcome = answers(nativeAgent, lookup(evidence)).answer("Where does the marker start?",
+                new QuestionContext(versionId, null, null, PlayerLocale.EN, null, Set.of(2), visuals),
+                "player", null, runId);
+        assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(outcome.selectedImageIds()).containsExactlyElementsOf(selectImage ? Set.of("owned") : Set.of());
+        assertThat(nativeAgent.request.playerRequest()).contains("A marker sits on a labeled start space.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void offersImageEvidenceOnlyWhenTheAnswerModelCanConsumeIt(boolean vision) {
+        StubNativeAgent nativeAgent = new StubNativeAgent(
+                "{\"kind\":\"CHAT\",\"shortVerdict\":\"Hello.\"}", List.of(), 0);
+        nativeAgent.vision = vision;
+        var outcome = answers(nativeAgent, emptyLookup()).answer(
+                "Hello", new QuestionContext(versionId), "player", null, runId);
+        assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(nativeAgent.request.allowedTools())
+                .contains("search_rule_evidence", "read_rule_pages", "read_visual_page_facts");
+        if (vision) assertThat(nativeAgent.request.allowedTools())
+                .contains("read_rule_page_image", "crop_rule_page_image");
+        else assertThat(nativeAgent.request.allowedTools())
+                .doesNotContain("read_rule_page_image", "crop_rule_page_image");
+    }
+
+    @ParameterizedTest
     @NullSource
     @ValueSource(strings = "Which card changes the scoring in your situation?")
     void publishesSupportedContentAndLocalizesAnUnresolvedPartWhenAnotherReadFailed(String clarification) throws Exception {
@@ -157,7 +197,7 @@ class NativeRuleAnswerAgentTest {
                  "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
                 """.formatted(evidenceId, evidenceId).strip();
         AtomicInteger decisions = new AtomicInteger();
-        NativeRuleAnswerAgent answers = answers(sourceBearingAgent(sourceTool, evidence, terminal, decisions), lookup(evidence));
+        NativeRuleAnswerAgent answers = answers(sourceBearingAgent(sourceTool, evidence, terminal, decisions, false, false), lookup(evidence));
 
         var outcome = answers.answer(
                 "How does fuel movement work?",
@@ -176,6 +216,26 @@ class NativeRuleAnswerAgentTest {
             assertThat(citation.pageFrom()).isEqualTo(6);
             assertThat(citation.excerpt()).isEqualTo(excerpt);
         });
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void publishesGroundedAnswerAfterARepeatedReadInsteadOfDiscardingItsEvidence(boolean rewordQuery) {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidenceHit evidence = new RuleEvidenceHit(
+                evidenceId, versionId, "MOVEMENT", "Movement", "Move to an adjacent clearing.", 3, 3, 1.0);
+        String terminal = """
+                {"kind":"RULE_ANSWER","shortVerdict":"Move to an adjacent clearing.","citationIds":["%s"]}
+                """.formatted(evidenceId).strip();
+        NativeRuleAnswerAgent answers = answers(sourceBearingAgent(
+                "search_rule_evidence", evidence, terminal, new AtomicInteger(), true, rewordQuery), lookup(evidence));
+
+        var outcome = answers.answer("Where can I move?", new QuestionContext(versionId), "player", null, runId);
+
+        assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(outcome.answer().shortVerdict()).isEqualTo("Move to an adjacent clearing.");
+        assertThat(outcome.answer().citations()).singleElement()
+                .satisfies(citation -> assertThat(citation.chunkId()).isEqualTo(evidenceId));
     }
 
     @Test
@@ -421,7 +481,7 @@ class NativeRuleAnswerAgentTest {
     }
 
     private NativeToolAgent sourceBearingAgent(
-            String sourceTool, RuleEvidenceHit evidence, String terminal, AtomicInteger decisions) {
+            String sourceTool, RuleEvidenceHit evidence, String terminal, AtomicInteger decisions, boolean repeatRead, boolean rewordQuery) {
         String arguments = switch (sourceTool) {
             case "search_rule_evidence" -> "{\"query\":\"fuel movement\",\"limit\":1}";
             case "search_rule_relationships" -> "{\"topic\":\"fuel movement condition\",\"limit\":1}";
@@ -432,6 +492,14 @@ class NativeRuleAnswerAgentTest {
             @Override
             public ModelTurn next(ModelRequest request) {
                 int decision = decisions.incrementAndGet();
+                if (repeatRead && decision == 2) {
+                    return new ModelTurn("", List.of(new ModelToolCall("recheck", sourceTool,
+                            rewordQuery ? "{\"query\":\"adjacent clearing\",\"limit\":1}" : arguments)), 10, 5);
+                }
+                if (repeatRead && decision == 3) {
+                    assertThat(request.tools()).isEmpty();
+                    return new ModelTurn(terminal, List.of(), 10, 5);
+                }
                 return switch (decision) {
                     case 1 -> new ModelTurn(
                             "",
@@ -521,6 +589,9 @@ class NativeRuleAnswerAgentTest {
         private final int toolCalls;
         private final AtomicInteger runs = new AtomicInteger();
         private RunRequest request;
+        private boolean vision;
+
+        @Override public boolean supportsVision(Role role, String owner) { return vision; }
 
         private StubNativeAgent(String terminal, List<ObservationRecord> observations, int toolCalls) {
             this.terminal = terminal;

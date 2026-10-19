@@ -57,6 +57,7 @@ public class NativeRuleAnswerAgent {
               "properties": {
                 "kind": {"type": "string", "enum": ["CHAT", "RULE_ANSWER", "CLARIFICATION"]},
                 "shortVerdict": {"type": "string"},
+                "imageIds": {"type": "array", "items": {"type": "string"}, "description": "Optional offered image identities that help explain this answer; empty when none helps."},
                 "explanation": {"type": ["string", "null"], "description": "Optional additional player-facing explanation. Leave empty when shortVerdict already gives the complete useful answer."},
                 "clarification": {"type": ["string", "null"], "description": "One useful question for the unresolved part, if needed. A RULE_ANSWER still publishes its supported verdict and citations."},
                 "citationIds": {
@@ -119,13 +120,17 @@ public class NativeRuleAnswerAgent {
         if (scope.isEmpty()) {
             return fallback(context, AnswerStatus.INVALID_MODEL_OUTPUT, "当前答疑范围不可用。", 0);
         }
+        boolean vision = agent.supportsVision(Role.ANSWER, username);
+        Set<String> availableTools = READ_TOOLS.stream()
+                .filter(name -> vision || !(name.equals("read_rule_page_image") || name.equals("crop_rule_page_image")))
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         RunRequest request = new RunRequest(
                 Role.ANSWER,
                 scope.orElseThrow(),
                 systemPrompt(context),
                 playerRequest(question, context),
                 fallbackText(context.outputLanguage()),
-                READ_TOOLS,
+                availableTools,
                 Set.of(),
                 TerminalContract.json(
                         TERMINAL_SCHEMA,
@@ -140,7 +145,13 @@ public class NativeRuleAnswerAgent {
                     result.toolCalls());
         }
         Candidate candidate = parseAccepted(result.text());
-        return new AgentOutcome(publish(context, candidate), result.toolCalls());
+        Set<String> selectedImages = context.visuals().stream()
+                .filter(image -> candidate.imageIds.contains(image.imageId()))
+                .filter(image -> image.evidenceIds().stream().map(UUID::toString).anyMatch(candidate.citationIds::contains))
+                .filter(image -> context.allowedEvidencePages() == null || context.allowedEvidencePages().contains(image.pageNumber()))
+                .map(com.rulepilot.assistant.RuleAnswering.VisualEvidence::imageId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        return new AgentOutcome(publish(context, candidate), result.toolCalls(), selectedImages);
     }
 
     TerminalValidation validateTerminal(
@@ -343,7 +354,7 @@ public class NativeRuleAnswerAgent {
                 clarification == null || clarification.isBlank() ? null : clarification,
                 stringArray(root, "citationIds"),
                 stringArray(root, "exceptions"),
-                numericClaims(root));
+                numericClaims(root), stringArray(root, "imageIds"));
     }
 
     private String requiredString(JsonNode root, String field, boolean nonBlank) {
@@ -474,6 +485,10 @@ public class NativeRuleAnswerAgent {
                 only when the search excerpt needs fuller page context, a crossed chunk boundary, a condition, an
                 exception, a list continuation, or an applicability check. A relationship label or adjacent location
                 never establishes which rule applies; the canonical text must support that conclusion.
+                Optional imageIds may select from untrustedVisualObservations when the visible objects, layout, or
+                state help explain this answer. A shared page or citation alone is not relevance. Descriptions cannot
+                prove mechanics. Cite the current rule evidence as usual; omit images when none helps. Do not make
+                another tool call merely to add an illustration. The answer must be understandable without images.
                 Use search_visual_page_facts only to locate a visible printed label, icon, table, diagram, or board
                 location that canonical text search did not locate. Its observations have no mechanical-rule
                 authority and are never citation-bearing; use the returned page-bound handle for a dependent visual
@@ -497,6 +512,7 @@ public class NativeRuleAnswerAgent {
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("question", question);
         request.put("previousQuestion", context.previousQuestion());
+        request.put("untrustedVisualObservations", context.visuals());
         request.put("learningIntent", context.learningIntent() == null ? null : context.learningIntent().name());
         request.put("priorGroundedTurn", priorTurn(context.priorTurnReference()));
         request.put("allowedPublicPages", context.allowedEvidencePages() == null
@@ -602,7 +618,9 @@ public class NativeRuleAnswerAgent {
         CLARIFICATION
     }
 
-    record AgentOutcome(StructuredRuleAnswer answer, int toolCalls) {}
+    record AgentOutcome(StructuredRuleAnswer answer, int toolCalls, Set<String> selectedImageIds) {
+        AgentOutcome(StructuredRuleAnswer answer, int toolCalls) { this(answer, toolCalls, Set.of()); }
+    }
 
     private record Candidate(
             Kind kind,
@@ -611,7 +629,8 @@ public class NativeRuleAnswerAgent {
             String clarification,
             List<String> citationIds,
             List<String> exceptions,
-            List<NumericClaim> numericClaims) {}
+            List<NumericClaim> numericClaims,
+            List<String> imageIds) {}
 
     private static final class CandidateFailure extends RuntimeException {
         private final String code;

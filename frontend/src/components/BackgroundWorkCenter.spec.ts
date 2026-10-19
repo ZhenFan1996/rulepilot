@@ -48,11 +48,11 @@ describe('BackgroundWorkCenter visible failure semantics', () => {
     const details = wrapper.get('[data-testid="player-failure-details"]')
 
     expect(wrapper.text()).toContain('已处理 1 / 2 章')
-    expect(wrapper.text()).toContain('已发布正文继续保留')
+    expect(wrapper.text()).toContain('已经完成的内容已保留')
     expect(details.attributes('data-failure-classification')).toBe('local-degradation')
-    expect(details.text()).toContain('配图处理')
-    expect(details.text()).toContain('enrichTeachingSectionVisual|2')
-    expect(details.text()).toContain('CHAPTER_LOCALLY_UNAVAILABLE')
+    expect(details.text()).not.toContain('配图处理')
+    expect(details.text()).not.toContain('enrichTeachingSectionVisual|2')
+    expect(details.text()).not.toContain('CHAPTER_LOCALLY_UNAVAILABLE')
   })
 
   it('shows a persistence boundary as repair-required with the exact backend code', async () => {
@@ -80,8 +80,8 @@ describe('BackgroundWorkCenter visible failure semantics', () => {
     const details = wrapper.get('[data-testid="player-failure-details"]')
 
     expect(details.attributes('data-failure-classification')).toBe('repair-required')
-    expect(details.text()).toContain('讲解保存')
-    expect(details.text()).toContain('TEACHING_PREPARATION_STORAGE_FAILED')
+    expect(details.text()).not.toContain('讲解保存')
+    expect(details.text()).not.toContain('TEACHING_PREPARATION_STORAGE_FAILED')
   })
 
   it('does not promise fixed queue durations', async () => {

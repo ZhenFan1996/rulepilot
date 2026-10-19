@@ -30,6 +30,7 @@ final class AgentInvocationDeadline {
     private final ExecutorService calls;
     private final Duration cancellationPollInterval;
 
+    @org.springframework.beans.factory.annotation.Autowired
     AgentInvocationDeadline(AgentExecutionControl execution) {
         this(
                 execution,

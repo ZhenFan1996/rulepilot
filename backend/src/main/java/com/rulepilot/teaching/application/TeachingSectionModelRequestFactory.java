@@ -14,14 +14,15 @@ final class TeachingSectionModelRequestFactory {
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             List<PriorSectionContext> priorSections,
-            List<RuleEvidence> evidence) {
+            List<RuleEvidence> evidence,
+            List<TeachingLessonModel.VisualInput> visuals) {
         return new TeachingLessonModel.SectionRequest(
                 planned.topicKey(),
                 planned.title(),
                 planned.objective(),
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
-                plan.createdBy(), plan.outputLanguage());
+                visuals, plan.createdBy(), plan.outputLanguage());
     }
 
     private EvidenceInput toModelEvidence(RuleEvidence evidence) {

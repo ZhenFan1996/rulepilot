@@ -94,6 +94,14 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             PlayerLocale outputLanguage,
             PublicLearningIntent learningIntent,
             Set<Integer> allowedPublicPages) {
+        return answerForPublicReader(documentVersionId, question, previousQuestion, outputLanguage,
+                learningIntent, allowedPublicPages, java.util.List.of());
+    }
+
+    @Override
+    public AnswerResult answerForPublicReader(UUID documentVersionId, String question, String previousQuestion,
+            PlayerLocale outputLanguage, PublicLearningIntent learningIntent, Set<Integer> allowedPublicPages,
+            java.util.List<com.rulepilot.assistant.RuleAnswering.VisualEvidence> visuals) {
         PlayerLocale language = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
         AnswerCreation creation = answerWithRun(
                 question,
@@ -103,11 +111,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         learningIntent == null ? null : LearningIntent.valueOf(learningIntent.name()),
                         language,
                         null,
-                        allowedPublicPages),
+                        allowedPublicPages, visuals),
                 DocumentNativeToolAccess.PUBLIC_READER,
                 null);
-        return AnswerOutcomePolicy.publicReaderAnswer(
+        var result = AnswerOutcomePolicy.publicReaderAnswer(
                 creation.assistantRunId(), creation.answer(), question, language);
+        return new AnswerResult(result.assistantRunId(), result.answer(), result.citedEvidenceIds(), creation.selectedImageIds());
     }
 
     public AnswerCreation evaluateWithRun(
@@ -138,7 +147,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     question, context, username, gameSessionId, run.id());
             progress.reached(AnswerRunProgressPolicy.ExecutionPhase.AGENT_RUNNING);
             runLifecycle.finish(run, outcome.answer(), progress.phase());
-            return new AnswerCreation(run.id(), outcome.answer());
+            return new AnswerCreation(run.id(), outcome.answer(), outcome.selectedImageIds());
         } catch (RuntimeException failure) {
             runLifecycle.fail(
                     run,
@@ -150,7 +159,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
     }
 
-    public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {
+    public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer, Set<String> selectedImageIds) {
+        public AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) { this(assistantRunId, answer, Set.of()); }
         public AnswerCreation {
             if (assistantRunId == null || answer == null) {
                 throw new IllegalArgumentException("answer creation is invalid");

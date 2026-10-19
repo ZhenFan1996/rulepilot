@@ -67,7 +67,7 @@ class SpringAiVisualRegionLocatorTest {
     @Test
     void parsesOnlyTheCandidateIdProtocolAndRejectsAnyModelAuthoredGeometry() {
         var guide = VisualLocatorResponsePolicy.parseModelGuide("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """).orElseThrow();
 
         assertThat(guide.reviews()).singleElement().satisfies(review -> {
@@ -76,7 +76,7 @@ class SpringAiVisualRegionLocatorTest {
         });
         assertThat(guide.batchAction()).isEqualTo(VisualRegionLocator.BatchAction.STOP);
         assertThat(VisualLocatorResponsePolicy.parseModelGuide("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7","x":100}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7","visibleDescription":"A board with marked spaces and an arrow.","x":100}]}
                 """)).isEmpty();
     }
 
@@ -85,7 +85,7 @@ class SpringAiVisualRegionLocatorTest {
         UUID evidence = UUID.randomUUID();
         Candidate candidate = candidate("opaque_7", 4, new Rectangle(120, 180, 360, 240));
         Runtime runtime = runtime("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":2,"action":"ACCEPT_CANDIDATE","candidateId":"opaque_7","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """);
 
         var result = runtime.locator().locateGuideWithResult(request(
@@ -126,20 +126,20 @@ class SpringAiVisualRegionLocatorTest {
         Candidate candidate = candidate("known_1", 4, new Rectangle(100, 100, 300, 300));
         String unknownId = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"unknown_9"}]}
+                "candidateId":"unknown_9","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         String secondUnknownId = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"unknown_10"}]}
+                "candidateId":"unknown_10","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         String acceptedReplacement = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"known_1"}]}
+                "candidateId":"known_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         String repeatedId = """
                 {"batchAction":"STOP","reviews":[
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1"},
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1"}]}
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1","visibleDescription":"A board with marked spaces and an arrow."},
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"known_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         Runtime recovered = runtime(unknownId, secondUnknownId, acceptedReplacement);
         Runtime localizedDuplicate = runtime(repeatedId);
@@ -174,26 +174,26 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void applicationBindsSelectedStepEvidenceWithoutAskingVisionToRepeatCitationIds() throws IOException {
+    void sourceImageOwnershipFeedbackLetsTheModelSelectEvidenceOnTheCorrectPage() throws IOException {
         Candidate pageTwo = candidate("page_two", 2, new Rectangle(80, 80, 400, 300));
         List<VisualRegionLocator.Claim> claims = List.of(claim(1, 1), claim(2, 2));
         VisualLocationRequest request = request(
                 claims, List.of(pageTwo), List.of(page(2, solidPng(Color.WHITE))), 1);
         String crossPageResponse = """
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"page_two"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"page_two","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         String unknownStepResponse = """
-                {"batchAction":"STOP","reviews":[{"stepPosition":3,"action":"ACCEPT_CANDIDATE","candidateId":"page_two"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":3,"action":"ACCEPT_CANDIDATE","candidateId":"page_two","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
-        Runtime crossPage = runtime(crossPageResponse);
+        Runtime crossPage = runtime(crossPageResponse, crossPageResponse.replace("stepPosition\":1", "stepPosition\":2"));
         Runtime unknownStep = runtime(unknownStepResponse, unknownStepResponse);
 
         assertThat(crossPage.locator().locateGuideWithResult(request).regions())
                 .singleElement()
                 .satisfies(region -> {
                     assertThat(region.pageNumber()).isEqualTo(2);
-                    assertThat(region.supportedStepPositions()).containsExactly(1);
-                    assertThat(region.supportedEvidenceIds()).containsExactly(claims.getFirst().evidenceId());
+                    assertThat(region.supportedStepPositions()).containsExactly(2);
+                    assertThat(region.supportedEvidenceIds()).containsExactly(claims.getLast().evidenceId());
                 });
         assertThat(unknownStep.locator().locateGuideWithResult(request).diagnostic())
                 .isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
@@ -203,7 +203,7 @@ class SpringAiVisualRegionLocatorTest {
     void acceptsSparseSelectionsWithoutMakingTheModelRestateEveryNoVisualStep() throws IOException {
         String incomplete = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1"}]}
+                "candidateId":"candidate_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         Runtime runtime = runtime(incomplete);
         VisualLocationRequest request = request(
@@ -224,8 +224,8 @@ class SpringAiVisualRegionLocatorTest {
     void acceptsDistinctComplementaryCandidatesForTheSameStep() throws IOException {
         Runtime runtime = runtime("""
                 {"batchAction":"STOP","reviews":[
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"overview"},
-                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"detail"}]}
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"overview","visibleDescription":"A board with marked spaces and an arrow."},
+                {"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"detail","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 2)),
@@ -247,7 +247,7 @@ class SpringAiVisualRegionLocatorTest {
     @Test
     void preservesTypedNoVisualForAProseOnlyCandidateWithoutRetrying() throws IOException {
         Runtime runtime = runtime("""
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"NO_VISUAL","candidateId":null}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"NO_VISUAL","candidateId":null,"visibleDescription":"A board with marked spaces and an arrow."}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 3)),
@@ -265,7 +265,7 @@ class SpringAiVisualRegionLocatorTest {
         Runtime runtime = runtime(
                 "not-json",
                 """
-                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"candidate_1"}]}
+                {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE","candidateId":"candidate_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 3)),
@@ -307,7 +307,7 @@ class SpringAiVisualRegionLocatorTest {
     void stopsWhenAVisualSelectionCyclesBackToAnyEarlierRejectedCandidate() throws IOException {
         String first = """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"unknown_1"}]}
+                "candidateId":"unknown_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         String second = first.replace("unknown_1", "unknown_2").replace("第一种", "第二种");
         Runtime runtime = runtime(first, second, first);
@@ -338,7 +338,7 @@ class SpringAiVisualRegionLocatorTest {
                 .thenThrow(new IllegalStateException("temporary provider failure"))
                 .thenReturn(response("""
                         {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                        "candidateId":"candidate_1"}]}
+                        "candidateId":"candidate_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                         """));
         var locator = new SpringAiVisualRegionLocator(configuration);
         VisualLocationRequest request = request(
@@ -428,7 +428,7 @@ class SpringAiVisualRegionLocatorTest {
                 "not-json",
                 """
                 {"batchAction":"STOP","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1"}]}
+                "candidateId":"candidate_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """);
         VisualLocationRequest request = request(
                 List.of(claim(1, 3)),
@@ -495,7 +495,7 @@ class SpringAiVisualRegionLocatorTest {
         };
         Runtime runtime = runtime(budget, """
                 {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1"}]}
+                "candidateId":"candidate_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """);
         Candidate candidate = candidate("candidate_1", 3, new Rectangle(0, 0, 550, 550));
 
@@ -655,7 +655,7 @@ class SpringAiVisualRegionLocatorTest {
     void normalizesContinueToStopOnTheLastBatchWithoutDiscardingValidReviews() throws IOException {
         String response = """
                 {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"ACCEPT_CANDIDATE",
-                "candidateId":"candidate_1"}]}
+                "candidateId":"candidate_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """;
         Candidate candidate = candidate("candidate_1", 1, new Rectangle(0, 0, 550, 550));
         Runtime withNextBatch = runtime(response);
@@ -698,7 +698,7 @@ class SpringAiVisualRegionLocatorTest {
         var request = new VisualLocationRequest("图例", List.of(claim(1, 2)), List.of(candidate),
                 List.of(page(2, solidPng(Color.BLUE))), "owner", null, null, 1, false, java.util.Set.of("coarse_1"));
         var result = runtime("""
-                {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"REFINE_CANDIDATE","candidateId":"coarse_1"}]}
+                {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"REFINE_CANDIDATE","candidateId":"coarse_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """).locator().locateGuideWithResult(request);
         assertThat(result.refinementCandidateIds()).containsExactly("coarse_1");
         assertThat(result.regions()).isEmpty();
@@ -707,7 +707,7 @@ class SpringAiVisualRegionLocatorTest {
         var unavailable = new VisualLocationRequest(request.sectionTitle(), request.claims(), request.candidates(),
                 request.pages(), "owner", null, null, 1, false);
         var rejected = runtime("""
-                {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"REFINE_CANDIDATE","candidateId":"coarse_1"}]}
+                {"batchAction":"CONTINUE","reviews":[{"stepPosition":1,"action":"REFINE_CANDIDATE","candidateId":"coarse_1","visibleDescription":"A board with marked spaces and an arrow."}]}
                 """).locator().locateGuideWithResult(unavailable);
         assertThat(rejected.refinementCandidateIds()).isEmpty();
         assertThat(rejected.diagnostic()).isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);

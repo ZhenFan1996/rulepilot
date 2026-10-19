@@ -24,11 +24,11 @@ class TeachingLessonAssemblyPolicyTest {
     private final TeachingLessonAssemblyPolicy policy = new TeachingLessonAssemblyPolicy();
 
     @Test
-    void keepsReadableChaptersAndMakesUnresolvedWorkExplicitlyDegraded() {
+    void completesSupportedChaptersWhileKeepingSourceUncertaintiesSeparateFromMissingWork() {
         assertThat(policy.status(plan(List.of()), List.of(section(1), section(2))))
                 .isEqualTo(LessonStatus.COMPLETE);
-        assertThat(policy.status(plan(List.of("Repairing remains unresolved")), List.of(section(1), section(2))))
-                .isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(policy.status(plan(List.of("The source does not specify an optional variation")), List.of(section(1), section(2))))
+                .isEqualTo(LessonStatus.COMPLETE);
         assertThat(policy.status(plan(List.of()), List.of(section(1))))
                 .isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(policy.status(plan(List.of()), List.of()))

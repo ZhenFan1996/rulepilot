@@ -15,6 +15,10 @@ public interface NativeToolAgent {
         return "native-tool-agent";
     }
 
+    default boolean supportsVision(Role role, String ownerUsername) {
+        return false;
+    }
+
     default boolean supports(Role role, String ownerUsername) {
         return true;
     }

@@ -47,9 +47,9 @@ describe('RecommendationLessonDialog failure visibility', () => {
     expect(wrapper.text()).toContain('未发布的局部主题')
     const details = wrapper.get('[data-testid="player-failure-details"]')
     expect(details.attributes('data-failure-classification')).toBe('local-degradation')
-    expect(details.text()).toContain('配图处理')
-    expect(details.text()).toContain('enrichTeachingSectionVisual|2')
-    expect(details.text()).toContain('CHAPTER_LOCALLY_UNAVAILABLE')
+    expect(details.text()).not.toContain('配图处理')
+    expect(details.text()).not.toContain('enrichTeachingSectionVisual|2')
+    expect(details.text()).not.toContain('CHAPTER_LOCALLY_UNAVAILABLE')
     wrapper.unmount()
   })
 
@@ -58,10 +58,11 @@ describe('RecommendationLessonDialog failure visibility', () => {
     const wrapper = await mountDialog()
 
     expect(wrapper.text()).toContain('已发布的 1 章可读草稿仍然保留')
+    expect(wrapper.get('[data-testid="recommendation-lesson-resume"]').attributes('href')).toBe('/lesson/plan-1')
     const details = wrapper.get('[data-testid="player-failure-details"]')
     expect(details.attributes('data-failure-classification')).toBe('repair-required')
-    expect(details.text()).toContain('讲解保存')
-    expect(details.text()).toContain('TEACHING_PERSISTENCE_FAILED')
+    expect(details.text()).not.toContain('讲解保存')
+    expect(details.text()).not.toContain('TEACHING_PERSISTENCE_FAILED')
     wrapper.unmount()
   })
 
@@ -71,9 +72,9 @@ describe('RecommendationLessonDialog failure visibility', () => {
 
     const details = wrapper.get('[data-testid="player-failure-details"]')
     expect(details.attributes('data-failure-classification')).toBe('internal-correction')
-    expect(details.text()).toContain('TEACHING_PLAN_INVALID')
+    expect(details.text()).not.toContain('TEACHING_PLAN_INVALID')
     expect(wrapper.get('[data-testid="recommendation-lesson-failure-boundary"]').text())
-      .toContain('同一 Agent')
+      .toContain('未完成的讲解仅自己可见')
     expect(wrapper.text()).not.toContain('文字处理额度')
     wrapper.unmount()
   })

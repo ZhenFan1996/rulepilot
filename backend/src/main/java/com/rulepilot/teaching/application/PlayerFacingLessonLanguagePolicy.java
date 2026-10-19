@@ -12,28 +12,19 @@ public final class PlayerFacingLessonLanguagePolicy {
 
     public static boolean isPubliclyReadable(IllustratedLesson lesson) {
         if (lesson == null
-                || lesson.status() == IllustratedLesson.LessonStatus.INCOMPLETE
+                || lesson.status() != IllustratedLesson.LessonStatus.COMPLETE
                 || lesson.sections().isEmpty()) {
             return false;
         }
-        return lesson.sections().stream().anyMatch(PlayerFacingLessonLanguagePolicy::isReadableSection);
+        return lesson.sections().stream().allMatch(PlayerFacingLessonLanguagePolicy::isReadableSection);
     }
 
-    /** Returns a reader-only projection; the stored lesson and its insufficient chapters remain unchanged. */
+    /** Public readers receive complete guides; private progress snapshots remain available only to their owner. */
     static IllustratedLesson publicProjection(IllustratedLesson lesson) {
         if (!isPubliclyReadable(lesson)) {
             throw new IllegalArgumentException("lesson has no publicly readable cited chapter");
         }
-        List<LessonSection> citedSections = lesson.sections().stream()
-                .filter(PlayerFacingLessonLanguagePolicy::isReadableSection)
-                .toList();
-        return new IllustratedLesson(
-                lesson.id(),
-                lesson.teachingPlanId(),
-                lesson.status(),
-                citedSections,
-                lesson.generatorVersion(),
-                lesson.createdAt());
+        return lesson;
     }
 
     private static boolean isReadableSection(LessonSection section) {

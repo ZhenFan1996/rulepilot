@@ -81,6 +81,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         Set<String> repeatedObservations = new HashSet<>();
         Set<String> rejectedActions = new HashSet<>();
         int toolCalls = 0;
+        boolean acquisitionExhausted = false;
 
         for (int iteration = 1; ; iteration++) {
             if (!Instant.now().isBefore(request.scope().deadlineAt())) {
@@ -95,8 +96,8 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             ModelTurn turn;
             int modelInputTokens;
             List<com.rulepilot.assistant.NativeToolModel.ToolSpec> advertisedTools =
-                    tools.specifications(request.role(), request.allowedTools());
-            if (advertisedTools.size() != request.allowedTools().size()) {
+                    acquisitionExhausted ? List.of() : tools.specifications(request.role(), request.allowedTools());
+            if (!acquisitionExhausted && advertisedTools.size() != request.allowedTools().size()) {
                 return fallback(request, "TOOL_ALLOWLIST_UNAVAILABLE", iteration - 1, toolCalls, observations);
             }
             try {
@@ -129,6 +130,9 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             if (turn.toolCalls().isEmpty()) {
                 List<String> missingCompletionTools = missingCompletionTools(request, observations);
                 if (!missingCompletionTools.isEmpty()) {
+                    if (acquisitionExhausted) {
+                        return fallback(request, "OBSERVATION_NO_PROGRESS", iteration, toolCalls, observations);
+                    }
                     String validationError = "No successful observation exists for required tool(s): "
                             + String.join(", ", missingCompletionTools);
                     recordDiagnostic(
@@ -138,7 +142,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             ActivityOutcome.REJECTED,
                             "native completion missing required observation");
                     String rejection = completionRejection(
-                            turn.text(), validationError, observations.size());
+                            validationError, repeatedObservations.size());
                     if (!rejectedCompletions.add(rejection)) {
                         return fallback(request, "COMPLETION_NO_PROGRESS", iteration, toolCalls, observations);
                     }
@@ -175,7 +179,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                     ? "native model returned neither a tool call nor a terminal status"
                                     : "native model returned a nonconforming terminal status");
                     String rejection = completionRejection(
-                            turn.text(), terminalRejection, observations.size());
+                            terminalRejection, repeatedObservations.size());
                     if (!rejectedCompletions.add(rejection)) {
                         return fallback(request, "COMPLETION_NO_PROGRESS", iteration, toolCalls, observations);
                     }
@@ -195,6 +199,9 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                         terminalStatus.orElse(null));
             }
 
+            if (acquisitionExhausted) {
+                return fallback(request, "ACTION_NO_PROGRESS", iteration, toolCalls, observations);
+            }
             conversation.appendAssistant(turn.text(), turn.toolCalls(), advertisedTools);
             String batchValidationError = batchValidationError(turn.toolCalls());
             if (batchValidationError != null) {
@@ -222,6 +229,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 return fallback(request, stopReason(exception), iteration, toolCalls, observations);
             }
             List<String> rejectedActionInstructions = new ArrayList<>();
+            boolean newObservation = false;
             for (ToolCallOutcome outcome : toolOutcomes) {
                 ModelToolCall call = outcome.call();
                 try {
@@ -299,14 +307,14 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                     + ". Treat them as literal page appearance only; cited text controls rule effects.",
                             toolExecution.observation().media());
                 }
-                String observationFingerprint = call.name() + "\n" + call.argumentsJson()
-                        + "\n" + serializedObservation;
-                if (!repeatedObservations.add(observationFingerprint)) {
+                String observationFingerprint = call.name() + "\n" + serializedObservation;
+                if (repeatedObservations.add(observationFingerprint)) {
+                    newObservation = true;
+                } else {
                     recordDiagnostic(
                             request.scope().runId(), ActivityType.VALIDATION,
                             "nativeObservationNoProgress|" + call.name(), ActivityOutcome.REJECTED,
-                            "native model repeated an action and received an identical observation");
-                    return fallback(request, "OBSERVATION_NO_PROGRESS", iteration, toolCalls, observations);
+                            "native read returned an already observed result");
                 }
                 if (toolExecution.observation().status() == ObservationStatus.PARTIAL
                         && toolExecution.observation().evidenceCount() == 0
@@ -320,6 +328,14 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 }
             }
             rejectedActionInstructions.forEach(conversation::appendApplicationInstruction);
+            if (!newObservation && rejectedActionInstructions.isEmpty()) {
+                acquisitionExhausted = true;
+                conversation.appendApplicationInstruction(
+                        "The read batch returned no new observations. No further read tools are available. "
+                                + "Return a complete terminal response using the evidence already observed. "
+                                + "Preserve supported conclusions and explicitly localize anything unresolved; "
+                                + "do not invent evidence or rule claims.");
+            }
         }
     }
 
@@ -502,13 +518,13 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     }
 
     private String completionRejection(
-            String candidate, TerminalValidation rejection, int observationCount) {
+            TerminalValidation rejection, int observationCount) {
         return observationCount + "\n" + rejection.code() + "\n" + rejection.path()
-                + "\n" + rejection.reason() + "\n" + candidate;
+                + "\n" + rejection.reason() + "\n" + rejection.allowedEvidenceIds().stream().sorted().toList();
     }
 
-    private String completionRejection(String candidate, String validationError, int observationCount) {
-        return observationCount + "\n" + validationError + "\n" + candidate;
+    private String completionRejection(String validationError, int observationCount) {
+        return observationCount + "\n" + validationError;
     }
 
     private String rejectedCompletionInstruction(String validationError, String nextAction) {
@@ -689,6 +705,11 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     @Override
     public String providerId(com.rulepilot.assistant.NativeAgentTool.Role role, String ownerUsername) {
         return model.providerId(role, ownerUsername);
+    }
+
+    @Override
+    public boolean supportsVision(com.rulepilot.assistant.NativeAgentTool.Role role, String ownerUsername) {
+        return model.supportsVision(role, ownerUsername);
     }
 
     @Override

@@ -87,8 +87,8 @@ describe('LessonAnswerPanel reliability boundary', () => {
 
     const details = wrapper.get('[data-testid="player-failure-details"]')
     expect(details.attributes('data-failure-classification')).toBe('retry-preserved')
-    expect(details.text()).toContain('answer_timeout')
-    expect(details.text()).toContain('答疑 Agent')
+    expect(details.text()).not.toContain('answer_timeout')
+    expect(details.text()).not.toContain('答疑 Agent')
     await wrapper.get('[data-testid="answer-failure-retry-unchanged"]').trigger('click')
     expect(wrapper.emitted('ask')).toHaveLength(1)
   })
@@ -114,7 +114,7 @@ describe('LessonAnswerPanel reliability boundary', () => {
 
     const details = wrapper.get('[data-testid="player-failure-details"]')
     expect(details.attributes('data-failure-classification')).toBe('internal-correction')
-    expect(details.text()).toContain('INVALID_MODEL_OUTPUT')
+    expect(details.text()).not.toContain('INVALID_MODEL_OUTPUT')
     expect(wrapper.text()).toContain('问题没有被拒绝')
     expect(wrapper.text()).not.toMatch(/改写问题|rephrase/i)
   })

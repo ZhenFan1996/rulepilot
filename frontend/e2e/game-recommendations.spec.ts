@@ -1169,7 +1169,7 @@ test('retries failed preparation through the original import without downloading
     'data-failure-classification',
     'retry-preserved',
   )
-  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toHaveCount(1)
+  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toHaveCount(0)
 
   recovery.publishPlan()
   recovery.publishFirstLesson()
