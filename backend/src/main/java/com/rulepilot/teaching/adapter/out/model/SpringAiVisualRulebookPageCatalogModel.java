@@ -44,7 +44,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final String OUTPUT_SCHEMA = """
             {"pages":[{"pageNumber":1,"printedTerms":["visible term"],"keywords":[],
-            "ruleGroups":[{"identifier":"visible label","fact":"faithful page-local fact",
+            "ruleGroups":[{"identifier":"visible label","sourceKind":"PRINTED_TEXT or GRAPHICAL_ASSOCIATION","status":"READABLE or UNCERTAIN","fact":"printed rule or graphic location",
             "quantitySpans":["optional exact visible span"]}]}]}
             Only pageNumber and pages are structurally required. ruleGroups may be empty. Additive fields are allowed.
             """;
@@ -56,7 +56,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     public SpringAiVisualRulebookPageCatalogModel(
             RuntimeModelConfiguration models,
             FakeVisualRulebookPageCatalogModel fake,
-            @Value("classpath:prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt")
+            @Value("classpath:prompts/visual-page-evidence-v7-relations-system.txt")
                     Resource systemPrompt)
             throws IOException {
         this.models = models;
@@ -227,12 +227,24 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         List<RuleGroupFact> groups = ruleGroups(page.get("ruleGroups"), path + ".ruleGroups");
         String printedTerms = joinedText(page.get("printedTerms"), "; ");
         if (printedTerms.isBlank()) printedTerms = "No reliably readable printed term.";
-        String factualSummary = joinedText(page.get("factualSummary"), "\n");
-        String groupFacts = groups.stream()
+        String factualSummary = groups.stream()
                 .map(group -> group.identifier() + ": [" + group.label() + "] " + group.fact())
                 .collect(Collectors.joining("\n"));
-        if (factualSummary.isBlank()) factualSummary = groupFacts;
-        else if (!groupFacts.isBlank()) factualSummary = factualSummary + "\n" + groupFacts;
+        JsonNode units = page.get("ruleGroups");
+        if (units != null && units.isArray()) {
+            List<String> uncertain = new ArrayList<>();
+            units.forEach(unit -> {
+                if ("UNCERTAIN".equals(optionalText(unit.get("status")))
+                        || "GRAPHICAL_ASSOCIATION".equals(optionalText(unit.get("sourceKind")))) {
+                    String identifier = optionalText(unit.get("identifier"));
+                    if (identifier != null) uncertain.add(identifier);
+                }
+            });
+            if (!uncertain.isEmpty()) {
+                factualSummary += "\n[Reader uncertainty, not rule evidence: consult the original page image for graphical or unreadable details in "
+                        + String.join("; ", uncertain) + "]";
+            }
+        }
         if (factualSummary.isBlank()) {
             factualSummary = "No reliably readable rule fragment was observed on this page.";
         }
@@ -257,6 +269,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             if (!group.isObject()) {
                 continue;
             }
+            if (!"READABLE".equals(optionalText(group.get("status")))
+                    || !"PRINTED_TEXT".equals(optionalText(group.get("sourceKind")))) continue;
             String identifier = optionalText(group.get("identifier"));
             String fact = optionalText(group.get("fact"));
             if (identifier == null || fact == null) continue;

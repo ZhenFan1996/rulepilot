@@ -21,6 +21,22 @@ import org.junit.jupiter.api.Test;
 class TeachingSectionCandidateValidatorTest {
 
     @Test
+    void keepsOriginalPageSelectableWhenOptionalVisualObservationIsUnavailable() {
+        UUID version = UUID.randomUUID(), citation = UUID.randomUUID();
+        var source = new RuleEvidence(citation, version, "RULE", "Repair", "Read the illustrated repair chart.", 8, 8);
+        var request = new TeachingSectionModelRequestFactory().create(plan(version), planned(), List.of(), List.of(source), List.of());
+        var image = request.visuals().getFirst();
+        var draft = new SectionDraft("Repair", List.of(new StepDraft("Check the chart", TeachingMove.UNDERSTAND,
+                "Use the source chart to check the unresolved correspondence.", List.of(citation), List.of(), List.of(image.imageId()))));
+        var section = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
+                plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT);
+        assertThat(section.steps().getFirst().visualFoci()).singleElement().satisfies(focus -> {
+            assertThat(focus.pageNumber()).isEqualTo(8);
+            assertThat(focus.sourceKind()).isEqualTo(com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind.FULL_PAGE);
+        });
+    }
+
+    @Test
     void publishesExactNaturalTextWhenEveryCitationBelongsToTheRequest() {
         UUID versionId = UUID.randomUUID();
         UUID citation = UUID.randomUUID();

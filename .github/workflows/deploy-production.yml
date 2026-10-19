@@ -703,7 +703,7 @@ jobs:
             'DOCLING_MAX_RESULT_BYTES=33554432' \
             'EMBEDDING_PROVIDER=qwen' \
             'TEACHING_PROVIDER=spring-ai' \
-            'TEACHING_MODEL_PROVIDER=deepseek' \
+            'TEACHING_MODEL_PROVIDER=qwen' \
             'TEACHING_AGENT_MAX_WORKLOAD_TIMEOUT=PT16H' \
             'TEACHING_AGENT_MAX_WORKLOAD_TOKENS=16000000' \
             'TEACHING_OUTLINE_SHARD_PARALLELISM=10' \
@@ -734,7 +734,7 @@ jobs:
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT5S' \
             'WEB_SEARCH_MODEL=qwen3.8-flash' \
-            'QWEN_MODEL=qwen3.7-plus' \
+            'QWEN_MODEL=qwen3.8-max' \
             'QWEN_VISION_CAPABLE=true' \
             'RULEBOOK_DISCOVERY_MODEL=qwen3.7-max' \
             'RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL=PT10M' \
@@ -1236,8 +1236,8 @@ jobs:
                 "$RULEPILOT_PUBLIC_URL/api/v1/model-configuration" \
                 "$model_body" || return $?
             jq -e '
-              .recommendationModel.provider == "qwen"
-              and .recommendationModel.model == "qwen3.7-plus"
+              .recommendationModel.provider == "deepseek"
+              and .recommendationModel.model == "deepseek-v4-pro"
             ' "$model_body" >/dev/null || return 1
 
             https_get "$RULEPILOT_PUBLIC_URL/" "$home_body" || return $?

@@ -47,7 +47,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         var draft = SpringAiVisualRulebookPageCatalogModel.parse("""
                 {"trace":"ignored","pages":[
                   {"pageNumber":9,"keywords":[],"ruleGroups":[
-                    {"identifier":"Repairing","fact":"Spend an action to repair.",
+                    {"identifier":"Repairing","status":"READABLE","sourceKind":"PRINTED_TEXT","fact":"Spend an action to repair.",
                      "quantitySpans":["one action"],"futureField":true}
                   ],"futurePageField":{"ignored":true}}
                 ]}
@@ -76,16 +76,21 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void discardsOnlyMalformedOptionalRuleGroupsAndKeepsReadablePageFacts() {
+    void omitsUncertainOrUnclassifiedAssociationsWithoutLosingReadableEvidence() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parse("""
-                {"pages":[{"pageNumber":2,"printedTerms":["Turn order"],"ruleGroups":[
+                {"pages":[{"pageNumber":2,"printedTerms":["Turn order"],
+                "factualSummary":"Unclassified claim must not bypass evidence status.","ruleGroups":[
                   {"identifier":"turn"},
-                  {"identifier":"action","fact":"Take one action."}
+                  {"identifier":"legend","status":"READABLE","sourceKind":"GRAPHICAL_ASSOCIATION","fact":"Unverified diagram value 99."},
+                  {"identifier":"unclassified","fact":"An unchecked claim."},
+                  {"identifier":"action","status":"READABLE","sourceKind":"PRINTED_TEXT","fact":"Take one action."}
                 ]}]}
                 """);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
             assertThat(page.printedTerms()).isEqualTo("Turn order");
+            assertThat(page.factualSummary()).contains("Take one action.", "Reader uncertainty", "legend")
+                    .doesNotContain("Unverified diagram value 99.", "unchecked claim", "bypass");
             assertThat(page.ruleGroupFacts()).singleElement().satisfies(group ->
                     assertThat(group.identifier()).isEqualTo("action"));
         });

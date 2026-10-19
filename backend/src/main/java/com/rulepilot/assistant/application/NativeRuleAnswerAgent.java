@@ -491,7 +491,10 @@ public class NativeRuleAnswerAgent {
                 Optional imageIds may select from untrustedVisualObservations when the visible objects, layout, or
                 state help explain this answer. A shared page or citation alone is not relevance. Descriptions cannot
                 prove mechanics. Cite the current rule evidence as usual; omit images when none helps. Do not make
-                another tool call merely to add an illustration. The answer must be understandable without images.
+                another tool call merely to add an illustration. The answer must explain its supported ruling and any need to inspect the source image.
+                When evidence marks graphical correspondence as unresolved, preserve that local uncertainty. Do not
+                infer object counts, numerical mappings, or rule effects from a diagram description or unlabeled
+                values. Answer the supported portion and direct the player to its cited original page for that detail.
                 Use search_visual_page_facts only to locate a visible printed label, icon, table, diagram, or board
                 location that canonical text search did not locate. Its observations have no mechanical-rule
                 authority and are never citation-bearing; use the returned page-bound handle for a dependent visual

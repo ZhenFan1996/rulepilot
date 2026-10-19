@@ -22,7 +22,26 @@ final class TeachingSectionModelRequestFactory {
                 planned.objective(),
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
-                visuals, plan.createdBy(), plan.outputLanguage());
+                sourceVisuals(plan, evidence, visuals), plan.createdBy(), plan.outputLanguage());
+    }
+
+    /** Original pages remain selectable when optional crop interpretation is unavailable. */
+    private List<TeachingLessonModel.VisualInput> sourceVisuals(
+            TeachingPlan plan, List<RuleEvidence> evidence, List<TeachingLessonModel.VisualInput> observed) {
+        var visuals = new java.util.LinkedHashMap<String, TeachingLessonModel.VisualInput>();
+        observed.forEach(visual -> visuals.put(visual.imageId(), visual));
+        var pages = new java.util.LinkedHashMap<Integer, java.util.List<java.util.UUID>>();
+        evidence.stream().filter(source -> plan.documentVersionId().equals(source.documentVersionId()))
+                .forEach(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                        .forEach(page -> pages.computeIfAbsent(page, ignored -> new java.util.ArrayList<>()).add(source.chunkId())));
+        pages.forEach((page, ids) -> {
+            var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(page,
+                    "Source page", "Original source page for direct inspection; graphical relationships are not interpreted rule evidence.",
+                    0, 0, 1_000, 1_000, com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind.FULL_PAGE);
+            String id = focus.imageId(plan.documentVersionId());
+            visuals.putIfAbsent(id, new TeachingLessonModel.VisualInput(id, focus, ids.stream().distinct().toList()));
+        });
+        return List.copyOf(visuals.values());
     }
 
     private EvidenceInput toModelEvidence(RuleEvidence evidence) {
