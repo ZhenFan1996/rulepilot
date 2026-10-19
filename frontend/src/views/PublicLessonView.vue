@@ -1219,7 +1219,6 @@ onUnmounted(() => {
         </aside>
 
         <LessonChapterList
-          v-if="!questionMode"
           :sections="publicLesson.lesson.sections"
           id-prefix="public-chapter"
           :page-image-url="sourcePageUrl"
