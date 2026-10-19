@@ -125,7 +125,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                                created_at, updated_at, completed_at, last_error_code, output_language
                         from assistant_run
                         where mode = :mode
-                          and state not in ('COMPLETED', 'INSUFFICIENT_EVIDENCE', 'FAILED', 'DEGRADED')
+                          and completed_at is null
                         order by created_at
                         """)
                 .setParameter("mode", mode.name())
@@ -145,7 +145,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                         from assistant_run
                         where mode = :mode
                           and owner_username = :owner
-                          and state not in ('COMPLETED', 'INSUFFICIENT_EVIDENCE', 'FAILED', 'DEGRADED')
+                          and completed_at is null
                         order by created_at
                         """)
                 .setParameter("mode", mode.name())

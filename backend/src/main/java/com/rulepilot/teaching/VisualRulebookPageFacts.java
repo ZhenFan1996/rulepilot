@@ -49,7 +49,7 @@ public interface VisualRulebookPageFacts {
             int schemaVersion,
             List<RuleGroupFact> ruleGroupFacts) {
 
-        public static final int CURRENT_SCHEMA_VERSION = 37;
+        public static final int CURRENT_SCHEMA_VERSION = 39;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(

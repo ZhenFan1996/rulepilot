@@ -35,34 +35,12 @@ final class VisualRulebookCatalogPolicy {
         return fact != null && fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION;
     }
 
-    static Set<Integer> anchorlessPages(List<PageFact> cached) {
-        return cached.stream()
-                .filter(fact -> fact.visualAnchors().isEmpty())
-                .map(PageFact::pageNumber)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
     static List<PageFact> mergeFreshFacts(List<PageFact> cached, List<PageFact> fresh) {
-        return mergeByPage(cached, fresh, false);
-    }
-
-    static List<PageFact> backfillAnchors(List<PageFact> cached, List<PageFact> fresh) {
-        return mergeByPage(cached, fresh, true);
-    }
-
-    private static List<PageFact> mergeByPage(List<PageFact> cached, List<PageFact> fresh, boolean retainExistingText) {
-        Map<Integer, PageFact> merged = cached.stream().collect(Collectors.toMap(
-                PageFact::pageNumber, Function.identity(), (first, ignored) -> first, LinkedHashMap::new));
-        for (PageFact observation : fresh) {
-            merged.merge(observation.pageNumber(), observation, (existing, supplied) -> new PageFact(
-                    supplied.pageNumber(),
-                    retainExistingText ? existing.printedTerms() : supplied.printedTerms(),
-                    retainExistingText ? existing.factualSummary() : supplied.factualSummary(),
-                    retainExistingText ? existing.keywords() : supplied.keywords(),
-                    supplied.visualAnchors().isEmpty() ? existing.visualAnchors() : supplied.visualAnchors(),
-                    Math.max(existing.schemaVersion(), supplied.schemaVersion()),
-                    retainExistingText ? existing.ruleGroupFacts() : supplied.ruleGroupFacts()));
-        }
+        Map<Integer, PageFact> merged = cached.stream()
+                .filter(VisualRulebookCatalogPolicy::hasReusablePageObservation)
+                .collect(Collectors.toMap(PageFact::pageNumber, Function.identity(),
+                        (first, ignored) -> first, LinkedHashMap::new));
+        fresh.forEach(observation -> merged.put(observation.pageNumber(), observation));
         return merged.values().stream().sorted(Comparator.comparingInt(PageFact::pageNumber)).toList();
     }
 
@@ -135,7 +113,7 @@ final class VisualRulebookCatalogPolicy {
         if (existing.pageNumber() != observation.pageNumber()) {
             throw new IllegalArgumentException("visual page fact does not match the persisted page");
         }
-        return mergeByPage(List.of(existing), List.of(observation), false).getFirst();
+        return observation;
     }
 
     private static PageSummary withoutRetiredMetadata(PageSummary summary) {

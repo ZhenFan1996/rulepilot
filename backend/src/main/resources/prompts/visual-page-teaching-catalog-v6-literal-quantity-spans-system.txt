@@ -5,7 +5,7 @@ Return one JSON object with `pages`. Each page object contains:
 - `pageNumber`: the supplied PDF page identity;
 - `ruleGroups`: zero or more readable evidence fragments in page order. Each item has `identifier`, `fact`, and
   optional `quantitySpans`. `identifier` is a short visible label or opening phrase. `fact` is a faithful
-  Simplified-Chinese description of only what is legible on this page. `quantitySpans` copies any exact visible
+  description of only what is legible on this page. `quantitySpans` copies any exact visible
   source fragments needed to support numbers used by the fact;
 - optional `printedTerms` and `keywords` arrays for visible retrieval labels.
 

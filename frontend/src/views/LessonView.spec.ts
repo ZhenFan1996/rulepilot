@@ -140,7 +140,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.get('img[alt="目录桌游 的 BGG 封面"]').attributes('src'))
       .toBe('https://example.test/catalog-cover.jpg')
     expect(wrapper.text()).toContain('结合图片 · 1/1')
-    expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
+    expect(wrapper.text()).not.toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('规则答疑')
     expect(wrapper.text()).not.toContain('答疑独立打开，不打断当前讲解')
     expect(wrapper.get('[data-testid="private-lesson-surface"]').classes()).not.toContain('overflow-x-hidden')

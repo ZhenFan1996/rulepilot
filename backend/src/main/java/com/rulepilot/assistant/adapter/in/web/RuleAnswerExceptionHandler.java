@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice(basePackageClasses = StructuredRuleAnswerController.class)
+@org.springframework.core.annotation.Order(0)
 public class RuleAnswerExceptionHandler {
 
     private static final URI TYPE = URI.create("urn:rulepilot:problem:rule-answer-rate-limit");

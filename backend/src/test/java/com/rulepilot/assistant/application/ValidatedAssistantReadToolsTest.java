@@ -18,6 +18,37 @@ import org.junit.jupiter.api.Test;
 class ValidatedAssistantReadToolsTest {
 
     @Test
+    void searchAndPageReadsRetainPrintedTextAlongsidePageBoundDiagramEvidence() {
+        UUID version = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        RuleEvidenceHit printed = evidence(id, version);
+        RuleEvidenceLookup lookup = org.mockito.Mockito.mock(RuleEvidenceLookup.class);
+        org.mockito.Mockito.when(lookup.canonicalChunkCount(version)).thenReturn(1);
+        org.mockito.Mockito.when(lookup.findByPageNumbers(version, Set.of(2))).thenReturn(List.of(printed));
+        var visual = org.mockito.Mockito.mock(com.rulepilot.assistant.NativeVisualEvidence.class);
+        org.mockito.Mockito.when(visual.readPageFacts(version, id, 2)).thenReturn(List.of(
+                new com.rulepilot.assistant.NativeVisualEvidence.VisualPageFact(
+                        2, "Track", "The printed track maps level 2 to 9 points.", List.of()),
+                new com.rulepilot.assistant.NativeVisualEvidence.VisualPageFact(
+                        3, "Other page", "Unrelated page observation.", List.of())));
+        HybridRuleSearch retrieval = (doc, query, options) -> List.of(new HybridEvidenceHit(printed, 1, 1, null, true));
+        var tools = new ValidatedAssistantReadTools(retrieval, lookup, (doc, pages) -> List.of(), visual);
+
+        var found = tools.searchRuleEvidence(new SearchRuleEvidence(version, "track", 1, Set.of(), null));
+        var read = tools.readRuleEvidencePages(version, Set.of(2), false);
+
+        for (var result : List.of(found, read)) {
+            assertThat(result).singleElement().satisfies(source -> {
+                assertThat(source.chunkId()).isEqualTo(id);
+                assertThat(source.excerpt()).contains(printed.excerpt(), "level 2 to 9 points")
+                        .doesNotContain("Unrelated page observation");
+                assertThat(source.contentKind()).isEqualTo(
+                        com.rulepilot.assistant.AssistantReadTools.RuleEvidence.ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS);
+            });
+        }
+    }
+
+    @Test
     void validatesAndScopesRuleSearchBeforeReturningEvidence() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

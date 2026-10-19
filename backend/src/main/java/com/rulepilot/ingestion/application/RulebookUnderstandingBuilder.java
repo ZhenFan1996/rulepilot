@@ -87,7 +87,7 @@ public class RulebookUnderstandingBuilder {
                 && text.split("\\s+").length <= 14
                 && text.codePoints().anyMatch(Character::isLetterOrDigit)
                 && !text.matches(".*[.!?。！？]$")
-                && (isMostlyUppercase(text) || block.y() < 420)) {
+                && isMostlyUppercase(text)) {
             return BlockRole.HEADING;
         }
         return BlockRole.BODY;

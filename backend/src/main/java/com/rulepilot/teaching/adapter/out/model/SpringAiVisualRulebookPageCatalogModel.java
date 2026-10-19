@@ -51,7 +51,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     private final RuntimeModelConfiguration models;
     private final FakeVisualRulebookPageCatalogModel fake;
-    private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final String systemPrompt;
 
     public SpringAiVisualRulebookPageCatalogModel(
@@ -160,7 +159,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     .mapToObj(index -> "image " + (index + 1) + " = PDF page "
                                             + request.pages().get(index).pageNumber())
                                     .collect(Collectors.joining("; ")));
-                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
+                    request.pages().forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()),
                             new ByteArrayResource(page.content())));
                 })

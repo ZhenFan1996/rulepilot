@@ -75,12 +75,24 @@ class JpaAgentExecutionControlPostgresTest {
     @Test
     void clarificationCanFinishWithoutLosingTheAnswerAtPersistence() {
         UUID runId = createRun("QUESTION_ANSWER");
+        UUID activeId = createRun("QUESTION_ANSWER");
         jdbc.update("UPDATE assistant_run SET state = 'NEED_CLARIFICATION', completed_at = updated_at WHERE id = ?", runId);
         assertThat(jdbc.queryForObject("SELECT completed_at IS NOT NULL FROM assistant_run WHERE id = ?",
                 Boolean.class, runId)).isTrue();
         assertThatThrownBy(() -> jdbc.update(
                 "UPDATE assistant_run SET completed_at = NULL WHERE id = ?", runId))
                 .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        try (EntityManager entityManager = sessionFactory.createEntityManager()) {
+            JpaAssistantRunRepository repository = new JpaAssistantRunRepository();
+            ReflectionTestUtils.setField(repository, "entityManager", entityManager);
+            assertThat(repository.findNonTerminal(com.rulepilot.assistant.AssistantRunMode.QUESTION_ANSWER))
+                    .extracting(com.rulepilot.assistant.domain.AssistantRun::id)
+                    .contains(activeId).doesNotContain(runId);
+            assertThat(repository.findNonTerminalOwned(
+                    com.rulepilot.assistant.AssistantRunMode.QUESTION_ANSWER, "budget-player"))
+                    .extracting(com.rulepilot.assistant.domain.AssistantRun::id)
+                    .contains(activeId).doesNotContain(runId);
+        }
     }
 
     @Test

@@ -1187,7 +1187,7 @@ onUnmounted(() => {
                         <img :src="cropUrl(aid.visualFocus)" :alt="t('public.step.openSource', { label: aid.visualFocus.label })" loading="lazy" decoding="async" fetchpriority="low" class="aspect-[4/3] w-full object-contain">
                         <span class="block border-t border-ink/10 px-3 py-2">
                           <span class="block text-xs font-semibold text-indigo">{{ t('public.question.aid', { step: aid.relatedStep }) }}</span>
-                          <span class="mt-1 block text-xs leading-5 text-muted">{{ aid.visualFocus.visibleDescription || aid.visualFocus.label }}</span>
+                          <span class="mt-1 block text-xs leading-5 text-muted">{{ aid.visualFocus.label }}</span>
                         </span>
                       </a>
                     </div>

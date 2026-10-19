@@ -307,7 +307,6 @@ const englishMessages = {
     'lesson.sidebar.directory': 'Guide contents',
     'lesson.visualEvidence.figure': 'Illustrated step · {current}/{total}',
     'lesson.visualEvidence.group': '{total} complementary illustrations for this step',
-    'lesson.visualEvidence.lookFor': 'Look for: ',
     'lesson.visualEvidence.alt': 'Illustration for “{label}” from rulebook page {page}',
     'lesson.visualEvidence.loading': 'Loading the illustration for this step',
     'lesson.visualEvidence.openOriginal': 'Check the source page',

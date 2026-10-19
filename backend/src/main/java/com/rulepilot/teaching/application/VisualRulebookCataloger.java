@@ -253,9 +253,7 @@ class VisualRulebookCataloger {
                         rulebookTitle,
                         owner,
                         assistantRunId);
-        List<PageFact> facts = cached.isEmpty()
-                ? VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh)
-                : VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
+        List<PageFact> facts = VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh);
         List<PageFact> teachingFacts = facts.stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();

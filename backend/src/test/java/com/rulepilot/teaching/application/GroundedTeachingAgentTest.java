@@ -149,11 +149,8 @@ class GroundedTeachingAgentTest {
                 visualFacts,
                 VisualRulebookCatalogerTestFixture.unavailable(tools, firstInvocations, visualFacts));
 
-        IllustratedLesson firstPartial = firstRun.createBase(
+        IllustratedLesson partial = firstRun.createBase(
                 resumablePlan, UUID.randomUUID(), null, ignored -> {});
-        IllustratedLesson partial = new IllustratedLesson(firstPartial.id(), firstPartial.teachingPlanId(),
-                firstPartial.status(), firstPartial.sections(), "teaching-agent-v67-planned-visual-pages",
-                firstPartial.createdAt());
 
         assertThat(partial.status()).isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(partial.sections())

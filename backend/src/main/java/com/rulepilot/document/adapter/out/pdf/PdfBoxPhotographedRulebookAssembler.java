@@ -21,7 +21,6 @@ public class PdfBoxPhotographedRulebookAssembler implements PhotographedRulebook
 
     private static final int MINIMUM_EDGE_PIXELS = 320;
     private static final long MAXIMUM_PIXELS = 24_000_000L;
-    private static final float PAGE_MARGIN = 18f;
 
     @Override
     public AssembledRulebook assemble(List<PhotoPage> pages) {
@@ -49,17 +48,15 @@ public class PdfBoxPhotographedRulebookAssembler implements PhotographedRulebook
         PDImageXObject image = "image/jpeg".equalsIgnoreCase(photographedPage.contentType())
                 ? JPEGFactory.createFromByteArray(document, photographedPage.content())
                 : LosslessFactory.createFromImage(document, source);
-        PDPage page = new PDPage(PDRectangle.A4);
-        document.addPage(page);
-        float availableWidth = page.getMediaBox().getWidth() - PAGE_MARGIN * 2;
-        float availableHeight = page.getMediaBox().getHeight() - PAGE_MARGIN * 2;
-        float scale = Math.min(availableWidth / image.getWidth(), availableHeight / image.getHeight());
+        // Preserve the source aspect ratio without adding blank pixels. Keep the existing A4 longest-edge
+        // rendering envelope so landscape photographs do not become small strips inside portrait pages.
+        float scale = PDRectangle.A4.getHeight() / Math.max(image.getWidth(), image.getHeight());
         float width = image.getWidth() * scale;
         float height = image.getHeight() * scale;
-        float x = (page.getMediaBox().getWidth() - width) / 2;
-        float y = (page.getMediaBox().getHeight() - height) / 2;
+        PDPage page = new PDPage(new PDRectangle(width, height));
+        document.addPage(page);
         try (PDPageContentStream canvas = new PDPageContentStream(document, page)) {
-            canvas.drawImage(image, x, y, width, height);
+            canvas.drawImage(image, 0, 0, width, height);
         }
     }
 }

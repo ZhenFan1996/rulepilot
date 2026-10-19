@@ -10,6 +10,39 @@ import org.junit.jupiter.api.Test;
 class SpringAiVisualRulebookPageCatalogModelTest {
 
     @Test
+    void preservesSourceResolutionWhenTransportingDenseRulePages() throws Exception {
+        var configuration = org.mockito.Mockito.mock(com.rulepilot.modelconfig.RuntimeModelConfiguration.class);
+        var chat = org.mockito.Mockito.mock(org.springframework.ai.chat.model.ChatModel.class);
+        var role = com.rulepilot.modelconfig.RuntimeModelConfiguration.Role.VISUAL;
+        org.mockito.Mockito.when(configuration.supportsVision(role, "player")).thenReturn(true);
+        org.mockito.Mockito.when(configuration.modelFor(role, "player")).thenReturn(chat);
+        org.mockito.Mockito.when(configuration.providerFor(role, "player")).thenReturn("qwen");
+        org.mockito.Mockito.when(chat.getOptions()).thenReturn(
+                org.springframework.ai.openai.OpenAiChatOptions.builder().model("vision-test").build());
+        org.mockito.Mockito.when(chat.call(org.mockito.ArgumentMatchers.any(org.springframework.ai.chat.prompt.Prompt.class)))
+                .thenReturn(new org.springframework.ai.chat.model.ChatResponse(List.of(
+                        new org.springframework.ai.chat.model.Generation(new org.springframework.ai.chat.messages.AssistantMessage(
+                                "{\"pages\":[{\"pageNumber\":2,\"ruleGroups\":[]}]}")))));
+        var source = new java.awt.image.BufferedImage(2400, 1800, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        var encoded = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(source, "png", encoded);
+        byte[] original = encoded.toByteArray();
+        var model = new SpringAiVisualRulebookPageCatalogModel(configuration,
+                new FakeVisualRulebookPageCatalogModel(),
+                new org.springframework.core.io.ByteArrayResource("Read only visible rules.".getBytes()));
+
+        model.summarizeForTeaching(new CatalogRequest(
+                List.of(new PageImageInput(2, "image/png", original)), "player"));
+
+        var prompt = org.mockito.ArgumentCaptor.forClass(org.springframework.ai.chat.prompt.Prompt.class);
+        org.mockito.Mockito.verify(chat).call(prompt.capture());
+        assertThat(prompt.getValue().getUserMessage().getMedia()).singleElement().satisfies(media -> {
+            assertThat(media.getMimeType().toString()).isEqualTo("image/png");
+            assertThat(media.getDataAsByteArray()).isEqualTo(original);
+        });
+    }
+
+    @Test
     void acceptsAdditiveFieldsEmptyKeywordsAndOptionalQuantitySpans() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parse("""
                 {"trace":"ignored","pages":[

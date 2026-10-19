@@ -88,18 +88,21 @@ public class NativeRuleAnswerAgent {
     private final RuleEvidenceLookup evidenceLookup;
     private final RuleAnswerRateLimiter rateLimiter;
     private final ObjectMapper objectMapper;
+    private final com.rulepilot.document.DocumentVersionScopeLookup documents;
 
     public NativeRuleAnswerAgent(
             NativeToolAgent agent,
             NativeToolScopes scopes,
             RuleEvidenceLookup evidenceLookup,
             RuleAnswerRateLimiter rateLimiter,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            com.rulepilot.document.DocumentVersionScopeLookup documents) {
         this.agent = agent;
         this.scopes = scopes;
         this.evidenceLookup = evidenceLookup;
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
+        this.documents = documents;
     }
 
     AgentOutcome answer(
@@ -510,6 +513,8 @@ public class NativeRuleAnswerAgent {
 
     private String playerRequest(String question, QuestionContext context) {
         Map<String, Object> request = new LinkedHashMap<>();
+        request.put("activeRulebookTitle", documents.findVersion(context.documentVersionId())
+                .map(com.rulepilot.document.DocumentVersionScopeLookup.VersionScope::documentTitle).orElse(null));
         request.put("question", question);
         request.put("previousQuestion", context.previousQuestion());
         request.put("untrustedVisualObservations", context.visuals());

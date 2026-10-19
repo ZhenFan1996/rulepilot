@@ -57,13 +57,12 @@ describe('LessonVisualEvidence', () => {
     setLocale('zh-CN')
   })
 
-  it('renders only the selected crop with its observation inside one illustrated unit', async () => {
+  it('renders the selected crop and final label without internal observations', async () => {
     const wrapper = mountEvidence()
     await flushPromises()
 
     expect(wrapper.text()).toContain('结合图片 · 1/1')
-    expect(wrapper.text()).toContain('看这里：')
-    expect(wrapper.text()).toContain('六张牌排成两行，箭头从左侧指向右侧。')
+    expect(wrapper.text()).not.toContain('六张牌排成两行，箭头从左侧指向右侧。')
     expect(wrapper.get('[data-testid="lesson-visual-image"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
     expect(fetch).toHaveBeenCalledWith('/crop/6', expect.objectContaining({ credentials: 'include' }))
     expect(wrapper.get('[data-testid="lesson-visual-image"]').attributes('href')).toBe('/page/6')
@@ -78,7 +77,7 @@ describe('LessonVisualEvidence', () => {
     expect(wrapper.find('[data-testid="lesson-visual-image"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('浏览器无法读取返回的局部图')
     expect(wrapper.text()).toContain('只省略此图，已发布的带引用正文保留')
-    expect(wrapper.text()).toContain('六张牌排成两行，箭头从左侧指向右侧。')
+    expect(wrapper.text()).not.toContain('六张牌排成两行，箭头从左侧指向右侧。')
     expect(wrapper.findAll('a[href="/page/6"]')).not.toHaveLength(0)
   })
 
@@ -88,7 +87,6 @@ describe('LessonVisualEvidence', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Illustrated step · 1/1')
-    expect(wrapper.text()).toContain('Look for:')
     expect(wrapper.get('img[alt*="Illustration for “行动网格”"]')).toBeTruthy()
   })
 

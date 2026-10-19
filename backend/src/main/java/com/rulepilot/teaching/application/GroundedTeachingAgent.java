@@ -39,11 +39,11 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "teaching-agent-v68-observed-images";
+    static final String GENERATOR_VERSION = "teaching-agent-v70-source-evidence";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
-            // Public v67 drafts still exist. Keep their supported chapters on resume; retire v67 reuse after
-            // those persisted drafts have completed or been explicitly retired.
-            Set.of(GENERATOR_VERSION, "teaching-agent-v67-planned-visual-pages");
+            // Earlier chapters can contain facts inferred from unreadable downscaled pages. Rebuild those
+            // against current source-resolution evidence; retries within this generation retain completed chapters.
+            Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final AuditedAgentInvocations invocations;

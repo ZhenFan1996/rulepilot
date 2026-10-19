@@ -111,7 +111,6 @@ final class VisualLocatorResponsePolicy {
             Candidate candidate = candidates.get(index);
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("candidateId", candidate.candidateId());
-            entry.put("attachmentIndex", index + 1);
             entry.put("pageNumber", candidate.pageNumber());
             manifest.add(Collections.unmodifiableMap(entry));
         }

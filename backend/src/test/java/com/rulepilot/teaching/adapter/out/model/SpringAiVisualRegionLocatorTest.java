@@ -108,13 +108,11 @@ class SpringAiVisualRegionLocatorTest {
         String userText = prompt.getValue().getInstructions().stream()
                 .filter(UserMessage.class::isInstance)
                 .map(message -> message.getText())
-                .findFirst()
-                .orElseThrow();
+                .collect(java.util.stream.Collectors.joining("\n"));
         assertThat(userText)
                 .contains(
                         "Page 4 source context",
                         "\"candidateId\":\"opaque_7\"",
-                        "\"attachmentIndex\":1",
                         "\"pageNumber\":4",
                         "\"ref\":\"C1\"",
                         "\"sourcePages\":[4]")
@@ -156,8 +154,7 @@ class SpringAiVisualRegionLocatorTest {
         String replacementPrompt = prompts.getAllValues().get(1).getInstructions().stream()
                 .filter(UserMessage.class::isInstance)
                 .map(message -> message.getText())
-                .findFirst()
-                .orElseThrow();
+                .collect(java.util.stream.Collectors.joining("\n"));
         assertThat(replacementPrompt)
                 .contains(
                         "\"status\":\"PREVIOUS_COMPLETE_SELECTION_REJECTED\"",
@@ -283,9 +280,7 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(prompts.getAllValues()).allSatisfy(prompt -> assertThat(prompt.getInstructions().stream()
                         .filter(UserMessage.class::isInstance)
                         .map(UserMessage.class::cast)
-                        .findFirst()
-                        .orElseThrow()
-                        .getMedia())
+                        .flatMap(message -> message.getMedia().stream()).toList())
                 .hasSize(1));
     }
 
@@ -520,7 +515,7 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void sendsLocallyCroppedCandidateImagesInManifestOrder() throws IOException {
+    void bindsEachCroppedImageToItsCandidateIdentityInTheSameMessage() throws IOException {
         Candidate right = candidate("right_crop", 1, new Rectangle(500, 0, 500, 1_000));
         Candidate left = candidate("left_crop", 1, new Rectangle(0, 0, 500, 1_000));
         VisualLocationRequest request = request(
@@ -535,17 +530,31 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(attachments)
                 .extracting(
                         SpringAiVisualRegionLocator.CandidateAttachment::candidateId,
-                        SpringAiVisualRegionLocator.CandidateAttachment::attachmentIndex)
+                        SpringAiVisualRegionLocator.CandidateAttachment::pageNumber)
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple("right_crop", 1),
-                        org.assertj.core.groups.Tuple.tuple("left_crop", 2));
+                        org.assertj.core.groups.Tuple.tuple("left_crop", 1));
         assertThat(centerColor(attachments.getFirst().content()).getBlue()).isGreaterThan(200);
         assertThat(centerColor(attachments.getLast().content()).getRed()).isGreaterThan(200);
         assertThat(VisualLocatorResponsePolicy.candidateManifest(request.candidates()))
-                .extracting(entry -> entry.get("candidateId"), entry -> entry.get("attachmentIndex"))
+                .extracting(entry -> entry.get("candidateId"), entry -> entry.get("pageNumber"))
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple("right_crop", 1),
-                        org.assertj.core.groups.Tuple.tuple("left_crop", 2));
+                        org.assertj.core.groups.Tuple.tuple("left_crop", 1));
+        var runtime = runtime("{\"batchAction\":\"STOP\",\"reviews\":[{\"stepPosition\":1,\"action\":\"NO_VISUAL\",\"candidateId\":null,\"visibleDescription\":\"\"}]}");
+        runtime.locator().locateGuideWithResult(request);
+        var captured = ArgumentCaptor.forClass(Prompt.class);
+        verify(runtime.model()).call(captured.capture());
+        var imageMessages = captured.getValue().getInstructions().stream()
+                .filter(UserMessage.class::isInstance).map(UserMessage.class::cast)
+                .filter(message -> !message.getMedia().isEmpty()).toList();
+        assertThat(imageMessages).hasSize(2);
+        assertThat(imageMessages.getFirst().getText()).contains("right_crop");
+        assertThat(imageMessages.getLast().getText()).contains("left_crop");
+        assertThat(centerColor(imageMessages.getFirst().getMedia().getFirst().getDataAsByteArray()).getBlue())
+                .isGreaterThan(200);
+        assertThat(centerColor(imageMessages.getLast().getMedia().getFirst().getDataAsByteArray()).getRed())
+                .isGreaterThan(200);
         String manifestJson = VisualLocatorResponsePolicy.promptJson(
                 VisualLocatorResponsePolicy.candidateManifest(request.candidates()));
         assertThat(manifestJson)
@@ -606,11 +615,11 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(attachments)
                 .extracting(
                         SpringAiVisualRegionLocator.CandidateAttachment::candidateId,
-                        SpringAiVisualRegionLocator.CandidateAttachment::attachmentIndex)
+                        SpringAiVisualRegionLocator.CandidateAttachment::pageNumber)
                 .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple("page_2_right", 1),
-                        org.assertj.core.groups.Tuple.tuple("page_1", 2),
-                        org.assertj.core.groups.Tuple.tuple("page_2_left", 3));
+                        org.assertj.core.groups.Tuple.tuple("page_2_right", 2),
+                        org.assertj.core.groups.Tuple.tuple("page_1", 1),
+                        org.assertj.core.groups.Tuple.tuple("page_2_left", 2));
         assertThat(centerColor(attachments.get(0).content()).getBlue()).isGreaterThan(200);
         assertThat(centerColor(attachments.get(1).content()).getRed()).isGreaterThan(200);
         assertThat(centerColor(attachments.get(2).content()).getBlue()).isGreaterThan(200);

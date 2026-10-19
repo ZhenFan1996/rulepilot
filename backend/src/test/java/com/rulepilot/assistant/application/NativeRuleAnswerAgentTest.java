@@ -91,6 +91,7 @@ class NativeRuleAnswerAgentTest {
         assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(outcome.selectedImageIds()).containsExactlyElementsOf(selectImage ? Set.of("owned") : Set.of());
         assertThat(nativeAgent.request.playerRequest()).contains("A marker sits on a labeled start space.");
+        assertThat(nativeAgent.request.playerRequest()).contains("\"activeRulebookTitle\":\"Harbor routes\"");
     }
 
     @ParameterizedTest
@@ -447,7 +448,9 @@ class NativeRuleAnswerAgentTest {
                         return () -> {};
                     }
                 },
-                JsonMapper.builder().findAndAddModules().build());
+                JsonMapper.builder().findAndAddModules().build(),
+                id -> java.util.Optional.of(new com.rulepilot.document.DocumentVersionScopeLookup.VersionScope(
+                        id, UUID.randomUUID(), "READY", "player", "Harbor routes")));
     }
 
     private ObservationRecord exactRead(UUID evidenceId, String excerpt, int page) {

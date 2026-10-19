@@ -75,9 +75,7 @@ public interface NativeVisualEvidence {
             String literalSummary,
             List<VisualAnchor> anchors) {
         public VisualPageFact {
-            if (pageNumber < 1 || printedTerms == null || literalSummary == null || anchors == null
-                    || printedTerms.length() > 2_000 || literalSummary.length() > 4_000
-                    || anchors.size() > 8) {
+            if (pageNumber < 1 || printedTerms == null || literalSummary == null || anchors == null) {
                 throw new IllegalArgumentException("native visual page fact is invalid");
             }
             printedTerms = printedTerms.strip();
