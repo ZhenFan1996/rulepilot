@@ -389,11 +389,12 @@ class NativeRuleAnswerAgentTest {
     }
 
     @Test
-    void mapsTypedProviderFailuresToRetryablePublicStatusesWithoutChangingTheQuestion() {
+    void keepsExecutionFailuresDistinctFromInvalidAnswersWithoutChangingTheQuestion() {
         String question = "When may this effect resolve?";
         Map<String, AnswerStatus> expectedStatuses = Map.of(
                 "MODEL_REQUEST_TIMEOUT", AnswerStatus.MODEL_TIMEOUT,
-                "MODEL_REQUEST_UNAVAILABLE", AnswerStatus.MODEL_UNAVAILABLE);
+                "MODEL_REQUEST_UNAVAILABLE", AnswerStatus.MODEL_UNAVAILABLE,
+                "EXECUTION_FAILED", AnswerStatus.MODEL_UNAVAILABLE);
 
         expectedStatuses.forEach((reason, expectedStatus) -> {
             NativeToolAgent failedAgent = request -> new RunResult(

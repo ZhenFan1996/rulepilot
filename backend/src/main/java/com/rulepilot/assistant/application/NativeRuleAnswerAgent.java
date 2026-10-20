@@ -540,7 +540,7 @@ public class NativeRuleAnswerAgent {
     }
 
     private AnswerStatus fallbackStatus(String reason) {
-        if (Set.of("MODEL_CAPABILITY_UNAVAILABLE", "MODEL_REQUEST_UNAVAILABLE").contains(reason)) {
+        if (Set.of("MODEL_CAPABILITY_UNAVAILABLE", "MODEL_REQUEST_UNAVAILABLE", "EXECUTION_FAILED").contains(reason)) {
             return AnswerStatus.MODEL_UNAVAILABLE;
         }
         if (Set.of(
@@ -569,6 +569,9 @@ public class NativeRuleAnswerAgent {
                     : "本次请求的答疑模型或模型提供方暂时不可用。";
         }
         return switch (reason) {
+            case "EXECUTION_FAILED" -> english
+                    ? "The answer service could not complete this request. Please consult the original rulebook."
+                    : "答疑服务暂时无法完成请求，请查阅原始规则书。";
             case "TIMEOUT", "MODEL_REQUEST_TIMEOUT" -> english
                     ? "This answer did not finish before the request deadline."
                     : "这次答疑未能在请求时限内完成。";
