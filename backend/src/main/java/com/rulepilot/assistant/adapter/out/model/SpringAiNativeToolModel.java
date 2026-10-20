@@ -71,10 +71,9 @@ public class SpringAiNativeToolModel implements NativeToolModel {
             if (models.usesDeepSeekNonThinkingGeneration(modelRole, request.scope().ownerUsername())) {
                 openAiOptions.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else if (qwen) {
-                // Real rulebook comparisons found unsupported edition/range claims in non-thinking Answer output.
-                // Use the provider's low effort tier inside the same request/deadline; no reviewer stage is added.
+                // Answer reasoning stays inside the same request deadline; no reviewer stage is added.
                 openAiOptions.extraBody(request.role() == Role.ANSWER
-                        ? Map.of("enable_thinking", true, "reasoning_effort", "low")
+                        ? Map.of("enable_thinking", true, "reasoning_effort", "medium")
                         : Map.of("enable_thinking", false));
             }
             if (request.jsonOutputRequired()) {
