@@ -170,17 +170,15 @@ test('keeps requested and displayed rulebook pages atomic across slow, failed, a
   const pageStatus = page.getByTestId('rulebook-page-status')
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
   await expect(pageStatus).toContainText('第 1 页已显示')
-  await page.getByRole('button', { name: '放大阅读', exact: true }).click()
-  await expect(page.getByRole('button', { name: '适合页面', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await page.getByRole('button', { name: '适合页面', exact: true }).click()
+  await page.getByRole('combobox', { name: '阅读尺寸' }).selectOption('actual')
+  await expect(page.getByRole('combobox', { name: '阅读尺寸' })).toHaveValue('actual')
+  await page.getByRole('combobox', { name: '阅读尺寸' }).selectOption('fit')
 
-  await page.locator('button[data-page-number="2"]').click()
+  await page.getByRole('combobox', { name: '规则书页面' }).selectOption('2')
   await expect(pageStatus).toContainText('正在加载第 2 页；第 1 页继续显示')
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
-  await expect(page.locator('button[data-page-number="1"]')).toHaveAttribute('aria-current', 'page')
-  await expect(page.locator('button[data-page-number="2"]')).toHaveAttribute('aria-busy', 'true')
 
-  await page.locator('button[data-page-number="3"]').click()
+  await page.getByRole('combobox', { name: '规则书页面' }).selectOption('3')
   await expect(pageStatus).toContainText('正在加载第 3 页；第 1 页继续显示')
   releaseSecond()
   await expect(pageStatus).toContainText('正在加载第 3 页；第 1 页继续显示')
@@ -189,23 +187,19 @@ test('keeps requested and displayed rulebook pages atomic across slow, failed, a
   releaseThird()
   await expect(displayedImage).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/3/image')
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 3 页')
-  await expect(page.locator('button[data-page-number="3"]')).toHaveAttribute('aria-current', 'page')
 
-  await page.locator('button[data-page-number="4"]').click()
-  await expect(pageStatus).toContainText('第 4 页在页面图像加载阶段失败')
-  await expect(pageStatus).toContainText('当前仍保留第 3 页，不会用失败结果替换')
+  await page.getByRole('combobox', { name: '规则书页面' }).selectOption('4')
+  await expect(pageStatus).toContainText('第 4 页暂时无法加载')
+  await expect(pageStatus).toContainText('仍显示第 3 页')
   await expect(pageStatus).toHaveAttribute('role', 'alert')
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 3 页')
-  await expect(page.locator('button[data-page-number="3"]')).toHaveAttribute('aria-current', 'page')
   await expect(page.getByRole('link', { name: '在新标签页打开第 4 页' })).toHaveAttribute(
     'href', '/api/v1/document-versions/version-1/pages/4/image',
   )
   await page.getByRole('button', { name: '重试第 4 页' }).click()
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 4 页')
 
-  await page.locator('button[data-page-number="4"]').focus()
-  await page.keyboard.press('Home')
-  await expect(page.locator('button[data-page-number="1"]')).toBeFocused()
+  await page.getByRole('combobox', { name: '规则书页面' }).selectOption('1')
   await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
   const persistedPageImage = await page.evaluate(() => JSON.stringify({
     local: { ...localStorage },

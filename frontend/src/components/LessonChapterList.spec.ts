@@ -94,8 +94,6 @@ describe('LessonChapterList', () => {
     expect(wrapper.get('[data-testid="mobile-chapter-directory"]').classes()).toContain('xl:hidden')
     expect(wrapper.get('[data-testid="desktop-chapter-directory"]').classes()).toEqual(expect.arrayContaining(['xl:block', 'xl:sticky', 'xl:top-24']))
     expect(wrapper.get('[data-testid="lesson-reading-column"]').classes()).toContain('min-w-0')
-    expect(wrapper.get('[data-testid="mobile-chapter-directory"]').classes()).toContain('player-board')
-    expect(wrapper.findAll('.hex-token').length).toBeGreaterThanOrEqual(6)
     expect(wrapper.findAll('[data-testid="desktop-chapter-link"]')).toHaveLength(2)
     expect(wrapper.get('[data-testid="desktop-chapter-link"][aria-current="location"]').text()).toContain('摆好桌面')
 
@@ -199,7 +197,7 @@ describe('LessonChapterList', () => {
     const narrative = pairedStep.get('[data-testid="lesson-step-narrative"]')
     const visual = pairedStep.get('[data-testid="lesson-visual-evidence"]')
 
-    expect(wrapper.get('.lesson-step-shadow').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="lesson-step-paired"]').classes()).toContain('min-w-0')
     expect(narrative.text()).toContain('把主板放在桌面中央。')
     expect(visual.attributes('aria-describedby')).toBe(narrative.attributes('id'))
     expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).toContain('grid')
@@ -236,6 +234,42 @@ describe('LessonChapterList', () => {
     expect(wrapper.text()).toContain('结合图片 · 3/3')
     expect(vi.mocked(fetch).mock.calls.map(([input]) => String(input)))
       .toEqual(['/crop/2', '/crop/3', '/crop/4'])
+  })
+
+  it('shows a shared illustration once while retaining every step and its source links', async () => {
+    const focus: TestVisualFocus = { pageNumber: 2, label: 'Setup', x: 0, y: 0, width: 1000, height: 1000 }
+    const wrapper = mountDirectory([{
+      ...sections[0]!,
+      steps: [
+        { ...sections[0]!.steps[0]!, visualFocus: focus },
+        { ...sections[0]!.steps[0]!, position: 2, text: 'Then deal the cards.', visualFocus: focus },
+      ],
+    }])
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="lesson-visual-evidence"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="lesson-step-narrative"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('Then deal the cards.')
+    expect(wrapper.findAll('[data-testid="lesson-step-narrative"] > div a[href="/page/2"]').length).toBeGreaterThanOrEqual(2)
+    wrapper.unmount()
+  })
+
+  it('opens the exact cited page in place and returns keyboard focus to the source link', async () => {
+    const wrapper = mount(LessonChapterList, {
+      attachTo: document.body,
+      props: { sections, idPrefix: 'sources', pageImageUrl: (page: number) => `/page/${page}`, focusedPageImageUrl: () => '/crop' },
+    })
+    const source = wrapper.get('a[href="/page/4"]')
+    ;(source.element as HTMLElement).focus()
+    await source.trigger('click')
+    await flushPromises()
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.querySelector('img')?.getAttribute('src')).toBe('/page/4')
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(source.element)
+    wrapper.unmount()
   })
 
   it('renders model-authored rule fact roles without parsing the natural step text', () => {

@@ -2,13 +2,9 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.teaching.VisualRegionLocator;
-import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
-import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
-import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
-import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
-import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
+import java.util.List;
 import java.time.Duration;
-import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
@@ -46,58 +42,44 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
     }
 
     @Override
-    public Optional<LocatedRegion> locate(VisualLocationRequest request) {
-        return locateWithResult(request).region();
-    }
-
-    @Override
     public boolean supportsVisualEvidence(String modelConfigurationOwner) {
         return delegate.supportsVisualEvidence(modelConfigurationOwner);
     }
 
     @Override
-    public LocateResult locateWithResult(VisualLocationRequest request) {
-        LocateGuideResult guide = locateGuideWithResult(request);
-        return guide.regions().stream()
-                .findFirst()
-                .map(LocateResult::found)
-                .orElseGet(() -> LocateResult.unavailable(guide.diagnostic()));
+    public List<VisualFocus> observe(Request request) {
+        return observe(request, timeout);
     }
 
     @Override
-    public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
-        return locateGuideWithResult(request, timeout);
-    }
-
-    @Override
-    public LocateGuideResult locateGuideWithResult(VisualLocationRequest request, Duration remainingWorkflowTime) {
+    public List<VisualFocus> observe(Request request, Duration remainingWorkflowTime) {
         if (remainingWorkflowTime == null || remainingWorkflowTime.isZero() || remainingWorkflowTime.isNegative()) {
-            return LocateGuideResult.unavailable(Diagnostic.TIMEOUT);
+            return List.of();
         }
         Duration effectiveTimeout = remainingWorkflowTime.compareTo(timeout) < 0
                 ? remainingWorkflowTime
                 : timeout;
-        Future<LocateGuideResult> work;
+        Future<List<VisualFocus>> work;
         try {
-            work = executor.submit(() -> delegate.locateGuideWithResult(request));
+            work = executor.submit(() -> delegate.observe(request));
         } catch (RejectedExecutionException busy) {
             log.info("Skipped visual enrichment because another visual request is still running");
-            return LocateGuideResult.unavailable(Diagnostic.EXECUTOR_BUSY);
+            return List.of();
         }
         try {
             return work.get(Math.max(1L, effectiveTimeout.toMillis()), TimeUnit.MILLISECONDS);
         } catch (TimeoutException slowProvider) {
             work.cancel(true);
             log.info("Skipped visual enrichment after {} ms", effectiveTimeout.toMillis());
-            return LocateGuideResult.unavailable(Diagnostic.TIMEOUT);
+            return List.of();
         } catch (InterruptedException interrupted) {
             work.cancel(true);
             Thread.currentThread().interrupt();
-            return LocateGuideResult.unavailable(Diagnostic.INTERRUPTED);
+            return List.of();
         } catch (ExecutionException failed) {
             if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
             log.info("Skipped visual enrichment after provider failure: {}", rootMessage(failed));
-            return LocateGuideResult.unavailable(Diagnostic.PROVIDER_FAILURE);
+            return List.of();
         }
     }
 

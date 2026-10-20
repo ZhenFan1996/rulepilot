@@ -57,9 +57,9 @@ public class VisualAidIndexer {
                     extraction.regions().size(),
                     extraction.source());
         } catch (IOException | RuntimeException failure) {
-            // Visual help is optional. Preserve the already extracted text and let local pixel proposals remain usable.
+            // Visual help is optional. Preserve the extracted text and original page evidence.
             LOGGER.warn(
-                    "Visual aid index failed for documentVersionId={}; teaching will use local candidates",
+                    "Visual aid index failed for documentVersionId={}; teaching will retain original page evidence",
                     event.documentVersionId(),
                     failure);
         } finally {

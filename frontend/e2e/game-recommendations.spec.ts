@@ -890,7 +890,8 @@ test('stops closed reader transport while the durable guide remains reopenable',
   await page.getByTestId('player-journey-progress-button').click()
   await journey.getByRole('button', { name: '先阅读原规则书' }).click()
   rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
-  await expect(rulebook.getByRole('button', { name: /第 7 页/ })).toBeVisible()
+  await rulebook.getByRole('combobox', { name: '规则书页面' }).selectOption('7')
+  await expect(rulebook.getByRole('combobox', { name: '规则书页面' })).toHaveValue('7')
   expect(pageRequests).toBe(2)
   await rulebook.getByRole('button', { name: '关闭规则书' }).click()
 

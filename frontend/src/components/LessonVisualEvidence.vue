@@ -10,9 +10,16 @@ const props = defineProps<{
   ordinal?: number
   total?: number
   compact?: boolean
+  openPage?: (page: number) => void
   pageImageUrl: (page: number) => string
   focusedPageImageUrl: (focus: VisualFocus) => string
 }>()
+
+function openOriginal(event: MouseEvent) {
+  if (!props.openPage || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  props.openPage(props.focus.pageNumber)
+}
 
 const { t } = useLocale()
 const DETAIL_RETRY_DEFAULT_MS = 250
@@ -253,16 +260,16 @@ function isReliableDetailViewport(focus: VisualFocus) {
   <figure
     data-testid="lesson-visual-evidence"
     :aria-describedby="narrationId || undefined"
-    class="overflow-hidden rounded-2xl border border-indigo/15 bg-paper elevation-sm"
+    class="overflow-hidden rounded-lg border border-ink/10 bg-paper"
   >
     <div v-if="detailIsReliable" ref="detailViewport" class="bg-canvas">
       <a
         v-if="loadedDetailImageUrl && !detailFailure"
         data-testid="lesson-visual-image"
-        :href="originalPageUrl"
-        target="_blank"
+        :href="originalPageUrl" target="_blank"
         rel="noopener noreferrer"
         class="block focus:outline-none focus:ring-4 focus:ring-inset focus:ring-indigo/15"
+        @click="openOriginal"
       >
         <img
           :src="loadedDetailImageUrl"
@@ -314,16 +321,16 @@ function isReliableDetailViewport(focus: VisualFocus) {
       <p class="mt-2 text-xs leading-5 text-muted">{{ t('lesson.visualEvidence.protectedBody') }}</p>
     </div>
 
-    <figcaption class="border-t border-indigo/10 px-4 py-4 sm:px-5">
+    <figcaption class="border-t border-ink/10 px-3 py-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <p class="text-[11px] font-bold uppercase tracking-[0.12em] text-indigo">
+        <p class="text-xs font-medium text-indigo">
           {{ t('lesson.visualEvidence.figure', { current: visualOrdinal, total: visualTotal }) }}
         </p>
         <span class="text-xs font-semibold text-muted">{{ t('lesson.chapter.page', { page: focus.pageNumber }) }}</span>
       </div>
-      <p class="mt-1 font-display text-lg font-semibold text-ink">{{ focus.label }}</p>
+      <p class="mt-1 text-sm font-semibold text-ink">{{ focus.label }}</p>
       <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted">
-        <a :href="originalPageUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo hover:underline">{{ t('lesson.visualEvidence.openOriginal') }} ↗</a>
+        <a :href="originalPageUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo hover:underline" @click="openOriginal">{{ t('lesson.visualEvidence.openOriginal') }} ↗</a>
       </div>
     </figcaption>
   </figure>

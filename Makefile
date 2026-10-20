@@ -65,7 +65,7 @@ agent-teaching-real: ## Run the explicitly authorized complete real-rulebook tea
 agent-teaching-page-canary: ## Run one explicitly authorized paid Gstone image-page catalog canary
 	@sh scripts/run-gstone-visual-page-canary.sh
 
-agent-visual-real: ## Evaluate opaque visual-candidate selection on ignored local rulebook crops
+agent-visual-real: ## Observe complete source illustrations from an ignored real-page manifest
 	@sh scripts/run-real-visual-agent.sh
 
 agent-recommendation-canary: ## Run one explicitly authorized paid recommendation direct-path canary

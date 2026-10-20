@@ -227,7 +227,7 @@ test('keeps cited lesson content when the focused crop is permanently unavailabl
   await expect(page.getByTestId('lesson-visual-context')).toHaveCount(0)
   await expect(page.locator('[data-testid="private-rule-step"]')).toHaveCount(2)
   await expect(page.getByText('把第一张灯塔牌正面朝上放在起点。')).toBeVisible()
-  await expect(page.getByRole('link', { name: '来源：第 2 页 ↗' }).last()).toBeVisible()
+  await expect(page.getByRole('link', { name: '来源：第 2 页' }).last()).toBeVisible()
 })
 
 test('shows immediate Q&A feedback and preserves verified evidence at the eight-second soft boundary', async ({ page }) => {

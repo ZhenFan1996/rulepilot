@@ -15,9 +15,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCall;
 import com.rulepilot.teaching.TeachingOutlineModel.ModelCallExecutor;
-import com.rulepilot.teaching.VisualRegionProposer;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import com.rulepilot.visualaid.VisualRegionCatalog;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -47,8 +45,6 @@ public class TeachingPlanService {
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
     private final TeachingPlanPublication publication;
-    private final VisualRegionCatalog visualRegions;
-    private final VisualRegionProposer visualRegionProposer;
 
     public TeachingPlanService(
             DocumentProcessing documents,
@@ -59,9 +55,7 @@ public class TeachingPlanService {
             AuditedAgentInvocations invocations,
             TeachingPlanFactory plans,
             TeachingPlanRepository repository,
-            TeachingPlanPublication publication,
-            VisualRegionCatalog visualRegions,
-            VisualRegionProposer visualRegionProposer) {
+            TeachingPlanPublication publication) {
         this.documents = documents;
         this.documentScopes = documentScopes;
         this.catalog = catalog;
@@ -71,8 +65,6 @@ public class TeachingPlanService {
         this.plans = plans;
         this.repository = repository;
         this.publication = publication;
-        this.visualRegions = visualRegions;
-        this.visualRegionProposer = visualRegionProposer;
     }
 
     public TeachingPlan create(
@@ -233,22 +225,7 @@ public class TeachingPlanService {
             UUID documentVersionId,
             List<PageInput> pages,
             List<DocumentProcessing.PageView> documentPages) {
-        List<VisualRegionCatalog.Region> indexedRegions = new java.util.ArrayList<>();
-        List<Integer> pageNumbers = pages.stream().map(PageInput::pageNumber).distinct().sorted().toList();
-        if (visualRegions.configured()) {
-            try {
-                for (int start = 0; start < pageNumbers.size(); start += 64) {
-                    Set<Integer> batch = new LinkedHashSet<>(pageNumbers.subList(
-                            start, Math.min(start + 64, pageNumbers.size())));
-                    indexedRegions.addAll(visualRegions.find(documentVersionId, batch));
-                }
-            } catch (RuntimeException unavailableIndex) {
-                log.warn("Visual aid index was unavailable during lesson planning; continuing with local candidates");
-                indexedRegions.clear();
-            }
-        }
-        Set<Integer> visualPages = availableVisualPageNumbers(
-                documentPages, visualRegionProposer.configured(), indexedRegions);
+        Set<Integer> visualPages = availableVisualPageNumbers(documentPages);
         return pages.stream()
                 .map(page -> new PageInput(
                         page.pageNumber(),
@@ -258,21 +235,9 @@ public class TeachingPlanService {
                 .toList();
     }
 
-    static Set<Integer> availableVisualPageNumbers(
-            List<DocumentProcessing.PageView> pages,
-            boolean localProposalConfigured,
-            List<VisualRegionCatalog.Region> indexedRegions) {
-        Set<Integer> renderedPages = pages.stream()
-                .filter(DocumentProcessing.PageView::imageAvailable)
-                .map(DocumentProcessing.PageView::pageNumber)
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        if (localProposalConfigured) return Set.copyOf(renderedPages);
-        Set<Integer> indexedPicturePages = indexedRegions.stream()
-                .filter(region -> "PICTURE".equals(region.kind()))
-                .map(VisualRegionCatalog.Region::pageNumber)
-                .collect(java.util.stream.Collectors.toSet());
-        renderedPages.retainAll(indexedPicturePages);
-        return Set.copyOf(renderedPages);
+    static Set<Integer> availableVisualPageNumbers(List<DocumentProcessing.PageView> pages) {
+        return pages.stream().filter(DocumentProcessing.PageView::imageAvailable)
+                .map(DocumentProcessing.PageView::pageNumber).collect(java.util.stream.Collectors.toSet());
     }
 
     @Transactional(readOnly = true)

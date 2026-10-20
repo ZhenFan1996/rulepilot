@@ -1,174 +1,102 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.assistant.AgentExecutionControl;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.document.DocumentPageImages;
-import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
+import com.rulepilot.teaching.TeachingLessonModel.VisualInput;
 import com.rulepilot.teaching.VisualRegionLocator;
-import com.rulepilot.teaching.VisualRegionProposer;
-import com.rulepilot.teaching.domain.IllustratedLesson;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import com.rulepilot.visualaid.VisualRegionCatalog;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-/** Observes source-owned images before chapter composition; the writer owns paragraph/image selection. */
+/** Reads source illustrations before writing; the chapter writer decides their placement. */
 @Service
 @Profile("!test")
 public class VisualLessonEnricher {
-
-    private final RulebookUnderstandingCatalog understanding;
-    private final VisualLessonStepLocator stepLocator;
-    private final Clock clock;
-    private final Duration compatibilityWorkflowTimeout;
-    private final Duration compositionAllowance;
+    private final DocumentPageImages pages;
+    private final com.rulepilot.visualaid.VisualRegionCatalog catalog;
+    private final VisualRegionLocator locator;
     private final AgentExecutionControl execution;
+    private final Duration observationTimeout;
+    private final Duration compositionAllowance;
 
-    @Autowired
-    public VisualLessonEnricher(
-            RulebookUnderstandingCatalog understanding,
-            DocumentPageImages pageImages,
-            VisualRegionCandidateSelector candidates,
-            VisualRegionProposer proposals,
-            VisualRegionCatalog indexedRegions,
+    public VisualLessonEnricher(DocumentPageImages pages, com.rulepilot.visualaid.VisualRegionCatalog catalog,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             AgentExecutionControl execution,
-            @Value("${rulepilot.visual.compatibility-workflow-timeout:PT10M}")
-                    Duration compatibilityWorkflowTimeout,
+            @Value("${rulepilot.visual.compatibility-workflow-timeout:PT10M}") Duration observationTimeout,
             @Value("${rulepilot.models.request-timeout:PT2M}") Duration compositionAllowance) {
-        this(
-                understanding,
-                pageImages,
-                candidates,
-                proposals,
-                indexedRegions,
-                locator,
-                execution,
-                compatibilityWorkflowTimeout, compositionAllowance,
-                Clock.systemUTC());
-    }
-
-    VisualLessonEnricher(
-            RulebookUnderstandingCatalog understanding,
-            DocumentPageImages pageImages,
-            VisualRegionCandidateSelector candidates,
-            VisualRegionProposer proposals,
-            VisualRegionCatalog indexedRegions,
-            VisualRegionLocator locator,
-            AgentExecutionControl execution,
-            Duration compatibilityWorkflowTimeout, Duration compositionAllowance,
-            Clock clock) {
-        if (clock == null) throw new IllegalArgumentException("visual enrichment clock is required");
-        this.understanding = understanding;
+        this.pages = pages;
+        this.catalog = catalog;
+        this.locator = locator;
         this.execution = execution;
+        this.observationTimeout = observationTimeout;
         this.compositionAllowance = compositionAllowance;
-        this.clock = clock;
-        this.compatibilityWorkflowTimeout = compatibilityWorkflowTimeout;
-        VisualReaderCropPolicy cropPolicy = new VisualReaderCropPolicy();
-        this.stepLocator = new VisualLessonStepLocator(
-                        pageImages,
-                        candidates,
-                        proposals,
-                        indexedRegions,
-                        locator,
-                        cropPolicy,
-                        execution,
-                        clock,
-                        compatibilityWorkflowTimeout);
     }
 
     static int estimatedTeachingRunModelCalls(TeachingPlan plan) {
-        if (plan == null || plan.sections().isEmpty()) return 0;
-        long estimated = plan.sections().stream()
-                .filter(TeachingPlan.PlannedSection::visualEvidenceRecommended)
-                .mapToLong(section -> {
-                    List<Integer> candidatePages = section.visualSourcePageNumbers().isEmpty()
-                            ? section.sourcePageNumbers()
-                            : section.visualSourcePageNumbers();
-                    long pages = candidatePages.stream().distinct().count();
-                    return Math.max(1L, (pages + DocumentPageImages.MAX_PAGES_PER_READ - 1L)
-                            / DocumentPageImages.MAX_PAGES_PER_READ);
-                })
-                .sum();
-        if (estimated > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("teaching visual workload is too large");
+        if (plan == null) return 0;
+        return Math.toIntExact(plan.sections().stream().filter(TeachingPlan.PlannedSection::visualEvidenceRecommended)
+                .mapToLong(section -> (sourcePages(section).size() + DocumentPageImages.MAX_PAGES_PER_READ - 1L)
+                        / DocumentPageImages.MAX_PAGES_PER_READ).sum());
+    }
+
+    boolean supportsVisualEvidence(String owner) { return locator.supportsVisualEvidence(owner); }
+
+    public List<VisualInput> prepare(TeachingPlan plan, TeachingPlan.PlannedSection section,
+            List<RuleEvidence> evidence, UUID runId) {
+        Instant deadline = Instant.now().plus(observationTimeout);
+        if (runId != null) {
+            Instant reserved = execution.budget(runId).deadlineAt().minus(compositionAllowance);
+            if (reserved.isBefore(deadline)) deadline = reserved;
         }
-        // This sizes the initial token/deadline envelope from the Agent's bounded visual-page windows. It is not a
-        // call limit: complete Agent corrections continue while durable resources remain.
-        return (int) estimated;
-    }
-
-    boolean supportsVisualEvidence(String modelConfigurationOwner) {
-        return stepLocator.supportsVisualEvidence(modelConfigurationOwner);
-    }
-
-    /** Understand source-owned crops before composition; no generated paragraph is used to guess a placement. */
-    public List<com.rulepilot.teaching.TeachingLessonModel.VisualInput> prepare(
-            TeachingPlan plan, TeachingPlan.PlannedSection planned,
-            List<com.rulepilot.assistant.AssistantReadTools.RuleEvidence> evidence, UUID runId) {
-        List<VisualRegionLocator.Claim> claims = java.util.stream.IntStream.range(0, evidence.size())
-                .mapToObj(index -> {
-                    var source = evidence.get(index);
-                    return new VisualRegionLocator.Claim(source.chunkId(), source.excerpt(),
-                            java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo()).boxed().toList(),
-                            index + 1);
-                }).toList();
-        Instant observationDeadline = clock.instant().plus(compatibilityWorkflowTimeout);
-        if (runId != null && execution != null) {
-            // Leave the configured provider request envelope for the essential chapter writer. Optional imagery
-            // must not consume all active-work time before a grounded chapter can be composed.
-            Instant latestObservation = execution.budget(runId).deadlineAt().minus(compositionAllowance);
-            if (latestObservation.isBefore(observationDeadline)) observationDeadline = latestObservation;
+        var result = new ArrayList<VisualInput>();
+        List<Integer> requested = sourcePages(section);
+        for (int offset = 0; offset < requested.size(); offset += DocumentPageImages.MAX_PAGES_PER_READ) {
+            Duration remaining = Duration.between(Instant.now(), deadline);
+            if (remaining.isNegative() || remaining.isZero()) break;
+            var batch = java.util.Set.copyOf(requested.subList(offset,
+                    Math.min(offset + DocumentPageImages.MAX_PAGES_PER_READ, requested.size())));
+            List<com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus> observed;
+            try {
+                var images = pages.read(plan.documentVersionId(), batch);
+                if (images.isEmpty()) continue;
+                var available = new java.util.LinkedHashMap<String, com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus>();
+                for (var region : catalog.find(plan.documentVersionId(), batch)) {
+                    var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(region.pageNumber(), "Source image",
+                            region.x(), region.y(), region.width(), region.height());
+                    available.put(focus.imageId(plan.documentVersionId()), focus);
+                }
+                if (available.isEmpty()) continue;
+                observed = locator.observe(new VisualRegionLocator.Request(
+                        section.title() + "\n" + section.objective(), images, available, plan.createdBy(), runId, plan.outputLanguage()), remaining);
+            } catch (com.rulepilot.assistant.AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException unavailable) {
+                org.slf4j.LoggerFactory.getLogger(VisualLessonEnricher.class)
+                        .warn("Optional source illustrations unavailable for pages {}; retaining earlier observations", batch, unavailable);
+                continue;
+            }
+            for (var focus : observed) {
+                var ids = evidence.stream().filter(source -> source.documentVersionId().equals(plan.documentVersionId())
+                                && source.pageFrom() <= focus.pageNumber() && source.pageTo() >= focus.pageNumber())
+                        .map(RuleEvidence::chunkId).distinct().toList();
+                if (!ids.isEmpty() && batch.contains(focus.pageNumber())) {
+                    result.add(new VisualInput(focus.imageId(plan.documentVersionId()), focus, ids));
+                }
+            }
         }
-        if (!clock.instant().isBefore(observationDeadline)) return List.of();
-        var result = stepLocator.locateEvidence(understanding.understanding(plan.documentVersionId()),
-                plan.documentVersionId(), planned.title(), claims,
-                evidence.stream().map(source -> source.heading() + " " + source.excerpt()).toList(),
-                plan.createdBy(), runId, observationDeadline,
-                stepLocator.beginProposalWorkflow(), List.of(), planned.visualSourcePageNumbers());
-        return result.regions().stream()
-                .filter(region -> !region.claimContradicted() && !region.visibleDescription().isBlank())
-                .map(region -> {
-                    var focus = new VisualFocus(region.pageNumber(), planned.title(), region.visibleDescription(),
-                            region.x(), region.y(), region.width(), region.height(), region.sourceKind());
-                    return new com.rulepilot.teaching.TeachingLessonModel.VisualInput(focus.imageId(plan.documentVersionId()), focus, region.supportedEvidenceIds());
-                }).distinct().toList();
+        return List.copyOf(result);
     }
 
-    public enum Outcome {
-        ADDED,
-        ADDED_WITH_CLAIM_CONFLICT,
-        ALREADY_PRESENT,
-        NO_CITED_CANDIDATE,
-        NO_PAGE_IMAGE,
-        LOCATOR_RETURNED_NONE,
-        MODEL_SEMANTIC_REJECTED,
-        MODEL_UNAVAILABLE,
-        MODEL_EXPLICIT_NO_REGION,
-        MODEL_MALFORMED_RESPONSE,
-        MODEL_UNSUPPORTED_SCOPE,
-        MODEL_INVALID_GEOMETRY,
-        MODEL_TIMEOUT,
-        MODEL_INTERRUPTED,
-        MODEL_BUSY,
-        MODEL_PROVIDER_FAILURE,
-        CANDIDATE_PREPARATION_FAILED,
-        REJECTED_TOO_SMALL,
-        REJECTED_NON_VISUAL,
-        REJECTED_OUTSIDE_CANDIDATE,
-        REJECTED_UNKNOWN_EVIDENCE,
-        REJECTED_DUPLICATE,
-        REJECTED_STEP_MISMATCH,
-        REJECTED_CLAIM_CONFLICT
+    private static List<Integer> sourcePages(TeachingPlan.PlannedSection section) {
+        return java.util.stream.Stream.concat(section.sourcePageNumbers().stream(), section.visualSourcePageNumbers().stream())
+                .distinct().sorted().toList();
     }
-
-
 }

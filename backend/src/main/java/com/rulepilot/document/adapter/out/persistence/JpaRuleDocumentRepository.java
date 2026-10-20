@@ -261,6 +261,7 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<PageImageMetadata> findPageImages(UUID versionId, java.util.Set<Integer> pageNumbers) {
         if (pageNumbers.isEmpty()) {
             return List.of();
