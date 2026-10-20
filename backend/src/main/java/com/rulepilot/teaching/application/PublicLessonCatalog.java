@@ -92,7 +92,7 @@ public class PublicLessonCatalog {
         return planReferences.stream()
                 .map(plan -> candidate(plan, lessonSummaries.get(plan.teachingPlanId()), references.get(plan.documentVersionId())))
                 .flatMap(java.util.Optional::stream)
-                .filter(candidate -> candidate.summary().status() != LessonStatus.INCOMPLETE)
+                .filter(candidate -> candidate.summary().status() == LessonStatus.COMPLETE)
                 .filter(candidate -> candidate.summary().publiclyReadable())
                 .filter(candidate -> candidate.reference().officialSourceUrl() != null)
                 .filter(candidate -> documentVersions.add(candidate.plan().documentVersionId()))

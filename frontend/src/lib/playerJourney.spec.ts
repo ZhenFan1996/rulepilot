@@ -7,6 +7,8 @@ describe('typed player journey failure policy', () => {
     ['CHAPTER_LOCALLY_UNAVAILABLE', 'local-degradation', null],
     ['TEACHING_QUEUE_TIMEOUT', 'retry-preserved', 'retry-step'],
     ['TEACHING_MODEL_PROVIDER_FAILED', 'retry-preserved', 'restart-from-completed'],
+    ['DEGRADED', 'retry-preserved', 'restart-from-completed'],
+    ['INSUFFICIENT_EVIDENCE', 'retry-preserved', 'restart-from-completed'],
     ['TEACHING_PERSISTENCE_FAILED', 'repair-required', 'manual-repair'],
     ['SOURCE_UNAVAILABLE', 'repair-required', 'manual-repair'],
     ['TEACHING_PLAN_INVALID', 'internal-correction', null],
@@ -28,8 +30,8 @@ describe('typed player journey failure policy', () => {
   it.each([
     ['local-degradation', '只影响对应页面、章节或配图'],
     ['retry-preserved', '没有丢弃已确认内容'],
-    ['repair-required', '需要先修复后再继续'],
-    ['internal-correction', '不是玩家输入被拒绝'],
+    ['repair-required', '暂时无法继续'],
+    ['internal-correction', '无需改写你的问题'],
   ] as const)('explains %s in player language', (failureClassification, expected) => {
     const presentation = playerJourneyFailurePresentation({ failureClassification, failureRecovery: null })
     expect(`${presentation.title} ${presentation.detail}`).toContain(expected)

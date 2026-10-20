@@ -21,6 +21,22 @@ import org.junit.jupiter.api.Test;
 class TeachingSectionCandidateValidatorTest {
 
     @Test
+    void keepsOriginalPageSelectableWhenOptionalVisualObservationIsUnavailable() {
+        UUID version = UUID.randomUUID(), citation = UUID.randomUUID();
+        var source = new RuleEvidence(citation, version, "RULE", "Repair", "Read the illustrated repair chart.", 8, 8);
+        var request = new TeachingSectionModelRequestFactory().create(plan(version), planned(), List.of(), List.of(source), List.of());
+        var image = request.visuals().getFirst();
+        var draft = new SectionDraft("Repair", List.of(new StepDraft("Check the chart", TeachingMove.UNDERSTAND,
+                "Use the source chart to check the unresolved correspondence.", List.of(citation), List.of(), List.of(image.imageId()))));
+        var section = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
+                plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT);
+        assertThat(section.steps().getFirst().visualFoci()).singleElement().satisfies(focus -> {
+            assertThat(focus.pageNumber()).isEqualTo(8);
+            assertThat(focus.sourceKind()).isEqualTo(com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind.FULL_PAGE);
+        });
+    }
+
+    @Test
     void publishesExactNaturalTextWhenEveryCitationBelongsToTheRequest() {
         UUID versionId = UUID.randomUUID();
         UUID citation = UUID.randomUUID();
@@ -72,6 +88,25 @@ class TeachingSectionCandidateValidatorTest {
                         draft,
                         EvidenceStatus.CITED_DRAFT))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"offered", "unknown", "wrong-source"})
+    void keepsGroundedProseAndAttachesOnlyTheExplicitlySelectedOwnedImage(String selection) {
+        UUID version = UUID.randomUUID(), citation = UUID.randomUUID();
+        var source = new RuleEvidence(citation, version, "RULE", "Repair", "Spend an action to repair.", 8, 8);
+        var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(
+                8, "Repair", "An arrow points from a damaged component to an intact component.", 100, 100, 300, 300);
+        var images = List.of(new com.rulepilot.teaching.TeachingLessonModel.VisualInput("offered", focus, List.of(citation)),
+                new com.rulepilot.teaching.TeachingLessonModel.VisualInput("wrong-source", focus, List.of(UUID.randomUUID())));
+        var request = new SectionRequest("repair", "Repair", "Explain repair", List.of(),
+                List.of(new EvidenceInput(citation, "RULE", "Repair", source.excerpt(), 8, 8)), images, "owner", PlayerLocale.EN);
+        var draft = new SectionDraft("Repair", List.of(new StepDraft("Repair", TeachingMove.DO,
+                "Spend an action to repair.", List.of(citation), List.of(), List.of(selection))));
+        var section = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
+                plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT);
+        assertThat(section.steps().getFirst().text()).isEqualTo("Spend an action to repair.");
+        assertThat(section.steps().getFirst().visualFoci()).hasSize(selection.equals("offered") ? 1 : 0);
     }
 
     private TeachingPlan plan(UUID versionId) {

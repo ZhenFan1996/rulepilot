@@ -17,7 +17,13 @@ public interface QuestionUnderstanding {
             LearningIntent learningIntent,
             PlayerLocale outputLanguage,
             PriorTurnReference priorTurnReference,
-            Set<Integer> allowedEvidencePages) {
+            Set<Integer> allowedEvidencePages,
+            List<RuleAnswering.VisualEvidence> visuals) {
+
+        public QuestionContext(UUID documentVersionId, String previousQuestion, LearningIntent learningIntent,
+                PlayerLocale outputLanguage, PriorTurnReference priorTurnReference, Set<Integer> allowedEvidencePages) {
+            this(documentVersionId, previousQuestion, learningIntent, outputLanguage, priorTurnReference, allowedEvidencePages, List.of());
+        }
 
         public QuestionContext(UUID documentVersionId) {
             this(documentVersionId, null, null, PlayerLocale.ZH_CN, null, null);
@@ -48,10 +54,14 @@ public interface QuestionUnderstanding {
                     resolvedLearningIntent,
                     outputLanguage,
                     priorTurnReference,
-                    allowedEvidencePages);
+                    allowedEvidencePages, visuals);
         }
 
         public QuestionContext {
+            visuals = visuals == null ? List.of() : List.copyOf(visuals);
+            if (visuals.stream().anyMatch(image -> !image.documentVersionId().equals(documentVersionId))) {
+                throw new IllegalArgumentException("image evidence uses a different document version");
+            }
             if (documentVersionId == null) {
                 throw new IllegalArgumentException("question context is invalid");
             }

@@ -96,9 +96,11 @@ class SpringAiNativeToolModelTest {
                 .containsEntry("runId", runId);
     }
 
-    @Test
-    void requestsProviderJsonModeForACustomTerminalContractWhileKeepingToolsAvailable() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"openai", "qwen"})
+    void preservesTheProviderOutputContractWhileKeepingToolsAvailable(String provider) {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.ANSWER, "player")).thenReturn(provider);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.modelFor(RuntimeModelConfiguration.Role.ANSWER, "player")).thenReturn(chatModel);
         when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
@@ -121,7 +123,8 @@ class SpringAiNativeToolModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
+        if (provider.equals("qwen")) assertThat(options.getResponseFormat()).isNull();
+        else assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getToolCallbacks()).hasSize(1);
     }
 

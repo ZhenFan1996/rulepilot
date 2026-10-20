@@ -75,6 +75,76 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void keepsAcquiringWhenARepeatedReadHasANewIndependentSibling() {
+        NativeAgentTool search = tool("search_rule_evidence");
+        NativeAgentTool pages = tool("read_rule_pages");
+        AtomicInteger decisions = new AtomicInteger();
+        NativeToolModel model = request -> switch (decisions.incrementAndGet()) {
+            case 1 -> turn(call("first", search.name(), "{}"));
+            case 2 -> turn(call("repeat", search.name(), "{}"), call("new", pages.name(), "{\"page\":3}"));
+            case 3 -> {
+                assertThat(request.tools()).extracting(NativeToolModel.ToolSpec::name)
+                        .contains(search.name(), pages.name());
+                yield turn(call("follow-up", pages.name(), "{\"page\":4}"));
+            }
+            default -> finalTurn("supported conclusion");
+        };
+
+        var result = agent(model, List.of(search, pages), new RecordingInvocations(null))
+                .run(request(Set.of(search.name(), pages.name()), TerminalContract.none()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("supported conclusion");
+        assertThat(result.observations()).anySatisfy(observation ->
+                assertThat(observation.observation().data()).containsEntry("arguments", "{\"page\":4}"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void repeatedSearchesPreserveIndependentEvidenceAcquisition(boolean originalPageAvailable) {
+        AtomicInteger searches = new AtomicInteger();
+        var first = Map.of("evidenceId", UUID.randomUUID().toString(), "excerpt", "The marker stays on its space.");
+        var second = Map.of("evidenceId", UUID.randomUUID().toString(), "excerpt", "The chart is unresolved.");
+        NativeAgentTool search = new TestTool("search_rule_evidence") {
+            @Override public ToolObservation execute(String arguments, ToolScope scope) {
+                return ToolObservation.success("FOUND", Map.of(
+                        "evidence", searches.incrementAndGet() == 1 ? List.of(first, second) : List.of(second, first),
+                        "nextCursor", UUID.randomUUID().toString()), 2);
+            }
+        };
+        NativeAgentTool originalPage = tool("read_rule_page_image");
+        AtomicInteger decisions = new AtomicInteger();
+        NativeToolModel model = request -> switch (decisions.incrementAndGet()) {
+            case 1 -> turn(call("first", search.name(), "{}"));
+            case 2 -> turn(call("again", search.name(), "{\"query\":\"another wording\"}"));
+            case 3 -> {
+                assertThat(request.tools()).extracting(NativeToolModel.ToolSpec::name)
+                        .doesNotContain(search.name());
+                if (originalPageAvailable) {
+                    assertThat(request.tools()).extracting(NativeToolModel.ToolSpec::name)
+                            .contains(originalPage.name());
+                    yield turn(call("original", originalPage.name(), "{}"));
+                }
+                assertThat(request.tools()).isEmpty();
+                yield finalTurn("The supported rule holds; consult the cited chart for the missing value.");
+            }
+            default -> {
+                yield finalTurn("The supported rule holds; consult the cited chart for the missing value.");
+            }
+        };
+        var result = agent(model, originalPageAvailable ? List.of(search, originalPage) : List.of(search),
+                new RecordingInvocations(null))
+                .run(request(originalPageAvailable ? Set.of(search.name(), originalPage.name()) : Set.of(search.name()),
+                        TerminalContract.none()));
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).contains("consult the cited chart");
+        if (originalPageAvailable) {
+            assertThat(result.observations()).extracting(NativeToolAgent.ObservationRecord::toolName)
+                    .contains(originalPage.name());
+        }
+    }
+
+    @Test
     void rejectsDependentSiblingBatchAsOneTypedActionWithoutExecutingIt() {
         AtomicInteger executions = new AtomicInteger();
         NativeAgentTool search = counting("search_rule_evidence", executions);
@@ -100,11 +170,11 @@ class BoundedNativeToolAgentTest {
         String rejected = "{\"kind\":\"RULE_ANSWER\",\"citationIds\":[\"outside\"],\"extra\":true}";
         String correctedCitation = """
                 {"kind":"RULE_ANSWER","citationIds":["evidence-1"],
-                 "numericClaims":[{"value":"7","evidenceId":"evidence-1"}]}
+                 "shortVerdict":""}
                 """.strip();
         String accepted = """
                 {"kind":"RULE_ANSWER","citationIds":["evidence-1"],
-                 "numericClaims":[{"value":"2","evidenceId":"evidence-1"}]}
+                 "shortVerdict":"Move."}
                 """.strip();
         QueueModel model = new QueueModel(
                 finalTurn(rejected), finalTurn(correctedCitation), finalTurn(accepted));
@@ -120,8 +190,8 @@ class BoundedNativeToolAgentTest {
                                 Set.of("evidence-1"))
                         : candidate.equals(correctedCitation)
                                 ? TerminalValidation.rejected(
-                                        "NUMERIC_VALUE_UNSUPPORTED", "/numericClaims/0/value",
-                                        "numeric value is absent from the cited evidence", Set.of("evidence-1"))
+                                        "TERMINAL_FIELD_INVALID", "/shortVerdict",
+                                        "shortVerdict must not be empty", Set.of("evidence-1"))
                                 : TerminalValidation.accepted());
         RecordingInvocations audited = new RecordingInvocations(null);
 
@@ -147,19 +217,19 @@ class BoundedNativeToolAgentTest {
                         .doesNotContain(rejected, "<rejected-candidate>"));
         assertThat(model.conversations.getLast())
                 .filteredOn(message -> message.role() == MessageRole.USER
-                        && message.content().contains("NUMERIC_VALUE_UNSUPPORTED"))
+                        && message.content().contains("TERMINAL_FIELD_INVALID"))
                 .singleElement()
                 .satisfies(message -> assertThat(message.content())
-                        .contains("/numericClaims/0/value", "numeric value is absent from the cited evidence", schemaJson)
+                        .contains("/shortVerdict", "shortVerdict must not be empty", schemaJson)
                         .doesNotContain(correctedCitation));
     }
 
     @Test
-    void stopsWhenTheSameRejectedCompletionMakesNoProgress() {
+    void stopsWhenRewordingRepeatsTheSameUnresolvedPublicationFailure() {
         String rejected = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Move.\"}";
         QueueModel model = new QueueModel(
                 finalTurn(rejected),
-                finalTurn(rejected),
+                finalTurn("{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"You can move.\"}"),
                 finalTurn("{\"kind\":\"CHAT\",\"shortVerdict\":\"must not run\"}"));
         RecordingInvocations audited = new RecordingInvocations(null);
         TerminalContract contract = TerminalContract.json(
@@ -235,6 +305,26 @@ class BoundedNativeToolAgentTest {
         assertThat(rejection.path("data").path("path").asText()).isEqualTo("/");
         assertThat(rejection.path("data").path("reason").asText()).isEqualTo("limit must be positive");
         assertThat(checked.inputSchema()).contains("\"additionalProperties\":true");
+    }
+
+    @Test
+    void publishesObservedEvidenceAfterTheTokenTelemetryEstimateIsExceeded() {
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        org.mockito.Mockito.when(execution.budget(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new AgentExecutionControl.BudgetSnapshot(
+                        1, 0, 0, 2, Instant.now().plusSeconds(60), null, false));
+        var mapper = JsonMapper.builder().findAndAddModules().build();
+        var reader = tool("search_rule_evidence");
+        var model = new QueueModel(turn(call("read", reader.name(), "{}")), finalTurn("supported answer"));
+        var agent = new BoundedNativeToolAgent(model,
+                new NativeAgentToolRegistry(List.of(reader), mapper, ignored -> true),
+                execution, new RecordingInvocations(null), mapper);
+
+        var result = agent.run(request(Set.of(reader.name()), TerminalContract.none()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("supported answer");
+        assertThat(result.observations()).isNotEmpty();
     }
 
     @Test

@@ -54,13 +54,14 @@ final class TeachingSectionDraftComposer {
             TeachingPlan.PlannedSection planned,
             List<PriorSectionContext> priorSections,
             List<RuleEvidence> evidence,
+            List<TeachingLessonModel.VisualInput> visuals,
             UUID assistantRunId,
             int sectionIndex) {
         TeachingLessonModel.SectionRequest request = requestFactory.create(
                 plan,
                 planned,
                 priorSections,
-                evidence);
+                evidence, visuals);
         return composeUntilAccepted(
                 plan, planned, evidence, request, assistantRunId, sectionIndex, "CITED_DRAFT_ACCEPTED");
     }

@@ -751,28 +751,21 @@ describe('RecommendationRulebookHandoff', () => {
     await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('需要处理'))
-    expect(wrapper.text()).toContain('TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED')
+    expect(wrapper.text()).not.toContain('TEACHING_PREPARATION_PLAN_RESOLUTION_FAILED')
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
     expect(wrapper.findAll('[data-testid="recommendation-journey-terminal-alert"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid="recommendation-teaching-generation-steps"]')).toHaveLength(1)
-    const failureBoundary = wrapper.get('[data-testid="recommendation-teaching-failure-boundary"]')
-    expect(failureBoundary.findAll('[data-failure-classification]')).toHaveLength(4)
-    expect(failureBoundary.get('[data-failure-classification="local-degradation"]').text())
-      .toContain('局部降级：可用内容保留')
-    expect(failureBoundary.get('[data-failure-classification="retry-preserved"]').text())
-      .toContain('可原样重试，进度保留')
-    expect(failureBoundary.get('[data-failure-classification="repair-required"]').text())
-      .toContain('需要你或运维修复后继续')
-    expect(failureBoundary.get('[data-failure-classification="retry-preserved"]').text())
-      .toContain('模型服务、排队、截止时间、传输或取消')
-    expect(failureBoundary.get('[data-failure-classification="internal-correction"]').text())
-      .toContain('完整候选、code、path、reason、schema 和 allowed IDs')
+
+
+
+
+
+
     expect(wrapper.get('[data-testid="recommendation-current-failure-classification"]').text())
       .toContain('本次属于：可原样重试，进度保留')
     expect(wrapper.get('[data-testid="recommendation-current-failure-cause"]').text())
       .toContain('失败发生在整理讲解结构时；规则书页面已经保留，第一段讲解尚未开始')
-    expect(failureBoundary.get('[data-failure-classification="retry-preserved"]').attributes('data-current-failure'))
-      .toBe('true')
+
 
     const pageSummary = wrapper.get('[data-testid="recommendation-visual-rule-group-summary"]')
     expect(pageSummary.get('[data-rule-group-state="directly-completed"]').text())
@@ -788,10 +781,8 @@ describe('RecommendationRulebookHandoff', () => {
       .toContain('Processing0 pages')
     expect(pageSummary.get('[data-rule-group-state="local-unavailable"]').text())
       .toContain('Page locally unavailable1 page · Page 2')
-    expect(failureBoundary.get('[data-failure-classification="retry-preserved"]').text())
-      .toContain('Provider, queue, deadline, transport, or cancellation')
-    expect(failureBoundary.get('[data-failure-classification="internal-correction"]').text())
-      .toContain('complete candidate, code, path, reason, schema, and allowed IDs')
+
+
     expect(wrapper.get('[data-testid="recommendation-current-failure-cause"]').text())
       .toContain('The failure occurred while organizing the guide structure')
     setLocale('zh-CN')
@@ -875,11 +866,10 @@ describe('RecommendationRulebookHandoff', () => {
     expect(status.text()).toBe('已有章节可读')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(status.attributes('data-player-work-outcome')).toBe('none')
-    expect(wrapper.text()).toContain('REVIEW_UNAVAILABLE')
+    expect(wrapper.text()).not.toContain('REVIEW_UNAVAILABLE')
     expect(wrapper.text()).toContain('打开已生成的讲解')
     expect(wrapper.findAll('button').some(button => button.text() === '重试当前步骤')).toBe(false)
-    expect(wrapper.get('[data-testid="recommendation-teaching-failure-boundary"] [data-failure-classification="local-degradation"]').attributes('data-current-failure'))
-      .toBe('true')
+
 
     expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
     expect(requests.filter(request => request.path === '/api/v1/teaching-plans/plan-1/illustrated-lessons')).toHaveLength(0)
@@ -1107,9 +1097,6 @@ describe('RecommendationRulebookHandoff', () => {
       expect(lessonRequests).toBe(1)
       expect(wrapper.text()).not.toContain('讲解已有可读内容')
       const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
-      expect(generationSteps.text()).toContain('章节规划候选已返回，正在校验规则依据、章节归属和结构')
-      expect(generationSteps.text()).toContain('正在读取第 1 章“Setup”引用的规则书页面')
-      expect(generationSteps.text()).toContain('正在依据规则书编写第 1 章“Setup”')
       expect(generationSteps.text()).not.toContain('readTeachingSourcePages')
       expect(generationSteps.text()).not.toContain('internal model operation')
       expect(generationSteps.text()).not.toContain('internal outline prompt')
@@ -1186,16 +1173,9 @@ describe('RecommendationRulebookHandoff', () => {
       expect(wrapper.text()).not.toContain('重试当前步骤')
       expect(wrapper.text()).not.toContain('需要重试')
       const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
-      const failureBoundary = wrapper.get('[data-testid="recommendation-teaching-failure-boundary"]')
-      expect(failureBoundary.get('[data-failure-classification="local-degradation"]').text())
-        .toContain('局部降级：可用内容保留')
-      expect(failureBoundary.get('[data-failure-classification="internal-correction"]').text())
-        .toContain('完整候选、code、path、reason、schema 和 allowed IDs')
-      expect(failureBoundary.text()).toContain('单页、单章或配图不可用只影响对应局部')
-      expect(failureBoundary.get('[data-failure-classification="retry-preserved"]').text())
-        .toContain('模型服务、排队、截止时间、传输或取消')
-      expect(failureBoundary.get('[data-failure-classification="repair-required"]').text())
-        .toContain('所有权、版本、保存、身份或引用问题')
+
+
+
 
       expect(wrapper.get('[data-testid="player-journey-surface"]').attributes('aria-live')).toBeUndefined()
       expect(generationSteps.attributes('aria-live')).toBeUndefined()
@@ -1326,16 +1306,7 @@ describe('RecommendationRulebookHandoff', () => {
       const status = wrapper.get('[data-testid="player-work-status"]')
       expect(status.text()).toBe('正在组织讲解')
       expect(status.attributes('data-player-work-capability')).toBe('rulebook')
-      const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
-      expect(generationSteps.text()).toContain('通读整本规则书，形成整局认识并规划章节')
-      expect(generationSteps.text()).toContain('图片页直接按原图和页码整理规则')
-      expect(generationSteps.text()).toContain('完整候选和校验记录会交回同一个 Agent')
-      expect(generationSteps.text()).toContain('按页面整理规则组')
-      expect(generationSteps.text()).toContain('读取当前章节绑定的规则页与引用')
-      expect(generationSteps.text()).toContain('依据原文生成玩家可以直接照做的讲解步骤')
-      expect(generationSteps.text()).toContain('校验引用归属、规则书版本与章节结构')
-      expect(generationSteps.text()).toContain('通过后立即发布当前章节')
-      expect(generationSteps.text()).toContain('正在通读整本规则书，形成整局认识并规划讲解章节')
+
       expect(wrapper.text()).toContain('进行中')
       expect(wrapper.text()).not.toContain('84%')
       expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)

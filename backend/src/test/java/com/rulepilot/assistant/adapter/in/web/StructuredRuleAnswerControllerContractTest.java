@@ -26,6 +26,27 @@ import org.springframework.core.task.TaskRejectedException;
 class StructuredRuleAnswerControllerContractTest {
 
     @Test
+    void reportsConcurrentAnswerAdmissionAsRetryableInsteadOfAnInternalError() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders
+                .standaloneSetup(new BusyAnswerController())
+                .setControllerAdvice(new ApiExceptionHandler(), new RuleAnswerExceptionHandler()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/busy-answer"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isTooManyRequests())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("Retry-After", "2"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("RULE_ANSWER_RATE_LIMITED"));
+    }
+
+    @org.springframework.web.bind.annotation.RestController
+    static class BusyAnswerController {
+        @org.springframework.web.bind.annotation.GetMapping("/busy-answer")
+        void answer() {
+            throw new com.rulepilot.assistant.application.RuleAnswerRateLimitExceededException(
+                    com.rulepilot.assistant.application.RuleAnswerRateLimitExceededException.Dimension.GAME_SESSION, 2);
+        }
+    }
+
+    @Test
     void keepsTheStreamOpenUntilThePersistedRunDeadlineAndCompletionGrace() {
         Instant runDeadline = Instant.parse("2026-08-29T10:00:00Z");
 

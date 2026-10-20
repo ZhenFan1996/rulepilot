@@ -1,7 +1,7 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.assistant.AssistantReadTools;
-import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.retrieval.RuleEvidenceLookup;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.assistant.NativeVisualEvidence;
 import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
@@ -17,17 +17,17 @@ import org.springframework.stereotype.Component;
 @Profile("!test")
 public class DocumentNativeVisualEvidence implements NativeVisualEvidence {
 
-    private final AssistantReadTools readTools;
+    private final RuleEvidenceLookup evidenceLookup;
     private final DocumentPageImages pageImages;
     private final DocumentPageImageCropper cropper;
     private final VisualRulebookPageFacts visualFacts;
 
     public DocumentNativeVisualEvidence(
-            AssistantReadTools readTools,
+            RuleEvidenceLookup evidenceLookup,
             DocumentPageImages pageImages,
             DocumentPageImageCropper cropper,
             VisualRulebookPageFacts visualFacts) {
-        this.readTools = readTools;
+        this.evidenceLookup = evidenceLookup;
         this.pageImages = pageImages;
         this.cropper = cropper;
         this.visualFacts = visualFacts;
@@ -83,7 +83,7 @@ public class DocumentNativeVisualEvidence implements NativeVisualEvidence {
 
     private boolean allowsPage(UUID documentVersionId, UUID evidenceId, int pageNumber) {
         if (documentVersionId == null || evidenceId == null || pageNumber < 1) return false;
-        List<RuleEvidence> evidence = readTools.readRuleEvidenceIds(documentVersionId, Set.of(evidenceId));
+        List<RuleEvidenceHit> evidence = evidenceLookup.findByChunkIds(documentVersionId, Set.of(evidenceId));
         return evidence.stream().anyMatch(source -> source.chunkId().equals(evidenceId)
                 && source.documentVersionId().equals(documentVersionId)
                 && pageNumber >= source.pageFrom()

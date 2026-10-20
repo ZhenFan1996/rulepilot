@@ -707,9 +707,9 @@ async function restartLessonGeneration() {
     })
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     generationPolling.schedule(0)
-  } catch (error) {
+  } catch {
     if (lessonViewDisposed || targetPlanId !== planId.value) return
-    generationRestartError.value = error instanceof Error ? error.message : t('lessons.error.launchShort')
+    generationRestartError.value = t('lessons.error.launchShort')
   } finally {
     if (!lessonViewDisposed && targetPlanId === planId.value) generationRestarting.value = false
   }
@@ -809,7 +809,7 @@ onUnmounted(() => {
         data-testid="lesson-unresolved-topics"
         class="mx-auto my-4 max-w-4xl rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm leading-6 text-amber-950"
       >
-        <p class="font-semibold">{{ locale === 'en' ? 'Topics not covered in this guide' : '本课程尚未覆盖的主题' }}</p>
+        <p class="font-semibold">{{ locale === 'en' ? 'Questions to check in the rulebook' : '仍需结合规则书核对的问题' }}</p>
         <ul class="mt-2 list-disc pl-5"><li v-for="topic in plan.wholeGameContext.unresolvedTopics" :key="topic">{{ topic }}</li></ul>
       </aside>
       <section

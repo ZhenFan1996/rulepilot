@@ -61,10 +61,11 @@ final class VisualLocatorResponsePolicy {
     private static Optional<ModelReview> parseReview(JsonNode review) {
         if (review == null
                 || !review.isObject()
-                || review.size() != 3
+                || review.size() != 4
                 || !integral(review, "stepPosition")
                 || !text(review, "action")
-                || !review.has("candidateId")) {
+                || !review.has("candidateId")
+                || !text(review, "visibleDescription")) {
             return Optional.empty();
         }
         int stepPosition = review.get("stepPosition").intValue();
@@ -79,16 +80,17 @@ final class VisualLocatorResponsePolicy {
             if (!review.get("candidateId").isNull()) {
                 return Optional.empty();
             }
-            return Optional.of(new ModelReview(stepPosition, action, null));
+            return Optional.of(new ModelReview(stepPosition, action, null, review.get("visibleDescription").textValue()));
         }
         if (!nonBlankText(review, "candidateId")) {
             return Optional.empty();
         }
+        if (action == ModelAction.ACCEPT_CANDIDATE && !nonBlankText(review, "visibleDescription")) return Optional.empty();
         String candidateId = review.get("candidateId").textValue().strip();
         return Optional.of(new ModelReview(
                 stepPosition,
                 action,
-                candidateId));
+                candidateId, review.get("visibleDescription").textValue()));
     }
 
     private static boolean integral(JsonNode object, String field) {
@@ -109,7 +111,6 @@ final class VisualLocatorResponsePolicy {
             Candidate candidate = candidates.get(index);
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("candidateId", candidate.candidateId());
-            entry.put("attachmentIndex", index + 1);
             entry.put("pageNumber", candidate.pageNumber());
             manifest.add(Collections.unmodifiableMap(entry));
         }
@@ -144,7 +145,7 @@ final class VisualLocatorResponsePolicy {
                 "rootFields", List.of("batchAction", "reviews"),
                 "batchAction", List.of("STOP", "CONTINUE"),
                 "reviewFields", List.of(
-                        "stepPosition", "action", "candidateId"),
+                        "stepPosition", "action", "candidateId", "visibleDescription"),
                 "actions", List.of("ACCEPT_CANDIDATE", "REFINE_CANDIDATE", "NO_VISUAL")));
         feedback.put("allowedCandidateIds", List.copyOf(allowedCandidateIds));
         feedback.put("allowedStepPositions", List.copyOf(allowedStepPositions));
@@ -166,7 +167,7 @@ final class VisualLocatorResponsePolicy {
                 return "The visual selection candidate must be one JSON object.";
             }
             return "The candidate does not match the exact batchAction plus non-empty reviews contract; every review "
-                    + "must contain exactly stepPosition, action, and candidateId with "
+                    + "must contain exactly stepPosition, action, candidateId, and visibleDescription with "
                     + "the action-dependent nullability described in the original contract.";
         } catch (JsonProcessingException invalidJson) {
             String location = invalidJson.getLocation() == null
@@ -198,7 +199,8 @@ final class VisualLocatorResponsePolicy {
     record ModelReview(
             int stepPosition,
             ModelAction action,
-            String candidateId) {
+            String candidateId,
+            String visibleDescription) {
         ModelReview {
             if (stepPosition < 1 || action == null) {
                 throw new IllegalArgumentException("model visual review is invalid");

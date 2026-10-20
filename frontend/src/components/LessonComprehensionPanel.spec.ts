@@ -40,7 +40,7 @@ describe('LessonComprehensionPanel', () => {
 
   it('forwards ratings and chapter revisit without writing lesson state itself', async () => {
     const wrapper = mountPanel()
-    expect(wrapper.text()).toContain('四块起始板块围绕中央标记摆放。')
+    expect(wrapper.text()).not.toContain('四块起始板块围绕中央标记摆放。')
     await wrapper.get('button').trigger('click')
     await wrapper.findAll('button').find((button) => button.text() === '没帮上忙')!.trigger('click')
     await wrapper.findAll('button').find((button) => button.text().includes('回到第 2 节'))!.trigger('click')

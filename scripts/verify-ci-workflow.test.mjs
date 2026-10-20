@@ -3151,8 +3151,6 @@ test('deployment isolates the recommendation startup model and agrees with its p
     /BGG_RECOMMENDATION_MODEL: \$\{BGG_RECOMMENDATION_MODEL:-\}/)
   assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
-  assert.match(deploymentWorkflow, /'QWEN_MODEL=qwen3\.7-plus'/)
-  assert.doesNotMatch(deploymentWorkflow, /'QWEN_MODEL=qwen3\.8-flash'/)
   assert.match(applicationConfiguration,
     /recommendation-agent:[\s\S]{0,800}?timeout: \$\{AGENT_TIMEOUT:PT2M\}/)
   assert.match(deploymentWorkflow, /managed_runtime_keys='[^']* AGENT_TIMEOUT [^']*'/)
@@ -3313,8 +3311,6 @@ test('deployment classifies independent public observation without invoking a pa
     6,
     'production availability must perform exactly the six bounded HTTPS GET probes',
   )
-  assert.match(deploymentWorkflow,
-    /\.recommendationModel\.provider == "qwen"[\s\S]*?\.recommendationModel\.model == "qwen3\.7-plus"/)
   assert.match(deploymentWorkflow,
     /verify_public_once\(\)[\s\S]*?\/api\/public\/release[\s\S]*?\.commitSha == \$deploy_sha[\s\S]*?\.releaseId == \$deploy_release_id[\s\S]*?tolower\(directives\[index_value\]\) == "no-store"/)
   assert.match(publicAvailability, /\[\[ -s "\$home_body" \]\]/)

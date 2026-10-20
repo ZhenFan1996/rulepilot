@@ -71,12 +71,16 @@ public class SpringAiNativeToolModel implements NativeToolModel {
             if (models.usesDeepSeekNonThinkingGeneration(modelRole, request.scope().ownerUsername())) {
                 openAiOptions.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else if (qwen) {
-                openAiOptions.extraBody(Map.of("enable_thinking", false));
+                // Answer reasoning stays inside the same request deadline; no reviewer stage is added.
+                openAiOptions.extraBody(request.role() == Role.ANSWER
+                        ? Map.of("enable_thinking", true, "reasoning_effort",
+                                request.conversation().stream().anyMatch(message -> !message.media().isEmpty())
+                                        ? "low" : "medium")
+                        : Map.of("enable_thinking", false));
             }
-            if (request.jsonOutputRequired()) {
-                // OpenAI-compatible chat providers expose JSON mode alongside tool calls. The application still
-                // validates the domain schema and evidence identities; this provider option only guarantees that
-                // the terminal candidate is syntactically JSON instead of spending repair turns on prose fences.
+            if (request.jsonOutputRequired() && !(qwen && request.role() == Role.ANSWER)) {
+                // Qwen reasoning uses application validation: forced JSON decoding can truncate quoted prose
+                // into syntactically valid but incomplete fields. Other providers retain their JSON transport.
                 openAiOptions.responseFormat(ResponseFormat.builder()
                         .type(Type.JSON_OBJECT)
                         .build());
@@ -141,11 +145,15 @@ public class SpringAiNativeToolModel implements NativeToolModel {
     }
 
     @Override
+    public boolean supportsVision(Role role, String ownerUsername) {
+        return models.supportsVision(modelRole(role), ownerUsername);
+    }
+
+    @Override
     public boolean supports(Role role, String ownerUsername) {
         RuntimeModelConfiguration.Role configuredRole = modelRole(role);
-        return role != Role.VISUAL
-                || (!models.usesFake(configuredRole, ownerUsername)
-                        && models.supportsVision(configuredRole, ownerUsername));
+        return !models.usesFake(configuredRole, ownerUsername)
+                && (role != Role.VISUAL || models.supportsVision(configuredRole, ownerUsername));
     }
 
     private Message message(ConversationMessage message) {

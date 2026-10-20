@@ -40,11 +40,11 @@ public class ReadRulePageImageNativeTool implements NativeAgentTool {
 
     @Override
     public String description() {
-        return "Read one rendered page only when its page number belongs to a cited evidence handle from the active rulebook. The image proves literal appearance, not a rule effect.";
+        return "Read one rendered page only when its page number belongs to a cited evidence handle from the active rulebook. This immutable original page is rule evidence, including printed diagrams and numerical relationships.";
     }
 
     @Override public String inputSchema() { return INPUT_SCHEMA; }
-    @Override public String schemaVersion() { return "2"; }
+    @Override public String schemaVersion() { return "3"; }
     @Override public Set<Role> allowedRoles() { return Set.of(Role.ANSWER, Role.VISUAL); }
 
     @Override
@@ -66,7 +66,7 @@ public class ReadRulePageImageNativeTool implements NativeAgentTool {
                                 "pageNumber", page.pageNumber(),
                                 "width", page.width(),
                                 "height", page.height(),
-                                "mechanicalRuleAuthority", false),
+                                "mechanicalRuleAuthority", true),
                         1,
                         List.of(new ToolMedia(
                                 page.mediaType(), page.content(), "Rulebook page " + page.pageNumber(),

@@ -28,11 +28,16 @@ class AgentInvocationDeadlineTest {
         CountDownLatch interrupted = new CountDownLatch(1);
         CountDownLatch started = new CountDownLatch(1);
 
-        try (var calls = Executors.newVirtualThreadPerTaskExecutor()) {
-            AgentInvocationDeadline guard = new AgentInvocationDeadline(
-                    execution, calls, Duration.ofMillis(20));
+        try (var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+            context.registerBean(AgentExecutionControl.class, () -> execution);
+            context.register(AgentInvocationDeadline.class);
+            context.refresh();
+            AgentInvocationDeadline guard = context.getBean(AgentInvocationDeadline.class);
+            deadline = Instant.now().plusMillis(250);
+            when(execution.budget(runId)).thenReturn(budget(deadline, null));
+            Instant operationDeadline = deadline;
 
-            assertThatThrownBy(() -> guard.invoke(runId, deadline, () -> {
+            assertThatThrownBy(() -> guard.invoke(runId, operationDeadline, () -> {
                         started.countDown();
                         try {
                             Thread.sleep(Duration.ofMinutes(5));

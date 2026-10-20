@@ -30,6 +30,17 @@ class PdfBoxPhotographedRulebookAssemblerTest {
             assertThat(document.getNumberOfPages()).isEqualTo(2);
             assertThat(document.getPage(0).getResources().getXObjectNames()).isNotEmpty();
             assertThat(document.getPage(1).getResources().getXObjectNames()).isNotEmpty();
+            var renderer = new org.apache.pdfbox.rendering.PDFRenderer(document);
+            for (int index = 0; index < 2; index++) {
+                var page = document.getPage(index).getMediaBox();
+                float expectedRatio = index == 0 ? 0.8f : 1.25f;
+                assertThat(page.getWidth() / page.getHeight()).isCloseTo(expectedRatio,
+                        org.assertj.core.data.Offset.offset(0.001f));
+                var rendered = renderer.renderImage(index);
+                var corner = new Color(rendered.getRGB(1, 1));
+                assertThat(index == 0 ? corner.getRed() : corner.getBlue()).isGreaterThan(240);
+                assertThat(corner.getGreen()).isLessThan(10);
+            }
         }
     }
 
@@ -42,7 +53,8 @@ class PdfBoxPhotographedRulebookAssemblerTest {
     }
 
     private byte[] image(String format, Color color) throws Exception {
-        BufferedImage image = new BufferedImage(800, 1000, BufferedImage.TYPE_INT_RGB);
+        BufferedImage image = new BufferedImage(color == Color.RED ? 800 : 1000,
+                color == Color.RED ? 1000 : 800, BufferedImage.TYPE_INT_RGB);
         Graphics2D graphics = image.createGraphics();
         graphics.setColor(color);
         graphics.fillRect(0, 0, image.getWidth(), image.getHeight());

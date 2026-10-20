@@ -38,10 +38,8 @@ final class TeachingLessonAssemblyPolicy {
         if (!hasReadableSection) return LessonStatus.INCOMPLETE;
         boolean everyPublishedSectionSupported = sections.stream()
                 .allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
-        boolean agentReportedUnresolved = !plan.wholeGameContext().unresolvedTopics().isEmpty();
         return sections.size() == plan.sections().size()
                         && everyPublishedSectionSupported
-                        && !agentReportedUnresolved
                 ? LessonStatus.COMPLETE
                 : LessonStatus.DRAFT_READY;
     }

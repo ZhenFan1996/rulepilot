@@ -115,7 +115,7 @@ class PublicLessonReaderTest {
     }
 
     @Test
-    void exposes_a_safe_draft_ready_lesson_while_post_publication_review_continues() {
+    void keeps_a_readable_in_progress_draft_out_of_the_public_reader() {
         Fixture fixture = fixture();
         IllustratedLesson draft = new IllustratedLesson(
                 fixture.lesson.id(),
@@ -128,11 +128,11 @@ class PublicLessonReaderTest {
         when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(draft));
         when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(fixture.reference));
 
-        assertThat(reader.find(fixture.plan.id())).isPresent();
+        assertThat(reader.find(fixture.plan.id())).isEmpty();
     }
 
     @Test
-    void projectsOnlyCitedChaptersAndNarrowsPublicQuestionPagesWithoutMutatingTheStoredLesson() {
+    void keepsAnIncompleteGuidePrivateWithoutDeletingItsCompletedChapters() {
         Fixture fixture = fixture();
         UUID withheldChunk = UUID.randomUUID();
         IllustratedLesson.LessonSection insufficient = new IllustratedLesson.LessonSection(
@@ -164,10 +164,7 @@ class PublicLessonReaderTest {
         when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(stored));
         when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(fixture.reference));
 
-        assertThat(reader.find(fixture.plan.id())).hasValueSatisfying(value -> {
-            assertThat(value.lesson().sections()).containsExactly(fixture.lesson.sections().getFirst());
-            assertThat(value.citedPages()).containsExactlyInAnyOrder(2, 5).doesNotContain(9);
-        });
+        assertThat(reader.find(fixture.plan.id())).isEmpty();
         assertThat(stored.sections()).containsExactly(fixture.lesson.sections().getFirst(), insufficient);
     }
 

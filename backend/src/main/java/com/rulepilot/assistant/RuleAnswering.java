@@ -40,6 +40,22 @@ public interface RuleAnswering {
             PublicLearningIntent learningIntent,
             Set<Integer> allowedPublicPages);
 
+    default AnswerResult answerForPublicReader(UUID documentVersionId, String question, String previousQuestion,
+            PlayerLocale language, PublicLearningIntent intent, Set<Integer> pages, List<VisualEvidence> visuals) {
+        return answerForPublicReader(documentVersionId, question, previousQuestion, language, intent, pages);
+    }
+
+    /** Read-only image descriptions from the active, identity-bound lesson; never independent rule authority. */
+    record VisualEvidence(String imageId, UUID documentVersionId, int pageNumber,
+            String visibleDescription, Set<UUID> evidenceIds) {
+        public VisualEvidence {
+            if (imageId == null || imageId.isBlank() || documentVersionId == null || pageNumber < 1
+                    || visibleDescription == null || visibleDescription.isBlank()
+                    || evidenceIds == null || evidenceIds.isEmpty()) throw new IllegalArgumentException("invalid image evidence");
+            evidenceIds = Set.copyOf(evidenceIds);
+        }
+    }
+
     enum PublicLearningIntent {
         SIMPLIFY,
         EXAMPLE,
@@ -54,8 +70,12 @@ public interface RuleAnswering {
      * The evidence identities stay inside the backend module boundary. They let a caller attach a lesson crop only
      * when that crop supports the exact evidence cited by the answer; controllers still expose only readable pages.
      */
-    record AnswerResult(UUID assistantRunId, Answer answer, Set<UUID> citedEvidenceIds) {
+    record AnswerResult(UUID assistantRunId, Answer answer, Set<UUID> citedEvidenceIds, Set<String> selectedImageIds) {
+        public AnswerResult(UUID assistantRunId, Answer answer, Set<UUID> citedEvidenceIds) {
+            this(assistantRunId, answer, citedEvidenceIds, Set.of());
+        }
         public AnswerResult {
+            selectedImageIds = selectedImageIds == null ? Set.of() : Set.copyOf(selectedImageIds);
             citedEvidenceIds = citedEvidenceIds == null ? Set.of() : Set.copyOf(citedEvidenceIds);
         }
 

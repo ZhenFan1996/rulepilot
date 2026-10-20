@@ -95,6 +95,7 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
     @Transactional(readOnly = true)
     public List<PageFactMatch> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
         return find(documentVersionId, pageNumbers).stream()
+                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .map(fact -> new PageFactMatch(
                         fact.pageNumber(),
                         fact.printedTerms(),

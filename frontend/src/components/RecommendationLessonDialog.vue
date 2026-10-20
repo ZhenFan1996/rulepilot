@@ -138,7 +138,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   refreshResponseIdentity: '服务器返回了另一个讲解任务的状态，已停止合并；当前已显示章节仍然保留。',
   refreshService: '当前页面无法继续自动刷新；已显示章节仍然保留，后台任务状态未被改写，可以手动重新连接。',
   ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
-  failureBoundary: '单页、单章或配图失败只影响对应局部；模型服务、排队、超时、传输或取消可保留进度原样重试；认证、输入、来源、所有权、版本、保存、身份或引用问题需修复后重试。结构化格式错误由同一 Agent 接收完整候选和校验记录后内部修正，不会要求玩家改写问题；只有完全重复、无进展或资源停止才结束这一步。',
+  failureBoundary: '未完成的讲解仅自己可见；完成后才会出现在公开讲解中。',
 } : {
   dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', updates: 'Guide updates', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
   draft: '{done} / {total} chapters passed citation-ownership, rulebook-version, and structure checks; the remaining chapters are still being generated.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only chapters with usable rulebook support.',
@@ -155,7 +155,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   refreshResponseIdentity: 'The server returned status for a different guide, so merging stopped. Displayed chapters remain available.',
   refreshService: 'This page cannot continue automatic refresh. Displayed chapters remain available, the background state was not rewritten, and you can reconnect manually.',
   ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
-  failureBoundary: 'A failed page, chapter, or visual affects only that item. Provider, queue, timeout, transport, or cancellation stops preserve progress for an unchanged retry. Authentication, input, source, ownership, version, persistence, identity, or citation errors require repair first. Typed-format errors are corrected internally by the same Agent with the complete candidate and validation record; players are not asked to rewrite the question. Only exact repetition, no progress, or a resource stop ends that step.',
+  failureBoundary: 'Unfinished guides stay private. Only completed guides appear in the public library.',
 })
 
 const active = computed(() => teachingRunIsActive(run.value?.run.state))
@@ -530,6 +530,13 @@ onBeforeUnmount(() => {
             </div>
             <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="supportedChapterCount" :aria-label="copy.progressAria(supportedChapterCount, plan.sections.length)"><div data-testid="recommendation-lesson-progress" class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
             <p v-if="activityText" class="mt-2 text-xs text-muted">{{ activityText }}</p>
+            <a
+              v-if="run && playerJourneyRunIsTerminal(run.run.state) && lesson.status !== 'COMPLETE'"
+              data-testid="recommendation-lesson-resume" :href="`/lesson/${encodeURIComponent(plan.id)}`"
+              class="mt-3 inline-flex min-h-11 items-center rounded-lg bg-indigo px-4 text-sm font-semibold text-white"
+            >
+              {{ locale === 'en' ? 'Open saved guide and continue' : '打开已保存讲解并继续生成' }}
+            </a>
             <p data-testid="recommendation-lesson-failure-boundary" class="mt-2 text-xs leading-5 text-muted">{{ copy.failureBoundary }}</p>
             <PlayerFailureDetails
               v-if="visibleFailureDetails"

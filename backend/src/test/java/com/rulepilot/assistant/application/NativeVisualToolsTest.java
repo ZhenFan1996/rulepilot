@@ -65,7 +65,7 @@ class NativeVisualToolsTest {
     }
 
     @Test
-    void returnsBoundedPageAndCropMediaWithNoMechanicalAuthority() {
+    void distinguishesOriginalRulePageEvidenceFromDerivedCropObservations() {
         var page = new ReadRulePageImageNativeTool(evidence, mapper).execute(
                 "{\"evidenceId\":\"" + evidenceId + "\",\"pageNumber\":4}", scope());
         var crop = new CropRulePageImageNativeTool(evidence, mapper).execute(
@@ -74,7 +74,7 @@ class NativeVisualToolsTest {
                 scope());
 
         assertThat(page.code()).isEqualTo("PAGE_IMAGE_FOUND");
-        assertThat(page.data()).containsEntry("mechanicalRuleAuthority", false);
+        assertThat(page.data()).containsEntry("mechanicalRuleAuthority", true);
         assertThat(page.media()).singleElement().satisfies(media -> {
             assertThat(media.mediaType()).isEqualTo("image/png");
             assertThat(media.content()).containsExactly(1, 2, 3);

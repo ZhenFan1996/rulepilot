@@ -15,6 +15,10 @@ public interface NativeToolModel {
         return "native-tool-model";
     }
 
+    default boolean supportsVision(Role role, String ownerUsername) {
+        return false;
+    }
+
     default boolean supports(Role role, String ownerUsername) {
         return true;
     }

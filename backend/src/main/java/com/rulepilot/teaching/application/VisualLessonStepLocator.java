@@ -223,17 +223,24 @@ final class VisualLessonStepLocator {
             ProposalToolCircuit proposalToolCircuit,
             List<VisualFocus> acceptedVisuals,
             List<Integer> plannedVisualPages) {
-        if (steps == null || steps.isEmpty()) {
-            throw new IllegalArgumentException("visual lesson steps are required");
-        }
+        return locateEvidence(understanding, documentVersionId, section.title(), claims(steps),
+                terms(section, steps), modelConfigurationOwner, runId, compatibilityDeadline,
+                proposalToolCircuit, acceptedVisuals, plannedVisualPages);
+    }
+
+    Result locateEvidence(RulebookUnderstanding understanding, UUID documentVersionId, String title,
+            List<Claim> claims, List<String> searchTerms, String modelConfigurationOwner, UUID runId,
+            Instant compatibilityDeadline, ProposalToolCircuit proposalToolCircuit,
+            List<VisualFocus> acceptedVisuals, List<Integer> plannedVisualPages) {
+        if (claims == null || claims.isEmpty()) throw new IllegalArgumentException("visual evidence is required");
         if (proposalToolCircuit == null || acceptedVisuals == null || plannedVisualPages == null) {
             throw new IllegalArgumentException("visual proposal workflow is required");
         }
         Instant workflowDeadline = compatibilityDeadline == null
                 ? clock.instant().plus(compatibilityWorkflowTimeout)
                 : compatibilityDeadline;
-        List<Integer> citedPages = steps.stream()
-                .flatMap(step -> step.sourcePages().stream())
+        List<Integer> citedPages = claims.stream()
+                .flatMap(claim -> claim.sourcePages().stream())
                 .distinct()
                 .sorted()
                 .toList();
@@ -242,7 +249,6 @@ final class VisualLessonStepLocator {
                 .distinct()
                 .sorted()
                 .toList();
-        List<Claim> claims = claims(steps);
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
         List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
         VisualLessonEnricher.Outcome firstRejection = null;
@@ -271,7 +277,7 @@ final class VisualLessonStepLocator {
             List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
                     understanding,
                     new LinkedHashSet<>(pageWindow),
-                    terms(section, steps),
+                    searchTerms,
                     proposed.byPage()).stream()
                     .filter(candidate -> acceptedVisuals.stream()
                             .noneMatch(existing -> cropPolicy.overlapsSubstantially(candidate, existing)))
@@ -339,7 +345,7 @@ final class VisualLessonStepLocator {
                     try {
                         guide = locator.locateGuideWithResult(
                                 new VisualRegionLocator.VisualLocationRequest(
-                                        section.title(),
+                                        title,
                                         claims,
                                         candidateBatch.candidates(),
                                         batchPages,
@@ -399,7 +405,7 @@ final class VisualLessonStepLocator {
                                 refinementFailed ? "图片细分不可用；保留原候选" : "图片细分返回 " + finer.size() + " 个局部候选");
                         var next = new ArrayList<VisualRegionCandidateSelector.Candidate>();
                         next.add(parent); // A failed or unhelpful refinement never removes the selectable context.
-                        next.addAll(candidates.select(understanding, Set.of(parent.pageNumber()), terms(section, steps),
+                        next.addAll(candidates.select(understanding, Set.of(parent.pageNumber()), searchTerms,
                                 Map.of(parent.pageNumber(), finer.stream()
                                         .filter(child -> child.pageNumber() == parent.pageNumber()
                                                 && child.x() >= rectangle.x() && child.y() >= rectangle.y()
@@ -422,7 +428,7 @@ final class VisualLessonStepLocator {
                     for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
                         VisualLessonEnricher.Outcome rejection =
                                 rejectionFor(candidate, candidateBatch.candidates(), evidenceIds);
-                        if (rejection == null && !supportsExactStep(candidate, steps)) {
+                        if (rejection == null && !supportsEvidenceScope(candidate, claims)) {
                             rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
                         }
                         if (rejection == null) accepted.add(candidate);
@@ -457,11 +463,11 @@ final class VisualLessonStepLocator {
                 throw new AgentExecutionStoppedException(
                         AgentExecutionStoppedException.StopReason.TOKEN_BUDGET);
             }
-            deadline = budget.deadlineAt();
-            if (!now.isBefore(deadline)) {
+            if (!now.isBefore(budget.deadlineAt())) {
                 throw new AgentExecutionStoppedException(
                         AgentExecutionStoppedException.StopReason.TIMEOUT);
             }
+            if (budget.deadlineAt().isBefore(deadline)) deadline = budget.deadlineAt();
         }
         if (!now.isBefore(deadline)) {
             return Boundary.stopped(VisualLessonEnricher.Outcome.MODEL_TIMEOUT);
@@ -579,9 +585,9 @@ final class VisualLessonStepLocator {
         return "步骤 " + step.position() + "（" + step.heading() + "）：" + step.text();
     }
 
-    private boolean supportsExactStep(VisualRegionLocator.LocatedRegion region, List<LessonStep> steps) {
-        if (region.supportedStepPositions().isEmpty()) return steps.size() == 1;
-        Set<Integer> offeredPositions = steps.stream().map(LessonStep::position).collect(Collectors.toSet());
+    private boolean supportsEvidenceScope(VisualRegionLocator.LocatedRegion region, List<Claim> claims) {
+        Set<Integer> offeredPositions = claims.stream().map(Claim::stepPosition).collect(Collectors.toSet());
+        if (region.supportedStepPositions().isEmpty()) return offeredPositions.size() == 1;
         return region.supportedStepPositions().stream().allMatch(offeredPositions::contains);
     }
 

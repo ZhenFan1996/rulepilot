@@ -52,7 +52,6 @@ final class TeachingVisualEvidenceResolver {
         ensurePageFacts(plan, requestedPages, assistantRunId);
         boolean usableFacts = hasUsableFacts(plan.documentVersionId(), requestedPages);
         Map<UUID, RuleEvidence> pageEvidenceById = new LinkedHashMap<>();
-        mergePageEvidence(pageEvidenceById, matchingPageEvidence(plan.documentVersionId(), requestedPages, retrieved));
         List<Set<Integer>> batches = pageReadBatches(retrievablePages);
         int toolCalls = 0;
         boolean completeRead = true;
@@ -100,8 +99,7 @@ final class TeachingVisualEvidenceResolver {
                     "Teaching topic {} is bound to visual source pages {}",
                     planned.topicKey(),
                     retrievablePages);
-            List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), pageEvidence);
-            return new Resolution(enriched, canonical, toolCalls);
+            return new Resolution(pageEvidence, canonical, toolCalls);
         }
         if (!pageEvidence.isEmpty()) {
             log.warn(
@@ -113,10 +111,9 @@ final class TeachingVisualEvidenceResolver {
                     .filter(source -> plan.documentVersionId().equals(source.documentVersionId()))
                     .filter(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
                             .anyMatch(retrievablePages::contains))
-                    .forEach(source -> mergePageEvidence(retained, List.of(source)));
+                    .forEach(source -> retained.put(source.chunkId(), source));
             List<RuleEvidence> partial = List.copyOf(retained.values());
-            List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), partial);
-            return new Resolution(enriched, Optional.empty(), toolCalls);
+            return new Resolution(partial, Optional.empty(), toolCalls);
         }
         return new Resolution(retrieved, Optional.empty(), toolCalls);
     }
@@ -291,54 +288,12 @@ final class TeachingVisualEvidenceResolver {
         return observedPages.containsAll(requestedPages);
     }
 
-    private static List<RuleEvidence> matchingPageEvidence(
-            UUID documentVersionId, Set<Integer> requestedPages, List<RuleEvidence> evidence) {
-        return evidence.stream()
-                .filter(source -> documentVersionId.equals(source.documentVersionId()))
-                .filter(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
-                        .anyMatch(requestedPages::contains))
-                .toList();
-    }
-
     private static int sourcePageTotal(TeachingPlan plan) {
         return plan.sections().stream()
                 .flatMap(section -> section.sourcePageNumbers().stream())
                 .mapToInt(Integer::intValue)
                 .max()
                 .orElseThrow(() -> new IllegalArgumentException("Teaching plan has no source pages"));
-    }
-
-    private List<RuleEvidence> enrichPageFacts(
-            UUID documentVersionId,
-            List<RuleEvidence> evidence) {
-        Set<Integer> pages = evidence.stream()
-                .filter(source -> source.pageFrom() == source.pageTo())
-                .map(RuleEvidence::pageFrom)
-                .collect(Collectors.toUnmodifiableSet());
-        if (pages.isEmpty()) return evidence;
-        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusablePageObservation)
-                .collect(Collectors.toUnmodifiableMap(
-                        VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::factualSummary,
-                        (existing, supplied) -> supplied));
-        if (factsByPage.isEmpty()) return evidence;
-        return evidence.stream()
-                .map(source -> {
-                    String facts = source.pageFrom() == source.pageTo() ? factsByPage.get(source.pageFrom()) : null;
-                    if (facts == null || !isVisualPageEvidence(source)) return source;
-                    return new RuleEvidence(
-                            source.chunkId(),
-                            source.documentVersionId(),
-                            source.sectionType(),
-                            source.heading(),
-                            facts,
-                            source.pageFrom(),
-                            source.pageTo(),
-                            source.pageImages(),
-                            RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
-                })
-                .toList();
     }
 
     private int evidenceTokens(List<RuleEvidence> evidence) {

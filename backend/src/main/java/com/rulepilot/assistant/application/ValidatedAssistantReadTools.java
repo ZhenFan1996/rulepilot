@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.AssistantReadTools;
+import com.rulepilot.assistant.NativeVisualEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContext;
@@ -37,15 +38,23 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
     private final HybridRuleSearch retrieval;
     private final RuleEvidenceLookup evidenceLookup;
     private final DocumentPageImages pageImages;
+    private final NativeVisualEvidence visualEvidence;
 
     @Autowired
     public ValidatedAssistantReadTools(
             HybridRuleSearch retrieval,
             RuleEvidenceLookup evidenceLookup,
-            DocumentPageImages pageImages) {
+            DocumentPageImages pageImages,
+            NativeVisualEvidence visualEvidence) {
         this.retrieval = retrieval;
         this.evidenceLookup = evidenceLookup;
         this.pageImages = pageImages;
+        this.visualEvidence = visualEvidence;
+    }
+
+    public ValidatedAssistantReadTools(
+            HybridRuleSearch retrieval, RuleEvidenceLookup evidenceLookup, DocumentPageImages pageImages) {
+        this(retrieval, evidenceLookup, pageImages, null);
     }
 
     public ValidatedAssistantReadTools(HybridRuleSearch retrieval, RuleEvidenceLookup evidenceLookup) {
@@ -146,7 +155,7 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
             case COMPLETE -> AssistantReadTools.SourceAvailability.COMPLETE;
             case PARTIAL -> AssistantReadTools.SourceAvailability.PARTIAL;
         };
-        return new RuleEvidencePage(result, hasMore, hits.size(), sourceAvailability);
+        return new RuleEvidencePage(withPageTranscriptions(result), hasMore, hits.size(), sourceAvailability);
     }
 
     @Override
@@ -169,7 +178,7 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         Map<Integer, RulePageImage> visuals = includePageImages
                 ? exactPageVisuals(documentVersionId, requestedPages)
                 : Map.of();
-        return evidence.stream()
+        return withPageTranscriptions(evidence.stream()
                 .peek(source -> {
                     if (!documentVersionId.equals(source.documentVersionId())) {
                         throw new IllegalStateException("page evidence escaped document scope");
@@ -194,7 +203,7 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                                         && image.pageNumber() <= source.pageTo())
                                 .toList(),
                         contentKind(source)))
-                .toList();
+                .toList());
     }
 
     @Override
@@ -226,7 +235,34 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                                 && image.pageNumber() <= source.pageTo()).toList(),
                         contentKind(source)))
                 .toList();
-        return new RuleEvidencePage(result, result.size() == pageSize, result.size());
+        return new RuleEvidencePage(withPageTranscriptions(result), result.size() == pageSize, result.size());
+    }
+
+    private List<RuleEvidence> withPageTranscriptions(List<RuleEvidence> sources) {
+        if (visualEvidence == null) return sources;
+        Map<Integer, List<NativeVisualEvidence.VisualPageFact>> observedPages = new LinkedHashMap<>();
+        return sources.stream().map(source -> {
+            if (source.pageFrom() != source.pageTo()) return source;
+            List<NativeVisualEvidence.VisualPageFact> facts;
+            try {
+                facts = observedPages.computeIfAbsent(source.pageFrom(), page ->
+                        visualEvidence.readPageFacts(source.documentVersionId(), source.chunkId(), page));
+            } catch (RuntimeException unavailable) {
+                LOGGER.warn("Optional page transcription unavailable on page {}; preserving source text", source.pageFrom());
+                return source;
+            }
+            String transcription = facts.stream().filter(fact -> fact.pageNumber() == source.pageFrom())
+                    .map(NativeVisualEvidence.VisualPageFact::literalSummary).filter(text -> !text.isBlank())
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            if (transcription.isBlank()) return source;
+            String text = source.contentKind() == RuleEvidence.ContentKind.VISUAL_PLACEHOLDER ? transcription
+                    : source.excerpt() + "\n\n[Page image transcription; verify against the source page]\n" + transcription;
+            return new RuleEvidence(source.chunkId(), source.documentVersionId(), source.sectionType(),
+                    source.heading(), text, source.pageFrom(), source.pageTo(), source.pageImages(),
+                    source.contentKind() == RuleEvidence.ContentKind.VISUAL_PLACEHOLDER
+                            ? RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION
+                            : RuleEvidence.ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS);
+        }).toList();
     }
 
     private Map<Integer, RulePageImage> exactPageVisuals(

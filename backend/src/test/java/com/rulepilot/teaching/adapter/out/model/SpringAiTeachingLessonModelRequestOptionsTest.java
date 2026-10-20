@@ -66,6 +66,30 @@ class SpringAiTeachingLessonModelRequestOptionsTest {
         assertThat(options.getExtraBody()).containsEntry("thinking", Map.of("type", "disabled"));
     }
 
+    @Test
+    void transportsVisualIdentityDescriptionAndEvidenceValuesToTheWriter() {
+        var configuration = mock(RuntimeModelConfiguration.class);
+        var prompts = mock(VersionedAgentPrompts.class);
+        var model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().model("test-model").build());
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(model);
+        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("deepseek");
+        when(model.call(any(Prompt.class))).thenReturn(response());
+        when(prompts.teachingRuntimeSystem()).thenReturn("Write a grounded chapter.");
+        when(prompts.teachingUser()).thenReturn("{evidence}\n{visuals}");
+        var base = request();
+        var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(
+                3, "Marker", "A blue marker sits beside a clockwise arrow.", 100, 100, 300, 300);
+        var request = new SectionRequest(base.topicKey(), base.title(), base.objective(), base.priorSections(),
+                base.evidence(), List.of(new com.rulepilot.teaching.TeachingLessonModel.VisualInput(
+                        "owned-image", focus, List.of(base.evidence().getFirst().chunkId()))), "player", PlayerLocale.ZH_CN);
+        new SpringAiTeachingLessonModel(configuration, prompts).compose(request);
+        var captured = ArgumentCaptor.forClass(Prompt.class);
+        verify(model).call(captured.capture());
+        assertThat(captured.getValue().getUserMessage().getText())
+                .contains("owned-image", focus.visibleDescription(), "E1");
+    }
+
     private static SectionRequest request() {
         return new SectionRequest(
                 "take-turn",

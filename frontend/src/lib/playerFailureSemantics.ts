@@ -14,35 +14,21 @@ export interface PlayerFailureDescriptor {
 
 export function playerFailureCategoryCopy(category: PlayerFailureCategory, locale: AppLocale) {
   const english = locale === 'en'
-  if (category === 'local-degradation') {
-    return {
-      title: english ? 'Local degradation' : '局部降级',
-      detail: english
-        ? 'Only the affected page, chapter, or visual is unavailable. Confirmed siblings and published text remain usable.'
-        : '只影响对应页面、章节或配图；已确认的兄弟项和已发布正文继续保留。',
-    }
+  if (category === 'local-degradation') return {
+    title: english ? 'Some supporting content is unavailable' : '部分辅助内容暂不可用',
+    detail: english ? 'Your available content is preserved.' : '已经完成的内容已保留。',
   }
-  if (category === 'retry-preserved') {
-    return {
-      title: english ? 'Retry unchanged; progress preserved' : '可原样重试，进度保留',
-      detail: english
-        ? 'The request itself was not rejected. Durable work remains, so a fresh attempt can reuse the same input.'
-        : '请求本身没有被拒绝；已持久化进度仍在，可以用相同输入启动新任务。',
-    }
+  if (category === 'retry-preserved') return {
+    title: english ? 'You can continue' : '可以继续生成',
+    detail: english ? 'Your progress is saved. Continue to finish the missing content.' : '进度已保存，继续生成即可补齐未完成的内容。',
   }
-  if (category === 'repair-required') {
-    return {
-      title: english ? 'Repair before retrying' : '需修复后重试',
-      detail: english
-        ? 'Retrying unchanged is unsafe. Repair the reported input, authorization, source, ownership, version, persistence, identity, or citation boundary first.'
-        : '原样重试不安全；请先修复已报告的输入、认证、来源、所有权、版本、保存、身份或引用边界。',
-    }
+  if (category === 'repair-required') return {
+    title: english ? 'Temporarily unavailable' : '暂时无法继续',
+    detail: english ? 'Your progress is saved. Try again later.' : '进度已保存，请稍后再试。',
   }
   return {
-    title: english ? 'Internal JSON correction' : '内部 JSON 修正',
-    detail: english
-      ? 'This is not a player-input failure. The same Agent receives the complete candidate plus code, path, reason, schema, and allowed IDs and must return a complete replacement. Only exact repetition, no progress, or a resource stop ends this step.'
-      : '这不是玩家输入失败；同一个 Agent 会收到完整候选以及 code、path、reason、schema、allowed IDs，并返回完整替代结果。只有完全重复、无进展或资源停止才会结束这一步。',
+    title: english ? 'This part is not ready yet' : '这部分尚未完成',
+    detail: english ? 'Your available content is preserved. You do not need to rewrite your request.' : '已完成的内容会保留，无需改写你的问题。',
   }
 }
 

@@ -5,8 +5,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.rulepilot.assistant.AssistantReadTools;
-import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.retrieval.RuleEvidenceLookup;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
@@ -23,9 +23,9 @@ class DocumentNativeVisualEvidenceTest {
     void exposesOnlyCurrentSchemaFactsToTheNativeAnswerTool() {
         UUID versionId = UUID.randomUUID();
         UUID evidenceId = UUID.randomUUID();
-        AssistantReadTools reads = mock(AssistantReadTools.class);
-        when(reads.readRuleEvidenceIds(versionId, Set.of(evidenceId))).thenReturn(List.of(new RuleEvidence(
-                evidenceId, versionId, "PLAY", "Play", "Take one action.", 4, 4)));
+        RuleEvidenceLookup reads = mock(RuleEvidenceLookup.class);
+        when(reads.findByChunkIds(versionId, Set.of(evidenceId))).thenReturn(List.of(new RuleEvidenceHit(
+                evidenceId, versionId, "PLAY", "Play", "Take one action.", 4, 4, 1)));
         VisualRulebookPageFacts facts = mock(VisualRulebookPageFacts.class);
         when(facts.find(versionId, Set.of(4))).thenReturn(List.of(
                 new PageFact(
@@ -58,9 +58,9 @@ class DocumentNativeVisualEvidenceTest {
     void requiresTheCanonicalEvidenceHandleToCoverTheRequestedPage() {
         UUID versionId = UUID.randomUUID();
         UUID evidenceId = UUID.randomUUID();
-        AssistantReadTools reads = mock(AssistantReadTools.class);
-        when(reads.readRuleEvidenceIds(versionId, Set.of(evidenceId))).thenReturn(List.of(new RuleEvidence(
-                evidenceId, versionId, "SETUP", "Setup", "Place components.", 4, 4)));
+        RuleEvidenceLookup reads = mock(RuleEvidenceLookup.class);
+        when(reads.findByChunkIds(versionId, Set.of(evidenceId))).thenReturn(List.of(new RuleEvidenceHit(
+                evidenceId, versionId, "SETUP", "Setup", "Place components.", 4, 4, 1)));
         DocumentPageImages images = mock(DocumentPageImages.class);
         when(images.read(versionId, Set.of(4))).thenReturn(List.of(
                 new DocumentPageImages.PageImage(4, "image/png", new byte[] {1, 2}, 1000, 1200)));

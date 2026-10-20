@@ -14,6 +14,21 @@ class RulebookUnderstandingBuilderTest {
     private final RulebookUnderstandingBuilder builder = new RulebookUnderstandingBuilder();
 
     @Test
+    void wrappedBodyNearTopOfPageDoesNotBecomeSeparateRuleSections() {
+        var page = new ExtractedPage(2, "PLACEMENT\nA piece can be placed only when\nall adjacent spaces are empty.", List.of(
+                new ExtractedTextBlock(0, "PLACEMENT", 100, 90, 220, 32),
+                new ExtractedTextBlock(1, "A piece can be placed only when", 100, 150, 500, 20),
+                new ExtractedTextBlock(2, "all adjacent spaces are empty.", 100, 175, 500, 20)));
+        var understanding = builder.build(List.of(page));
+
+        assertThat(understanding.pageBlocks()).extracting(block -> block.role())
+                .containsExactly(BlockRole.HEADING, BlockRole.BODY, BlockRole.BODY);
+        assertThat(new RulePageChunker().chunk(List.of(page), understanding))
+                .singleElement().satisfies(chunk -> assertThat(chunk.content())
+                        .contains("A piece can be placed only when\nall adjacent spaces are empty."));
+    }
+
+    @Test
     void keepsPageCoordinatesReadingOrderAndHeadingOwnership() {
         var understanding = builder.build(List.of(new ExtractedPage(7, "ignored", List.of(
                 new ExtractedTextBlock(0, "SETUP", 100, 90, 220, 32),

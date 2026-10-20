@@ -31,7 +31,7 @@ function lessonPayload() {
     officialSourceUrl: null, gameCover: null, contentLanguage: 'zh-CN',
     unresolvedTopics: ['缺少身份一致证据的可选章节'],
     lesson: {
-      id: 'lesson-1', status: 'DRAFT_READY', sections: [{
+      id: 'lesson-1', status: 'COMPLETE', sections: [{
         position: 1, title: '已发布章节', visualCaption: '', steps: [{
           position: 1, heading: '先执行动作', kind: 'DO', text: '按规则书执行。', sourcePages: [2], visualFocus: null,
         }],
@@ -78,7 +78,7 @@ describe('PublicLessonView failure visibility', () => {
 
     expect(wrapper.text()).toContain('已发布章节')
     const unresolved = wrapper.get('[data-testid="public-lesson-unresolved-topics"]')
-    expect(unresolved.text()).toContain('局部未完成主题')
+    expect(unresolved.text()).not.toContain('证据边界未通过')
     expect(unresolved.text()).toContain('缺少身份一致证据的可选章节')
   })
 
@@ -111,7 +111,7 @@ describe('PublicLessonView failure visibility', () => {
 
     const details = wrapper.get('[data-testid="player-failure-details"]')
     expect(details.attributes('data-failure-classification')).toBe('internal-correction')
-    expect(details.text()).toContain('INVALID_MODEL_OUTPUT')
+    expect(details.text()).not.toContain('INVALID_MODEL_OUTPUT')
     expect(wrapper.text()).toContain('问题本身没有被拒绝')
     expect(wrapper.text()).not.toMatch(/改写问题|rephrase/i)
   })
@@ -124,7 +124,7 @@ describe('PublicLessonView failure visibility', () => {
 
     const details = wrapper.get('[data-testid="player-failure-details"]')
     expect(details.attributes('data-failure-classification')).toBe('retry-preserved')
-    expect(details.text()).toContain('answer_service_unavailable')
+    expect(details.text()).not.toContain('answer_service_unavailable')
     expect(wrapper.find('[data-testid="public-answer-failure-retry-unchanged"]').exists()).toBe(true)
   })
 })

@@ -71,6 +71,30 @@ class NativeRuleAnswerAgentTest {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void selectsOnlyOfferedImagesSupportedByThePublishedAnswer(boolean selectImage) {
+        UUID id = UUID.randomUUID();
+        String excerpt = "Place the marker on the start space.";
+        var evidence = new RuleEvidenceHit(id, versionId, "RULE", "Setup", excerpt, 2, 2, 1.0);
+        String terminal = "{\"kind\":\"RULE_ANSWER\",\"shortVerdict\":\"Place the marker on the start space.\","
+                + "\"citationIds\":[\"" + id + "\"],\"imageIds\":"
+                + (selectImage ? "[\"owned\",\"unowned\",\"invented\"]" : "[]") + "}";
+        var nativeAgent = new StubNativeAgent(terminal, List.of(exactRead(id, excerpt, 2)), 1);
+        var visuals = List.of(
+                new com.rulepilot.assistant.RuleAnswering.VisualEvidence("owned", versionId, 2,
+                        "A marker sits on a labeled start space.", Set.of(id)),
+                new com.rulepilot.assistant.RuleAnswering.VisualEvidence("unowned", versionId, 2,
+                        "An unrelated component.", Set.of(UUID.randomUUID())));
+        var outcome = answers(nativeAgent, lookup(evidence)).answer("Where does the marker start?",
+                new QuestionContext(versionId, null, null, PlayerLocale.EN, null, Set.of(2), visuals),
+                "player", null, runId);
+        assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(outcome.selectedImageIds()).containsExactlyElementsOf(selectImage ? Set.of("owned") : Set.of());
+        assertThat(nativeAgent.request.playerRequest()).contains("A marker sits on a labeled start space.");
+        assertThat(nativeAgent.request.playerRequest()).contains("\"activeRulebookTitle\":\"Harbor routes\"");
+    }
+
+    @ParameterizedTest
     @NullSource
     @ValueSource(strings = "Which card changes the scoring in your situation?")
     void publishesSupportedContentAndLocalizesAnUnresolvedPartWhenAnotherReadFailed(String clarification) throws Exception {
@@ -82,8 +106,8 @@ class NativeRuleAnswerAgentTest {
                 exactRead(evidenceId, excerpt, 7),
                 new ObservationRecord(
                         1,
-                        "crop_rule_page_image",
-                        "crop-schema",
+                        "read_visual_page_facts",
+                        "facts-schema",
                         new ToolObservation(ObservationStatus.ERROR, "TOOL_EXECUTION_FAILED", Map.of(), 0)));
         String terminal = """
                 {
@@ -91,11 +115,10 @@ class NativeRuleAnswerAgentTest {
                   "shortVerdict":"游戏共 5 轮。",
                   "explanation":"第 5 轮结束后计算最终得分，得分最高者获胜。",
                   "citationIds":["%s"],
-                  "numericClaims":[{"value":"5","evidenceId":"%s","note":"additive"}],
                   "exceptions":[],
                   "presentationHint":"concise"
                 }
-                """.formatted(evidenceId, evidenceId);
+                """.formatted(evidenceId);
         var candidate = JsonMapper.builder().build().readTree(terminal);
         if (clarification != null) ((com.fasterxml.jackson.databind.node.ObjectNode) candidate)
                 .put("clarification", clarification);
@@ -154,10 +177,10 @@ class NativeRuleAnswerAgentTest {
                 evidenceId, versionId, "MOVEMENT", "Fuel movement", excerpt, 6, 6, 1.0);
         String terminal = """
                 {"kind":"RULE_ANSWER","shortVerdict":"Pay 2 fuel, then move one space.",
-                 "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
-                """.formatted(evidenceId, evidenceId).strip();
+                 "citationIds":["%s"]}
+                """.formatted(evidenceId).strip();
         AtomicInteger decisions = new AtomicInteger();
-        NativeRuleAnswerAgent answers = answers(sourceBearingAgent(sourceTool, evidence, terminal, decisions), lookup(evidence));
+        NativeRuleAnswerAgent answers = answers(sourceBearingAgent(sourceTool, evidence, terminal, decisions, false, false), lookup(evidence));
 
         var outcome = answers.answer(
                 "How does fuel movement work?",
@@ -178,6 +201,26 @@ class NativeRuleAnswerAgentTest {
         });
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void publishesGroundedAnswerAfterARepeatedReadInsteadOfDiscardingItsEvidence(boolean rewordQuery) {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidenceHit evidence = new RuleEvidenceHit(
+                evidenceId, versionId, "MOVEMENT", "Movement", "Move to an adjacent clearing.", 3, 3, 1.0);
+        String terminal = """
+                {"kind":"RULE_ANSWER","shortVerdict":"Move to an adjacent clearing.","citationIds":["%s"]}
+                """.formatted(evidenceId).strip();
+        NativeRuleAnswerAgent answers = answers(sourceBearingAgent(
+                "search_rule_evidence", evidence, terminal, new AtomicInteger(), true, rewordQuery), lookup(evidence));
+
+        var outcome = answers.answer("Where can I move?", new QuestionContext(versionId), "player", null, runId);
+
+        assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(outcome.answer().shortVerdict()).isEqualTo("Move to an adjacent clearing.");
+        assertThat(outcome.answer().citations()).singleElement()
+                .satisfies(citation -> assertThat(citation.chunkId()).isEqualTo(evidenceId));
+    }
+
     @Test
     void normalizesANullOptionalExplanationToEmptyPlayerProse() {
         String terminal = """
@@ -191,6 +234,25 @@ class NativeRuleAnswerAgentTest {
 
         assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(outcome.answer().explanation()).isEmpty();
+    }
+
+    @Test
+    void returnsTheExactParserFailureToTheOwningAgent() throws Exception {
+        String candidate = "{\"kind\":\"CHAT\",\n\"shortVerdict\":\"Hello\" \"explanation\":\"\"}";
+        var parserFailure = org.assertj.core.api.Assertions.catchThrowableOfType(
+                () -> JsonMapper.builder().build().readTree(candidate),
+                com.fasterxml.jackson.core.JsonProcessingException.class);
+        NativeRuleAnswerAgent answers = answers(
+                new StubNativeAgent("unused", List.of(), 0), emptyLookup());
+
+        TerminalValidation result = answers.validateTerminal(
+                candidate, List.of(), new QuestionContext(versionId));
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.code()).isEqualTo("TERMINAL_JSON_INVALID");
+        assertThat(result.reason()).contains(parserFailure.getOriginalMessage())
+                .contains("line " + parserFailure.getLocation().getLineNr())
+                .contains("column " + parserFailure.getLocation().getColumnNr());
     }
 
     @Test
@@ -250,8 +312,8 @@ class NativeRuleAnswerAgentTest {
         TerminalValidation result = answers.validateTerminal(
                 """
                 {"kind":"RULE_ANSWER","shortVerdict":"Pay 2 fuel, then move one space.","explanation":"",
-                 "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
-                """.formatted(evidenceId, evidenceId),
+                 "citationIds":["%s"]}
+                """.formatted(evidenceId),
                 List.of(sourceObservation(sourceTool, evidenceId, crossVersion.excerpt(), 6)),
                 new QuestionContext(versionId));
 
@@ -277,8 +339,8 @@ class NativeRuleAnswerAgentTest {
         TerminalValidation result = answers.validateTerminal(
                 """
                 {"kind":"RULE_ANSWER","shortVerdict":"Pay 2 fuel, then move one space.","explanation":"",
-                 "citationIds":["%s"],"numericClaims":[{"value":"2","evidenceId":"%s"}]}
-                """.formatted(evidenceId, evidenceId),
+                 "citationIds":["%s"]}
+                """.formatted(evidenceId),
                 List.of(sourceObservation(sourceTool, evidenceId, canonical.excerpt(), 6)),
                 new QuestionContext(versionId));
 
@@ -286,70 +348,50 @@ class NativeRuleAnswerAgentTest {
         assertThat(result.code()).isEqualTo("CITATION_SNAPSHOT_CONFLICT");
     }
 
+    @Test
+    void publishesEvidenceBoundArithmeticWithoutRequiringTheResultLiteralInSourceText() {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidenceHit evidence = new RuleEvidenceHit(
+                evidenceId, versionId, "SCORING", "Area scoring",
+                "Score the number of spaces multiplied by the number of crowns.", 9, 9, 1.0);
+        NativeRuleAnswerAgent answers = answers(new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
+        String candidate = """
+                {"kind":"RULE_ANSWER","shortVerdict":"Five spaces with two crowns score 10 points.",
+                 "citationIds":["%s"]}
+                """.formatted(evidenceId);
+        assertThat(answers.validateTerminal(candidate,
+                List.of(exactRead(evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId)).valid()).isTrue();
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {"read_rule_pages", "search_rule_evidence", "search_rule_relationships", "expand_rule_evidence_context"})
-    void rejectsATypedHardNumberAbsentFromItsCitedEvidence(String sourceTool) {
+    @ValueSource(booleans = {true, false})
+    void requiresDeliveredOriginalPageMediaBeforePublishingAnImageOnlyCitation(boolean delivered) {
         UUID evidenceId = UUID.randomUUID();
         RuleEvidenceHit evidence = new RuleEvidenceHit(
-                evidenceId, versionId, "LIMIT", "Hand limit", "Keep at most 4 cards.", 9, 9, 1.0);
-        NativeRuleAnswerAgent answers = answers(
-                new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
+                evidenceId, versionId, "SCORING", "Scoring chart", "Inspect the original page.", 2, 2, 1.0);
+        NativeRuleAnswerAgent answers = answers(new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
         String candidate = """
-                {"kind":"RULE_ANSWER","shortVerdict":"Keep 5 cards.","explanation":"That is the limit.",
-                 "citationIds":["%s"],"numericClaims":[{"value":"5","evidenceId":"%s"}]}
-                """.formatted(evidenceId, evidenceId);
-
-        TerminalValidation result = answers.validateTerminal(
-                candidate, List.of(sourceObservation(sourceTool, evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId));
-
-        assertThat(result.valid()).isFalse();
-        assertThat(result.code()).isEqualTo("NUMERIC_VALUE_UNSUPPORTED");
-        assertThat(result.path()).isEqualTo("/numericClaims/0/value");
+                {"kind":"RULE_ANSWER","shortVerdict":"Consult this scoring chart.","citationIds":["%s"]}
+                """.formatted(evidenceId);
+        var media = delivered ? List.of(new NativeAgentTool.ToolMedia(
+                "image/png", new byte[]{1, 2, 3}, "Original page", 100, 100)) : List.<NativeAgentTool.ToolMedia>of();
+        var observation = new ObservationRecord(1, "read_rule_page_image", "page-schema",
+                new ToolObservation(ObservationStatus.SUCCESS, "PAGE_IMAGE_FOUND",
+                        Map.of("evidenceId", evidenceId.toString(), "pageNumber", 2), 1, media));
+        assertThat(answers.validateTerminal(candidate, List.of(observation),
+                new QuestionContext(versionId)).valid()).isEqualTo(delivered);
+        assertThat(answers.validateTerminal(candidate, List.of(observation),
+                new QuestionContext(versionId, null, null, PlayerLocale.EN, null, Set.of(3), List.of())).valid())
+                .isFalse();
     }
 
     @Test
-    void validatesTypedNumericClaimsWithoutInterpretingPresentationDigitsAsRuleFacts() {
-        UUID evidenceId = UUID.randomUUID();
-        RuleEvidenceHit evidence = new RuleEvidenceHit(
-                evidenceId, versionId, "LIMIT", "Hand limit", "Keep at most 4 cards.", 9, 9, 1.0);
-        NativeRuleAnswerAgent answers = answers(
-                new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
-        String candidate = """
-                {"kind":"RULE_ANSWER","shortVerdict":"1. Keep at most 4 cards.","explanation":"That is the limit.",
-                 "citationIds":["%s"],"numericClaims":[{"value":"4","evidenceId":"%s"}]}
-                """.formatted(evidenceId, evidenceId);
-
-        TerminalValidation result = answers.validateTerminal(
-                candidate, List.of(exactRead(evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId));
-
-        assertThat(result.valid()).isTrue();
-    }
-
-    @Test
-    void rejectsANumericClaimThatOnlyAppearsInsideAnotherNumber() {
-        UUID evidenceId = UUID.randomUUID();
-        RuleEvidenceHit evidence = new RuleEvidenceHit(
-                evidenceId, versionId, "LIMIT", "Track limit", "Advance to space 15.", 9, 9, 1.0);
-        NativeRuleAnswerAgent answers = answers(
-                new StubNativeAgent("unused", List.of(), 0), lookup(evidence));
-        String candidate = """
-                {"kind":"RULE_ANSWER","shortVerdict":"Advance 5 spaces.","explanation":"Use the cited limit.",
-                 "citationIds":["%s"],"numericClaims":[{"value":"5","evidenceId":"%s"}]}
-                """.formatted(evidenceId, evidenceId);
-
-        TerminalValidation result = answers.validateTerminal(
-                candidate, List.of(exactRead(evidenceId, evidence.excerpt(), 9)), new QuestionContext(versionId));
-
-        assertThat(result.valid()).isFalse();
-        assertThat(result.code()).isEqualTo("NUMERIC_VALUE_UNSUPPORTED");
-    }
-
-    @Test
-    void mapsTypedProviderFailuresToRetryablePublicStatusesWithoutChangingTheQuestion() {
+    void keepsExecutionFailuresDistinctFromInvalidAnswersWithoutChangingTheQuestion() {
         String question = "When may this effect resolve?";
         Map<String, AnswerStatus> expectedStatuses = Map.of(
                 "MODEL_REQUEST_TIMEOUT", AnswerStatus.MODEL_TIMEOUT,
-                "MODEL_REQUEST_UNAVAILABLE", AnswerStatus.MODEL_UNAVAILABLE);
+                "MODEL_REQUEST_UNAVAILABLE", AnswerStatus.MODEL_UNAVAILABLE,
+                "EXECUTION_FAILED", AnswerStatus.MODEL_UNAVAILABLE);
 
         expectedStatuses.forEach((reason, expectedStatus) -> {
             NativeToolAgent failedAgent = request -> new RunResult(
@@ -387,7 +429,9 @@ class NativeRuleAnswerAgentTest {
                         return () -> {};
                     }
                 },
-                JsonMapper.builder().findAndAddModules().build());
+                JsonMapper.builder().findAndAddModules().build(),
+                id -> java.util.Optional.of(new com.rulepilot.document.DocumentVersionScopeLookup.VersionScope(
+                        id, UUID.randomUUID(), "READY", "player", "Harbor routes")));
     }
 
     private ObservationRecord exactRead(UUID evidenceId, String excerpt, int page) {
@@ -421,7 +465,7 @@ class NativeRuleAnswerAgentTest {
     }
 
     private NativeToolAgent sourceBearingAgent(
-            String sourceTool, RuleEvidenceHit evidence, String terminal, AtomicInteger decisions) {
+            String sourceTool, RuleEvidenceHit evidence, String terminal, AtomicInteger decisions, boolean repeatRead, boolean rewordQuery) {
         String arguments = switch (sourceTool) {
             case "search_rule_evidence" -> "{\"query\":\"fuel movement\",\"limit\":1}";
             case "search_rule_relationships" -> "{\"topic\":\"fuel movement condition\",\"limit\":1}";
@@ -432,6 +476,13 @@ class NativeRuleAnswerAgentTest {
             @Override
             public ModelTurn next(ModelRequest request) {
                 int decision = decisions.incrementAndGet();
+                if (repeatRead && decision == 2) {
+                    return new ModelTurn("", List.of(new ModelToolCall("recheck", sourceTool,
+                            rewordQuery ? "{\"query\":\"adjacent clearing\",\"limit\":1}" : arguments)), 10, 5);
+                }
+                if (repeatRead && decision == 3) {
+                    return new ModelTurn(terminal, List.of(), 10, 5);
+                }
                 return switch (decision) {
                     case 1 -> new ModelTurn(
                             "",

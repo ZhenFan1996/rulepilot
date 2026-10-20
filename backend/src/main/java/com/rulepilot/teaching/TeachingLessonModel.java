@@ -239,7 +239,14 @@ public interface TeachingLessonModel {
             String objective,
             List<PriorSectionContext> priorSections,
             List<EvidenceInput> evidence,
+            List<VisualInput> visuals,
             String modelConfigurationOwner, PlayerLocale outputLanguage) {
+
+        public SectionRequest(String topicKey, String title, String objective,
+                List<PriorSectionContext> priorSections, List<EvidenceInput> evidence,
+                String modelConfigurationOwner, PlayerLocale outputLanguage) {
+            this(topicKey, title, objective, priorSections, evidence, List.of(), modelConfigurationOwner, outputLanguage);
+        }
 
         public SectionRequest(
                 String topicKey,
@@ -265,8 +272,21 @@ public interface TeachingLessonModel {
                     || evidence == null || evidence.isEmpty()) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
+            visuals = visuals == null ? List.of() : List.copyOf(visuals);
             priorSections = List.copyOf(priorSections);
             evidence = List.copyOf(evidence);
+        }
+    }
+
+    /** An observed crop with application-owned geometry and source identity; prose is untrusted visual data. */
+    record VisualInput(String imageId, com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus focus,
+            List<UUID> evidenceIds) {
+        public VisualInput {
+            if (imageId == null || imageId.isBlank() || focus == null || focus.visibleDescription().isBlank()
+                    || evidenceIds == null || evidenceIds.isEmpty()) {
+                throw new IllegalArgumentException("visual observation requires identity, description, and evidence");
+            }
+            evidenceIds = List.copyOf(evidenceIds);
         }
     }
 
@@ -334,10 +354,17 @@ public interface TeachingLessonModel {
             TeachingMove kind,
             String text,
             List<UUID> citationIds,
-            List<RuleFactDraft> ruleFacts) {
+            List<RuleFactDraft> ruleFacts,
+            List<String> imageIds) {
         public StepDraft {
+            imageIds = imageIds == null ? List.of() : List.copyOf(imageIds);
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
             ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
+        }
+
+        public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds,
+                List<RuleFactDraft> ruleFacts) {
+            this(heading, kind, text, citationIds, ruleFacts, List.of());
         }
 
         public StepDraft(

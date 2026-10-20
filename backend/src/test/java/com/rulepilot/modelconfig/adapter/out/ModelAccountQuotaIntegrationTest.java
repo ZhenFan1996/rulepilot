@@ -50,6 +50,23 @@ class ModelAccountQuotaIntegrationTest {
     }
 
     @Test
+    void anonymousAnswerUsageHasADisabledIdentityAndStillEnforcesQuota() {
+        var jdbc = jdbc();
+        assertThat(jdbc.getJdbcTemplate().queryForObject(
+                "SELECT enabled FROM app_user WHERE username = 'public-reader'", Boolean.class)).isFalse();
+        assertThat(jdbc.getJdbcTemplate().queryForObject(
+                "SELECT count(*) FROM app_user_authority WHERE username = 'public-reader'", Integer.class)).isZero();
+        var quota = new PostgresModelAccountQuota(jdbc, 100);
+        Instant now = Instant.parse("2026-10-19T21:00:00Z");
+        var request = new ModelAccountQuota.Request("public-reader", ModelAccountQuota.CredentialSource.PLATFORM,
+                RuntimeModelConfiguration.Role.ANSWER, "deepseek", "test", "answer", 60, now);
+        var reservation = quota.reserve(request);
+        assertThatThrownBy(() -> quota.reserve(request)).isInstanceOf(AccountQuotaExceededException.class);
+        quota.settle(reservation.id(), new ModelAccountQuota.Usage(20, 10, "SUCCESS"), now.plusSeconds(1));
+        assertThat(quota.usage("public-reader", LocalDate.of(2026, 10, 1)).platformTokensCharged()).isEqualTo(30);
+    }
+
+    @Test
     void reservesPlatformQuotaAtomicallyWhilePersonalUsageDoesNotConsumeIt() {
         var quota = new PostgresModelAccountQuota(jdbc(), 200_000);
         Instant now = Instant.parse("2026-08-21T08:00:00Z");

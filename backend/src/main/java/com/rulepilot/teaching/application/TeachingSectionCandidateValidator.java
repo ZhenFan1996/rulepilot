@@ -62,8 +62,8 @@ final class TeachingSectionCandidateValidator {
                     "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
         }
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
-                .mapToObj(index -> LessonDraftValidator.validatedStep(
-                        index + 1, draft.steps().get(index), allowedEvidence))
+                .mapToObj(index -> withSelectedVisuals(LessonDraftValidator.validatedStep(
+                        index + 1, draft.steps().get(index), allowedEvidence), draft.steps().get(index), modelRequest))
                 .toList();
         List<UUID> citedIds = steps.stream()
                 .flatMap(step -> step.sourceChunkIds().stream())
@@ -86,6 +86,23 @@ final class TeachingSectionCandidateValidator {
                 citedPages,
                 citedIds,
                 steps);
+    }
+
+    private LessonStep withSelectedVisuals(LessonStep step, TeachingLessonModel.StepDraft draft,
+            TeachingLessonModel.SectionRequest request) {
+        Map<String, TeachingLessonModel.VisualInput> offered = request.visuals().stream()
+                .collect(Collectors.toMap(TeachingLessonModel.VisualInput::imageId, Function.identity(), (a, b) -> a));
+        var foci = draft.imageIds().stream().distinct().map(offered::get)
+                .filter(java.util.Objects::nonNull)
+                .filter(visual -> visual.evidenceIds().stream().anyMatch(step.sourceChunkIds()::contains)
+                        && step.sourcePages().contains(visual.focus().pageNumber()))
+                .map(visual -> {
+            var focus = visual.focus();
+            return new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(focus.pageNumber(), step.heading(),
+                    focus.visibleDescription(), focus.x(), focus.y(), focus.width(), focus.height(), focus.sourceKind());
+        }).toList();
+        return foci.isEmpty() ? step : step.withVisualFoci(
+                com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove.VISUAL, foci);
     }
 
     private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {

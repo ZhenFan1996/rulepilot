@@ -43,11 +43,10 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
-    void dependentTextStartsWhilePrerequisiteVisualsSettleAndLocalFailuresPreserveReadableChapters() {
+    void independentTextPublishesWhileSourceImagesAreObservedAndFailuresPreserveReadableChapters() {
         UUID versionId = UUID.randomUUID();
         CountDownLatch dependentTextStarted = new CountDownLatch(1);
         CountDownLatch textOnlyPublished = new CountDownLatch(1);
-        AtomicBoolean textOverlappedVisualWork = new AtomicBoolean();
         AtomicBoolean textPublishedDuringVisualWork = new AtomicBoolean();
         AtomicBoolean unplannedVisualWork = new AtomicBoolean();
         AssistantReadTools tools = request -> List.of(evidence(versionId, request.query()));
@@ -69,13 +68,12 @@ class GroundedTeachingAgentTest {
         VisualRulebookPageFacts visualFacts = VisualRulebookPageFacts.empty();
         VisualLessonEnricher visuals = mock(VisualLessonEnricher.class);
         when(visuals.supportsVisualEvidence("player")).thenReturn(true);
-        when(visuals.enrichSection(
-                        eq(versionId), any(TeachingPlan.PlannedSection.class), any(LessonSection.class), any(), eq("player"), any(), any()))
+        when(visuals.prepare(
+                        any(TeachingPlan.class), any(TeachingPlan.PlannedSection.class), any(), any()))
                 .thenAnswer(invocation -> {
-                    LessonSection section = invocation.getArgument(2);
+                    TeachingPlan.PlannedSection section = invocation.getArgument(1);
                     if (section.topicKey().equals("text-only")) unplannedVisualWork.set(true);
                     if (section.topicKey().equals("readable")) {
-                        textOverlappedVisualWork.set(dependentTextStarted.await(2, TimeUnit.SECONDS));
                         textPublishedDuringVisualWork.set(textOnlyPublished.await(2, TimeUnit.SECONDS));
                     }
                     throw new IllegalStateException("image provider unavailable");
@@ -97,7 +95,6 @@ class GroundedTeachingAgentTest {
             }
         });
 
-        assertThat(textOverlappedVisualWork).isTrue();
         assertThat(textPublishedDuringVisualWork).isTrue();
         assertThat(unplannedVisualWork).isFalse();
         assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
@@ -220,8 +217,7 @@ class GroundedTeachingAgentTest {
                 "Independent chapters",
                 "Teach every chapter that can be grounded.",
                 new WholeGameContext(
-                        List.of(new TeachingPlan.TopicDependency("readable", "dependent", "Continue the cited rule."),
-                                new TeachingPlan.TopicDependency("readable", "text-only", "Use the validated prerequisite.")),
+                        List.of(new TeachingPlan.TopicDependency("readable", "dependent", "Continue the cited rule.")),
                         List.of("The unavailable chapter remains unresolved.")),
                 List.of(section(1, "unavailable", false), section(2, "readable", true),
                         section(3, "dependent", true), section(4, "text-only", false)),

@@ -313,7 +313,6 @@ const messages = {
     'lesson.sidebar.directory': '讲解目录',
     'lesson.visualEvidence.figure': '结合图片 · {current}/{total}',
     'lesson.visualEvidence.group': '本步骤的 {total} 张互补图片',
-    'lesson.visualEvidence.lookFor': '看这里：',
     'lesson.visualEvidence.alt': '规则书第 {page} 页中与“{label}”对应的插图',
     'lesson.visualEvidence.loading': '正在加载与当前步骤对应的插图',
     'lesson.visualEvidence.openOriginal': '核对原页',

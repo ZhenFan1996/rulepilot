@@ -58,7 +58,8 @@ class SearchVisualPageFactsNativeToolTest {
         assertThat(observation.code()).isEqualTo("VISUAL_PAGE_FACTS_FOUND");
         assertThat(observation.data()).containsEntry("mechanicalRuleAuthority", false);
         assertThat(observation.data().toString())
-                .contains(evidenceId.toString(), "A red prism is pictured", "mechanicalRuleAuthority=false");
+                .contains(evidenceId.toString(), "A7 red prism", "mechanicalRuleAuthority=false")
+                .doesNotContain("A red prism is pictured");
         assertThat(observation.evidenceCount()).isEqualTo(1);
     }
 
