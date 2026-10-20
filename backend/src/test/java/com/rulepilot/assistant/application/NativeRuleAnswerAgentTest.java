@@ -95,23 +95,6 @@ class NativeRuleAnswerAgentTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void offersImageEvidenceOnlyWhenTheAnswerModelCanConsumeIt(boolean vision) {
-        StubNativeAgent nativeAgent = new StubNativeAgent(
-                "{\"kind\":\"CHAT\",\"shortVerdict\":\"Hello.\"}", List.of(), 0);
-        nativeAgent.vision = vision;
-        var outcome = answers(nativeAgent, emptyLookup()).answer(
-                "Hello", new QuestionContext(versionId), "player", null, runId);
-        assertThat(outcome.answer().status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(nativeAgent.request.allowedTools())
-                .contains("search_rule_evidence", "read_rule_pages", "read_visual_page_facts");
-        if (vision) assertThat(nativeAgent.request.allowedTools())
-                .contains("read_rule_page_image", "crop_rule_page_image");
-        else assertThat(nativeAgent.request.allowedTools())
-                .doesNotContain("read_rule_page_image", "crop_rule_page_image");
-    }
-
-    @ParameterizedTest
     @NullSource
     @ValueSource(strings = "Which card changes the scoring in your situation?")
     void publishesSupportedContentAndLocalizesAnUnresolvedPartWhenAnotherReadFailed(String clarification) throws Exception {
@@ -123,8 +106,8 @@ class NativeRuleAnswerAgentTest {
                 exactRead(evidenceId, excerpt, 7),
                 new ObservationRecord(
                         1,
-                        "crop_rule_page_image",
-                        "crop-schema",
+                        "read_visual_page_facts",
+                        "facts-schema",
                         new ToolObservation(ObservationStatus.ERROR, "TOOL_EXECUTION_FAILED", Map.of(), 0)));
         String terminal = """
                 {
@@ -592,9 +575,6 @@ class NativeRuleAnswerAgentTest {
         private final int toolCalls;
         private final AtomicInteger runs = new AtomicInteger();
         private RunRequest request;
-        private boolean vision;
-
-        @Override public boolean supportsVision(Role role, String owner) { return vision; }
 
         private StubNativeAgent(String terminal, List<ObservationRecord> observations, int toolCalls) {
             this.terminal = terminal;

@@ -46,9 +46,7 @@ public class NativeRuleAnswerAgent {
             "search_rule_relationships",
             "expand_rule_evidence_context",
             "read_rule_pages",
-            "read_visual_page_facts",
-            "read_rule_page_image",
-            "crop_rule_page_image");
+            "read_visual_page_facts");
 
     static final String TERMINAL_SCHEMA = """
             {
@@ -123,17 +121,13 @@ public class NativeRuleAnswerAgent {
         if (scope.isEmpty()) {
             return fallback(context, AnswerStatus.INVALID_MODEL_OUTPUT, "当前答疑范围不可用。", 0);
         }
-        boolean vision = agent.supportsVision(Role.ANSWER, username);
-        Set<String> availableTools = READ_TOOLS.stream()
-                .filter(name -> vision || !(name.equals("read_rule_page_image") || name.equals("crop_rule_page_image")))
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         RunRequest request = new RunRequest(
                 Role.ANSWER,
                 scope.orElseThrow(),
                 systemPrompt(context),
                 playerRequest(question, context),
                 fallbackText(context.outputLanguage()),
-                availableTools,
+                READ_TOOLS,
                 Set.of(),
                 TerminalContract.json(
                         TERMINAL_SCHEMA,
@@ -497,8 +491,8 @@ public class NativeRuleAnswerAgent {
                 values. Answer the supported portion and direct the player to its cited original page for that detail.
                 Use search_visual_page_facts only to locate a visible printed label, icon, table, diagram, or board
                 location that canonical text search did not locate. Its observations have no mechanical-rule
-                authority and are never citation-bearing; use the returned page-bound handle for a dependent visual
-                read, then confirm any ruling with canonical text.
+                authority and are never citation-bearing; use the returned page-bound handle with read_visual_page_facts,
+                then confirm any ruling with canonical text.
                 Call mutually independent read-only tools together in one decision; choose a dependent read only after
                 observing its prerequisite. Preserve supported portions when one sibling read fails and localize only
                 what remains unresolved.
@@ -586,17 +580,17 @@ public class NativeRuleAnswerAgent {
                     : "这次答疑未能在请求时限内完成。";
             case "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
                     "OBSERVATION_BUDGET_EXHAUSTED", "OBSERVATION_BUDGET_EXCEEDED" -> english
-                        ? "This Agent run used its available resource budget and stopped without discarding prior observations."
-                        : "本次 Agent 运行已用完可用资源预算，并在保留既有 observation 后停止。";
+                        ? "This answer could not be completed within the available resources. Please check the original rulebook or try again."
+                        : "这次答疑未能完成。请核对原始规则书，或稍后重试。";
             case "COMPLETION_NO_PROGRESS" -> english
-                    ? "The Agent repeated the same complete response after a typed JSON or evidence-identity rejection, so correction stopped."
-                    : "Agent 在收到 JSON 或证据身份校验结果后仍重复同一份完整回复，因此已停止修正。";
+                    ? "The answer could not be verified against this rulebook. Please check the original page."
+                    : "暂时无法根据这份规则书确认答案，请核对原页。";
             case "ACTION_NO_PROGRESS" -> english
-                    ? "The Agent repeated the same rejected tool action, so the read loop stopped without replaying it again."
-                    : "Agent 重复了同一项已拒绝的工具动作，因此只读循环已停止且不会再次重放。";
+                    ? "No further supporting evidence could be found. Please check the original rulebook."
+                    : "暂时找不到更多支持证据，请核对原始规则书。";
             case "OBSERVATION_NO_PROGRESS" -> english
-                    ? "The same read returned the same observation again, so the Agent stopped that no-progress path."
-                    : "同一只读动作再次返回相同 observation，Agent 已停止这条无进展路径。";
+                    ? "No further supporting evidence could be found. Please check the original rulebook."
+                    : "暂时找不到更多支持证据，请核对原始规则书。";
             case "TOOL_ALLOWLIST_UNAVAILABLE" -> english
                     ? "The current read-tool identity set was incomplete, so the Agent stopped at the capability boundary."
                     : "当前只读工具身份集合不完整，Agent 已在能力边界停止。";
