@@ -310,7 +310,7 @@ class AssistantRunServiceTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(300_000, Duration.ofMinutes(30), false),
                         org.assertj.core.groups.Tuple.tuple(600_000, Duration.ofMinutes(30), false),
-                        org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2), true));
+                        org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2), false));
     }
 
     @Test

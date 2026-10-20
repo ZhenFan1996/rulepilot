@@ -55,7 +55,7 @@ public class AssistantRunService implements AssistantRuns {
                     Duration visualEnrichmentTimeout) {
         this.repository = repository;
         this.execution = execution;
-        this.answerLimits = new BudgetLimits(answerMaxTokens, timeout);
+        this.answerLimits = BudgetLimits.observationalTokens(answerMaxTokens, timeout);
         this.teachingLimits = BudgetLimits.observationalTokens(teachingMaxTokens, teachingTimeout);
         if (teachingModelCallCapacityBaseline < 1) {
             throw new IllegalArgumentException("teaching model-call capacity baseline must be positive");

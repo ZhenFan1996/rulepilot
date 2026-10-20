@@ -784,7 +784,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             ModelTurn turn,
             int currentModelInputTokens) {
         AgentExecutionControl.BudgetSnapshot budget = execution.budget(scope.runId());
-        if (budget == null) {
+        if (budget == null || !budget.tokenLimitEnforced()) {
             return turn.toolCalls().stream().map(ignored -> scope).toList();
         }
         long remaining = Math.max(0L, (long) budget.maxTokens() - budget.usedTokens());

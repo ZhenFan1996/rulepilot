@@ -263,6 +263,26 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void publishesObservedEvidenceAfterTheTokenTelemetryEstimateIsExceeded() {
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        org.mockito.Mockito.when(execution.budget(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new AgentExecutionControl.BudgetSnapshot(
+                        1, 0, 0, 2, Instant.now().plusSeconds(60), null, false));
+        var mapper = JsonMapper.builder().findAndAddModules().build();
+        var reader = tool("search_rule_evidence");
+        var model = new QueueModel(turn(call("read", reader.name(), "{}")), finalTurn("supported answer"));
+        var agent = new BoundedNativeToolAgent(model,
+                new NativeAgentToolRegistry(List.of(reader), mapper, ignored -> true),
+                execution, new RecordingInvocations(null), mapper);
+
+        var result = agent.run(request(Set.of(reader.name()), TerminalContract.none()));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("supported answer");
+        assertThat(result.observations()).isNotEmpty();
+    }
+
+    @Test
     void stopsEachTypedProviderFailureWithoutRepairOrASecondModelCall() {
         for (ModelRequestFailureKind kind : ModelRequestFailureKind.values()) {
             AtomicInteger requests = new AtomicInteger();
