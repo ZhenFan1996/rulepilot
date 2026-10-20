@@ -73,7 +73,9 @@ public class SpringAiNativeToolModel implements NativeToolModel {
             } else if (qwen) {
                 // Answer reasoning stays inside the same request deadline; no reviewer stage is added.
                 openAiOptions.extraBody(request.role() == Role.ANSWER
-                        ? Map.of("enable_thinking", true, "reasoning_effort", "medium")
+                        ? Map.of("enable_thinking", true, "reasoning_effort",
+                                request.conversation().stream().anyMatch(message -> !message.media().isEmpty())
+                                        ? "low" : "medium")
                         : Map.of("enable_thinking", false));
             }
             if (request.jsonOutputRequired() && !(qwen && request.role() == Role.ANSWER)) {

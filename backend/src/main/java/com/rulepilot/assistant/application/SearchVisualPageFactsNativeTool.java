@@ -56,7 +56,7 @@ public class SearchVisualPageFactsNativeTool implements NativeAgentTool {
                 + "cannot be located through canonical text search. It finds page-scoped visual observations in the "
                 + "active immutable rulebook and returns a page-bound evidence handle for a dependent page or image "
                 + "read. Visual observations locate content but never establish a mechanical ruling; confirm rule "
-                + "claims with canonical text and do not retry with superficial synonyms.";
+                + "claims with the original page or canonical text and do not retry with superficial synonyms.";
     }
 
     @Override
@@ -66,7 +66,7 @@ public class SearchVisualPageFactsNativeTool implements NativeAgentTool {
 
     @Override
     public String schemaVersion() {
-        return "1";
+        return "2";
     }
 
     @Override
@@ -113,9 +113,6 @@ public class SearchVisualPageFactsNativeTool implements NativeAgentTool {
                 "evidenceId", handle.chunkId().toString(),
                 "pageNumber", match.pageNumber(),
                 "printedTerms", match.printedTerms(),
-                "literalSummary", match.factualSummary(),
-                "keywords", match.keywords(),
-                "factStatus", match.ruleFactStatus().name(),
                 "mechanicalRuleAuthority", false);
     }
 

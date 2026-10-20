@@ -152,11 +152,11 @@ class BoundedNativeToolAgentTest {
         String rejected = "{\"kind\":\"RULE_ANSWER\",\"citationIds\":[\"outside\"],\"extra\":true}";
         String correctedCitation = """
                 {"kind":"RULE_ANSWER","citationIds":["evidence-1"],
-                 "numericClaims":[{"value":"7","evidenceId":"evidence-1"}]}
+                 "shortVerdict":""}
                 """.strip();
         String accepted = """
                 {"kind":"RULE_ANSWER","citationIds":["evidence-1"],
-                 "numericClaims":[{"value":"2","evidenceId":"evidence-1"}]}
+                 "shortVerdict":"Move."}
                 """.strip();
         QueueModel model = new QueueModel(
                 finalTurn(rejected), finalTurn(correctedCitation), finalTurn(accepted));
@@ -172,8 +172,8 @@ class BoundedNativeToolAgentTest {
                                 Set.of("evidence-1"))
                         : candidate.equals(correctedCitation)
                                 ? TerminalValidation.rejected(
-                                        "NUMERIC_VALUE_UNSUPPORTED", "/numericClaims/0/value",
-                                        "numeric value is absent from the cited evidence", Set.of("evidence-1"))
+                                        "TERMINAL_FIELD_INVALID", "/shortVerdict",
+                                        "shortVerdict must not be empty", Set.of("evidence-1"))
                                 : TerminalValidation.accepted());
         RecordingInvocations audited = new RecordingInvocations(null);
 
@@ -199,10 +199,10 @@ class BoundedNativeToolAgentTest {
                         .doesNotContain(rejected, "<rejected-candidate>"));
         assertThat(model.conversations.getLast())
                 .filteredOn(message -> message.role() == MessageRole.USER
-                        && message.content().contains("NUMERIC_VALUE_UNSUPPORTED"))
+                        && message.content().contains("TERMINAL_FIELD_INVALID"))
                 .singleElement()
                 .satisfies(message -> assertThat(message.content())
-                        .contains("/numericClaims/0/value", "numeric value is absent from the cited evidence", schemaJson)
+                        .contains("/shortVerdict", "shortVerdict must not be empty", schemaJson)
                         .doesNotContain(correctedCitation));
     }
 

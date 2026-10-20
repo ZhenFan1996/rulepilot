@@ -21,8 +21,6 @@ import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
-import com.rulepilot.assistant.application.RuleAnswerNumericBoundary.NumericClaim;
-import com.rulepilot.assistant.application.RuleAnswerNumericBoundary.ObservedEvidence;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.ArrayList;
@@ -44,7 +42,9 @@ public class NativeRuleAnswerAgent {
             "search_rule_evidence",
             "search_rule_relationships",
             "expand_rule_evidence_context",
-            "read_rule_pages");
+            "read_rule_pages",
+            "read_rule_page_image",
+            "search_visual_page_facts");
 
     static final String TERMINAL_SCHEMA = """
             {
@@ -61,19 +61,7 @@ public class NativeRuleAnswerAgent {
                   "items": {"type": "string", "format": "uuid"},
                   "uniqueItems": true
                 },
-                "exceptions": {"type": "array", "items": {"type": "string"}},
-                "numericClaims": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": ["value", "evidenceId"],
-                    "properties": {
-                      "value": {"type": "string"},
-                      "evidenceId": {"type": "string", "format": "uuid"}
-                    },
-                    "additionalProperties": true
-                  }
-                }
+                "exceptions": {"type": "array", "items": {"type": "string"}}
               },
               "additionalProperties": true
             }
@@ -199,7 +187,7 @@ public class NativeRuleAnswerAgent {
             if (!allowedEvidence.containsKey(id)) {
                 return rejected(
                         "CITATION_NOT_OBSERVED", "/citationIds/" + index,
-                        "The citation identity was not returned by a source-bearing canonical text tool in this Agent run.",
+                        "The citation identity was not returned by a source-bearing text or original-page tool in this Agent run.",
                         allowedIds);
             }
         }
@@ -210,11 +198,7 @@ public class NativeRuleAnswerAgent {
         }
         TerminalValidation identity = validateCanonicalIdentity(candidate, context, allowedEvidence, allowedIds);
         if (identity != null) return identity;
-        return RuleAnswerNumericBoundary.validate(
-                candidate.numericClaims,
-                candidate.citationIds,
-                allowedEvidence,
-                allowedIds);
+        return TerminalValidation.accepted();
     }
 
     private TerminalValidation validateCanonicalIdentity(
@@ -349,7 +333,7 @@ public class NativeRuleAnswerAgent {
                 clarification == null || clarification.isBlank() ? null : clarification,
                 stringArray(root, "citationIds"),
                 stringArray(root, "exceptions"),
-                numericClaims(root), stringArray(root, "imageIds"));
+                stringArray(root, "imageIds"));
     }
 
     private String requiredString(JsonNode root, String field, boolean nonBlank) {
@@ -397,42 +381,23 @@ public class NativeRuleAnswerAgent {
         return List.copyOf(strings);
     }
 
-    private List<NumericClaim> numericClaims(JsonNode root) {
-        JsonNode values = root.get("numericClaims");
-        if (values == null || values.isNull()) return List.of();
-        if (!values.isArray()) {
-            throw new CandidateFailure(
-                    "TERMINAL_FIELD_INVALID", "/numericClaims", "numericClaims must be a JSON array.");
-        }
-        List<NumericClaim> claims = new ArrayList<>();
-        for (int index = 0; index < values.size(); index++) {
-            JsonNode value = values.get(index);
-            if (!value.isObject()) {
-                throw new CandidateFailure(
-                        "TERMINAL_FIELD_INVALID", "/numericClaims/" + index,
-                        "Each numeric claim must be one JSON object.");
-            }
-            claims.add(new NumericClaim(
-                    nestedString(value, "value", index),
-                    nestedString(value, "evidenceId", index)));
-        }
-        return List.copyOf(claims);
-    }
-
-    private String nestedString(JsonNode value, String field, int index) {
-        JsonNode child = value.get(field);
-        if (child == null || !child.isTextual() || child.textValue().isBlank()) {
-            throw new CandidateFailure(
-                    "TERMINAL_FIELD_INVALID", "/numericClaims/" + index + "/" + field,
-                    field + " must be a non-blank JSON string.");
-        }
-        return child.textValue();
-    }
-
     private Map<String, ObservedEvidence> allowedEvidence(
             List<ObservationRecord> observations, Set<Integer> allowedPages) {
         Map<String, ObservedEvidence> allowed = new LinkedHashMap<>();
         for (ObservationRecord observation : observations) {
+            if ("read_rule_page_image".equals(observation.toolName())
+                    && observation.observation().status() == ObservationStatus.SUCCESS
+                    && !observation.observation().media().isEmpty()) {
+                JsonNode page = objectMapper.valueToTree(observation.observation().data());
+                if (page.path("evidenceId").isTextual() && page.path("pageNumber").canConvertToInt()) {
+                    int pageNumber = page.path("pageNumber").intValue();
+                    if (withinAllowedPages(pageNumber, pageNumber, allowedPages)) {
+                        allowed.putIfAbsent(page.path("evidenceId").textValue(),
+                                new ObservedEvidence(pageNumber, pageNumber));
+                    }
+                }
+                continue;
+            }
             if (!("search_rule_evidence".equals(observation.toolName())
                             || "search_rule_relationships".equals(observation.toolName())
                             || "expand_rule_evidence_context".equals(observation.toolName())
@@ -454,7 +419,7 @@ public class NativeRuleAnswerAgent {
                 if (!withinAllowedPages(pageFrom, pageTo, allowedPages)) continue;
                 allowed.putIfAbsent(
                         value.path("evidenceId").textValue(),
-                        new ObservedEvidence(value.path("excerpt").textValue(), pageFrom, pageTo));
+                        new ObservedEvidence(pageFrom, pageTo));
             }
         }
         return Map.copyOf(allowed);
@@ -472,29 +437,30 @@ public class NativeRuleAnswerAgent {
                 Decide the next action yourself. Ordinary non-rule conversation uses kind CHAT and no citation.
                 Answer only the unresolved obligations in the player's request. Do not broaden into related rules that
                 are unnecessary to make the verdict correct. Prefer the smallest complete supported ruling; every
-                included claim must earn its evidence and numeric-validation cost.
+                included claim must be supported by the active rulebook.
                 For a rule claim, search only when needed. Text returned by search_rule_evidence,
                 search_rule_relationships, expand_rule_evidence_context, or read_rule_pages is source-bearing when its
                 excerpt directly contains enough subject, condition, exception, and applicability context for the
                 answer; cite that observed evidenceId without repeating or reconfirming the read. Use read_rule_pages
                 only when the search excerpt needs fuller page context, a crossed chunk boundary, a condition, an
                 exception, a list continuation, or an applicability check. A relationship label or adjacent location
-                never establishes which rule applies; the canonical text must support that conclusion.
+                never establishes which rule applies; the source rule must support that conclusion.
                 Optional imageIds may select from untrustedVisualObservations when the visible objects, layout, or
                 state help explain this answer. A shared page or citation alone is not relevance. Descriptions cannot
                 prove mechanics. Cite the current rule evidence as usual; omit images when none helps. Do not make
                 another tool call merely to add an illustration. The answer must explain its supported ruling and any need to inspect the source image.
-                When evidence marks graphical correspondence as unresolved, preserve that local uncertainty. Do not
-                infer object counts, numerical mappings, or rule effects from a diagram description or unlabeled
-                values. Answer the supported portion and direct the player to its cited original page for that detail.
+                When a rule depends on graphical correspondence not captured in the text, use read_rule_page_image
+                with an observed evidenceId and its exact page. If text search cannot locate the diagram,
+                search_visual_page_facts locates its original page by printed terms. The original image is source evidence;
+                a generated description is not. If the original still leaves a detail unresolved, answer the
+                supported portion and direct the player to that page. Do not invent missing relationships.
                 Call mutually independent read-only tools together in one decision; choose a dependent read only after
                 observing its prerequisite. Preserve supported portions when one sibling read fails and localize only
                 what remains unresolved.
                 Every terminal response must be one complete JSON object satisfying the schema below. Cite only
-                evidenceId values observed from the source-bearing text tools above in this
+                evidenceId values observed from the source-bearing text or original-page tools in this
                 run. Do not print raw evidence IDs or page excerpts in player prose; the application publishes
-                citations separately. Declare every numeric
-                literal used as a hard rule fact in numericClaims with the exact literal and its evidenceId. Unknown
+                citations separately. Unknown
                 additive fields are ignored. Write all player-facing prose yourself in %s. No reviewer or prose
                 template follows this turn.
                 Terminal JSON schema:
@@ -621,6 +587,8 @@ public class NativeRuleAnswerAgent {
         AgentOutcome(StructuredRuleAnswer answer, int toolCalls) { this(answer, toolCalls, Set.of()); }
     }
 
+    private record ObservedEvidence(int pageFrom, int pageTo) {}
+
     private record Candidate(
             Kind kind,
             String shortVerdict,
@@ -628,7 +596,6 @@ public class NativeRuleAnswerAgent {
             String clarification,
             List<String> citationIds,
             List<String> exceptions,
-            List<NumericClaim> numericClaims,
             List<String> imageIds) {}
 
     private static final class CandidateFailure extends RuntimeException {
