@@ -76,10 +76,9 @@ public class SpringAiNativeToolModel implements NativeToolModel {
                         ? Map.of("enable_thinking", true, "reasoning_effort", "medium")
                         : Map.of("enable_thinking", false));
             }
-            if (request.jsonOutputRequired()) {
-                // OpenAI-compatible chat providers expose JSON mode alongside tool calls. The application still
-                // validates the domain schema and evidence identities; this provider option only guarantees that
-                // the terminal candidate is syntactically JSON instead of spending repair turns on prose fences.
+            if (request.jsonOutputRequired() && !(qwen && request.role() == Role.ANSWER)) {
+                // Qwen reasoning uses application validation: forced JSON decoding can truncate quoted prose
+                // into syntactically valid but incomplete fields. Other providers retain their JSON transport.
                 openAiOptions.responseFormat(ResponseFormat.builder()
                         .type(Type.JSON_OBJECT)
                         .build());
