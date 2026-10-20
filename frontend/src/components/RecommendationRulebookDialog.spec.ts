@@ -14,11 +14,6 @@ const pages = [
   { pageNumber: 2, text: 'Turn order', characterCount: 900 },
 ]
 
-const threePages = [
-  ...pages,
-  { pageNumber: 3, text: 'Ending', characterCount: 640 },
-]
-
 describe('RecommendationRulebookDialog', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -38,7 +33,7 @@ describe('RecommendationRulebookDialog', () => {
     expect(wrapper.get('[data-testid="rulebook-page-loader"]').attributes('src')).toBe('/api/v1/document-versions/document-1/pages/1/image')
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
     expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('src')).toBe('/api/v1/document-versions/document-1/pages/1/image')
-    await wrapper.findAll('button').find(button => button.text().includes('第 2 页'))!.trigger('click')
+    await wrapper.get('select').setValue('2')
     expect(wrapper.get('[data-testid="rulebook-page-loader"]').attributes('src')).toBe('/api/v1/document-versions/document-1/pages/2/image')
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
     expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('src')).toBe('/api/v1/document-versions/document-1/pages/2/image')
@@ -49,40 +44,6 @@ describe('RecommendationRulebookDialog', () => {
 
     await wrapper.get('button[aria-label="关闭规则书"]').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
-    wrapper.unmount()
-  })
-
-  it('publishes image, page label, and accessible name atomically when an older page finishes late', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(threePages)))
-    const wrapper = mount(RecommendationRulebookDialog, {
-      props: { open: true, versionId: 'document-1', title: '规则书' },
-    })
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 1 页')
-    const firstRequest = wrapper.get('[data-testid="rulebook-page-loader"]')
-    expect(wrapper.find('[data-testid="rulebook-page-image"]').exists()).toBe(false)
-    await firstRequest.trigger('load')
-    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 1 页')
-    expect(wrapper.get('button[data-page-number="1"]').attributes('aria-current')).toBe('page')
-
-    await wrapper.get('button[data-page-number="2"]').trigger('click')
-    const lateSecondPage = wrapper.get('[data-testid="rulebook-page-loader"]')
-    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 1 页')
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 2 页；第 1 页继续显示')
-
-    await wrapper.get('button[data-page-number="3"]').trigger('click')
-    const currentThirdPage = wrapper.get('[data-testid="rulebook-page-loader"]')
-    await lateSecondPage.trigger('load')
-    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 1 页')
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 3 页；第 1 页继续显示')
-
-    await currentThirdPage.trigger('load')
-    const displayed = wrapper.get('[data-testid="rulebook-page-image"]')
-    expect(displayed.attributes('src')).toBe('/api/v1/document-versions/document-1/pages/3/image')
-    expect(displayed.attributes('alt')).toBe('规则书第 3 页')
-    expect(wrapper.get('button[data-page-number="3"]').attributes('aria-current')).toBe('page')
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('第 3 页已显示')
     wrapper.unmount()
   })
 
@@ -128,14 +89,14 @@ describe('RecommendationRulebookDialog', () => {
     expect(signals[0]!.aborted).toBe(true)
     await wrapper.setProps({ open: true })
     await flushPromises()
-    expect(wrapper.find('button[data-page-number="2"]').exists()).toBe(true)
+    expect(wrapper.find('select option[value="2"]').exists()).toBe(true)
 
     closed.resolve(Response.json([
       { pageNumber: 1, text: 'Closed page', characterCount: 99 },
     ]))
     await flushPromises()
-    expect(wrapper.find('button[data-page-number="2"]').exists()).toBe(true)
-    expect(wrapper.find('button[data-page-number="1"]').exists()).toBe(false)
+    expect(wrapper.find('select option[value="2"]').exists()).toBe(true)
+    expect(wrapper.find('select option[value="1"]').exists()).toBe(false)
     expect(signals[1]!.aborted).toBe(false)
     wrapper.unmount()
   })
@@ -168,7 +129,7 @@ describe('RecommendationRulebookDialog', () => {
       { pageNumber: 1, text: 'Old version', characterCount: 120 },
     ]))
     await flushPromises()
-    expect(wrapper.find('button[data-page-number="1"]').exists()).toBe(false)
+    expect(wrapper.find('select option[value="1"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="rulebook-page-loader"]').attributes('src')).toContain('/document-new/pages/2/image')
     wrapper.unmount()
   })

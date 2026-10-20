@@ -244,8 +244,8 @@ onUnmounted(() => {
 
 <template>
   <AppShell>
-    <div class="min-h-screen bg-[#ddd8cf] text-ink">
-      <header class="app-sticky-top sticky z-30 border-b border-ink/10 bg-paper/95 backdrop-blur">
+    <div class="min-h-screen bg-canvas text-ink">
+      <header class="app-sticky-below-mobile-header sticky z-30 border-b border-ink/10 bg-paper/95 backdrop-blur">
         <div class="mx-auto flex max-w-[100rem] items-center justify-between gap-4 px-4 py-3 sm:px-6">
           <div class="min-w-0">
             <RouterLink :to="{ name: 'catalog' }" class="text-xs font-semibold text-indigo">← {{ copy.back }}</RouterLink>
@@ -265,7 +265,7 @@ onUnmounted(() => {
             <p class="font-semibold">{{ errorMessage }}</p>
             <button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 text-sm font-semibold text-white" @click="loadRulebook">{{ copy.retry }}</button>
           </section>
-          <RulebookPageViewer v-else :version-id="versionId" :pages="pages" :eyebrow="copy.eyebrow" :hint="copy.hint" />
+          <RulebookPageViewer v-else :version-id="versionId" :pages="pages" :hint="copy.hint" />
         </section>
 
         <div v-if="answersOpen" class="fixed inset-0 z-50 bg-ink/40 backdrop-blur-[2px] lg:static lg:z-auto lg:min-w-0 lg:bg-transparent lg:backdrop-blur-none" @click.self="closeAnswers">

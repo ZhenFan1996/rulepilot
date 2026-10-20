@@ -42,8 +42,7 @@ describe('RulebookPageViewer', () => {
     await firstAttempt.trigger('error')
 
     expect(wrapper.get('[data-testid="rulebook-page-status"]').attributes('role')).toBe('alert')
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('第 5 页在页面图像加载阶段失败')
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('浏览器没有得到可显示的图片')
+    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('第 5 页暂时无法加载')
     expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('只重试第 5 页')
     expect(wrapper.find('[data-testid="rulebook-page-image"]').exists()).toBe(false)
     expect(wrapper.get('a').attributes()).toMatchObject({
@@ -57,7 +56,7 @@ describe('RulebookPageViewer', () => {
     expect(retry.attributes('data-request-token')).not.toBe(firstAttempt.attributes('data-request-token'))
     await retry.trigger('load')
     expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 5 页')
-    expect(wrapper.get('button[data-page-number="5"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('data-page-number')).toBe('5')
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('/pages/5/image')
     wrapper.unmount()
   })
@@ -68,17 +67,17 @@ describe('RulebookPageViewer', () => {
     })
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
 
-    await wrapper.get('button[data-page-number="6"]').trigger('click')
+    await wrapper.get('select').setValue('6')
     expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('data-page-number')).toBe('5')
     expect(wrapper.get('[data-testid="rulebook-page-status"]').text())
       .toContain('正在加载第 6 页；第 5 页继续显示')
 
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('error')
     expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('data-page-number')).toBe('5')
-    expect(wrapper.get('button[data-page-number="5"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('data-page-number')).toBe('5')
     const failure = wrapper.get('[data-testid="rulebook-page-status"]')
-    expect(failure.text()).toContain('第 6 页在页面图像加载阶段失败')
-    expect(failure.text()).toContain('当前仍保留第 5 页，不会用失败结果替换')
+    expect(failure.text()).toContain('第 6 页暂时无法加载')
+    expect(failure.text()).toContain('仍显示第 5 页')
     expect(failure.text()).toContain('下一步：只重试第 6 页')
 
     await wrapper.findAll('button').find(button => button.text() === '重试第 6 页')!.trigger('click')
@@ -88,29 +87,17 @@ describe('RulebookPageViewer', () => {
     wrapper.unmount()
   })
 
-  it('uses page-list order for keyboard navigation and disables smooth scrolling for reduced motion', async () => {
-    const scrollIntoView = vi.fn()
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: scrollIntoView,
-    })
-    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+  it('moves through available pages by keyboard and can open an exact cited page', async () => {
     const wrapper = mount(RulebookPageViewer, {
-      attachTo: document.body,
-      props: { versionId: 'opaque-version', pages },
+      props: { versionId: 'public-guide', pages, initialPage: 6, pageImageUrl: page => `/public/source/${page}` },
     })
+    expect(wrapper.get('[data-testid="rulebook-page-loader"]').attributes('src')).toBe('/public/source/6')
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
-
-    const first = wrapper.get('button[data-page-number="5"]')
-    ;(first.element as HTMLButtonElement).focus()
-    await first.trigger('keydown', { key: 'End' })
+    await wrapper.get('[data-testid="rulebook-page-stage"]').trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
-
-    expect(document.activeElement).toBe(wrapper.get('button[data-page-number="9"]').element)
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 9 页')
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'auto', block: 'start' })
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
-    expect(wrapper.get('button[data-page-number="9"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('data-page-number')).toBe('9')
+    expect(wrapper.get('button[aria-label="下一页"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
@@ -145,7 +132,7 @@ describe('RulebookPageViewer', () => {
 
     expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('Loading page 5')
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('error')
-    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('Page 5 failed while loading its page image')
+    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('Page 5 could not be loaded')
     expect(wrapper.findAll('button').some(button => button.text() === 'Retry page 5')).toBe(true)
     expect(wrapper.get('a').text()).toBe('Open page 5 in a new tab')
     wrapper.unmount()

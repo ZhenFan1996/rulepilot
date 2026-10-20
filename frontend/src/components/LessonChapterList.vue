@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
+import RulebookPageViewer from '@/components/RulebookPageViewer.vue'
+import { useModalFocus } from '@/composables/useModalFocus'
 import LessonVisualEvidence from '@/components/LessonVisualEvidence.vue'
 import LessonRuleFacts, { type LessonRuleFact } from '@/components/LessonRuleFacts.vue'
 import type { VisualFocus } from '@/composables/lessonSupportingContent'
@@ -33,6 +35,19 @@ const props = withDefaults(defineProps<{
 }>(), { stepTestId: '' })
 
 const { locale, t } = useLocale()
+const sourcePage = ref<number | null>(null)
+const sourceDialog = ref<HTMLElement | null>(null)
+const sourcePages = computed(() => [...new Set(props.sections.flatMap(section => section.steps.flatMap(step => [
+  ...step.sourcePages, ...stepVisuals(step).map(focus => focus.pageNumber),
+])))].sort((a, b) => a - b).map(pageNumber => ({ pageNumber, characterCount: 0 })))
+function openSource(page: number) { sourcePage.value = page }
+function openSourceLink(event: MouseEvent, page: number) {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  openSource(page)
+}
+useModalFocus({ dialog: sourceDialog, open: () => sourcePage.value !== null, requestClose: () => { sourcePage.value = null } })
+
 const activePosition = ref<number | null>(props.sections[0]?.position ?? null)
 const activeChapterNumber = computed(() => {
   const index = props.sections.findIndex((section) => section.position === activePosition.value)
@@ -53,6 +68,25 @@ function activateChapter(position: number) {
 
 function stepVisuals(step: LessonReaderStep) {
   return step.visualFoci?.length ? step.visualFoci : step.visualFocus ? [step.visualFocus] : []
+}
+
+const chapterVisuals = computed(() => {
+  const result = new Map<string, VisualFocus[]>()
+  for (const section of props.sections) {
+    const shown = new Set<string>()
+    for (const step of section.steps) {
+      result.set(`${section.position}:${step.position}`, stepVisuals(step).filter(focus => {
+        const identity = `${focus.pageNumber}:${focus.x}:${focus.y}:${focus.width}:${focus.height}`
+        if (shown.has(identity)) return false
+        shown.add(identity)
+        return true
+      }))
+    }
+  }
+  return result
+})
+function visibleVisuals(section: LessonReaderSection, step: LessonReaderStep) {
+  return chapterVisuals.value.get(`${section.position}:${step.position}`) ?? []
 }
 
 function scrollVisualGroup(event: KeyboardEvent, direction: -1 | 1) {
@@ -137,29 +171,14 @@ function stepTone(kind: string) {
   if (kind === 'WATCH' || kind === 'LIMIT') return 'border-amber-300/70 bg-amber-50/60'
   if (kind === 'CHECK') return 'border-emerald-200 bg-emerald-50/55'
   if (kind === 'EXAMPLE') return 'border-copper/20 bg-copper/[0.045]'
-  return 'border-ink/10 bg-paper'
+  return 'border-ink/10'
 }
 
-function stepKindLabel(kind: string) {
-  switch (kind) {
-    case 'UNDERSTAND': return t('lesson.chapter.move.understand')
-    case 'DO': return t('lesson.chapter.move.do')
-    case 'EXAMPLE': return t('lesson.chapter.move.example')
-    case 'WATCH': return t('lesson.chapter.move.watch')
-    case 'CHECK': return t('lesson.chapter.move.check')
-    case 'VISUAL': return t('lesson.chapter.move.visual')
-    case 'FLOW': return t('lesson.chapter.move.flow')
-    case 'LEDGER': return t('lesson.chapter.move.ledger')
-    case 'REFERENCE_CARD': return t('lesson.chapter.move.referenceCard')
-    case 'LIMIT': return t('lesson.chapter.move.limit')
-    default: return kind
-  }
-}
 </script>
 
 <template>
-  <div class="mt-7 xl:grid xl:grid-cols-[15rem_minmax(0,1fr)] xl:items-start xl:gap-12">
-    <nav data-testid="mobile-chapter-directory" class="player-board app-sticky-below-mobile-header sticky z-10 -mx-2 flex gap-2 overflow-x-auto border border-ink/10 bg-canvas/90 p-2 elevation-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
+  <div class="mt-7 xl:grid xl:grid-cols-[13rem_minmax(0,1fr)] xl:items-start xl:gap-10">
+    <nav data-testid="mobile-chapter-directory" class="app-sticky-below-mobile-header sticky z-10 -mx-2 flex gap-2 overflow-x-auto border border-ink/10 bg-canvas/90 p-2 elevation-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
       <a
         v-for="section in sections"
         :key="section.position"
@@ -171,13 +190,13 @@ function stepKindLabel(kind: string) {
         :aria-current="section.position === activePosition ? 'location' : undefined"
         @click="activateChapter(section.position)"
       >
-        <span class="hex-token size-7 text-copper"><span>{{ section.position }}</span></span>
+        <span class="text-xs tabular-nums opacity-70">{{ section.position }}</span>
         {{ section.title }}
       </a>
     </nav>
 
     <aside data-testid="desktop-chapter-directory" class="hidden min-w-0 xl:sticky xl:top-24 xl:block xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto" :aria-label="t('lesson.reader.chapterDirectory')">
-      <nav class="tabletop-panel player-board bg-paper/75 p-3 backdrop-blur">
+      <nav class="border-l border-ink/15 pl-3">
         <div class="flex items-end justify-between gap-3 border-b border-ink/10 px-2 pb-3 pt-1">
           <div>
             <p class="mt-1 text-sm font-semibold text-ink">{{ t('lesson.reader.chapterDirectory') }}</p>
@@ -194,7 +213,7 @@ function stepKindLabel(kind: string) {
               :aria-current="section.position === activePosition ? 'location' : undefined"
               @click="activateChapter(section.position)"
             >
-              <span class="hex-token size-7 shrink-0 text-copper"><span class="text-xs font-bold">{{ section.position }}</span></span>
+              <span class="shrink-0 text-xs tabular-nums opacity-70">{{ section.position }}</span>
               <span class="min-w-0 break-words font-semibold leading-5">{{ section.title }}</span>
             </a>
           </li>
@@ -208,29 +227,25 @@ function stepKindLabel(kind: string) {
         :id="chapterId(section.position)"
         :key="section.position"
         :ref="(element) => registerSection(element, section.position)"
-        class="scroll-mt-32 border-b border-ink/10 py-10 first:pt-8 last:border-b-0 lg:grid lg:grid-cols-[5.5rem_minmax(0,1fr)] lg:gap-7 lg:py-14 lg:first:pt-1"
+        class="scroll-mt-36 border-b border-ink/10 py-10 first:pt-8 last:border-b-0 lg:py-12 lg:first:pt-1"
       >
-        <div class="mb-4 lg:mb-0">
-          <div class="hex-token size-14 text-copper elevation-sm"><span class="font-display text-xl font-bold">{{ section.position }}</span></div>
-          <p class="mt-2 text-xs font-semibold text-copper">{{ t('public.chapter', { position: section.position }) }}</p>
-        </div>
+        <p class="mb-3 text-sm font-semibold text-indigo">{{ t('public.chapter', { position: section.position }) }}</p>
 
         <div class="min-w-0">
           <h2 class="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{{ section.title }}</h2>
-          <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-muted">{{ section.visualCaption }}</p>
+          <p v-if="section.visualCaption && section.visualCaption !== section.title" class="mt-3 max-w-2xl leading-7 text-muted">{{ section.visualCaption }}</p>
 
-          <ol class="mt-7 grid gap-4">
+          <ol class="mt-7 divide-y divide-ink/10">
             <li
               v-for="step in section.steps"
               :key="step.position"
               :data-testid="stepTestId || undefined"
-              class="min-w-0 rounded-2xl border p-5 lesson-step-shadow sm:p-6"
+              class="min-w-0 py-7 first:pt-0"
               :class="stepTone(step.kind)"
             >
-              <div class="flex gap-4">
-                <span class="grid size-8 shrink-0 place-items-center rounded-xl bg-ink text-sm font-bold text-canvas">{{ step.position }}</span>
+              <div>
                 <div
-                  :data-testid="stepVisuals(step).length ? 'lesson-step-paired' : undefined"
+                  :data-testid="visibleVisuals(section, step).length ? 'lesson-step-paired' : undefined"
                   class="min-w-0 flex-1"
                 >
                   <div
@@ -239,47 +254,53 @@ function stepKindLabel(kind: string) {
                     class="min-w-0"
                   >
                     <div class="flex flex-wrap items-center gap-2">
-                      <h3 class="font-display text-xl font-semibold sm:text-2xl">{{ step.heading }}</h3>
-                      <span class="rounded-full border border-ink/10 bg-canvas/70 px-2.5 py-1 text-[11px] font-bold tracking-[0.08em] text-muted">{{ stepKindLabel(step.kind) }}</span>
+                      <span class="text-sm font-semibold tabular-nums text-muted">{{ step.position }}</span>
+                      <h3 class="text-xl font-semibold leading-snug sm:text-2xl">{{ step.heading }}</h3>
                     </div>
                     <div
                       class="mt-4"
-                      :class="stepVisuals(step).length ? 'grid gap-5 2xl:grid-cols-[minmax(16rem,0.92fr)_minmax(20rem,1.08fr)] 2xl:items-start 2xl:gap-6' : ''"
+                      :class="visibleVisuals(section, step).length ? 'grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start lg:gap-7' : ''"
                     >
                       <div class="min-w-0">
-                        <p class="text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
-                        <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
+                        <p class="max-w-[70ch] whitespace-pre-line text-base leading-8 text-ink sm:text-[1.0625rem]">{{ step.text }}</p>
+                        <details v-if="step.ruleFacts?.length" class="mt-4 border-l-2 border-ink/10 pl-3">
+                          <summary class="cursor-pointer py-2 text-sm font-semibold text-muted">{{ locale === 'en' ? 'Rule highlights' : '规则要点' }}</summary>
+                          <LessonRuleFacts :facts="step.ruleFacts" />
+                        </details>
 
-                        <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-muted transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
+                        <div v-if="step.sourcePages.length" class="mt-4 flex flex-wrap gap-2">
+                          <a v-for="page in step.sourcePages" :key="page" :href="props.pageImageUrl(page)" class="inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-muted transition hover:border-indigo/30 hover:text-indigo" @click="openSourceLink($event, page)">{{ sourceLabel([page]) }}</a>
+                        </div>
                       </div>
 
                       <ul
-                        v-if="stepVisuals(step).length"
+                        v-if="visibleVisuals(section, step).length"
                         data-testid="lesson-step-visuals"
-                        :aria-label="t('lesson.visualEvidence.group', { total: stepVisuals(step).length })"
-                        :tabindex="stepVisuals(step).length > 1 ? 0 : undefined"
+                        :aria-label="t('lesson.visualEvidence.group', { total: visibleVisuals(section, step).length })"
+                        :tabindex="visibleVisuals(section, step).length > 1 ? 0 : undefined"
                         class="min-w-0"
-                        :class="stepVisuals(step).length > 1
+                        :class="visibleVisuals(section, step).length > 1
                           ? 'flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain rounded-xl pb-3 focus:outline-none focus:ring-4 focus:ring-indigo/15'
                           : 'grid'"
                         @keydown.left.prevent="scrollVisualGroup($event, -1)"
                         @keydown.right.prevent="scrollVisualGroup($event, 1)"
                       >
                         <li
-                          v-for="(focus, visualIndex) in stepVisuals(step)"
+                          v-for="(focus, visualIndex) in visibleVisuals(section, step)"
                           :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`"
                           class="min-w-0"
-                          :class="stepVisuals(step).length > 1
-                            ? 'w-[min(78vw,21rem)] shrink-0 snap-start sm:w-[19rem] 2xl:w-[17rem]'
+                          :class="visibleVisuals(section, step).length > 1
+                            ? 'w-[90%] shrink-0 snap-start'
                             : ''"
                         >
                           <LessonVisualEvidence
                             class="h-full"
                             :focus="focus"
                             :ordinal="visualIndex + 1"
-                            :total="stepVisuals(step).length"
-                            :compact="stepVisuals(step).length > 1"
+                            :total="visibleVisuals(section, step).length"
+                            :compact="visibleVisuals(section, step).length > 1"
                             :narration-id="stepNarrationId(section.position, step.position)"
+                            :open-page="openSource"
                             :page-image-url="props.pageImageUrl"
                             :focused-page-image-url="props.focusedPageImageUrl"
                           />
@@ -294,5 +315,18 @@ function stepKindLabel(kind: string) {
         </div>
       </section>
     </div>
+    <Teleport to="body">
+      <div v-if="sourcePage !== null" class="fixed inset-0 z-[80] bg-black/50 p-2 backdrop-blur-sm sm:p-6" @click.self="sourcePage = null">
+        <section ref="sourceDialog" role="dialog" aria-modal="true" :aria-label="locale === 'en' ? 'Source rulebook' : '原规则书'" tabindex="-1" class="mx-auto flex h-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-ink/10 bg-canvas shadow-2xl">
+          <header class="flex shrink-0 items-center justify-between gap-4 border-b border-ink/10 px-4 py-2">
+            <h2 class="font-semibold text-ink">{{ locale === 'en' ? 'Source rulebook' : '原规则书' }}</h2>
+            <button type="button" data-modal-initial-focus class="min-h-11 rounded-lg px-4 text-sm font-semibold text-indigo" @click="sourcePage = null">{{ locale === 'en' ? 'Back to guide' : '返回讲解' }} ×</button>
+          </header>
+          <div class="min-h-0 overflow-auto p-2 sm:p-4">
+            <RulebookPageViewer :version-id="idPrefix" :pages="sourcePages" :initial-page="sourcePage" :page-image-url="pageImageUrl" dialog-mode />
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>

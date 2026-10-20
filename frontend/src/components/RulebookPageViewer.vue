@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 
 import { useLocale } from '@/lib/locale'
 
@@ -18,19 +18,18 @@ interface PageImageRequest {
 const props = withDefaults(defineProps<{
   versionId: string
   pages: RulebookPageSummary[]
-  eyebrow?: string
   hint?: string
   dialogMode?: boolean
+  initialPage?: number
+  pageImageUrl?: (page: number) => string
 }>(), {
-  eyebrow: '',
   hint: '',
   dialogMode: false,
 })
 
 const { locale } = useLocale()
-const viewerTop = ref<HTMLElement | null>(null)
-const zoomed = ref(false)
-const pageList = ref<HTMLOListElement | null>(null)
+const pageStage = ref<HTMLElement | null>(null)
+const readingMode = ref(window.matchMedia?.('(min-width: 768px)').matches ? 'fit' : 'width')
 const requestedImage = shallowRef<PageImageRequest | null>(null)
 const displayedImage = shallowRef<PageImageRequest | null>(null)
 const failedRequestToken = ref<number | null>(null)
@@ -43,28 +42,30 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   loading: (value: number) => `正在加载第 ${value} 页…`,
   loadingWithPreserved: (value: number, preserved: number) => `正在加载第 ${value} 页；第 ${preserved} 页继续显示。`,
   displayed: (value: number) => `第 ${value} 页已显示`,
-  failed: (value: number, preserved: number | null) => `第 ${value} 页在页面图像加载阶段失败；浏览器没有得到可显示的图片。${preserved === null ? '规则书文字索引和其他页面不受影响。' : `当前仍保留第 ${preserved} 页，不会用失败结果替换。`}`,
+  failed: (value: number, preserved: number | null) => `第 ${value} 页暂时无法加载。${preserved === null ? '你可以重试或查看其他页。' : `仍显示第 ${preserved} 页。`}`,
   next: (value: number) => `下一步：只重试第 ${value} 页；若再次失败，可在新标签页打开这一页核对。`,
   retry: (value: number) => `重试第 ${value} 页`,
   openOriginal: (value: number) => `在新标签页打开第 ${value} 页`,
   openingState: '正在打开',
   displayedState: '已显示',
   failedState: '加载失败',
-  pagesLabel: '规则书页面', zoom: '放大阅读', fit: '适合页面',
+  pagesLabel: '规则书页面', previous: '上一页', following: '下一页', mode: '阅读尺寸',
+  width: '适合宽度', fit: '整页预览', actual: '原始尺寸',
 } : {
   page: (value: number) => `Page ${value}`,
   image: (value: number) => `Rulebook page ${value}`,
   loading: (value: number) => `Loading page ${value}…`,
   loadingWithPreserved: (value: number, preserved: number) => `Loading page ${value}; page ${preserved} remains displayed.`,
   displayed: (value: number) => `Page ${value} displayed`,
-  failed: (value: number, preserved: number | null) => `Page ${value} failed while loading its page image; the browser did not receive a displayable image. ${preserved === null ? 'The indexed rulebook text and other pages are unaffected.' : `Page ${preserved} remains displayed and is not replaced by this failure.`}`,
+  failed: (value: number, preserved: number | null) => `Page ${value} could not be loaded. ${preserved === null ? 'Retry or choose another page.' : `Page ${preserved} remains displayed.`}`,
   next: (value: number) => `Next: retry only page ${value}. If it fails again, open this page in a new tab to inspect it.`,
   retry: (value: number) => `Retry page ${value}`,
   openOriginal: (value: number) => `Open page ${value} in a new tab`,
   openingState: 'Opening',
   displayedState: 'Displayed',
   failedState: 'Failed to load',
-  pagesLabel: 'Rulebook pages', zoom: 'Enlarge page', fit: 'Fit page',
+  pagesLabel: 'Rulebook pages', previous: 'Previous page', following: 'Next page', mode: 'Reading size',
+  width: 'Fit width', fit: 'Whole page', actual: 'Original size',
 })
 
 const pageSignature = computed(() => props.pages.map(page => page.pageNumber).join(','))
@@ -74,8 +75,8 @@ const imageLoading = computed(() => requestedImage.value !== null
 const imageFailed = computed(() => requestedImage.value !== null
   && failedRequestToken.value === requestedImage.value.token)
 
-function pageImageUrl(versionId: string, pageNumber: number) {
-  return `/api/v1/document-versions/${encodeURIComponent(versionId)}/pages/${pageNumber}/image`
+function resolvePageImageUrl(versionId: string, pageNumber: number) {
+  return props.pageImageUrl?.(pageNumber) ?? `/api/v1/document-versions/${encodeURIComponent(versionId)}/pages/${pageNumber}/image`
 }
 
 function hasPage(pageNumber: number) {
@@ -89,12 +90,11 @@ function invalidateImageRequest() {
   failedRequestToken.value = null
 }
 
-function requestPage(pageNumber: number, scroll = true) {
+function requestPage(pageNumber: number) {
   if (disposed || !props.versionId || !hasPage(pageNumber)) return
   const current = requestedImage.value
   if (current?.versionId === props.versionId && current.pageNumber === pageNumber
     && (imageLoading.value || displayedImage.value?.token === current.token)) {
-    if (scroll) scrollToViewer()
     return
   }
   const token = ++requestSequence
@@ -102,15 +102,14 @@ function requestPage(pageNumber: number, scroll = true) {
     token,
     versionId: props.versionId,
     pageNumber,
-    url: pageImageUrl(props.versionId, pageNumber),
+    url: resolvePageImageUrl(props.versionId, pageNumber),
   }
   failedRequestToken.value = null
-  if (scroll) scrollToViewer()
 }
 
 function retryPage() {
   const pageNumber = requestedImage.value?.pageNumber
-  if (pageNumber !== undefined) requestPage(pageNumber, false)
+  if (pageNumber !== undefined) requestPage(pageNumber)
 }
 
 function requestFromImageEvent(event: Event) {
@@ -132,6 +131,7 @@ function commitDisplayedImage(event: Event) {
   if (!current) return
   failedRequestToken.value = null
   displayedImage.value = current
+  if (pageStage.value) { pageStage.value.scrollTop = 0; pageStage.value.scrollLeft = 0 }
 }
 
 function failRequestedImage(event: Event) {
@@ -140,59 +140,21 @@ function failRequestedImage(event: Event) {
   failedRequestToken.value = current.token
 }
 
-function pageButtonClass(pageNumber: number) {
-  if (requestedImage.value?.pageNumber !== pageNumber) return 'border-ink/10 hover:border-indigo/30'
-  if (imageFailed.value) return 'border-red-200 ring-2 ring-copper/20'
-  return 'border-copper ring-2 ring-copper/20'
+const currentIndex = computed(() => props.pages.findIndex(page => page.pageNumber === requestedImage.value?.pageNumber))
+
+function movePage(direction: -1 | 1) {
+  const page = props.pages[currentIndex.value + direction]
+  if (page) requestPage(page.pageNumber)
 }
 
-function pageState(pageNumber: number) {
-  if (imageLoading.value && requestedImage.value?.pageNumber === pageNumber) return copy.value.openingState
-  if (imageFailed.value && requestedImage.value?.pageNumber === pageNumber) return copy.value.failedState
-  if (displayedImage.value?.pageNumber === pageNumber) return copy.value.displayedState
-  return ''
+function choosePage(event: Event) {
+  if (event.target instanceof HTMLSelectElement) requestPage(Number(event.target.value))
 }
 
-function scrollToViewer() {
-  void nextTick(() => {
-    viewerTop.value?.scrollIntoView?.({
-      behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-      block: 'start',
-    })
-  })
-}
-
-function focusPageButton(pageNumber: number) {
-  void nextTick(() => {
-    pageList.value?.querySelector<HTMLButtonElement>(`button[data-page-number="${pageNumber}"]`)?.focus()
-  })
-}
-
-function navigatePages(event: KeyboardEvent, currentPage: number) {
-  const currentIndex = props.pages.findIndex(page => page.pageNumber === currentPage)
-  if (currentIndex < 0) return
-  let targetIndex: number | null = null
-  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-    targetIndex = Math.min(currentIndex + 1, props.pages.length - 1)
-  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-    targetIndex = Math.max(currentIndex - 1, 0)
-  } else if (event.key === 'Home') {
-    targetIndex = 0
-  } else if (event.key === 'End') {
-    targetIndex = props.pages.length - 1
-  }
-  if (targetIndex === null || targetIndex === currentIndex) return
-  const target = props.pages[targetIndex]
-  if (!target) return
-  event.preventDefault()
-  requestPage(target.pageNumber)
-  focusPageButton(target.pageNumber)
-}
-
-watch([() => props.versionId, pageSignature], () => {
+watch([() => props.versionId, pageSignature, () => props.initialPage], () => {
   invalidateImageRequest()
-  const firstPage = props.pages[0]
-  if (firstPage && props.versionId) requestPage(firstPage.pageNumber, false)
+  const firstPage = props.pages.find(page => page.pageNumber === props.initialPage) ?? props.pages[0]
+  if (firstPage && props.versionId) requestPage(firstPage.pageNumber)
 }, { immediate: true })
 
 onBeforeUnmount(() => {
@@ -202,42 +164,39 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="viewerTop" class="grid scroll-mt-20 gap-3">
-    <nav class="min-w-0">
-      <p v-if="eyebrow" class="tabletop-kicker px-1">{{ eyebrow }}</p>
-      <ol
-        ref="pageList"
-        class="flex gap-2 overflow-x-auto p-1"
-        :class="eyebrow ? 'mt-3' : ''"
-        :aria-label="copy.pagesLabel"
-      >
-        <li v-for="page in pages" :key="page.pageNumber" class="shrink-0">
-          <button
-            type="button"
-            class="min-h-11 rounded-lg border bg-paper px-3 py-2 text-left text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo focus-visible:ring-offset-2"
-            :class="pageButtonClass(page.pageNumber)"
-            :data-page-number="page.pageNumber"
-            :aria-current="displayedImage?.pageNumber === page.pageNumber ? 'page' : undefined"
-            :aria-busy="imageLoading && requestedImage?.pageNumber === page.pageNumber ? 'true' : undefined"
-            @click="requestPage(page.pageNumber)"
-            @keydown="navigatePages($event, page.pageNumber)"
-          >
-            <span class="block font-bold">{{ copy.page(page.pageNumber) }}</span>
-            <span v-if="pageState(page.pageNumber)" class="sr-only">{{ pageState(page.pageNumber) }}</span>
-          </button>
-        </li>
-      </ol>
+  <div class="grid scroll-mt-20 gap-3">
+    <nav class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink/10 bg-paper px-3 py-2" :aria-label="copy.pagesLabel">
+      <div class="flex items-center gap-1 text-ink">
+        <button type="button" :disabled="currentIndex <= 0" :aria-label="copy.previous" class="reader-control" @click="movePage(-1)">{{ copy.previous }}</button>
+        <label class="flex items-center gap-2 text-sm font-semibold">
+          <span class="sr-only">{{ copy.pagesLabel }}</span>
+          <select :value="requestedImage?.pageNumber" class="min-h-11 max-w-40 rounded-lg bg-canvas px-3 text-ink" @change="choosePage">
+            <option v-for="page in pages" :key="page.pageNumber" :value="page.pageNumber">{{ copy.page(page.pageNumber) }}</option>
+          </select>
+        </label>
+        <button type="button" :disabled="currentIndex >= pages.length - 1" :aria-label="copy.following" class="reader-control" @click="movePage(1)">{{ copy.following }}</button>
+      </div>
+      <label class="text-sm">
+        <span class="sr-only">{{ copy.mode }}</span>
+        <select v-model="readingMode" class="min-h-11 rounded-lg border border-ink/10 bg-paper px-3 text-ink">
+          <option value="width">{{ copy.width }}</option>
+          <option value="fit">{{ copy.fit }}</option>
+          <option value="actual">{{ copy.actual }}</option>
+        </select>
+      </label>
     </nav>
 
     <section class="min-w-0">
-      <div class="mb-2 flex justify-end">
-        <button type="button" :disabled="!displayedImage" :aria-pressed="zoomed" class="min-h-11 rounded-lg border border-ink/15 bg-paper px-4 text-sm font-semibold text-indigo disabled:opacity-40" @click="zoomed = !zoomed">{{ zoomed ? copy.fit : copy.zoom }}</button>
-      </div>
       <div
+        ref="pageStage"
         data-testid="rulebook-page-stage"
-        class="relative mx-auto w-full max-w-6xl rounded-lg bg-ink/5 p-1 shadow-2xl shadow-ink/20 sm:p-2"
-        :class="[imageLoading || imageFailed ? 'min-h-72' : '', zoomed ? 'max-h-[calc(100dvh-12rem)] overflow-auto' : 'grid place-items-center overflow-hidden']"
+        class="relative mx-auto w-full overflow-auto rounded-lg border border-ink/10 bg-ink/5 p-1 sm:p-3"
+        :class="[imageLoading || imageFailed ? 'min-h-72' : '', dialogMode ? 'max-h-[calc(100dvh-11rem)]' : 'max-h-[calc(100dvh-15rem)]']"
+        tabindex="0"
+        :aria-label="copy.pagesLabel"
         :aria-busy="imageLoading ? 'true' : 'false'"
+        @keydown.left.self.prevent="movePage(-1)"
+        @keydown.right.self.prevent="movePage(1)"
       >
         <img
           v-if="displayedImage"
@@ -247,8 +206,8 @@ onBeforeUnmount(() => {
           :data-page-number="displayedImage.pageNumber"
           :src="displayedImage.url"
           :alt="copy.image(displayedImage.pageNumber)"
-          class="h-auto w-auto object-contain"
-          :class="zoomed ? 'max-w-none' : ['mx-auto max-w-full', dialogMode ? 'max-h-[calc(100vh-9rem)]' : 'max-h-[calc(100vh-8rem)]']"
+          class="mx-auto block h-auto object-contain"
+          :class="readingMode === 'actual' ? 'w-auto max-w-none' : readingMode === 'width' ? 'w-full max-w-full' : 'w-auto max-w-full max-h-[calc(100dvh-16rem)]'"
         >
 
         <img
@@ -309,3 +268,9 @@ onBeforeUnmount(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+.reader-control { min-width: 2.75rem; min-height: 2.75rem; border-radius: .5rem; padding: 0 .5rem; font-size: .875rem; }
+.reader-control:hover:not(:disabled) { background: var(--color-canvas); }
+.reader-control:disabled { opacity: .3; }
+</style>

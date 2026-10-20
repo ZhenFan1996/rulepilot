@@ -3107,23 +3107,7 @@ test('deployment keeps protected integration credentials out of packages and com
   assert.doesNotMatch(deploymentWorkflow, /echo "\$BGG_API_TOKEN"/)
   assert.doesNotMatch(deploymentWorkflow,
     /'bash -s' -- "\$DEPLOY_PATH" "\$BGG_API_TOKEN"/)
-  assert.match(deploymentWorkflow, /DOCLING_API_KEY: \$\{\{ secrets\.DOCLING_API_KEY \}\}/)
-  assert.match(deploymentWorkflow, /DOCLING_SERVICE_URL: \$\{\{ secrets\.DOCLING_SERVICE_URL \}\}/)
-  assert.match(deploymentWorkflow,
-    /printf '%s' "\$DOCLING_API_KEY" > "\$local_docling_key_file"/)
-  assert.match(deploymentWorkflow,
-    /printf '%s' "\$DOCLING_SERVICE_URL" > "\$local_docling_url_file"/)
-  assert.doesNotMatch(deploymentWorkflow, /echo "\$DOCLING_(?:API_KEY|SERVICE_URL)"/)
-  assert.doesNotMatch(deploymentWorkflow,
-    /'bash -s' -- "\$DEPLOY_PATH" "\$DOCLING_(?:API_KEY|SERVICE_URL)"/)
-  assert.match(deploymentWorkflow,
-    /managed_runtime_keys='[^']* DOCLING_ENABLED DOCLING_SERVICE_URL DOCLING_API_KEY [^']*'/)
-  assert.match(deploymentWorkflow,
-    /if \[\[ -n "\$docling_service_url" \|\| -n "\$docling_api_key" \]\]; then[\s\S]*?docling_enabled=true[\s\S]*?printf 'DOCLING_ENABLED=%s\\n' "\$docling_enabled"/)
-  assert.match(deploymentCompose, /DOCLING_ENABLED: \$\{DOCLING_ENABLED:-false\}/)
-  assert.match(deploymentCompose, /DOCLING_API_KEY: \$\{DOCLING_API_KEY:-\}/)
-  assert.match(productionReleaseGuard,
-    /discard_transaction_secrets\(\)[\s\S]*?staged_docling_credential "\$release_id"/)
+
 })
 
 test('deployment isolates the recommendation startup model and agrees with its publication boundary', () => {

@@ -41,7 +41,7 @@ test('keeps the rulebook usable alongside questions and restores focus after car
   const opener = page.getByRole('button', { name: '基于这本规则书答疑' }).first()
   await opener.click()
   const answerDialog = page.getByRole('complementary', { name: '基于这本规则书答疑' })
-  await page.locator('button[data-page-number="2"]').click({ timeout: 1500 })
+  await page.getByRole('combobox', { name: '规则书页面' }).selectOption('2', { timeout: 1500 })
   await expect(page.getByTestId('rulebook-page-image')).toHaveAttribute('data-page-number', '2')
   const cardOpener = answerDialog.getByRole('button', { name: '拍照识别卡牌文字' })
   await cardOpener.click()

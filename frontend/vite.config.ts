@@ -101,7 +101,7 @@ export default defineConfig({
           'assets/locale*.js',
           'assets/LessonView-*.js',
           'assets/LessonModeNav-*.js',
-          'assets/LessonChapterList-*.js',
+          'assets/{LessonChapterList,RulebookPageViewer}-*.{js,css}',
           'assets/AppShell-*.js',
           'assets/LanguageSwitcher-*.{js,css}',
           'assets/liveLesson-*.js',

@@ -9,10 +9,6 @@ public interface VisualLayoutExtractor {
 
     Extraction extract(InputStream rulebookPdf);
 
-    default Extraction extractImage(byte[] image, java.time.Duration timeout) {
-        throw new IllegalStateException("visual image layout extraction is unavailable");
-    }
-
     default boolean configured() {
         return true;
     }

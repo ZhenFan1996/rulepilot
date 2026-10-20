@@ -139,7 +139,7 @@ class DocumentProcessingService implements DocumentProcessing, DocumentPageImage
     }
 
     @Override
-    @Transactional(readOnly = true)
+    // Object storage may be slow: do not retain a database connection while reading image bytes.
     public List<PageImage> read(UUID documentVersionId, Set<Integer> pageNumbers) {
         requireVersion(documentVersionId);
         if (pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > DocumentPageImages.MAX_PAGES_PER_READ

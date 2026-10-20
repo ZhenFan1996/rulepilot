@@ -39,7 +39,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "teaching-agent-v76-source-image-uncertainty";
+    static final String GENERATOR_VERSION = "teaching-agent-v78-source-owned-illustrations";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             // Earlier chapters can contain facts inferred from unreadable downscaled pages. Rebuild those
             // against current source-resolution evidence; retries within this generation retain completed chapters.
