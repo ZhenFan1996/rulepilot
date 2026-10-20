@@ -42,11 +42,9 @@ public class NativeRuleAnswerAgent {
 
     static final Set<String> READ_TOOLS = Set.of(
             "search_rule_evidence",
-            "search_visual_page_facts",
             "search_rule_relationships",
             "expand_rule_evidence_context",
-            "read_rule_pages",
-            "read_visual_page_facts");
+            "read_rule_pages");
 
     static final String TERMINAL_SCHEMA = """
             {
@@ -489,10 +487,6 @@ public class NativeRuleAnswerAgent {
                 When evidence marks graphical correspondence as unresolved, preserve that local uncertainty. Do not
                 infer object counts, numerical mappings, or rule effects from a diagram description or unlabeled
                 values. Answer the supported portion and direct the player to its cited original page for that detail.
-                Use search_visual_page_facts only to locate a visible printed label, icon, table, diagram, or board
-                location that canonical text search did not locate. Its observations have no mechanical-rule
-                authority and are never citation-bearing; use the returned page-bound handle with read_visual_page_facts,
-                then confirm any ruling with canonical text.
                 Call mutually independent read-only tools together in one decision; choose a dependent read only after
                 observing its prerequisite. Preserve supported portions when one sibling read fails and localize only
                 what remains unresolved.

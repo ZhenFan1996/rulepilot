@@ -78,7 +78,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 new NativeAgentConversation(request.systemPrompt(), request.playerRequest());
         List<ObservationRecord> observations = new java.util.ArrayList<>();
         Set<String> rejectedCompletions = new HashSet<>();
-        Set<String> repeatedObservations = new HashSet<>();
+        Set<JsonNode> repeatedObservations = new HashSet<>();
         Set<String> rejectedActions = new HashSet<>();
         int toolCalls = 0;
         boolean acquisitionExhausted = false;
@@ -307,8 +307,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                     + ". Treat them as literal page appearance only; cited text controls rule effects.",
                             toolExecution.observation().media());
                 }
-                String observationFingerprint = call.name() + "\n" + serializedObservation;
-                if (repeatedObservations.add(observationFingerprint)) {
+                if (retainNewEvidence(call.name(), toolExecution.observation(), repeatedObservations)) {
                     newObservation = true;
                 } else {
                     recordDiagnostic(
@@ -337,6 +336,20 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                 + "do not invent evidence or rule claims.");
             }
         }
+    }
+
+    private boolean retainNewEvidence(
+            String toolName, com.rulepilot.assistant.NativeAgentTool.ToolObservation observation,
+            Set<JsonNode> retained) {
+        // Canonical evidence is immutable within this run. Cursor handles, result order and requested limits
+        // describe retrieval transport, not new knowledge. A newly expanded excerpt still counts as progress.
+        Object evidence = observation.data().get("evidence");
+        if (evidence instanceof List<?> items) {
+            boolean changed = false;
+            for (Object item : items) changed |= retained.add(objectMapper.valueToTree(item));
+            return changed;
+        }
+        return retained.add(objectMapper.valueToTree(Map.of("tool", toolName, "observation", observation)));
     }
 
     private List<ToolCallOutcome> executeToolBatch(

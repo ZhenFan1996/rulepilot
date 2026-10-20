@@ -100,6 +100,33 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void completesWhenSearchesOnlyReorderKnownEvidenceAndIssueFreshCursors() {
+        AtomicInteger searches = new AtomicInteger();
+        var first = Map.of("evidenceId", UUID.randomUUID().toString(), "excerpt", "The marker stays on its space.");
+        var second = Map.of("evidenceId", UUID.randomUUID().toString(), "excerpt", "The chart is unresolved.");
+        NativeAgentTool search = new TestTool("search_rule_evidence") {
+            @Override public ToolObservation execute(String arguments, ToolScope scope) {
+                return ToolObservation.success("FOUND", Map.of(
+                        "evidence", searches.incrementAndGet() == 1 ? List.of(first, second) : List.of(second, first),
+                        "nextCursor", UUID.randomUUID().toString()), 2);
+            }
+        };
+        AtomicInteger decisions = new AtomicInteger();
+        NativeToolModel model = request -> switch (decisions.incrementAndGet()) {
+            case 1 -> turn(call("first", search.name(), "{}"));
+            case 2 -> turn(call("again", search.name(), "{\"query\":\"another wording\"}"));
+            default -> {
+                assertThat(request.tools()).isEmpty();
+                yield finalTurn("The supported rule holds; consult the cited chart for the missing value.");
+            }
+        };
+        var result = agent(model, List.of(search), new RecordingInvocations(null))
+                .run(request(Set.of(search.name()), TerminalContract.none()));
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).contains("consult the cited chart");
+    }
+
+    @Test
     void rejectsDependentSiblingBatchAsOneTypedActionWithoutExecutingIt() {
         AtomicInteger executions = new AtomicInteger();
         NativeAgentTool search = counting("search_rule_evidence", executions);
