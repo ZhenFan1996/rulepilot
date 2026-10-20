@@ -81,7 +81,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         Set<JsonNode> repeatedObservations = new HashSet<>();
         Set<String> rejectedActions = new HashSet<>();
         int toolCalls = 0;
-        boolean acquisitionExhausted = false;
+        Set<String> exhaustedTools = new HashSet<>();
 
         for (int iteration = 1; ; iteration++) {
             if (!Instant.now().isBefore(request.scope().deadlineAt())) {
@@ -95,9 +95,12 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
 
             ModelTurn turn;
             int modelInputTokens;
+            Set<String> availableTools = new HashSet<>(request.allowedTools());
+            availableTools.removeAll(exhaustedTools);
+            boolean acquisitionExhausted = availableTools.isEmpty();
             List<com.rulepilot.assistant.NativeToolModel.ToolSpec> advertisedTools =
-                    acquisitionExhausted ? List.of() : tools.specifications(request.role(), request.allowedTools());
-            if (!acquisitionExhausted && advertisedTools.size() != request.allowedTools().size()) {
+                    acquisitionExhausted ? List.of() : tools.specifications(request.role(), availableTools);
+            if (advertisedTools.size() != availableTools.size()) {
                 return fallback(request, "TOOL_ALLOWLIST_UNAVAILABLE", iteration - 1, toolCalls, observations);
             }
             try {
@@ -304,7 +307,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 if (!toolExecution.observation().media().isEmpty()) {
                     conversation.appendVisual(
                             "Visual observations returned by " + call.name()
-                                    + ". Treat them as literal page appearance only; cited text controls rule effects.",
+                                    + ". Use the source identity and evidence authority declared by the tool observation.",
                             toolExecution.observation().media());
                 }
                 if (retainNewEvidence(call.name(), toolExecution.observation(), repeatedObservations)) {
@@ -328,10 +331,11 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             }
             rejectedActionInstructions.forEach(conversation::appendApplicationInstruction);
             if (!newObservation && rejectedActionInstructions.isEmpty()) {
-                acquisitionExhausted = true;
+                turn.toolCalls().forEach(call -> exhaustedTools.add(call.name()));
                 conversation.appendApplicationInstruction(
-                        "The read batch returned no new observations. No further read tools are available. "
-                                + "Return a complete terminal response using the evidence already observed. "
+                        "The read batch returned no new observations. Those read tools are no longer available. "
+                                + "Use a remaining advertised tool only for unresolved evidence, or return a complete "
+                                + "terminal response using the evidence already observed. "
                                 + "Preserve supported conclusions and explicitly localize anything unresolved; "
                                 + "do not invent evidence or rule claims.");
             }

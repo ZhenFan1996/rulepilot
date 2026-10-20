@@ -99,8 +99,9 @@ class BoundedNativeToolAgentTest {
                 assertThat(observation.observation().data()).containsEntry("arguments", "{\"page\":4}"));
     }
 
-    @Test
-    void completesWhenSearchesOnlyReorderKnownEvidenceAndIssueFreshCursors() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void repeatedSearchesPreserveIndependentEvidenceAcquisition(boolean originalPageAvailable) {
         AtomicInteger searches = new AtomicInteger();
         var first = Map.of("evidenceId", UUID.randomUUID().toString(), "excerpt", "The marker stays on its space.");
         var second = Map.of("evidenceId", UUID.randomUUID().toString(), "excerpt", "The chart is unresolved.");
@@ -111,19 +112,36 @@ class BoundedNativeToolAgentTest {
                         "nextCursor", UUID.randomUUID().toString()), 2);
             }
         };
+        NativeAgentTool originalPage = tool("read_rule_page_image");
         AtomicInteger decisions = new AtomicInteger();
         NativeToolModel model = request -> switch (decisions.incrementAndGet()) {
             case 1 -> turn(call("first", search.name(), "{}"));
             case 2 -> turn(call("again", search.name(), "{\"query\":\"another wording\"}"));
-            default -> {
+            case 3 -> {
+                assertThat(request.tools()).extracting(NativeToolModel.ToolSpec::name)
+                        .doesNotContain(search.name());
+                if (originalPageAvailable) {
+                    assertThat(request.tools()).extracting(NativeToolModel.ToolSpec::name)
+                            .contains(originalPage.name());
+                    yield turn(call("original", originalPage.name(), "{}"));
+                }
                 assertThat(request.tools()).isEmpty();
                 yield finalTurn("The supported rule holds; consult the cited chart for the missing value.");
             }
+            default -> {
+                yield finalTurn("The supported rule holds; consult the cited chart for the missing value.");
+            }
         };
-        var result = agent(model, List.of(search), new RecordingInvocations(null))
-                .run(request(Set.of(search.name()), TerminalContract.none()));
+        var result = agent(model, originalPageAvailable ? List.of(search, originalPage) : List.of(search),
+                new RecordingInvocations(null))
+                .run(request(originalPageAvailable ? Set.of(search.name(), originalPage.name()) : Set.of(search.name()),
+                        TerminalContract.none()));
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(result.text()).contains("consult the cited chart");
+        if (originalPageAvailable) {
+            assertThat(result.observations()).extracting(NativeToolAgent.ObservationRecord::toolName)
+                    .contains(originalPage.name());
+        }
     }
 
     @Test

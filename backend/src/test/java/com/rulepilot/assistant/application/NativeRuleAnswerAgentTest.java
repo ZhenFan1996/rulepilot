@@ -237,6 +237,25 @@ class NativeRuleAnswerAgentTest {
     }
 
     @Test
+    void returnsTheExactParserFailureToTheOwningAgent() throws Exception {
+        String candidate = "{\"kind\":\"CHAT\",\n\"shortVerdict\":\"Hello\" \"explanation\":\"\"}";
+        var parserFailure = org.assertj.core.api.Assertions.catchThrowableOfType(
+                () -> JsonMapper.builder().build().readTree(candidate),
+                com.fasterxml.jackson.core.JsonProcessingException.class);
+        NativeRuleAnswerAgent answers = answers(
+                new StubNativeAgent("unused", List.of(), 0), emptyLookup());
+
+        TerminalValidation result = answers.validateTerminal(
+                candidate, List.of(), new QuestionContext(versionId));
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.code()).isEqualTo("TERMINAL_JSON_INVALID");
+        assertThat(result.reason()).contains(parserFailure.getOriginalMessage())
+                .contains("line " + parserFailure.getLocation().getLineNr())
+                .contains("column " + parserFailure.getLocation().getColumnNr());
+    }
+
+    @Test
     void rejectsANonStringExplanationWhenTheOptionalFieldIsPresent() {
         NativeRuleAnswerAgent answers = answers(
                 new StubNativeAgent("unused", List.of(), 0), emptyLookup());
@@ -462,7 +481,6 @@ class NativeRuleAnswerAgentTest {
                             rewordQuery ? "{\"query\":\"adjacent clearing\",\"limit\":1}" : arguments)), 10, 5);
                 }
                 if (repeatRead && decision == 3) {
-                    assertThat(request.tools()).isEmpty();
                     return new ModelTurn(terminal, List.of(), 10, 5);
                 }
                 return switch (decision) {

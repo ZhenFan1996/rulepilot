@@ -312,7 +312,13 @@ public class NativeRuleAnswerAgent {
         try {
             root = objectMapper.readTree(raw);
         } catch (JsonProcessingException exception) {
-            throw new CandidateFailure("TERMINAL_JSON_INVALID", "/", "Terminal JSON could not be decoded.");
+            String location = exception.getLocation() == null
+                    ? ""
+                    : " at line " + exception.getLocation().getLineNr()
+                            + ", column " + exception.getLocation().getColumnNr();
+            throw new CandidateFailure(
+                    "TERMINAL_JSON_INVALID", "/",
+                    "JSON parsing failed" + location + ": " + exception.getOriginalMessage());
         }
         if (root == null || !root.isObject()) {
             throw new CandidateFailure("TERMINAL_TYPE_INVALID", "/", "Terminal JSON must be one object.");
