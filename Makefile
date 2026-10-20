@@ -91,10 +91,12 @@ mcp-smoke: mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke ## Exercise ever
 backend-test: ## Run backend unit and application tests
 	@cd backend && ./mvnw test
 
-backend-runtime-image-smoke: ## Package and build the exact backend runtime image, including native visual-tool smoke
+backend-runtime-image-smoke: ## Build the runtime and exercise PDF and publication-check dependencies
 	@if [ -f backend/mvnw ]; then \
-		(cd backend && ./mvnw -q -DskipTests package); \
-		docker build --file backend/Dockerfile.runtime --tag rulepilot-backend:ci-smoke backend; \
+		(cd backend && ./mvnw -q -DskipTests package) && \
+		docker build --file backend/Dockerfile.runtime --tag rulepilot-backend:ci-smoke backend && \
+		docker run --rm --network none --entrypoint sh rulepilot-backend:ci-smoke -c \
+			'pdftoppm -v && python3 -c '\''import json; assert json.loads("{\"status\":\"UP\"}")["status"] == "UP"'\'''; \
 	else \
 		echo "backend runtime image smoke is not available; the backend project is missing."; \
 		exit 2; \
