@@ -91,6 +91,11 @@ describe('playerAnswerContract', () => {
     })).not.toBeNull()
     expect(parsePlayerFacingRuleAnswer({
       ...insufficient,
+      status: 'RESOURCE_LIMIT_REACHED',
+      recovery: { ...insufficient.recovery!, canRetryUnchanged: false },
+    })).not.toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
+      ...insufficient,
       status: 'MODEL_TIMEOUT',
       recovery: { ...insufficient.recovery!, canRetryUnchanged: true },
     })).not.toBeNull()

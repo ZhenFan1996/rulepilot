@@ -223,7 +223,7 @@ class NativeReadToolsTest {
                 .toList();
         ToolScope scope = scope();
         when(readTools.searchRuleEvidencePage(any(), org.mockito.ArgumentMatchers.eq(0),
-                org.mockito.ArgumentMatchers.eq(6), org.mockito.ArgumentMatchers.eq(Set.of())))
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.eq(Set.of())))
                 .thenReturn(new RuleEvidencePage(List.of(), false, 0));
         String arguments = JsonMapper.builder().build().writeValueAsString(java.util.Map.of(
                 "query", query,
@@ -236,7 +236,7 @@ class NativeReadToolsTest {
         ArgumentCaptor<AssistantReadTools.SearchRuleEvidence> request =
                 ArgumentCaptor.forClass(AssistantReadTools.SearchRuleEvidence.class);
         verify(readTools).searchRuleEvidencePage(request.capture(),
-                org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.eq(6),
+                org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.eq(Set.of()));
         assertThat(request.getValue().query()).isEqualTo(query);
         assertThat(request.getValue().limit()).isEqualTo(12);
@@ -282,15 +282,16 @@ class NativeReadToolsTest {
                 .isInstanceOf(IllegalArgumentException.class);
         ToolScope scope = scope();
         Set<Integer> pages = Set.of(1, 2, 3, 4, 5, 6, 7, 8);
-        Set<Integer> firstBatch = Set.of(1, 2, 3, 4, 5, 6);
-        when(readTools.readRuleEvidencePagesPage(scope.documentVersionId(), firstBatch, false, 0, 6))
+        when(readTools.readRuleEvidencePagesPage(org.mockito.ArgumentMatchers.eq(scope.documentVersionId()), org.mockito.ArgumentMatchers.eq(pages),
+                org.mockito.ArgumentMatchers.eq(false), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.anyInt()))
                 .thenReturn(new RuleEvidencePage(List.of(), false, 0));
 
         var result = tool.execute("{\"pageNumbers\":[1,2,3,4,5,6,7,8]}", scope);
 
         assertThat(result.code()).isEqualTo("NO_PAGE_EVIDENCE");
-        assertThat(result.data()).containsEntry("hasMore", true);
-        verify(readTools).readRuleEvidencePagesPage(scope.documentVersionId(), firstBatch, false, 0, 6);
+        assertThat(result.data()).containsEntry("hasMore", false);
+        verify(readTools).readRuleEvidencePagesPage(org.mockito.ArgumentMatchers.eq(scope.documentVersionId()), org.mockito.ArgumentMatchers.eq(pages),
+                org.mockito.ArgumentMatchers.eq(false), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.anyInt());
     }
 
     @Test

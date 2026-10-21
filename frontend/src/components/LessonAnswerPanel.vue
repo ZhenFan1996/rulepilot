@@ -316,6 +316,7 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
     RETRIEVAL_UNAVAILABLE: t('lesson.answer.failure.retrievalUnavailable'),
     MODEL_UNAVAILABLE: t('lesson.answer.failure.unavailable'),
     MODEL_TIMEOUT: t('public.answer.timeout'),
+    RESOURCE_LIMIT_REACHED: t('lesson.answer.failure.capacity'),
     INVALID_MODEL_OUTPUT: t('lesson.answer.failure.invalid'),
     VERSION_CONFLICT: t('lesson.answer.failure.version'),
   }[status]

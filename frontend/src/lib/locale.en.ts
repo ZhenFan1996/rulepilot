@@ -671,6 +671,7 @@ const englishMessages = {
     'public.answer.refineHint': 'Add the exact rule object, trigger, or what happened immediately before it to search for reliable support again.',
     'public.answer.refineAction': 'Add detail and retry',
     'public.answer.refineSuffix': '\nAdditional condition: ',
+    'lesson.answer.failure.capacity': 'This answer reached the available processing capacity. Focus on one rule or consult the source.',
     'public.answer.timeout': 'Checking took too long this time. Try again shortly, or open the source page below.',
     'public.answer.missing': 'This guide is no longer public, so it cannot answer questions.',
     'public.answer.failed': 'We could not check the rulebook right now. Please try again shortly.',

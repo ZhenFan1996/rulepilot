@@ -108,7 +108,10 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 int estimatedInputTokens = messages.stream()
                         .mapToInt(message -> estimateTokens(message.content()))
                         .reduce(0, this::saturatedAdd);
-                modelInputTokens = estimatedInputTokens;
+                modelInputTokens = saturatedAdd(estimatedInputTokens, advertisedTools.stream()
+                        .mapToInt(tool -> estimateTokens(tool.inputSchema()) + estimateTokens(tool.description())
+                                + estimateTokens(tool.name()))
+                        .reduce(0, this::saturatedAdd));
                 int currentIteration = iteration;
                 turn = audited.invoke(
                         request.scope().runId(),
@@ -130,6 +133,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 return fallback(request, stopReason(exception), iteration, toolCalls, observations);
             }
 
+            modelInputTokens = Math.max(modelInputTokens, turn.promptTokens());
             if (turn.toolCalls().isEmpty()) {
                 List<String> missingCompletionTools = missingCompletionTools(request, observations);
                 if (!missingCompletionTools.isEmpty()) {
@@ -318,16 +322,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             "nativeObservationNoProgress|" + call.name(), ActivityOutcome.REJECTED,
                             "native read returned an already observed result");
                 }
-                if (toolExecution.observation().status() == ObservationStatus.PARTIAL
-                        && toolExecution.observation().evidenceCount() == 0
-                        && "OBSERVATION_BUDGET_EXHAUSTED".equals(toolExecution.observation().code())) {
-                    recordDiagnostic(
-                            request.scope().runId(), ActivityType.VALIDATION,
-                            "nativeObservationNoProgress|" + call.name(), ActivityOutcome.REJECTED,
-                            "native observation could not retain one evidence item within the remaining envelope");
-                    return fallback(
-                            request, "OBSERVATION_BUDGET_EXHAUSTED", iteration, toolCalls, observations);
-                }
+
             }
             rejectedActionInstructions.forEach(conversation::appendApplicationInstruction);
             if (!newObservation && rejectedActionInstructions.isEmpty()) {
@@ -364,7 +359,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         Map<String, ToolSpec> advertisedByName = advertisedTools.stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(ToolSpec::name, spec -> spec));
         List<com.rulepilot.assistant.NativeAgentTool.ToolScope> observationScopes =
-                observationScopes(request.scope(), turn, modelInputTokens);
+                observationScopes(request, turn, modelInputTokens);
         if (turn.toolCalls().size() == 1) {
             ModelToolCall call = turn.toolCalls().getFirst();
             return List.of(settleToolCall(
@@ -797,31 +792,23 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     }
 
     private List<com.rulepilot.assistant.NativeAgentTool.ToolScope> observationScopes(
-            com.rulepilot.assistant.NativeAgentTool.ToolScope scope,
-            ModelTurn turn,
-            int currentModelInputTokens) {
-        AgentExecutionControl.BudgetSnapshot budget = execution.budget(scope.runId());
-        if (budget == null || !budget.tokenLimitEnforced()) {
-            return turn.toolCalls().stream().map(ignored -> scope).toList();
-        }
-        long remaining = Math.max(0L, (long) budget.maxTokens() - budget.usedTokens());
+            RunRequest request, ModelTurn turn, int currentModelInputTokens) {
+        var scope = request.scope();
         long argumentTokens = turn.toolCalls().stream()
-                .mapToLong(call -> estimateTokens(call.argumentsJson()))
-                .sum();
-        // The observation is charged once as tool output and once more inside the next complete model context.
-        // Reserve the already-known next-turn context plus a small typed decision/completion allowance first.
-        long nextTurnWithoutObservation = (long) currentModelInputTokens
-                + estimateTokens(turn.text())
-                + argumentTokens
-                + 256;
-        long twiceObservation = remaining - argumentTokens - nextTurnWithoutObservation;
-        int batchObservationTokens = saturatedInt(Math.max(0L, twiceObservation / 2));
+                .mapToLong(call -> estimateTokens(call.argumentsJson())).sum();
+        long nextInput = (long) currentModelInputTokens + estimateTokens(turn.text()) + argumentTokens;
+        long available = Math.max(0L, (long) model.maxInputTokens(request.role(), scope.ownerUsername()) - nextInput);
+        AgentExecutionControl.BudgetSnapshot budget = execution.budget(scope.runId());
+        if (budget != null && budget.tokenLimitEnforced()) {
+            long remaining = Math.max(0L, (long) budget.maxTokens() - budget.usedTokens());
+            // Only durable runs that enforce cumulative usage charge output plus the next prompt.
+            available = Math.min(available, Math.max(0L, (remaining - argumentTokens - nextInput) / 2));
+        }
+        int batchTokens = saturatedInt(available);
         int calls = turn.toolCalls().size();
-        int tokensPerCall = batchObservationTokens / calls;
-        int remainder = batchObservationTokens % calls;
         List<com.rulepilot.assistant.NativeAgentTool.ToolScope> scopes = new ArrayList<>(calls);
         for (int index = 0; index < calls; index++) {
-            scopes.add(scope.withMaxObservationTokens(tokensPerCall + (index < remainder ? 1 : 0)));
+            scopes.add(scope.withMaxObservationTokens(batchTokens / calls + (index < batchTokens % calls ? 1 : 0)));
         }
         return List.copyOf(scopes);
     }

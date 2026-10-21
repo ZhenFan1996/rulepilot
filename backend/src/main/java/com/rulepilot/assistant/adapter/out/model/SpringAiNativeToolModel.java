@@ -50,6 +50,18 @@ public class SpringAiNativeToolModel implements NativeToolModel {
     }
 
     @Override
+    public int maxInputTokens(Role role, String ownerUsername) {
+        String name = models.modelNameFor(modelRole(role), ownerUsername);
+        // Published thinking-mode input limit, not a workload estimate:
+        // https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max
+        if ("qwen".equals(models.providerFor(modelRole(role), ownerUsername))
+                && name != null && (name.equals("qwen3.8-max") || name.equals("qwen3.8-max-0902"))) {
+            return 983_616;
+        }
+        return NativeToolModel.super.maxInputTokens(role, ownerUsername);
+    }
+
+    @Override
     public ModelTurn next(ModelRequest request) {
         List<ToolCallback> callbacks = request.tools().stream().map(DefinitionOnlyToolCallback::new).map(ToolCallback.class::cast).toList();
         ChatModel chatModel = models.modelFor(modelRole(request.role()), request.scope().ownerUsername());

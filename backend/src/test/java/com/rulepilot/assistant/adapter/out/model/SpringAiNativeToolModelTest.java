@@ -45,6 +45,17 @@ import org.springframework.ai.retry.NonTransientAiException;
 class SpringAiNativeToolModelTest {
 
     @Test
+    void reportsPublishedInputCapacityWithoutInventingACustomProviderLimit() {
+        var configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.ANSWER, "player")).thenReturn("qwen");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.ANSWER, "player")).thenReturn("qwen3.8-max");
+        var model = new SpringAiNativeToolModel(configuration);
+        assertThat(model.maxInputTokens(Role.ANSWER, "player")).isEqualTo(983_616);
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.ANSWER, "player")).thenReturn("custom-model");
+        assertThat(model.maxInputTokens(Role.ANSWER, "player")).isEqualTo(Integer.MAX_VALUE);
+    }
+
+    @Test
     void registersDefinitionsAndReturnsProviderNativeCallsWithoutExecutingCallbacks() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
