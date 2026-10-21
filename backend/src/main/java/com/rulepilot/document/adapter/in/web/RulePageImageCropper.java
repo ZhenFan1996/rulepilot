@@ -64,6 +64,7 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
                         projection.top(),
                         projection.width(),
                         projection.height()));
+                parameters.setSourceSubsampling(projection.subsampling(), projection.subsampling(), 0, 0);
                 BufferedImage decoded = reader.read(0, parameters);
                 if (decoded == null) throw new IllegalStateException("document page image cannot be decoded");
                 return encodeRgb(decoded);
@@ -125,13 +126,17 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
                 y + height, page.height());
         int projectedWidth = right - left;
         int projectedHeight = bottom - top;
-        long projectedPixels = (long) projectedWidth * projectedHeight;
-        validateProjectedPixels(projectedPixels);
+        int subsampling = 1;
+        while (sampledPixels(projectedWidth, projectedHeight, subsampling) > MAX_PROJECTED_IMAGE_PIXELS) {
+            subsampling++;
+        }
+        long projectedPixels = sampledPixels(projectedWidth, projectedHeight, subsampling);
         return new CropProjection(
                 left,
                 top,
                 projectedWidth,
                 projectedHeight,
+                subsampling,
                 sourcePixels + projectedPixels);
     }
 
@@ -237,7 +242,7 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
                 (int) (((long) normalized * imageSize + NORMALIZED_PAGE_SIZE - 1) / NORMALIZED_PAGE_SIZE)));
     }
 
-    private record CropProjection(int left, int top, int width, int height, long totalWorkPixels) {}
+    private record CropProjection(int left, int top, int width, int height, int subsampling, long totalWorkPixels) {}
 
     private record PreviewSize(int width, int height) {}
 }

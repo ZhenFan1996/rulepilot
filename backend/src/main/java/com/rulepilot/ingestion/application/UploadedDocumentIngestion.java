@@ -3,7 +3,6 @@ package com.rulepilot.ingestion.application;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentPageImageStore;
-import com.rulepilot.document.RenderedDocumentAvailable;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.UUID;
@@ -15,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -36,7 +34,6 @@ public class UploadedDocumentIngestion {
     private final ProcessingProgressTracker progress;
     private final RuleStructureService structures;
     private final RuleChunkEmbeddingService embeddings;
-    private final ApplicationEventPublisher events;
     private final MeterRegistry metrics;
 
     @Autowired
@@ -48,7 +45,6 @@ public class UploadedDocumentIngestion {
             ProcessingProgressTracker progress,
             RuleStructureService structures,
             RuleChunkEmbeddingService embeddings,
-            ApplicationEventPublisher events,
             MeterRegistry metrics) {
         this.documents = documents;
         this.pdfPreparation = pdfPreparation;
@@ -57,29 +53,7 @@ public class UploadedDocumentIngestion {
         this.progress = progress;
         this.structures = structures;
         this.embeddings = embeddings;
-        this.events = events;
         this.metrics = metrics;
-    }
-
-    UploadedDocumentIngestion(
-            DocumentProcessing documents,
-            PdfRulebookPreparation pdfPreparation,
-            DocumentPageImageStore pageImages,
-            BoundedPageImageStoragePipeline pageImageStorage,
-            ProcessingProgressTracker progress,
-            RuleStructureService structures,
-            RuleChunkEmbeddingService embeddings,
-            MeterRegistry metrics) {
-        this(
-                documents,
-                pdfPreparation,
-                pageImages,
-                pageImageStorage,
-                progress,
-                structures,
-                embeddings,
-                ignored -> {},
-                metrics);
     }
 
     public void process(UUID documentVersionId, DocumentProcessingStage stage) {
@@ -217,9 +191,6 @@ public class UploadedDocumentIngestion {
         progress.update(documentVersionId, "INDEXING", 95, pageCount, false);
         documents.markReady(documentVersionId);
         progress.update(documentVersionId, "READY", 100, pageCount, true);
-        // Synchronous optional listeners may take minutes. Publish only after readiness is durable and visible,
-        // so teaching and Q&A can use the document while visual enrichment finishes on this worker.
-        events.publishEvent(new RenderedDocumentAvailable(documentVersionId, pageCount));
     }
 
     static int renderingPercentage(int completedPages, int totalPages) {

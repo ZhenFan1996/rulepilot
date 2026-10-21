@@ -7,6 +7,8 @@ import java.util.UUID;
 /** Durable state owned by the optional visual-aid module. */
 public interface VisualRegionIndex {
 
+    String source(UUID documentVersionId);
+
     List<Region> find(UUID documentVersionId, java.util.Set<Integer> pageNumbers);
 
     void replace(UUID documentVersionId, String source, int pageCount, List<Region> regions);

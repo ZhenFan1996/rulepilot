@@ -23,7 +23,7 @@ public class VersionedAgentPrompts {
     private final String lessonLocalizationUser;
 
     public VersionedAgentPrompts(
-            @Value("classpath:prompts/teaching-agent-v45-focused-source-contract-system.txt") Resource focusedTeachingSystem,
+            @Value("classpath:prompts/teaching-agent-v46-direct-source-illustrations-system.txt") Resource focusedTeachingSystem,
             @Value("classpath:prompts/teaching-agent-v44-quantitative-aggregation-system.txt") Resource teachingQuantitativeAggregation,
             @Value("classpath:prompts/teaching-agent-v12-user.txt") Resource teachingUser,
             @Value("classpath:prompts/content-critic-v34-focused-runtime-system.txt") Resource focusedCriticSystem,

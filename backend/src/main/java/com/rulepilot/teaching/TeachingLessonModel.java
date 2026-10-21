@@ -278,16 +278,18 @@ public interface TeachingLessonModel {
         }
     }
 
-    /** An observed crop with application-owned geometry and source identity; prose is untrusted visual data. */
+    /** Source-bound pixels for the chapter Agent; the application never invents their meaning. */
     record VisualInput(String imageId, com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus focus,
-            List<UUID> evidenceIds) {
+            List<UUID> evidenceIds, com.rulepilot.document.DocumentPageImages.PageImage sourcePage, byte[] image) {
         public VisualInput {
-            if (imageId == null || imageId.isBlank() || focus == null || focus.visibleDescription().isBlank()
-                    || evidenceIds == null || evidenceIds.isEmpty()) {
-                throw new IllegalArgumentException("visual observation requires identity, description, and evidence");
+            if (imageId == null || imageId.isBlank() || focus == null || sourcePage == null || sourcePage.pageNumber() != focus.pageNumber()
+                    || image == null || image.length == 0 || evidenceIds == null || evidenceIds.isEmpty()) {
+                throw new IllegalArgumentException("source illustration requires identity, pixels, and page-bound evidence");
             }
             evidenceIds = List.copyOf(evidenceIds);
+            image = image.clone();
         }
+        @Override public byte[] image() { return image.clone(); }
     }
 
     record PriorSectionContext(String topicKey, String title, String closingStep) {

@@ -26,6 +26,13 @@ public class JpaVisualRegionIndex implements VisualRegionIndex {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public String source(UUID documentVersionId) {
+        var state = entityManager.find(VisualAidIndexEntity.class, documentVersionId);
+        return state == null ? null : state.source;
+    }
+
+    @Override
     @Transactional
     public void replace(UUID documentVersionId, String source, int pageCount, List<Region> regions) {
         if (documentVersionId == null || source == null || source.isBlank() || pageCount < 1 || regions == null

@@ -93,28 +93,6 @@ class TeachingGenerationConfiguration {
         return executor;
     }
 
-    /**
-     * Vision calls are deliberately isolated from base lesson generation. Each page request owns its source image,
-     * provider response, validation, and persistence boundary. This pool serves post-publication positioning and
-     * complete visual audits; Teaching page catalog calls own their bounded lane in the cataloger.
-     * The zero-capacity queue still rejects work above the configured per-lesson bound.
-     */
-    @Bean(name = "visualLocationExecutor")
-    ThreadPoolTaskExecutor visualLocationExecutor(
-            @Value("${rulepilot.visual.request-parallelism:10}") int requestParallelism) {
-        if (requestParallelism < 1 || requestParallelism > 10) {
-            throw new IllegalArgumentException("visual request parallelism must be between one and ten");
-        }
-        var executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(requestParallelism);
-        executor.setMaxPoolSize(requestParallelism);
-        executor.setQueueCapacity(0);
-        executor.setThreadNamePrefix("visual-location-");
-        executor.setWaitForTasksToCompleteOnShutdown(false);
-        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
-        return executor;
-    }
-
     @Bean(name = "publicCoverWarmupExecutor")
     ThreadPoolTaskExecutor publicCoverWarmupExecutor() {
         var executor = new ThreadPoolTaskExecutor();

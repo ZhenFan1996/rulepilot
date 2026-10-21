@@ -39,7 +39,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "teaching-agent-v78-source-owned-illustrations";
+    static final String GENERATOR_VERSION = "teaching-agent-v82-labelled-source-illustrations";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             // Earlier chapters can contain facts inferred from unreadable downscaled pages. Rebuild those
             // against current source-resolution evidence; retries within this generation retain completed chapters.
@@ -415,13 +415,15 @@ public class GroundedTeachingAgent {
         if (!planned.visualEvidenceRecommended() || visualEnricher == null
                 || !visualEnricher.supportsVisualEvidence(plan.createdBy())) return List.of();
         try {
-            return visualEnricher.prepare(plan, planned, evidence, runId);
+            return invocations.invoke(runId, com.rulepilot.assistant.AgentExecutionControl.ActivityType.TOOL,
+                    "prepareSourceIllustrations|" + planned.position(), 0, "Source illustration pixels prepared",
+                    () -> visualEnricher.prepare(plan, planned, evidence), ignored -> 0);
         } catch (AgentExecutionStoppedException stopped) {
             if (stopped.reason() == AgentExecutionStoppedException.StopReason.CANCELLED) throw stopped;
-            log.warn("Optional source image observation stopped for {}: {}", planned.topicKey(), stopped.reason());
+            log.warn("Optional source illustration preparation stopped for {}: {}", planned.topicKey(), stopped.reason());
             return List.of();
         } catch (RuntimeException failure) {
-            log.warn("Optional source image observation unavailable for {}: {}", planned.topicKey(), failure.getMessage());
+            log.warn("Optional source illustration preparation unavailable for {}: {}", planned.topicKey(), failure.getMessage());
             return List.of();
         }
     }

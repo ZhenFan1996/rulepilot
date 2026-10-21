@@ -15,7 +15,6 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessing.ExtractedPage;
 import com.rulepilot.document.DocumentProcessing.ExtractedTextBlock;
 import com.rulepilot.document.DocumentProcessingStage;
-import com.rulepilot.document.RenderedDocumentAvailable;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.ByteArrayInputStream;
@@ -30,7 +29,6 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.mockito.InOrder;
-import org.springframework.context.ApplicationEventPublisher;
 
 class UploadedDocumentIngestionTest {
 
@@ -42,7 +40,6 @@ class UploadedDocumentIngestionTest {
         ProcessingProgressTracker progress = Mockito.mock(ProcessingProgressTracker.class);
         RuleStructureService structures = Mockito.mock(RuleStructureService.class);
         RuleChunkEmbeddingService embeddings = Mockito.mock(RuleChunkEmbeddingService.class);
-        ApplicationEventPublisher events = Mockito.mock(ApplicationEventPublisher.class);
         SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         UploadedDocumentIngestion ingestion = new UploadedDocumentIngestion(
                 documents,
@@ -52,7 +49,6 @@ class UploadedDocumentIngestionTest {
                 progress,
                 structures,
                 embeddings,
-                events,
                 metrics);
         UUID versionId = UUID.randomUUID();
         List<ExtractedPage> pages = List.of(
@@ -84,7 +80,6 @@ class UploadedDocumentIngestionTest {
         verify(progress).update(versionId, "CHUNKING", 85, 3, false);
         verify(documents).markStructuring(versionId);
         verify(documents).markChunking(versionId);
-        verifyNoInteractions(events);
         InOrder statusOrder = inOrder(documents);
         statusOrder.verify(documents).markStructuring(versionId);
         statusOrder.verify(documents).markChunking(versionId);
@@ -94,14 +89,9 @@ class UploadedDocumentIngestionTest {
         persistenceBeforeImages.verify(structures).organize(versionId, pages);
         persistenceBeforeImages.verify(pageImages, Mockito.times(3)).store(Mockito.eq(versionId), any());
         when(documents.pageCount(versionId)).thenReturn(3);
-        doAnswer(ignored -> {
-                    // Readiness must already be durable and visible when a slow optional listener begins.
-                    verify(documents).markReady(versionId);
-                    verify(progress).update(versionId, "READY", 100, 3, true);
-                    return null;
-                }).when(events).publishEvent(new RenderedDocumentAvailable(versionId, 3));
         ingestion.process(versionId, DocumentProcessingStage.EMBED);
-        verify(events).publishEvent(new RenderedDocumentAvailable(versionId, 3));
+        verify(documents).markReady(versionId);
+        verify(progress).update(versionId, "READY", 100, 3, true);
         assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
                         .tag("phase", "extraction").timer().count())
                 .isOne();

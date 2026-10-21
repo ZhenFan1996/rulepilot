@@ -301,6 +301,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                 .param("visuals", modelVisuals(request))
                                 .param("repair", repairInstruction);
                     });
+            requestSpec = requestSpec.messages(visualMessages(request));
             ChatResponse response = requestSpec.call().chatResponse();
             if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
                 throw new InvalidOutputException("teaching model returned no response", null);
@@ -393,7 +394,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             options.put("thinking", Map.of("type", "disabled"));
         }
         if (usesQwen(role, modelConfigurationOwner)) {
-            options.put("enable_thinking", false);
+            String model = models.modelNameFor(role, modelConfigurationOwner);
+            // Qwen 3.8 exposes effort control. Direct illustrated composition needs source interpretation as well as prose.
+            boolean controlledReasoning = model != null && model.startsWith("qwen3.8-");
+            options.put("enable_thinking", controlledReasoning);
+            if (controlledReasoning) options.put("reasoning_effort", "low");
         }
         return Map.copyOf(options);
     }
@@ -465,9 +470,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     Role roleFor(SectionRequest request) {
-        // A bounded visual pass has already converted rendered pages into reusable page facts and anchors. Real
-        // provider replays showed that making the visual provider inspect pages, write prose, and satisfy the complete
-        // section schema in one call was slower and materially less reliable than composing from that compact ledger.
+        // The chapter Agent owns prose and source-image placement in the same invocation.
         return Role.TEACHING;
     }
 
@@ -500,12 +503,63 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return readable.isEmpty() ? excerpt : readable.toString();
     }
 
+    private List<org.springframework.ai.chat.messages.Message> visualMessages(SectionRequest request) {
+        var messages = new java.util.ArrayList<org.springframework.ai.chat.messages.Message>();
+        var pages = new java.util.HashSet<Integer>();
+        for (var visual : request.visuals()) {
+            var page = visual.sourcePage();
+            if (pages.add(page.pageNumber())) {
+                messages.add(org.springframework.ai.chat.messages.UserMessage.builder()
+                        .text("Original source page " + page.pageNumber() + "; evidence references are listed in the chapter request.")
+                        .media(new org.springframework.ai.content.Media(org.springframework.util.MimeTypeUtils.parseMimeType(page.mediaType()),
+                                new org.springframework.core.io.ByteArrayResource(page.content()))).build());
+            }
+            messages.add(org.springframework.ai.chat.messages.UserMessage.builder()
+                    .text("Source illustration imageId: " + visual.imageId() + "; page: " + page.pageNumber())
+                    .media(new org.springframework.ai.content.Media(org.springframework.util.MimeTypeUtils.IMAGE_JPEG,
+                            new org.springframework.core.io.ByteArrayResource(labelledIllustration(visual)))).build());
+        }
+        return messages;
+    }
+
+    /** Keep the selection identity in the pixels as well as the transport text. Reader crops remain untouched. */
+    private byte[] labelledIllustration(TeachingLessonModel.VisualInput visual) {
+        try {
+            var source = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(visual.image()));
+            if (source == null) throw new java.io.IOException("source illustration cannot be decoded");
+            var font = new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.PLAIN, 24);
+            var measuring = source.createGraphics();
+            var metrics = measuring.getFontMetrics(font);
+            int width = Math.max(source.getWidth(), metrics.stringWidth(visual.imageId()) + 16);
+            int band = metrics.getHeight() + 16;
+            int baseline = metrics.getAscent() + 8;
+            measuring.dispose();
+            var labelled = new java.awt.image.BufferedImage(width, source.getHeight() + band,
+                    java.awt.image.BufferedImage.TYPE_INT_RGB);
+            var graphics = labelled.createGraphics();
+            try {
+                graphics.setColor(java.awt.Color.WHITE);
+                graphics.fillRect(0, 0, labelled.getWidth(), labelled.getHeight());
+                graphics.drawImage(source, 0, band, null);
+                graphics.setColor(java.awt.Color.BLACK);
+                graphics.setFont(font);
+                graphics.drawString(visual.imageId(), 8, baseline);
+            } finally {
+                graphics.dispose();
+            }
+            var output = new java.io.ByteArrayOutputStream();
+            if (!javax.imageio.ImageIO.write(labelled, "jpeg", output)) throw new java.io.IOException("JPEG writer unavailable");
+            return output.toByteArray();
+        } catch (java.io.IOException unavailable) {
+            throw new java.io.UncheckedIOException("could not bind illustration identity to its pixels", unavailable);
+        }
+    }
+
     private String modelVisuals(SectionRequest request) {
         Map<UUID, String> references = new LinkedHashMap<>();
         evidenceIds(request).forEach((ref, id) -> references.put(id, ref));
         var observations = request.visuals().stream().map(visual -> Map.<String, Object>of(
                 "imageId", visual.imageId(), "page", visual.focus().pageNumber(),
-                "visibleDescription", visual.focus().visibleDescription(),
                 "evidenceRefs", visual.evidenceIds().stream().map(references::get).toList())).toList();
         try {
             return STRICT_TEACHING_OUTPUT.writeValueAsString(observations);

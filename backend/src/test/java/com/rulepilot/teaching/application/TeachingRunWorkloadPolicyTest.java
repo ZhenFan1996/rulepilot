@@ -21,7 +21,7 @@ class TeachingRunWorkloadPolicyTest {
 
         // Candidate correction and additional candidate batches are intentionally absent from this source-window
         // estimate: the durable token/deadline owner governs useful recovery instead of imposing an attempt count.
-        assertThat(demand.estimatedModelCalls()).isEqualTo(57);
+        assertThat(demand.estimatedModelCalls()).isEqualTo(38);
     }
 
     @Test
@@ -35,7 +35,7 @@ class TeachingRunWorkloadPolicyTest {
     void derivesACapacityEstimateForALargerUnlikePlanWithoutAFixedPlanCeiling() {
         var demand = policy.demand(plan(30, true));
 
-        assertThat(demand.estimatedModelCalls()).isEqualTo(90);
+        assertThat(demand.estimatedModelCalls()).isEqualTo(60);
     }
 
     @Test
@@ -50,15 +50,7 @@ class TeachingRunWorkloadPolicyTest {
 
         assertThat(visualCalls).isEqualTo(21);
         assertThat(policy.demand(plan))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(59));
-    }
-
-    @Test
-    void estimatesVisualWorkFromActualSourcePageWindowsWithoutCreatingACallLimit() {
-        TeachingPlan plan = plan(2, false);
-
-        assertThat(VisualLessonEnricher.estimatedTeachingRunModelCalls(plan)).isZero();
-        assertThat(policy.demand(plan).estimatedModelCalls()).isEqualTo(2);
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(40));
     }
 
     private TeachingPlan plan(int sectionCount, boolean sourceBound) {

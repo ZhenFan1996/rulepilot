@@ -12,9 +12,7 @@ final class TeachingRunWorkloadPolicy {
         }
         long estimatedModelCalls = Math.addExact(
                 (long) plan.sections().size(),
-                Math.addExact(
-                        (long) TeachingVisualEvidenceResolver.estimatedCatalogModelCalls(plan),
-                        VisualLessonEnricher.estimatedTeachingRunModelCalls(plan)));
+                (long) TeachingVisualEvidenceResolver.estimatedCatalogModelCalls(plan));
         if (estimatedModelCalls > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("teaching workload is too large");
         }

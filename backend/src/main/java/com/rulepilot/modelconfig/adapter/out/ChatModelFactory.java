@@ -28,7 +28,7 @@ public class ChatModelFactory {
 
     public ChatModelFactory(
             ObservationRegistry observations,
-            @Value("${rulepilot.models.request-timeout:PT2M}") Duration requestTimeout) {
+            @Value("${rulepilot.models.request-timeout:PT4M}") Duration requestTimeout) {
         this.observations = observations;
         if (requestTimeout == null || requestTimeout.isZero() || requestTimeout.isNegative()) {
             throw new IllegalArgumentException("model request timeout must be positive");

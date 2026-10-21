@@ -67,7 +67,7 @@ class SpringAiTeachingLessonModelRequestOptionsTest {
     }
 
     @Test
-    void transportsVisualIdentityDescriptionAndEvidenceValuesToTheWriter() {
+    void transportsSourceAndIllustrationPixelsWithTheirEvidenceIdentitiesToTheWriter() throws Exception {
         var configuration = mock(RuntimeModelConfiguration.class);
         var prompts = mock(VersionedAgentPrompts.class);
         var model = mock(ChatModel.class);
@@ -77,17 +77,34 @@ class SpringAiTeachingLessonModelRequestOptionsTest {
         when(model.call(any(Prompt.class))).thenReturn(response());
         when(prompts.teachingRuntimeSystem()).thenReturn("Write a grounded chapter.");
         when(prompts.teachingUser()).thenReturn("{evidence}\n{visuals}");
+        var pixels = new java.awt.image.BufferedImage(40, 40, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        var graphics = pixels.createGraphics();
+        graphics.setColor(java.awt.Color.BLUE);
+        graphics.fillRect(0, 0, 40, 40);
+        graphics.dispose();
+        var encoded = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(pixels, "jpeg", encoded);
         var base = request();
         var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(
                 3, "Marker", "A blue marker sits beside a clockwise arrow.", 100, 100, 300, 300);
         var request = new SectionRequest(base.topicKey(), base.title(), base.objective(), base.priorSections(),
                 base.evidence(), List.of(new com.rulepilot.teaching.TeachingLessonModel.VisualInput(
-                        "owned-image", focus, List.of(base.evidence().getFirst().chunkId()))), "player", PlayerLocale.ZH_CN);
+                        "owned-image", focus, List.of(base.evidence().getFirst().chunkId()),
+                        new com.rulepilot.document.DocumentPageImages.PageImage(3, "image/png", new byte[]{1}, 100, 100), encoded.toByteArray())), "player", PlayerLocale.ZH_CN);
         new SpringAiTeachingLessonModel(configuration, prompts).compose(request);
         var captured = ArgumentCaptor.forClass(Prompt.class);
         verify(model).call(captured.capture());
         assertThat(captured.getValue().getUserMessage().getText())
-                .contains("owned-image", focus.visibleDescription(), "E1");
+                .contains("owned-image", "E1");
+        var media = captured.getValue().getInstructions().stream()
+                .filter(message -> message instanceof org.springframework.ai.chat.messages.UserMessage)
+                .map(message -> (org.springframework.ai.chat.messages.UserMessage) message)
+                .flatMap(message -> message.getMedia().stream()).toList();
+        assertThat(media).hasSize(2);
+        assertThat(media.getFirst().getDataAsByteArray()).containsExactly((byte) 1);
+        var labelled = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(media.getLast().getDataAsByteArray()));
+        assertThat(labelled.getHeight()).isGreaterThan(pixels.getHeight());
+        assertThat(new java.awt.Color(labelled.getRGB(20, labelled.getHeight() - 20)).getBlue()).isGreaterThan(200);
     }
 
     private static SectionRequest request() {

@@ -57,7 +57,6 @@ services:
       VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-10}
       VISUAL_SEMANTIC_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_SEMANTIC_REQUEST_PARALLELISM:-4}
       VISUAL_CATALOG_TIMEOUT: PT120S
-      VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT: ${VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT:-PT10M}
       # Publish the cited text lesson first. The single enrichment worker and per-call candidate attachment batch
       # protect reading, upload, and answer traffic without truncating the lesson's eligible visual chapters.
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
@@ -86,7 +85,9 @@ services:
     # Measured production RSS reached ~852 MiB under a 896 MiB limit while post-GC heap remained healthy. 1.2 GiB
     # keeps the 512 MiB heap, ~190 MiB metaspace, thread stacks and bounded image buffers inside the cgroup; limits
     # are ceilings rather than reservations, and measured host availability leaves the required operating margin.
-    mem_limit: 1200m
+    # Linux six-page extraction measured 491 MiB peak RSS. Preserve the former 1200 MiB application
+    # envelope plus 600 MiB for one serialized detector, including its allocation margin.
+    mem_limit: 1800m
 
   worker:
     image: ${RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local}

@@ -96,7 +96,12 @@ final class TeachingSectionCandidateValidator {
                 .filter(java.util.Objects::nonNull)
                 .filter(visual -> visual.evidenceIds().stream().anyMatch(step.sourceChunkIds()::contains)
                         && step.sourcePages().contains(visual.focus().pageNumber()))
-                .map(TeachingLessonModel.VisualInput::focus).toList();
+                .map(visual -> {
+                    var focus = visual.focus();
+                    return new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(
+                            focus.pageNumber(), step.heading(), focus.visibleDescription(),
+                            focus.x(), focus.y(), focus.width(), focus.height(), focus.sourceKind());
+                }).toList();
         return foci.isEmpty() ? step : step.withVisualFoci(
                 com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove.VISUAL, foci);
     }

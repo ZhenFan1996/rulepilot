@@ -69,7 +69,7 @@ class GroundedTeachingAgentTest {
         VisualLessonEnricher visuals = mock(VisualLessonEnricher.class);
         when(visuals.supportsVisualEvidence("player")).thenReturn(true);
         when(visuals.prepare(
-                        any(TeachingPlan.class), any(TeachingPlan.PlannedSection.class), any(), any()))
+                        any(TeachingPlan.class), any(TeachingPlan.PlannedSection.class), any()))
                 .thenAnswer(invocation -> {
                     TeachingPlan.PlannedSection section = invocation.getArgument(1);
                     if (section.topicKey().equals("text-only")) unplannedVisualWork.set(true);
