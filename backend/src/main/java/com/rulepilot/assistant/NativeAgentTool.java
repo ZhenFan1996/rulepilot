@@ -43,12 +43,9 @@ public interface NativeAgentTool {
             Instant deadlineAt,
             int maxObservationTokens) {
 
-        /**
-         * Compatibility constructor for direct tool tests and non-Agent callers. Production Agent execution replaces
-         * this fallback with the current run's remaining context envelope before every tool invocation.
-         */
+        /** Direct calls have no invented observation ceiling; the Agent supplies available provider/run capacity. */
         public ToolScope(String ownerUsername, UUID documentVersionId, UUID runId, Instant deadlineAt) {
-            this(ownerUsername, documentVersionId, runId, deadlineAt, 4_096);
+            this(ownerUsername, documentVersionId, runId, deadlineAt, Integer.MAX_VALUE);
         }
 
         public ToolScope {

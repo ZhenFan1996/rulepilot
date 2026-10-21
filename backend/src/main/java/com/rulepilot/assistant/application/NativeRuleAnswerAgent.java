@@ -515,9 +515,10 @@ public class NativeRuleAnswerAgent {
         if (Set.of("MODEL_CAPABILITY_UNAVAILABLE", "MODEL_REQUEST_UNAVAILABLE", "EXECUTION_FAILED").contains(reason)) {
             return AnswerStatus.MODEL_UNAVAILABLE;
         }
+        if (Set.of("TIMEOUT", "MODEL_REQUEST_TIMEOUT").contains(reason)) {
+            return AnswerStatus.MODEL_TIMEOUT;
+        }
         if (Set.of(
-                        "TIMEOUT",
-                        "MODEL_REQUEST_TIMEOUT",
                         "STEP_BUDGET",
                         "TOOL_BUDGET",
                         "MODEL_BUDGET",
@@ -525,7 +526,7 @@ public class NativeRuleAnswerAgent {
                         "OBSERVATION_BUDGET_EXHAUSTED",
                         "OBSERVATION_BUDGET_EXCEEDED")
                 .contains(reason)) {
-            return AnswerStatus.MODEL_TIMEOUT;
+            return AnswerStatus.RESOURCE_LIMIT_REACHED;
         }
         return AnswerStatus.INVALID_MODEL_OUTPUT;
     }
@@ -549,8 +550,8 @@ public class NativeRuleAnswerAgent {
                     : "这次答疑未能在请求时限内完成。";
             case "STEP_BUDGET", "TOOL_BUDGET", "MODEL_BUDGET", "TOKEN_BUDGET",
                     "OBSERVATION_BUDGET_EXHAUSTED", "OBSERVATION_BUDGET_EXCEEDED" -> english
-                        ? "This answer could not be completed within the available resources. Please check the original rulebook or try again."
-                        : "这次答疑未能完成。请核对原始规则书，或稍后重试。";
+                        ? "This answer reached the available processing capacity. Please focus on one rule or consult the source."
+                        : "本次答疑达到了可用处理容量。请聚焦一条具体规则，或核对原始规则书。";
             case "COMPLETION_NO_PROGRESS" -> english
                     ? "The answer could not be verified against this rulebook. Please check the original page."
                     : "暂时无法根据这份规则书确认答案，请核对原页。";

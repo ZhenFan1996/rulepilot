@@ -23,6 +23,9 @@ public interface NativeToolModel {
         return true;
     }
 
+    /** Provider input capacity; unknown/custom providers enforce their own limit. No guessed fallback ceiling. */
+    default int maxInputTokens(Role role, String ownerUsername) { return Integer.MAX_VALUE; }
+
     enum ModelRequestFailureKind {
         TIMEOUT,
         TEMPORARILY_UNAVAILABLE

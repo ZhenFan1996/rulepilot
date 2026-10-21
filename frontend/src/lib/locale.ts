@@ -677,6 +677,7 @@ const messages = {
     'public.answer.refineHint': '补充规则中的具体对象、触发时机或前一步发生了什么，就能重新查找可靠依据。',
     'public.answer.refineAction': '补充条件后重试',
     'public.answer.refineSuffix': '\n补充条件：',
+    'lesson.answer.failure.capacity': '本次答疑达到了可用处理容量，请聚焦一条具体规则或核对来源。',
     'public.answer.timeout': '这次核对超时了，可以稍后再问，或直接查看下方来源页。',
     'public.answer.missing': '这份讲解已不再公开，无法继续答疑。',
     'public.answer.failed': '暂时无法核对规则书，请稍后再试。',

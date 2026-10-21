@@ -414,6 +414,18 @@ class NativeRuleAnswerAgentTest {
         });
     }
 
+    @Test
+    void evidenceCapacityIsNotReportedAsTimeoutOrInvalidQuestion() {
+        NativeToolAgent failed = request -> new RunResult(RunStatus.FALLBACK, request.fallbackText(),
+                "OBSERVATION_BUDGET_EXHAUSTED", 1, 1, List.of());
+        var outcome = answers(failed, emptyLookup()).answer("Which rule applies?",
+                new QuestionContext(versionId), "player", null, runId);
+        var presented = PlayerFacingAnswerPresenter.present(outcome.answer(), "Which rule applies?", PlayerLocale.EN);
+        assertThat(presented.status()).isEqualTo(AnswerStatus.RESOURCE_LIMIT_REACHED);
+        assertThat(presented.recovery().canRetryUnchanged()).isFalse();
+        assertThat(presented.recovery().draft()).isEqualTo("Which rule applies?");
+    }
+
     private NativeRuleAnswerAgent answers(NativeToolAgent agent, RuleEvidenceLookup lookup) {
         ToolScope scope = new ToolScope(
                 "player", versionId, runId, Instant.now().plusSeconds(30));

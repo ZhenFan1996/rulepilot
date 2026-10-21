@@ -328,6 +328,53 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void readsLargeAtomicEvidenceWithProviderCapacityInsteadOfTheLegacyScopeDefault() {
+        String excerpt = "证据".repeat(1000);
+        var mapper = JsonMapper.builder().build();
+        var reader = new TestTool("search_rule_evidence") {
+            @Override public ToolObservation execute(String arguments, ToolScope scope) {
+                assertThat(scope.maxObservationTokens()).isLessThan(32_768);
+                var found = ToolObservation.success("FOUND", Map.of("evidence", List.of(excerpt)), 1);
+                return NativeEvidenceObservationBudget.fits(mapper, found, scope.maxObservationTokens())
+                        ? found : ToolObservation.partial("OBSERVATION_BUDGET_EXHAUSTED", Map.of("evidence", List.of()), 0);
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        NativeToolModel model = new NativeToolModel() {
+            @Override public int maxInputTokens(Role role, String owner) { return 32_768; }
+            @Override public ModelTurn next(ModelRequest request) {
+                if (turns.incrementAndGet() == 1) return turn(call("read", reader.name(), "{}"));
+                assertThat(request.conversation()).anySatisfy(message -> assertThat(message.content()).contains(excerpt));
+                return finalTurn("supported answer");
+            }
+        };
+        RunRequest initial = request(Set.of(reader.name()), TerminalContract.none());
+        RunRequest legacyScope = new RunRequest(initial.role(), initial.scope().withMaxObservationTokens(4096),
+                initial.systemPrompt(), initial.playerRequest(), initial.fallbackText(), initial.allowedTools(),
+                initial.requiredToolsBeforeCompletion(), initial.terminalContract());
+        var result = agent(model, List.of(reader), new RecordingInvocations(null)).run(legacyScope);
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.observations().getFirst().observation().evidenceCount()).isOne();
+    }
+
+    @Test
+    void capacityBlockedSiblingCannotDiscardEvidenceFromTheSameReadBatch() {
+        var blocked = new TestTool("search_rule_evidence") {
+            @Override public ToolObservation execute(String arguments, ToolScope scope) {
+                return ToolObservation.partial("OBSERVATION_BUDGET_EXHAUSTED", Map.of("evidence", List.of()), 0);
+            }
+        };
+        var usable = tool("read_rule_pages");
+        var model = new QueueModel(turn(call("large", blocked.name(), "{}"), call("usable", usable.name(), "{}")),
+                finalTurn("supported conclusion"));
+        var result = agent(model, List.of(blocked, usable), new RecordingInvocations(null))
+                .run(request(Set.of(blocked.name(), usable.name()), TerminalContract.none()));
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.observations()).anySatisfy(observation ->
+                assertThat(observation.observation().evidenceCount()).isOne());
+    }
+
+    @Test
     void stopsEachTypedProviderFailureWithoutRepairOrASecondModelCall() {
         for (ModelRequestFailureKind kind : ModelRequestFailureKind.values()) {
             AtomicInteger requests = new AtomicInteger();

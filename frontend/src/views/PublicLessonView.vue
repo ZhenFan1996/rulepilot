@@ -65,7 +65,7 @@ interface PublicLessonResponse {
 interface RuleCitation { heading: string; pageFrom: number; pageTo: number }
 interface PublicAnswer {
   answer: {
-    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'RETRIEVAL_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT' | 'VERSION_CONFLICT'
+    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'RETRIEVAL_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT' | 'RESOURCE_LIMIT_REACHED' | 'VERSION_CONFLICT'
     shortVerdict: string
     explanation: string | null
     citations: RuleCitation[]
@@ -496,7 +496,7 @@ function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status
   return value === 'ANSWERED' || value === 'ANSWERED_WITH_WARNING'
     || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
     || value === 'RETRIEVAL_UNAVAILABLE' || value === 'MODEL_UNAVAILABLE' || value === 'INVALID_MODEL_OUTPUT'
-    || value === 'MODEL_TIMEOUT' || value === 'VERSION_CONFLICT'
+    || value === 'RESOURCE_LIMIT_REACHED' || value === 'MODEL_TIMEOUT' || value === 'VERSION_CONFLICT'
 }
 
 function isAnswerWarning(value: unknown): value is PublicAnswer['answer']['warnings'][number] {

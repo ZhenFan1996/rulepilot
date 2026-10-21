@@ -185,6 +185,16 @@ public final class PlayerFacingAnswerPresenter {
                             safeQuestionDraft(question),
                             true));
         }
+        if (status == AnswerStatus.RESOURCE_LIMIT_REACHED) {
+            return new FailureCopy(
+                    english ? "This answer reached the available processing capacity."
+                            : "本次答疑达到了可用处理容量。",
+                    null,
+                    new Recovery(english ? "Ask about one specific rule or situation, or consult the cited source."
+                                    : "可以聚焦一条具体规则或情境提问，或核对引用的原文。",
+                            english ? "Narrow the question" : "缩小问题范围",
+                            safeQuestionDraft(question), false));
+        }
         if (status == AnswerStatus.MODEL_TIMEOUT) {
             String detail = english
                     ? "The timeout does not mean the question was invalid. It is appropriate to retry the same question unchanged."
