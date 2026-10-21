@@ -13,7 +13,7 @@ AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
 AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
 AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-teaching-real agent-teaching-page-canary agent-visual-real agent-recommendation-canary agent-rulebook-acquisition-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e production-dependency-test workflow-test verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-teaching-real agent-teaching-page-canary agent-recommendation-canary agent-rulebook-acquisition-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke backend-test backend-runtime-image-smoke frontend-test integration-test performance-test security-test e2e production-dependency-test workflow-test verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -65,9 +65,6 @@ agent-teaching-real: ## Run the explicitly authorized complete real-rulebook tea
 agent-teaching-page-canary: ## Run one explicitly authorized paid Gstone image-page catalog canary
 	@sh scripts/run-gstone-visual-page-canary.sh
 
-agent-visual-real: ## Observe complete source illustrations from an ignored real-page manifest
-	@sh scripts/run-real-visual-agent.sh
-
 agent-recommendation-canary: ## Run one explicitly authorized paid recommendation direct-path canary
 	@sh scripts/run-recommendation-paid-canary.sh
 
@@ -96,7 +93,7 @@ backend-runtime-image-smoke: ## Build the runtime and exercise PDF and publicati
 		(cd backend && ./mvnw -q -DskipTests package) && \
 		docker build --file backend/Dockerfile.runtime --tag rulepilot-backend:ci-smoke backend && \
 		docker run --rm --network none --entrypoint sh rulepilot-backend:ci-smoke -c \
-			'pdftoppm -v && python3 -c '\''import json; assert json.loads("{\"status\":\"UP\"}")["status"] == "UP"'\'''; \
+			'pdftoppm -v && python3 -c '\''import json; assert json.loads("{\"status\":\"UP\"}")["status"] == "UP"'\'' && /opt/layout/bin/python -c '\''import onnxruntime as ort, numpy as np, PIL, pypdfium2; session = ort.InferenceSession("/opt/layout/model/model.onnx", providers=["CPUExecutionProvider"]); session.run(None, {"images": np.zeros((1, 3, 640, 640), dtype=np.uint8), "orig_target_sizes": np.array([[640, 640]], dtype=np.int64)})'\'''; \
 	else \
 		echo "backend runtime image smoke is not available; the backend project is missing."; \
 		exit 2; \

@@ -52,7 +52,6 @@ test('Make routes paid and real public commands through guarded shell entrypoint
     'agent-tool-probe': 'run-paid-model-tool-probe.sh',
     'agent-teaching-real': 'run-real-teaching-agent.sh',
     'agent-teaching-page-canary': 'run-gstone-visual-page-canary.sh',
-    'agent-visual-real': 'run-real-visual-agent.sh',
     'agent-recommendation-canary': 'run-recommendation-paid-canary.sh',
     'agent-rulebook-acquisition-real': 'run-real-rulebook-acquisition.sh',
   }

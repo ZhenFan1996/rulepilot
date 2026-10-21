@@ -159,12 +159,24 @@ class RulePageImageCropperTest {
     }
 
     @Test
-    void rejectsAProjectedCropWhoseActualPixelsExceedTheSingleRequestBoundary() {
-        PageImage page = new PageImage(1, "image/jpeg", new byte[] {1}, 5_000, 5_000);
+    void subsamplesALargeCropWithoutLosingItsSourceExtent() throws IOException {
+        BufferedImage source = new BufferedImage(5_000, 5_000, BufferedImage.TYPE_INT_RGB);
+        var graphics = source.createGraphics();
+        graphics.setColor(Color.BLUE);
+        graphics.fillRect(0, 0, 5_000, 5_000);
+        graphics.setColor(Color.RED);
+        graphics.fillRect(4_800, 4_800, 200, 200);
+        graphics.dispose();
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+        PageImage page = new PageImage(1, "image/jpeg", encoded.toByteArray(), 5_000, 5_000);
 
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> cropper.crop(page, 0, 0, 1_000, 1_000))
-                .withMessageContaining("projected pixel limit");
+        BufferedImage crop = ImageIO.read(new ByteArrayInputStream(cropper.crop(page, 0, 0, 1_000, 1_000)));
+
+        assertThat(crop.getWidth()).isLessThan(page.width());
+        assertThat(crop.getHeight()).isEqualTo(crop.getWidth());
+        assertThat(new Color(crop.getRGB(0, 0)).getBlue()).isGreaterThan(200);
+        assertThat(new Color(crop.getRGB(crop.getWidth() - 1, crop.getHeight() - 1)).getRed()).isGreaterThan(200);
     }
 
     @Test

@@ -206,6 +206,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 throw new IllegalArgumentException("teaching outline page identities must be unique");
             }
         }
+        if (pages.values().stream().noneMatch(PageInput::available)) {
+            throw new OutlineGenerationException("no readable rule evidence is available; retry page reading before planning chapters", null);
+        }
         AgentState state = new AgentState(request, pages);
         pages.values().stream()
                 .filter(PageInput::available)

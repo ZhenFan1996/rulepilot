@@ -183,6 +183,11 @@ rulepilot:
       agent:
         max-tokens: ${VISUAL_ENRICHMENT_AGENT_MAX_TOKENS:600000}
         timeout: ${VISUAL_ENRICHMENT_AGENT_TIMEOUT:PT30M}
+  docling:
+    python: ${DOCLING_PYTHON:/opt/layout/bin/python}
+    model-directory: ${DOCLING_MODEL_DIRECTORY:/opt/layout/model}
+    # Operator-owned indexing resource deadline, including admission. Failure preserves readable source pages.
+    timeout: ${DOCLING_TIMEOUT:PT4M}
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}
@@ -190,10 +195,6 @@ rulepilot:
     request-parallelism: ${VISUAL_REQUEST_PARALLELISM:10}
     # Structured rule interpretation is heavier and retains the measured four-request provider headroom.
     semantic-request-parallelism: ${VISUAL_SEMANTIC_REQUEST_PARALLELISM:4}
-    location-timeout: ${VISUAL_LOCATION_TIMEOUT:PT45S}
-    # Legacy callers without an observable Agent run still share one workflow wall deadline across every candidate
-    # batch. This bounds elapsed time without imposing a final image or section count.
-    compatibility-workflow-timeout: ${VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT:PT10M}
     # One page-bound catalog window covers the finite rule-page batch. The deadline is shared so slow provider calls
     # cannot multiply the background enrichment time.
     catalog-timeout: ${VISUAL_CATALOG_TIMEOUT:PT120S}
@@ -229,7 +230,7 @@ rulepilot:
     credential-encryption-key-version: ${MODEL_CREDENTIAL_ENCRYPTION_KEY_VERSION:1}
     default-monthly-token-limit: ${MODEL_DEFAULT_MONTHLY_TOKEN_LIMIT:2000000}
     per-call-reservation-tokens: ${MODEL_PER_CALL_RESERVATION_TOKENS:16000}
-    request-timeout: ${MODEL_REQUEST_TIMEOUT:PT2M}
+    request-timeout: ${MODEL_REQUEST_TIMEOUT:PT4M}
     startup-allowed-users: ${RULEPILOT_MODELS_STARTUP_ALLOWED_USERS:}
     openai:
       enabled: ${OPENAI_ENABLED:false}

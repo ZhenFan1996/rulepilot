@@ -33,6 +33,15 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 class SpringAiTeachingOutlineModelRetryTest {
 
     @Test
+    void failsRecoverablyWhenAllSourcePageReadsAreUnavailable() {
+        var original = onePageRequest();
+        var unavailable = new OutlineRequest(List.of(new PageInput(1, "Source page reading unavailable", false, false)),
+                original.pageImages(), original.learningGoal(), original.modelConfigurationOwner(), original.outputLanguage());
+        assertThatThrownBy(() -> fixture().model.organize(unavailable))
+                .isInstanceOf(OutlineGenerationException.class).hasMessageContaining("no readable rule evidence");
+    }
+
+    @Test
     void letsOneAgentReadContextWithoutTurningANonRulePageIntoAMissingTopic() {
         Fixture fixture = fixture();
         when(fixture.chatModel.call(any(Prompt.class))).thenReturn(

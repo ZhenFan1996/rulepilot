@@ -1,0 +1,6 @@
+Docling Heron layout model (ONNX export)
+Publisher: Docling project
+Source: https://huggingface.co/docling-project/docling-layout-heron-onnx
+Revision: 40bde044036bb181c130ddf6c51792187268748f
+License: Apache License, Version 2.0 (see layout-model-LICENSE.txt)
+The model weights are unmodified. RulePilot consumes raw picture detections.

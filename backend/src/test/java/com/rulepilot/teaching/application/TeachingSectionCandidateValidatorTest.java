@@ -21,19 +21,12 @@ import org.junit.jupiter.api.Test;
 class TeachingSectionCandidateValidatorTest {
 
     @Test
-    void keepsOriginalPageSelectableWhenOptionalVisualObservationIsUnavailable() {
+    void keepsSourceCitationsWithoutSubstitutingWholePagesForMissingIllustrations() {
         UUID version = UUID.randomUUID(), citation = UUID.randomUUID();
         var source = new RuleEvidence(citation, version, "RULE", "Repair", "Read the illustrated repair chart.", 8, 8);
         var request = new TeachingSectionModelRequestFactory().create(plan(version), planned(), List.of(), List.of(source), List.of());
-        var image = request.visuals().getFirst();
-        var draft = new SectionDraft("Repair", List.of(new StepDraft("Check the chart", TeachingMove.UNDERSTAND,
-                "Use the source chart to check the unresolved correspondence.", List.of(citation), List.of(), List.of(image.imageId()))));
-        var section = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
-                plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT);
-        assertThat(section.steps().getFirst().visualFoci()).singleElement().satisfies(focus -> {
-            assertThat(focus.pageNumber()).isEqualTo(8);
-            assertThat(focus.sourceKind()).isEqualTo(com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind.FULL_PAGE);
-        });
+        assertThat(request.visuals()).isEmpty();
+        assertThat(request.evidence()).extracting(EvidenceInput::chunkId).containsExactly(citation);
     }
 
     @Test
@@ -97,8 +90,9 @@ class TeachingSectionCandidateValidatorTest {
         var source = new RuleEvidence(citation, version, "RULE", "Repair", "Spend an action to repair.", 8, 8);
         var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(
                 8, "Repair", "An arrow points from a damaged component to an intact component.", 100, 100, 300, 300);
-        var images = List.of(new com.rulepilot.teaching.TeachingLessonModel.VisualInput("offered", focus, List.of(citation)),
-                new com.rulepilot.teaching.TeachingLessonModel.VisualInput("wrong-source", focus, List.of(UUID.randomUUID())));
+        var page = new com.rulepilot.document.DocumentPageImages.PageImage(8, "image/png", new byte[]{1}, 100, 100);
+        var images = List.of(new com.rulepilot.teaching.TeachingLessonModel.VisualInput("offered", focus, List.of(citation), page, new byte[]{2}),
+                new com.rulepilot.teaching.TeachingLessonModel.VisualInput("wrong-source", focus, List.of(UUID.randomUUID()), page, new byte[]{2}));
         var request = new SectionRequest("repair", "Repair", "Explain repair", List.of(),
                 List.of(new EvidenceInput(citation, "RULE", "Repair", source.excerpt(), 8, 8)), images, "owner", PlayerLocale.EN);
         var draft = new SectionDraft("Repair", List.of(new StepDraft("Repair", TeachingMove.DO,

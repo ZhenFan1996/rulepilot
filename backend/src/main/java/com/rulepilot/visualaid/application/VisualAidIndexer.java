@@ -1,18 +1,16 @@
 package com.rulepilot.visualaid.application;
 
 import com.rulepilot.document.DocumentProcessing;
-import com.rulepilot.document.RenderedDocumentAvailable;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.io.IOException;
 import java.io.InputStream;
-import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-/** Optional ingestion reaction owned entirely by the visual-aid module. */
+/** Builds one reusable source index when teaching first requests illustrations. */
 @Service
 @Profile("!test")
 public class VisualAidIndexer {
@@ -35,24 +33,26 @@ public class VisualAidIndexer {
         this.metrics = metrics;
     }
 
-    public void index(RenderedDocumentAvailable event) {
-        if (!extractor.configured()) return;
+    public synchronized void ensure(java.util.UUID version) {
+        if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("layout preparation interrupted");
+        if (!extractor.configured() || "docling-heron-raw-v1".equals(index.source(version))) return;
+        int pageCount = documents.pageCount(version);
         Timer.Sample duration = Timer.start(metrics);
         String outcome = "failed";
-        try (InputStream input = documents.open(event.documentVersionId())) {
+        try (InputStream input = documents.open(version)) {
             VisualLayoutExtractor.Extraction extraction = extractor.extract(input);
-            if (extraction.pageCount() != event.pageCount()) {
+            if (extraction.pageCount() != pageCount) {
                 throw new IllegalStateException("visual layout page count does not match the rendered document");
             }
             index.replace(
-                    event.documentVersionId(),
+                    version,
                     extraction.source(),
                     extraction.pageCount(),
                     extraction.regions());
             outcome = "succeeded";
             LOGGER.info(
                     "Visual aid index completed for documentVersionId={}, pages={}, regions={}, source={}",
-                    event.documentVersionId(),
+                    version,
                     extraction.pageCount(),
                     extraction.regions().size(),
                     extraction.source());
@@ -60,7 +60,7 @@ public class VisualAidIndexer {
             // Visual help is optional. Preserve the extracted text and original page evidence.
             LOGGER.warn(
                     "Visual aid index failed for documentVersionId={}; teaching will retain original page evidence",
-                    event.documentVersionId(),
+                    version,
                     failure);
         } finally {
             metrics.counter("rulepilot.visual_aid.index", "outcome", outcome).increment();

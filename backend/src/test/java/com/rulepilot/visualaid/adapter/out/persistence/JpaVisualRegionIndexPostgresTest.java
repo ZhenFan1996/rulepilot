@@ -91,6 +91,8 @@ class JpaVisualRegionIndexPostgresTest {
 
         List<Region> restoredReplacement = inTransaction(index -> index.find(versionId, Set.of(1, 2)));
         assertThat(restoredReplacement).containsExactly(replacement);
+        String source = inTransaction(index -> index.source(versionId));
+        assertThat(source).isEqualTo("docling:test-v2");
         assertThat(jdbc.queryForObject(
                         "SELECT count(*) FROM visual_aid_region WHERE document_version_id = ?",
                         Integer.class,
