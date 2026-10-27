@@ -182,7 +182,7 @@ class PostgresBggRankedCatalogTest {
                         new BigDecimal("7.5"),
                         4_000,
                         null,
-                        CatalogSort.POPULARITY,
+                        CatalogSort.POPULARITY, null,
                         20,
                         0)))
                 .as("publisher, family, year, rating and popularity constraints compose locally")
@@ -190,25 +190,25 @@ class PostgresBggRankedCatalogTest {
                 .containsExactly(10);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                        null, null, null, null, null, CatalogSort.RANK, 1, 1)))
+                        null, null, null, null, null, CatalogSort.RANK, null, 1, 1)))
                 .as("stable offsets return a new page instead of repeating the first result")
                 .extracting(RankedGame::bggId)
                 .containsExactly(20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                        null, null, null, null, new TextQuery("industrial rail", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, 20, 0)))
+                        null, null, null, null, new TextQuery("industrial rail", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, null, 20, 0)))
                 .as("cached BGG descriptions and tags rank the relevant game first without hard-filtering the slate")
                 .extracting(RankedGame::bggId)
                 .containsExactly(10, 20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                        null, null, null, null, new TextQuery("industrial gardens", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, 20, 0)))
+                        null, null, null, null, new TextQuery("industrial gardens", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, null, 20, 0)))
                 .as("concept retrieval recalls both partial and inflected matches without inventing a semantic tie-break")
                 .extracting(RankedGame::bggId)
                 .containsExactlyInAnyOrder(10, 20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                        null, null, null, null, new TextQuery("unmatched constellation", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, 20, 0)))
+                        null, null, null, null, new TextQuery("unmatched constellation", TextScope.DESCRIPTION), CatalogSort.RELEVANCE, null, 20, 0)))
                 .as("a soft concept query must not erase otherwise eligible ranked games")
                 .extracting(RankedGame::bggId)
                 .containsExactly(10, 20);
@@ -216,14 +216,14 @@ class PostgresBggRankedCatalogTest {
             assertThat(repository.findByMetadataFilters(new CatalogFilters(
                     List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                     null, null, null, null, new TextQuery(title, TextScope.TITLE),
-                    CatalogSort.RELEVANCE, 20, 0)))
+                    CatalogSort.RELEVANCE, null, 20, 0)))
                     .as("title queries filter canonical/localized names before pagination, including literal wildcards")
                     .extracting(RankedGame::bggId).containsExactly(10);
         }
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                 List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                 null, null, null, null, new TextQuery("industrial", TextScope.TITLE),
-                CatalogSort.RELEVANCE, 20, 0)))
+                CatalogSort.RELEVANCE, null, 20, 0)))
                 .as("description matches cannot fill a named-title lookup with unrelated games")
                 .isEmpty();
         jdbc.getJdbcTemplate().update("""
@@ -234,7 +234,7 @@ class PostgresBggRankedCatalogTest {
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                 List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                 null, null, null, null, new TextQuery("orbital mining", TextScope.DESCRIPTION),
-                CatalogSort.RELEVANCE, 20, 0)))
+                CatalogSort.RELEVANCE, null, 20, 0)))
                 .extracting(RankedGame::bggId).containsExactly(20, 10);
 
         jdbc.getJdbcTemplate().update("""
@@ -243,6 +243,54 @@ class PostgresBggRankedCatalogTest {
                 WHERE cache_kind = 'DISCOVERY'
                 """);
         assertThat(repository.findMechanics()).isEmpty();
+    }
+
+    @Test
+    void tablePreferencesShapeTheFirstStoragePageBeforeRankAndLimit() {
+        UUID importId = UUID.randomUUID();
+        var games = new java.util.ArrayList<RankedGame>();
+        for (int index = 0; index < 24; index++) {
+            int id = 3000 + index;
+            games.add(game(id, "Candidate " + index, 2025, index + 1, "8.0", 1000,
+                    false, Map.of(BggGameType.STRATEGY, index + 1)));
+            String payload = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+                    .put("minPlayers", 2).put("maxPlayers", index == 21 ? 2 : 4)
+                    .put("maximumPlayTimeMinutes", index == 22 ? 180 : 45)
+                    .put("averageWeight", index < 20 ? 4.0 : 2.0).toString();
+            jdbc.update("""
+                    INSERT INTO bgg_metadata_cache
+                    (cache_kind, bgg_id, payload, payload_bytes, cached_at, fresh_until, stale_until, last_accessed_at)
+                    VALUES ('DISCOVERY', :id, CAST(:payload AS jsonb), :bytes,
+                            NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW())
+                    """, Map.of("id", id, "payload", payload, "bytes", payload.length()));
+        }
+        repository.stage(importId, games);
+        repository.publish(importId, new Snapshot(Instant.now(), LocalDate.of(2026, 10, 28),
+                games.size(), "b".repeat(64)));
+        var preferred = new com.rulepilot.catalog.BoardGameRecommendationCatalog.PlayPreferences(
+                4, 60, null, new BigDecimal("2.5"), false);
+        var firstPage = repository.findByMetadataFilters(new CatalogFilters(
+                List.of(BggGameType.STRATEGY), List.of(), List.of(), List.of(), List.of(), List.of(),
+                null, null, null, null, null, CatalogSort.RANK, preferred, 2, 0));
+        assertThat(firstPage).extracting(RankedGame::bggId).containsExactly(3020, 3023);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                List.of(BggGameType.STRATEGY), List.of(), List.of(), List.of(), List.of(), List.of(),
+                null, null, null, null, null, CatalogSort.RANK, preferred, 2, 2)))
+                .as("soft conflicts remain available after the preferred candidates")
+                .extracting(RankedGame::bggId).containsExactly(3000, 3001);
+        var required = new com.rulepilot.catalog.BoardGameRecommendationCatalog.PlayPreferences(
+                4, 60, null, new BigDecimal("2.5"), true);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                List.of(BggGameType.STRATEGY), List.of(), List.of(), List.of(), List.of(), List.of(),
+                null, null, null, null, null, CatalogSort.RANK, required, 20, 0)))
+                .as("hard bounds exclude incompatible games before pagination")
+                .extracting(RankedGame::bggId).containsExactly(3020, 3023);
+        var heavy = new com.rulepilot.catalog.BoardGameRecommendationCatalog.PlayPreferences(
+                4, 60, new BigDecimal("3.5"), null, false);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                List.of(BggGameType.STRATEGY), List.of(), List.of(), List.of(), List.of(), List.of(),
+                null, null, null, null, null, CatalogSort.RANK, heavy, 2, 0)))
+                .extracting(RankedGame::bggId).containsExactly(3000, 3001);
     }
 
     private static RankedGame game(

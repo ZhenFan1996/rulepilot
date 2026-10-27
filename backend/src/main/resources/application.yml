@@ -296,8 +296,6 @@ rulepilot:
       model-provider: ${BGG_RECOMMENDATION_MODEL_PROVIDER:qwen}
       model: ${BGG_RECOMMENDATION_MODEL:}
       temperature: ${BGG_RECOMMENDATION_TEMPERATURE:0.0}
-      model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
-      diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
       timeout: ${AGENT_TIMEOUT:PT2M}
       web-research:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}

@@ -246,6 +246,7 @@ public class BggRankedCatalogService
                 filters.minimumRatingsCount(),
                 filters.textQuery(),
                 filters.sort(),
+                filters.playPreferences(),
                 filters.maximum(),
                 filters.offset());
         List<RankedGame> ranked = repository.findByMetadataFilters(checkedFilters);

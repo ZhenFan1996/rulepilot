@@ -61,6 +61,14 @@ public interface BoardGameRecommendationCatalog {
         }
     }
 
+    /** Typed table requirements; soft complexity ranks before popularity, hard complexity filters. */
+    record PlayPreferences(
+            Integer players,
+            Integer maxMinutes,
+            BigDecimal minimumWeight,
+            BigDecimal maximumWeight,
+            boolean hardComplexity) {}
+
     record CatalogFilters(
             List<BggGameType> types,
             List<String> categories,
@@ -74,6 +82,7 @@ public interface BoardGameRecommendationCatalog {
             Integer minimumRatingsCount,
             TextQuery textQuery,
             CatalogSort sort,
+            PlayPreferences playPreferences,
             int maximum,
             int offset) {
         public CatalogFilters(
@@ -105,6 +114,7 @@ public interface BoardGameRecommendationCatalog {
                     null,
                     null,
                     CatalogSort.RANK,
+                    null,
                     maximum,
                     offset);
         }

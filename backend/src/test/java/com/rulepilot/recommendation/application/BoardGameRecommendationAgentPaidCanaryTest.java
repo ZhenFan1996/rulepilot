@@ -73,12 +73,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         String prefix = provider.toUpperCase(Locale.ROOT);
         String modelName = canaryModel(prefix);
         Capture capture = new Capture(provider, modelName);
-        var properties = new BoardGameRecommendationProperties(8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var properties = new BoardGameRecommendationProperties(RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model(provider, environment(prefix + "_API_KEY", null), environment(prefix + "_BASE_URL", null),
                         modelName, capture),
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
-                new BoardGameRecommendationSelector(properties), properties, json);
+                new BoardGameRecommendationSelector(), properties, json);
         long started = System.nanoTime();
         capture.beginTurn(scenario);
         try {
@@ -116,12 +116,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 environment(prefix + "_BASE_URL", null),
                 modelName,
                 capture);
-        var properties = new BoardGameRecommendationProperties(
-                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var properties = new BoardGameRecommendationProperties(RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchThatMustNotRun()),
-                new BoardGameRecommendationSelector(properties),
+                new BoardGameRecommendationSelector(),
                 properties,
                 json);
         long started = System.nanoTime();
@@ -171,12 +170,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 environment(prefix + "_BASE_URL", null),
                 modelName,
                 capture);
-        var properties = new BoardGameRecommendationProperties(
-                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var properties = new BoardGameRecommendationProperties(RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
-                new BoardGameRecommendationSelector(properties),
+                new BoardGameRecommendationSelector(),
                 properties,
                 json);
         long started = System.nanoTime();
@@ -276,12 +274,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 environment(prefix + "_BASE_URL", null),
                 modelName,
                 capture);
-        var properties = new BoardGameRecommendationProperties(
-                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var properties = new BoardGameRecommendationProperties(RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
-                new BoardGameRecommendationSelector(properties),
+                new BoardGameRecommendationSelector(),
                 properties,
                 json);
         long started = System.nanoTime();
@@ -339,12 +336,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 environment(prefix + "_BASE_URL", null),
                 modelName,
                 capture);
-        var properties = new BoardGameRecommendationProperties(
-                8, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var properties = new BoardGameRecommendationProperties(RECOMMENDATION_TIMEOUT);
         var agent = new BoardGameRecommendationAgent(
                 model,
                 new BoardGameRecommendationTools(new CanaryCatalog(), configuredResearchCanary()),
-                new BoardGameRecommendationSelector(properties),
+                new BoardGameRecommendationSelector(),
                 properties,
                 json);
         long started = System.nanoTime();
