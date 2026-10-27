@@ -1596,7 +1596,7 @@ onBeforeUnmount(() => {
   <section class="pb-7" aria-labelledby="recommendation-agent-title">
     <div class="tabletop-panel overflow-hidden">
       <div class="grid overflow-hidden lg:grid-cols-[12rem_minmax(0,1fr)]">
-        <div class="recommendation-table-side border-b border-ink/10 bg-canvas/60 p-4 lg:border-b-0 lg:border-r">
+        <div class="recommendation-table-side min-w-0 border-b border-ink/10 bg-canvas/60 p-4 lg:border-b-0 lg:border-r">
           <h2 id="recommendation-agent-title" class="text-sm font-semibold text-ink">{{ t('title') }}</h2>
           <div v-if="profileLabels.length" class="mt-6"><p class="recommendation-profile-label text-xs font-semibold">{{ t('profile') }}</p><ul class="mt-2 flex flex-wrap gap-2"><li v-for="label in profileLabels" :key="label" class="recommendation-profile-chip border-l border-ink/15 px-2.5 py-1 text-xs font-semibold">{{ label }}</li></ul></div>
           <details v-if="response?.userModel?.summary" class="mt-5 rounded-xl border border-ink/10 bg-paper p-4">
@@ -1604,14 +1604,14 @@ onBeforeUnmount(() => {
             <p class="recommendation-understanding-copy mt-3 text-sm leading-6">{{ response.userModel.summary }}</p>
             <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-indigo">{{ confidenceLabel(hypothesis.confidence, response.responseLocale) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ responseT(response, 'basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
-          <div v-if="sessionKnown" class="mt-5 flex flex-wrap gap-x-4 gap-y-2">
-            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="startNewConversation">{{ t('newChat') }}</button>
-            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" :aria-expanded="conversationHistoryOpen" @click="toggleConversationHistory">{{ t('chatHistory') }}</button>
-            <button v-if="canResetRecommendation" type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-indigo-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
+          <div v-if="sessionKnown" class="mt-5 grid grid-cols-2 gap-1 border-t border-ink/10 pt-3 sm:grid-cols-3 lg:grid-cols-1">
+            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-sidebar-action disabled:cursor-not-allowed disabled:opacity-40" @click="startNewConversation">{{ t('newChat') }}</button>
+            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-sidebar-action disabled:cursor-not-allowed disabled:opacity-40" :aria-expanded="conversationHistoryOpen" @click="toggleConversationHistory">{{ t('chatHistory') }}</button>
+            <button v-if="canResetRecommendation" type="button" :disabled="loading || conversationNavigationPending" class="recommendation-sidebar-action disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
           </div>
           <ul v-if="conversationHistoryOpen" class="mt-2 grid gap-2 rounded-xl border border-ink/10 bg-paper p-2">
             <li v-for="session in conversationHistory" :key="session.conversationId">
-              <button type="button" class="w-full rounded-lg px-3 py-2 text-left text-xs leading-5 text-white/70 hover:bg-white/10" :class="session.conversationId === conversationId ? 'bg-white/10 font-semibold text-white' : ''" @click="openConversationFromHistory(session)">{{ conversationHistoryTitle(session) }}</button>
+              <button type="button" class="recommendation-sidebar-action w-full" :class="session.conversationId === conversationId ? 'bg-indigo/10 text-indigo' : ''" @click="openConversationFromHistory(session)">{{ conversationHistoryTitle(session) }}</button>
             </li>
           </ul>
         </div>
@@ -1871,12 +1871,21 @@ onBeforeUnmount(() => {
   color: var(--color-muted);
 }
 
-.recommendation-reset {
-  color: var(--color-muted);
+.recommendation-sidebar-action {
+  min-width: 0;
+  min-height: 2.75rem;
+  border-radius: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  color: var(--color-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 
-.recommendation-reset:hover {
-  color: var(--color-indigo);
+.recommendation-sidebar-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-indigo) 8%, transparent);
 }
 
 .recommendation-tool-label {
