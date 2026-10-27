@@ -119,7 +119,7 @@ final class RecommendationReActLoop {
                 Thread.ofVirtual().name("recommendation-bounded-call-", 0).factory()));
         maximumRunMillis = properties.timeout().toMillis();
         evidenceReview = new RecommendationEvidenceReview(json, this);
-        actionExecutor = new RecommendationActions(tools, selector, properties, json, evidenceReview, this);
+        actionExecutor = new RecommendationActions(tools, selector, json, evidenceReview, this);
         publication = new RecommendationPublication(
                 selector,
                 evidenceReview,

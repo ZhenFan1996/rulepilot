@@ -264,13 +264,53 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                     TEXT_SEARCH_QUERY);
             textJoin = " LEFT JOIN text_matches text_match ON text_match.bgg_id = g.bgg_id ";
         }
+        String playJoin = "";
+        String preferenceOrder = "";
+        var preferences = filters.playPreferences();
+        if (preferences != null) {
+            // The same DISCOVERY snapshot supplies the returned facts and the pre-pagination query.
+            playJoin = " LEFT JOIN bgg_metadata_cache play ON play.bgg_id = g.bgg_id"
+                    + " AND play.cache_kind = 'DISCOVERY' AND play.stale_until > NOW() ";
+            if (preferences.players() != null) {
+                parameters.addValue("players", preferences.players());
+                clauses.add(numericFact("minPlayers") + " <= :players");
+                clauses.add(numericFact("maxPlayers") + " >= :players");
+            }
+            if (preferences.maxMinutes() != null) {
+                parameters.addValue("maxMinutes", preferences.maxMinutes());
+                String duration = "COALESCE(" + numericFact("maximumPlayTimeMinutes")
+                        + ", " + numericFact("playingTimeMinutes") + ")";
+                clauses.add(duration + " > 0 AND " + duration + " <= :maxMinutes");
+            }
+            List<String> complexity = new ArrayList<>();
+            String weight = numericFact("averageWeight");
+            if (preferences.minimumWeight() != null) {
+                parameters.addValue("minimumWeight", preferences.minimumWeight());
+                complexity.add(weight + " >= :minimumWeight");
+            }
+            if (preferences.maximumWeight() != null) {
+                parameters.addValue("maximumWeight", preferences.maximumWeight());
+                complexity.add(weight + " <= :maximumWeight");
+            }
+            if (!complexity.isEmpty()) {
+                String fit = String.join(" AND ", complexity);
+                if (preferences.hardComplexity()) clauses.add(fit);
+                else preferenceOrder = "CASE WHEN " + fit + " THEN 0 WHEN " + weight
+                        + " IS NULL THEN 2 ELSE 1 END, ";
+            }
+        }
         String relevanceOrder = !descriptionQuery
                 ? ""
                 : "text_match.relevance DESC NULLS LAST, ";
-        String sql = textMatches + "SELECT " + QUALIFIED_COLUMNS + " FROM bgg_ranked_game g " + textJoin + " WHERE "
+        String sql = textMatches + "SELECT " + QUALIFIED_COLUMNS + " FROM bgg_ranked_game g " + textJoin + playJoin + " WHERE "
                 + String.join(" AND ", clauses)
-                + " ORDER BY " + relevanceOrder + metadataOrder(filters.sort()) + " LIMIT :limit OFFSET :offset";
+                + " ORDER BY " + preferenceOrder + relevanceOrder + metadataOrder(filters.sort()) + " LIMIT :limit OFFSET :offset";
         return jdbc.query(sql, parameters, this::mapGame);
+    }
+
+    private static String numericFact(String field) {
+        return "(CASE WHEN jsonb_typeof(play.payload->'" + field + "') = 'number'"
+                + " THEN (play.payload->>'" + field + "')::numeric END)";
     }
 
     private String metadataOrder(CatalogSort sort) {

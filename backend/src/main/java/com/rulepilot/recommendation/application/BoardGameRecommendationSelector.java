@@ -14,7 +14,6 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -22,25 +21,6 @@ import org.springframework.stereotype.Component;
 @Component
 @Profile("!test")
 class BoardGameRecommendationSelector {
-
-    private final BoardGameRecommendationProperties properties;
-
-    BoardGameRecommendationSelector(BoardGameRecommendationProperties properties) {
-        this.properties = properties;
-    }
-
-    List<Game> eligible(
-            List<Game> source,
-            RecommendationProfile profile,
-            Set<Integer> excludedBggIds,
-            int maximum) {
-        List<Game> allowed = source.stream()
-                .filter(game -> game != null && game.details() != null)
-                .filter(game -> !excludedBggIds.contains(game.ranking().bggId()))
-                .filter(game -> eligible(game, profile))
-                .toList();
-        return allowed.stream().limit(maximum).toList();
-    }
 
     boolean eligible(Game game, RecommendationProfile profile) {
         if (game == null || game.ranking() == null || game.details() == null) return false;

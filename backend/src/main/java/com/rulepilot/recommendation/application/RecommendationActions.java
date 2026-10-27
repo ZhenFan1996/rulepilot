@@ -76,7 +76,6 @@ final class RecommendationActions {
     private static final int MAX_CATALOG_OFFSET = Integer.MAX_VALUE - CATALOG_PAGE_SIZE;
     private final BoardGameRecommendationTools tools;
     private final BoardGameRecommendationSelector selector;
-    private final BoardGameRecommendationProperties properties;
     private final ObjectMapper actionJson;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationReActLoop runtime;
@@ -84,13 +83,11 @@ final class RecommendationActions {
     RecommendationActions(
             BoardGameRecommendationTools tools,
             BoardGameRecommendationSelector selector,
-            BoardGameRecommendationProperties properties,
             ObjectMapper json,
             RecommendationEvidenceReview evidenceReview,
             RecommendationReActLoop runtime) {
         this.tools = tools;
         this.selector = selector;
-        this.properties = properties;
         this.actionJson = json.copy()
                 .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
                 .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
@@ -479,8 +476,6 @@ final class RecommendationActions {
         int pagesScanned = 0;
         long pageBudget = 1;
         boolean completedPage = false;
-        int candidateWindowSize = properties.modelCandidateLimit();
-        // Preserve each page's alternatives without paging merely to fill the optional model window.
         while (eligible.isEmpty()
                 || search.requestedCount() != null && eligible.size() < search.requestedCount()) {
             state.recordCatalogCall();
@@ -505,6 +500,12 @@ final class RecommendationActions {
                                                 ? com.rulepilot.catalog.BoardGameRecommendationCatalog.TextScope.DESCRIPTION
                                                 : com.rulepilot.catalog.BoardGameRecommendationCatalog.TextScope.TITLE),
                                 sort,
+                                new com.rulepilot.catalog.BoardGameRecommendationCatalog.PlayPreferences(
+                                        search.players(), search.maxMinutes(),
+                                        selectionProfile.complexity() == null ? null : selectionProfile.complexity().minimum(),
+                                        selectionProfile.complexity() == null ? null : selectionProfile.complexity().maximum(),
+                                        selectionProfile.complexity() != null
+                                                && selectionProfile.complexity().strength() == ConstraintRange.Strength.HARD),
                                 CATALOG_PAGE_SIZE,
                                 currentOffset));
             } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
@@ -528,10 +529,8 @@ final class RecommendationActions {
                     continue;
                 }
                 eligible.putIfAbsent(bggId, game);
-                if (eligible.size() == candidateWindowSize) break;
             }
-            if (eligible.size() >= candidateWindowSize
-                    || page.pageExhausted()
+            if (page.pageExhausted()
                     || (!pageIds.isEmpty() && pageIds.equals(previousPageIds))
                     || pagesScanned >= pageBudget) {
                 break;
@@ -745,7 +744,7 @@ final class RecommendationActions {
         boolean completedBatch = false;
         boolean webResearchAvailable = true;
         LinkedHashSet<Integer> researchedIds = new LinkedHashSet<>();
-        int researchPageSize = properties.modelCandidateLimit();
+        int researchPageSize = CATALOG_PAGE_SIZE;
         int attemptedPages = 0;
         int completedPages = 0;
         long pageBudget = pageBudget(ids.size(), researchPageSize);

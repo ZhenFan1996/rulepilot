@@ -14,22 +14,18 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class BoardGameRecommendationSelectorTest {
 
-    private final BoardGameRecommendationSelector selector = new BoardGameRecommendationSelector(
-            new BoardGameRecommendationProperties(8, new BigDecimal("0.66"), Duration.ofSeconds(20)));
+    private final BoardGameRecommendationSelector selector = new BoardGameRecommendationSelector();
 
     @Test
     void acceptsTheUnifiedAgentTimeoutWithoutAnIndependentRecommendationMaximum() {
-        var accepted = new BoardGameRecommendationProperties(
-                8, new BigDecimal("0.66"), Duration.ofMinutes(2));
+        var accepted = new BoardGameRecommendationProperties(Duration.ofMinutes(2));
 
         assertThat(accepted.timeout()).isEqualTo(Duration.ofMinutes(2));
-        assertThatThrownBy(() -> new BoardGameRecommendationProperties(
-                        8, new BigDecimal("0.66"), Duration.ZERO))
+        assertThatThrownBy(() -> new BoardGameRecommendationProperties(Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be positive");
     }
@@ -246,26 +242,6 @@ class BoardGameRecommendationSelectorTest {
                         partyProfile))
                 .as("unknown ranking type cannot satisfy an explicit type request")
                 .isFalse();
-    }
-
-    @Test
-    void broadBrowseFiltersExcludedAndIneligibleGamesWithoutReorderingTheRemainingPool() {
-        RecommendationProfile profile = new RecommendationProfile(
-                ConstraintRange.hardExact(4),
-                ConstraintRange.hardAtMost(60),
-                null,
-                BggGameType.ALL,
-                InteractionPreference.ANY);
-        List<Game> result = selector.eligible(
-                List.of(
-                        game(1, 45, new BigDecimal("2"), List.of("Pattern Building")),
-                        game(2, 120, new BigDecimal("2"), List.of("Trading")),
-                        game(3, 50, new BigDecimal("2"), List.of("Open Drafting"))),
-                profile,
-                Set.of(3),
-                8);
-
-        assertThat(result).extracting(value -> value.ranking().bggId()).containsExactly(1);
     }
 
     private Game game(int id, int maximumMinutes, BigDecimal weight, List<String> mechanics) {

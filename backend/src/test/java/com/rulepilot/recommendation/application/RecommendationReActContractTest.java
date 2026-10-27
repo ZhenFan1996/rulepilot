@@ -350,6 +350,9 @@ class RecommendationReActContractTest {
             assertThat(range.maximum()).isEqualTo(60);
             assertThat(range.strength()).isEqualTo(ConstraintRange.Strength.HARD);
         });
+        assertThat(catalog.lastFilters.get().playPreferences()).isEqualTo(
+                new BoardGameRecommendationCatalog.PlayPreferences(
+                        23, 60, BigDecimal.ONE, new BigDecimal("3"), true));
         assertThat(response.profile().complexity()).satisfies(range -> {
             assertThat(range.minimum()).isEqualByComparingTo("1");
             assertThat(range.maximum()).isEqualByComparingTo("3");
@@ -1307,6 +1310,41 @@ class RecommendationReActContractTest {
         }
     }
 
+    @Test
+    void requestedSlateCanContinueAcrossStoragePagesWithoutAFixedCandidateCap() {
+        int requested = BoardGameRecommendationCatalog.MAX_SEARCH_PAGE_SIZE + 1;
+        List<Game> games = java.util.stream.IntStream.range(0, requested)
+                .mapToObj(index -> game(4000 + index, "Candidate " + index,
+                        BggGameType.STRATEGY, 2, 4, 45, "2.0")).toList();
+        var catalog = org.mockito.Mockito.mock(BoardGameRecommendationCatalog.class);
+        org.mockito.Mockito.when(catalog.searchGames(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    CatalogFilters filters = invocation.getArgument(0);
+                    return new CandidateSet(games.size(), games.stream().skip(filters.offset())
+                            .limit(filters.maximum()).toList(), filters.offset() + filters.maximum() >= games.size());
+                });
+        String selections = games.stream().map(game -> {
+            int id = game.ranking().bggId();
+            return "{\"bggId\":" + id + ",\"internalEvidenceIds\":[\"B" + id + ":complexity\"]}";
+        }).collect(java.util.stream.Collectors.joining(","));
+        var model = new ScriptedModel(
+                action("search", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"includeTypes\":[],\"excludeTypes\":[],\"requestedGameCount\":" + requested + "}"),
+                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"newRecommendationCount\":" + requested + ",\"selections\":[" + selections
+                                + "],\"playerReply\":\"These candidates have verified complexity data.\"}"));
+        var loop = loop(model, catalog);
+        try {
+            var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(),
+                    "Recommend " + requested + " games."), "en", "player", ignored -> {});
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).hasSize(requested);
+            assertThat(response.shortfall()).isNull();
+        } finally {
+            loop.stopBoundedCalls();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.EnumSource(ConstraintRange.Strength.class)
     void qualitativeComplexityPreferencesDoNotBecomeHardExclusions(ConstraintRange.Strength strength) {
@@ -1573,12 +1611,11 @@ class RecommendationReActContractTest {
             BoardGameRecommendationModel model,
             BoardGameRecommendationCatalog catalog,
             BoardGameRecommendationWebResearch research) {
-        var properties = new BoardGameRecommendationProperties(
-                8, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        var properties = new BoardGameRecommendationProperties(Duration.ofSeconds(30));
         return new RecommendationReActLoop(
                 model,
                 new BoardGameRecommendationTools(catalog, research),
-                new BoardGameRecommendationSelector(properties),
+                new BoardGameRecommendationSelector(),
                 properties,
                 new ObjectMapper(),
                 ObservationRegistry.NOOP);

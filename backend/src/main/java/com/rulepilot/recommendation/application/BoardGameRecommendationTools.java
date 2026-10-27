@@ -44,29 +44,6 @@ public class BoardGameRecommendationTools {
             List<String> categories,
             List<String> mechanics,
             List<String> designers,
-            int maximum) {
-        return searchCatalog(
-                types,
-                categories,
-                mechanics,
-                designers,
-                List.of(),
-                List.of(),
-                null,
-                null,
-                null,
-                null,
-                null,
-                CatalogSort.RANK,
-                maximum,
-                0);
-    }
-
-    CatalogObservation searchCatalog(
-            List<BggGameType> types,
-            List<String> categories,
-            List<String> mechanics,
-            List<String> designers,
             List<String> publishers,
             List<String> families,
             Integer minimumPublicationYear,
@@ -75,6 +52,7 @@ public class BoardGameRecommendationTools {
             Integer minimumRatingsCount,
             BoardGameRecommendationCatalog.TextQuery textQuery,
             CatalogSort sort,
+            BoardGameRecommendationCatalog.PlayPreferences playPreferences,
             int maximum,
             int offset) {
         try {
@@ -92,6 +70,7 @@ public class BoardGameRecommendationTools {
                             minimumRatingsCount,
                             textQuery,
                             sort,
+                            playPreferences,
                             maximum,
                             offset));
             return new CatalogObservation(
