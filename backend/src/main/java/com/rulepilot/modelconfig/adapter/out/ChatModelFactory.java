@@ -15,6 +15,7 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
 import org.springframework.stereotype.Component;
@@ -25,11 +26,21 @@ public class ChatModelFactory {
     private final ObservationRegistry observations;
     private final Duration requestTimeout;
     private final int requestTimeoutMillis;
+    private final ModelCallDebugRecorder debugRecorder;
 
     public ChatModelFactory(
             ObservationRegistry observations,
             @Value("${rulepilot.models.request-timeout:PT4M}") Duration requestTimeout) {
+        this(observations, requestTimeout, null);
+    }
+
+    @Autowired
+    public ChatModelFactory(
+            ObservationRegistry observations,
+            @Value("${rulepilot.models.request-timeout:PT4M}") Duration requestTimeout,
+            ModelCallDebugRecorder debugRecorder) {
         this.observations = observations;
+        this.debugRecorder = debugRecorder;
         if (requestTimeout == null || requestTimeout.isZero() || requestTimeout.isNegative()) {
             throw new IllegalArgumentException("model request timeout must be positive");
         }
@@ -45,11 +56,12 @@ public class ChatModelFactory {
     }
 
     public ChatModel create(String provider, String apiKey, String baseUrl, String model) {
-        return switch (provider) {
+        ChatModel created = switch (provider) {
             case "gemini" -> gemini(apiKey, model);
             case "openai", "deepseek", "qwen", "compatible" -> openAi(apiKey, baseUrl, model);
             default -> throw new IllegalArgumentException("unsupported model provider: " + provider);
         };
+        return debugRecorder == null ? created : debugRecorder.wrap(created, provider, model, apiKey);
     }
 
     private ChatModel gemini(String apiKey, String model) {
