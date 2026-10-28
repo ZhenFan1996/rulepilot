@@ -35,6 +35,20 @@ make dev
 <http://127.0.0.1:3000>。默认使用确定性 Fake Provider，不调用付费模型。启用真实 Provider 时，本地启动器会在
 旧 `.env` 尚未声明 `RULEPILOT_MODELS_STARTUP_ALLOWED_USERS` 的情况下，仅向已配置的本地玩家与演示管理员账号
 开放启动凭证；显式设置（包括留空）始终优先。真实凭证只放 `.env`，不得提交。
+
+模型响应调试可显式设置 `MODEL_DEBUG_RECORDING_ENABLED=true`，对所有用户生效。它沿用现有
+OpenTelemetry → Tempo 链路，不记录输入 prompt、图片、私有推理或异常正文。在 Grafana 打开对应 trace，
+展开 `model-call` 的 Span attributes：`gen_ai.request.model` 是模型，`model.debug.outcome` 是完成、失败或取消，
+`model.response.000` 起的有序分片拼接为 JSON，包含 `text` 和 `tool_calls`（名称、ID、脱敏参数）。
+同步响应和流式响应使用同一个记录器，每次模型调用独立记录，流式参数在结束时合并；它们是模型候选输出，
+并不意味着已经通过业务发布校验。失败或取消标记 `partial_redacted`，无法解析的参数不输出原文。
+记录跟随 trace 采样；生产需要覆盖全部请求时同时设置 `PRODUCTION_TRACING_SAMPLING_PROBABILITY=1.0`。
+这些内容对已有 Grafana 查看者可见，并按 Tempo 的 24 小时策略保留。脱敏覆盖结构化敏感字段、当前 Provider
+凭据、常见凭据格式、邮箱及 URL 查询参数，不保证识别自然语言中所有个人信息或文档原文。
+关闭开关只停止新记录，不会立即删除已存储的 trace。
+诊断副本受 Tempo 每属性 2048 字节和 OTel 每 span 128 个属性的容量约束（16 个槽位保留给元数据）；
+生产属性值长度设为 2048，异常事件继续禁用。超限时 `model.debug.output_status=omitted_capacity`，
+不会静默展示截断 JSON，也不会影响实际模型响应、工具执行或发布。没有有效父 trace 时不创建脱离业务的记录。
 部署环境另为公开答疑的 `public-reader` 系统身份启用启动模型配置。该身份禁止登录、没有用户权限，
 模型用量仍由独立账户配额约束；本地需要验证公开答疑时，将它显式加入上述名单。
 同步答疑的累计 token 估算仅用于统计，不截断已读证据后的回答；请求统一时限、账户配额、Provider 限制、

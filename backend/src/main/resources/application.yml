@@ -226,6 +226,8 @@ rulepilot:
     dataset: ${ANSWER_REGRESSION_DATASET:}
     name: ${ANSWER_REGRESSION_NAME:external-answer-regressions}
   models:
+    debug-recording:
+      enabled: ${MODEL_DEBUG_RECORDING_ENABLED:false}
     credential-encryption-key: ${MODEL_CREDENTIAL_ENCRYPTION_KEY:}
     credential-encryption-key-version: ${MODEL_CREDENTIAL_ENCRYPTION_KEY_VERSION:1}
     default-monthly-token-limit: ${MODEL_DEFAULT_MONTHLY_TOKEN_LIMIT:2000000}
