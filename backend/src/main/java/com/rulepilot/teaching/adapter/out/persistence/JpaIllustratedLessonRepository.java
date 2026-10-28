@@ -10,6 +10,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.RuleFact;
+import com.rulepilot.teaching.domain.IllustratedLesson.ReadingBlock;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
@@ -401,6 +402,7 @@ class IllustratedLessonStepEntity {
     @Column(name = "source_pages", nullable = false, columnDefinition = "text") String sourcePages;
     @Column(name = "source_chunk_ids", nullable = false, columnDefinition = "text") String sourceChunkIds;
     @Column(name = "rule_facts_json", nullable = false, columnDefinition = "text") String ruleFactsJson = "[]";
+    @Column(name = "reading_blocks_json", nullable = false, columnDefinition = "text") String readingBlocksJson = "[]";
     @Column(name = "visual_foci_json", nullable = false, columnDefinition = "text") String visualFociJson = "[]";
     @Column(name = "visual_page") Integer visualPage;
     @Column(name = "visual_label", columnDefinition = "text") String visualLabel;
@@ -423,6 +425,8 @@ class IllustratedLessonStepEntity {
         sourceChunkIds = step.sourceChunkIds().stream().map(UUID::toString).collect(Collectors.joining(","));
         ruleFactsJson = writeRuleFacts(step.ruleFacts());
         visualFociJson = writeVisualFoci(step.visualFoci());
+        try { readingBlocksJson = JSON.writeValueAsString(step.readingBlocks()); }
+        catch (Exception invalid) { throw new IllegalStateException("lesson reading flow could not be stored", invalid); }
         if (step.visualFocus() != null) {
             visualPage = step.visualFocus().pageNumber();
             visualLabel = step.visualFocus().label();
@@ -461,7 +465,12 @@ class IllustratedLessonStepEntity {
                 chunkIds,
                 readRuleFacts(ruleFactsJson),
                 visualFoci.isEmpty() ? null : visualFoci.getFirst(),
-                visualFoci);
+                visualFoci, readReadingBlocks(readingBlocksJson));
+    }
+
+    private static List<ReadingBlock> readReadingBlocks(String value) {
+        try { return JSON.readValue(value, new TypeReference<List<ReadingBlock>>() {}); }
+        catch (Exception invalid) { throw new IllegalStateException("stored lesson reading flow is invalid", invalid); }
     }
 
     private static String writeRuleFacts(List<RuleFact> facts) {

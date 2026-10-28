@@ -157,6 +157,8 @@ class GroundedTeachingAgentTest {
                 .extracting(LessonSection::topicKey)
                 .containsExactly("published", "preserved");
 
+        IllustratedLesson previousRelease = new IllustratedLesson(partial.id(), partial.teachingPlanId(), partial.status(),
+                partial.sections(), "teaching-agent-v82-labelled-source-illustrations", partial.createdAt());
         List<String> composedTopics = new CopyOnWriteArrayList<>();
         AtomicBoolean deadlineReached = new AtomicBoolean(true);
         TeachingLessonModel resumedModel = request -> {
@@ -177,7 +179,7 @@ class GroundedTeachingAgentTest {
 
         List<IllustratedLesson> resumedSnapshots = new ArrayList<>();
         assertThatThrownBy(() -> resumedRun.createBase(
-                resumablePlan, UUID.randomUUID(), partial, resumedSnapshots::add))
+                resumablePlan, UUID.randomUUID(), previousRelease, resumedSnapshots::add))
                 .isInstanceOf(AgentExecutionStoppedException.class);
 
         assertThat(resumedSnapshots).isNotEmpty().allSatisfy(snapshot ->

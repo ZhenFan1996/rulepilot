@@ -4,6 +4,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import RulebookPageViewer from '@/components/RulebookPageViewer.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
 import LessonVisualEvidence from '@/components/LessonVisualEvidence.vue'
+import LessonReadingFlow from '@/components/LessonReadingFlow.vue'
 import LessonRuleFacts, { type LessonRuleFact } from '@/components/LessonRuleFacts.vue'
 import type { VisualFocus } from '@/composables/lessonSupportingContent'
 import { useLocale } from '@/lib/locale'
@@ -16,6 +17,7 @@ interface LessonReaderStep {
   ruleFacts?: LessonRuleFact[]
   sourcePages: number[]
   visualFocus: VisualFocus | null
+  readingBlocks?: import('@/composables/lessonSupportingContent').LessonReadingBlock[]
   visualFoci?: VisualFocus[]
 }
 
@@ -257,20 +259,16 @@ function stepTone(kind: string) {
                       <span class="text-sm font-semibold tabular-nums text-muted">{{ step.position }}</span>
                       <h3 class="lesson-step-title text-xl font-semibold leading-snug sm:text-2xl">{{ step.heading }}</h3>
                     </div>
-                    <div
+                    <LessonReadingFlow v-if="step.readingBlocks?.length" class="mt-4"
+                      :blocks="step.readingBlocks" :narration-id="stepNarrationId(section.position, step.position)"
+                      :open-page="openSource" :page-image-url="props.pageImageUrl" :focused-page-image-url="props.focusedPageImageUrl" />
+                    <!-- Retained pre-flow lessons and offline snapshots have no authored block order. -->
+                    <div v-else
                       class="mt-4"
                       :class="visibleVisuals(section, step).length ? 'grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start lg:gap-7' : ''"
                     >
                       <div class="min-w-0">
                         <p class="lesson-step-copy max-w-[70ch] whitespace-pre-line text-base leading-8 text-ink sm:text-[1.0625rem]">{{ step.text }}</p>
-                        <details v-if="step.ruleFacts?.length" class="mt-4 border-l-2 border-ink/10 pl-3">
-                          <summary class="cursor-pointer py-2 text-sm font-semibold text-muted">{{ locale === 'en' ? 'Rule highlights' : '规则要点' }}</summary>
-                          <LessonRuleFacts :facts="step.ruleFacts" />
-                        </details>
-
-                        <div v-if="step.sourcePages.length" class="mt-4 flex flex-wrap gap-2">
-                          <a v-for="page in step.sourcePages" :key="page" :href="props.pageImageUrl(page)" class="inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-muted transition hover:border-indigo/30 hover:text-indigo" @click="openSourceLink($event, page)">{{ sourceLabel([page]) }}</a>
-                        </div>
                       </div>
 
                       <ul
@@ -307,6 +305,13 @@ function stepTone(kind: string) {
                         </li>
                       </ul>
                     </div>
+                      <details v-if="step.ruleFacts?.length" class="mt-4 border-l-2 border-ink/10 pl-3">
+                        <summary class="cursor-pointer py-2 text-sm font-semibold text-muted">{{ locale === 'en' ? 'Rule highlights' : '规则要点' }}</summary>
+                        <LessonRuleFacts :facts="step.ruleFacts" />
+                      </details>
+                      <div v-if="step.sourcePages.length" class="mt-4 flex flex-wrap gap-2">
+                        <a v-for="page in step.sourcePages" :key="page" :href="props.pageImageUrl(page)" class="text-xs text-muted underline underline-offset-4" @click="openSourceLink($event, page)">{{ sourceLabel([page]) }}</a>
+                      </div>
                   </div>
                 </div>
               </div>

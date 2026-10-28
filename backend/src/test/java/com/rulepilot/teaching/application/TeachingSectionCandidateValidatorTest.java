@@ -96,7 +96,19 @@ class TeachingSectionCandidateValidatorTest {
         var request = new SectionRequest("repair", "Repair", "Explain repair", List.of(),
                 List.of(new EvidenceInput(citation, "RULE", "Repair", source.excerpt(), 8, 8)), images, "owner", PlayerLocale.EN);
         var draft = new SectionDraft("Repair", List.of(new StepDraft("Repair", TeachingMove.DO,
-                "Spend an action to repair.", List.of(citation), List.of(), List.of(selection))));
+                List.of(new com.rulepilot.teaching.TeachingLessonModel.ReadingBlockDraft(
+                        com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.FIGURES, "",
+                        List.of(new com.rulepilot.teaching.TeachingLessonModel.FigureDraft(selection, "")),
+                        com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.ASIDE),
+                        new com.rulepilot.teaching.TeachingLessonModel.ReadingBlockDraft(
+                        com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH,
+                        "Spend an action to repair.", List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE)), List.of(citation), List.of())));
+        if (!selection.equals("offered")) {
+            assertThatThrownBy(() -> new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
+                    plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("outside the step evidence scope");
+            return;
+        }
         var section = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
                 plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT);
         assertThat(section.steps().getFirst().text()).isEqualTo("Spend an action to repair.");

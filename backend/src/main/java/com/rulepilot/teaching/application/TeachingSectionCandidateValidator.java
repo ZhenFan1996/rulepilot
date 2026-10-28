@@ -92,13 +92,19 @@ final class TeachingSectionCandidateValidator {
             TeachingLessonModel.SectionRequest request) {
         Map<String, TeachingLessonModel.VisualInput> offered = request.visuals().stream()
                 .collect(Collectors.toMap(TeachingLessonModel.VisualInput::imageId, Function.identity(), (a, b) -> a));
-        var foci = draft.imageIds().stream().distinct().map(offered::get)
-                .filter(java.util.Objects::nonNull)
-                .filter(visual -> visual.evidenceIds().stream().anyMatch(step.sourceChunkIds()::contains)
-                        && step.sourcePages().contains(visual.focus().pageNumber()))
-                .map(TeachingLessonModel.VisualInput::focus).toList();
-        return foci.isEmpty() ? step : step.withVisualFoci(
-                com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove.VISUAL, foci);
+        var blocks = draft.content().stream().map(block -> {
+            var figures = block.figures().stream().map(figure -> {
+                var visual = offered.get(figure.imageId());
+                if (visual == null || !visual.evidenceIds().stream().anyMatch(step.sourceChunkIds()::contains)
+                        || !step.sourcePages().contains(visual.focus().pageNumber())) {
+                    throw new IllegalArgumentException("reading figure references an image outside the step evidence scope: " + figure.imageId());
+                }
+                return new com.rulepilot.teaching.domain.IllustratedLesson.ReadingFigure(visual.focus(), figure.caption());
+            }).toList();
+            return new com.rulepilot.teaching.domain.IllustratedLesson.ReadingBlock(
+                    block.kind(), block.text(), figures, block.flow());
+        }).toList();
+        return step.withReadingBlocks(blocks);
     }
 
     private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {

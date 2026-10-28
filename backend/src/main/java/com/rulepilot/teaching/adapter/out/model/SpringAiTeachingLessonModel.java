@@ -583,14 +583,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 draft.title(),
                 draft.steps().stream()
                         .map(step -> new ModelStepDraft(
-                                step.heading(), step.kind(), step.text(),
+                                step.heading(), step.kind(), step.content(),
                                 step.citationIds().stream().map(references::get).toList(),
                                 step.ruleFacts().stream()
                                         .map(fact -> new ModelRuleFact(
                                                 fact.role(),
                                                 fact.text(),
                                                 fact.citationIds().stream().map(references::get).toList()))
-                                        .toList(), step.imageIds()))
+                                        .toList()))
                         .toList());
     }
 
@@ -608,14 +608,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 draft.title(),
                 draft.steps().stream()
                         .map(step -> new StepDraft(
-                                step.heading(), step.kind(), step.text(),
+                                step.heading(), step.kind(), step.content(),
                                 resolveReferences(step.citationIds(), evidenceIds),
                                 step.ruleFacts().stream()
                                         .map(fact -> new RuleFactDraft(
                                                 fact.role(),
                                                 fact.text(),
                                                 resolveReferences(fact.citationIds(), evidenceIds)))
-                                        .toList(), step.imageIds()))
+                                        .toList()))
                         .toList());
     }
 
@@ -659,16 +659,16 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     record ModelStepDraft(
             String heading,
             TeachingMove kind,
-            String text,
+            List<TeachingLessonModel.ReadingBlockDraft> content,
             List<String> citationIds,
-            List<ModelRuleFact> ruleFacts,
-            List<String> imageIds) {
+            List<ModelRuleFact> ruleFacts) {
         ModelStepDraft(String heading, TeachingMove kind, String text, List<String> citationIds,
                 List<ModelRuleFact> ruleFacts) {
-            this(heading, kind, text, citationIds, ruleFacts, List.of());
+            this(heading, kind, List.of(new TeachingLessonModel.ReadingBlockDraft(
+                    com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH, text, List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE)), citationIds, ruleFacts);
         }
         ModelStepDraft {
-            imageIds = imageIds == null ? List.of() : List.copyOf(imageIds);
+            content = content == null ? List.of() : List.copyOf(content);
             citationIds = citationIds == null ? List.of() : citationIds.stream().distinct().toList();
             ruleFacts = ruleFacts == null ? List.of() : ruleFacts.stream().distinct().toList();
         }

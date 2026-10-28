@@ -126,7 +126,7 @@ class SpringAiTeachingLessonModelRequestOptionsTest {
     private static ChatResponse response() {
         return new ChatResponse(List.of(new Generation(new AssistantMessage("""
                 {"locale":"zh-CN","title":"进行回合","steps":[{"heading":"移动并交棒","kind":"DO",
-                "text":"先移动一个标记，再把回合交给下一位玩家。","citationIds":["E1"],"ruleFacts":[]}]}
+                "content":[{"kind":"PARAGRAPH","text":"先移动一个标记，再把回合交给下一位玩家。","figures":[],"flow":"NONE"}],"citationIds":["E1"],"ruleFacts":[]}]}
                 """))));
     }
 }
