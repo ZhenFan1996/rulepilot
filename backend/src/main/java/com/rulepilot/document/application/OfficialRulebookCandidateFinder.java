@@ -1,12 +1,29 @@
 package com.rulepilot.document.application;
 
 import java.util.List;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
 
 public interface OfficialRulebookCandidateFinder {
+
+    static Optional<String> publisherForHost(String host, List<String> publishers) {
+        return publishers.stream().filter(publisher -> publisher != null &&
+                Arrays.stream(publisher.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").split(" "))
+                        .filter(token -> token.length() >= 4)
+                        .filter(token -> !Set.of("games", "game", "publishing", "publisher", "edition").contains(token))
+                        .anyMatch(host::contains)).findFirst();
+    }
 
     boolean configured();
 
     List<Candidate> find(Request request);
+
+    /** Previously observed sources only; never starts a provider request. Capabilities still need inspection. */
+    default List<Candidate> cachedCandidates(Request request) {
+        return List.of();
+    }
 
     /** One bounded recovery pass after ordinary search and source-page inspection produced no downloadable PDF. */
     default List<Candidate> findAfterSourcePages(Request request, List<Candidate> observedSourcePages) {

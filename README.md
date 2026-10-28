@@ -36,6 +36,10 @@ make dev
 旧 `.env` 尚未声明 `RULEPILOT_MODELS_STARTUP_ALLOWED_USERS` 的情况下，仅向已配置的本地玩家与演示管理员账号
 开放启动凭证；显式设置（包括留空）始终优先。真实凭证只放 `.env`，不得提交。
 
+规则书搜索默认使用 Qwen 3.8 Flash。先复用已有搜索来源并重新检查文件；缓存无可用结果时再查询外部目录和联网搜索。
+联网搜索观察到与游戏标题关联的出版社或可信站点规则页后，即交给来源检查，不等待模型继续整理文字。
+来源页仍需检查内容和下载链接，不能仅凭搜索结果认定为可导入规则书；找到符合目标语言的可导入文件后立即返回。
+
 模型响应调试可显式设置 `MODEL_DEBUG_RECORDING_ENABLED=true`，对所有用户生效。它沿用现有
 OpenTelemetry → Tempo 链路，不记录输入 prompt、图片、私有推理或异常正文。在 Grafana 打开对应 trace，
 展开 `model-call` 的 Span attributes：`gen_ai.request.model` 是模型，`model.debug.outcome` 是完成、失败或取消，

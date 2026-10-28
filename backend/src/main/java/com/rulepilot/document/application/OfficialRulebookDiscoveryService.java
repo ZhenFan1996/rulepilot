@@ -185,6 +185,16 @@ public class OfficialRulebookDiscoveryService {
                 identity.officialNames(),
                 identity.publishers(),
                 trustedDomains.stream().sorted().toList());
+        var allCandidates = new ArrayList<Candidate>();
+        List<OfficialRulebookCandidateFinder.Candidate> cachedDiscovered = finder.cachedCandidates(request);
+        List<Candidate> cachedCandidates = cachedDiscovered.stream()
+                .map(candidate -> validate(candidate, identity.publishers()))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        allCandidates.addAll(assessCandidates(cachedCandidates, request, budget));
+        if (allCandidates.stream().anyMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
+            return completeResult(true, discoveryIdentity, allCandidates, budget);
+        }
         List<OfficialRulebookCandidateFinder.Candidate> catalogDiscovered = budget
                 .call(DiscoveryProvider.CATALOG, () -> gstoneCatalog.find(request))
                 .orElse(List.of());
@@ -192,7 +202,6 @@ public class OfficialRulebookDiscoveryService {
                 .map(candidate -> validate(candidate, identity.publishers()))
                 .filter(java.util.Objects::nonNull)
                 .toList();
-        var allCandidates = new ArrayList<Candidate>();
         allCandidates.addAll(assessCandidates(catalogCandidates, request, budget));
         if (allCandidates.stream().anyMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
             return completeResult(true, discoveryIdentity, allCandidates, budget);
@@ -202,9 +211,9 @@ public class OfficialRulebookDiscoveryService {
             return completeResult(!catalogDiscovered.isEmpty(), discoveryIdentity, allCandidates, budget);
         }
 
-        var modelDiscovered = new ArrayList<>(budget
+        var modelDiscovered = new ArrayList<>(cachedDiscovered.isEmpty() ? budget
                 .call(DiscoveryProvider.WEB_SEARCH, () -> finder.find(request))
-                .orElse(List.of()));
+                .orElse(List.of()) : List.<OfficialRulebookCandidateFinder.Candidate>of());
         modelDiscovered.add(new OfficialRulebookCandidateFinder.Candidate(
                 "BoardGameGeek Files",
                 "https://boardgamegeek.com/files/thing/" + game.bggId(),
@@ -299,13 +308,17 @@ public class OfficialRulebookDiscoveryService {
             var inspection = inspectedSource.orElseThrow();
             if (inspection.mediaType() == OfficialRulebookSourceInspector.MediaType.PDF) {
                 if (confirmedDocuments++ < MAX_RESOLVED_DOWNLOADS) {
-                    assessed.add(resolvedDownload(page, inspection.finalSource(), checkedAt));
+                    Candidate document = resolvedDownload(page, inspection.finalSource(), checkedAt);
+                    assessed.add(document);
+                    if (isImportableForLanguage(document, request.language())) break;
                 }
                 continue;
             }
             if (inspection.mediaType() == OfficialRulebookSourceInspector.MediaType.IMAGE_GALLERY) {
                 if (confirmedDocuments++ < MAX_RESOLVED_DOWNLOADS) {
-                    assessed.add(resolvedImageGallery(page, inspection.finalSource(), checkedAt));
+                    Candidate document = resolvedImageGallery(page, inspection.finalSource(), checkedAt);
+                    assessed.add(document);
+                    if (isImportableForLanguage(document, request.language())) break;
                 }
                 continue;
             }
@@ -313,16 +326,17 @@ public class OfficialRulebookDiscoveryService {
                 assessed.add(assessHtml(page.provenance(), inspection, checkedAt));
             }
             if (page.provenance().sourceType() == SourceType.PUBLIC_WEB || page.depth() >= 1) continue;
-            inspection.links().stream()
+            var links = inspection.links().stream()
                     .filter(link -> !isExplicitNonRuleDocument(link))
                     .map(link -> new ScoredLink(link, linkScore(link, request)))
                     .sorted(Comparator.comparingInt(ScoredLink::score).reversed()
                             .thenComparing(link -> link.link().target().toASCIIString()))
-                    .limit(4)
-                    .forEach(link -> {
+                    .limit(4).toList();
+            // Follow the best observed download before inspecting unrelated alternative source pages.
+            links.reversed().forEach(link -> {
                         URI target = link.link().target();
                         if (!inspected.contains(target.toASCIIString())) {
-                            queue.addLast(new SourcePage(page.provenance(), target, link.link().label(), 1));
+                            queue.addFirst(new SourcePage(page.provenance(), target, link.link().label(), 1));
                         }
                     });
         }
@@ -547,9 +561,7 @@ public class OfficialRulebookDiscoveryService {
         }
         String host = IDN.toASCII(uri.getHost()).toLowerCase(Locale.ROOT);
         boolean trusted = trustedDomains.stream().anyMatch(domain -> host.equals(domain) || host.endsWith("." + domain));
-        boolean publisherMatch = verifiedPublishers.stream()
-                .flatMap(publisher -> publisherTokens(publisher).stream())
-                .anyMatch(host::contains);
+        boolean publisherMatch = OfficialRulebookCandidateFinder.publisherForHost(host, verifiedPublishers).isPresent();
         SourceType sourceType = publisherMatch
                 ? SourceType.PUBLISHER
                 : trusted
@@ -731,14 +743,6 @@ public class OfficialRulebookDiscoveryService {
     private boolean requiresBrowserHandoff(URI source) {
         String host = source.getHost() == null ? "" : source.getHost().toLowerCase(Locale.ROOT);
         return isBggPageHost(host) || host.equals("geekdo.com") || host.endsWith(".geekdo.com");
-    }
-
-    private Set<String> publisherTokens(String publisher) {
-        if (publisher == null) return Set.of();
-        return Arrays.stream(publisher.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").split(" "))
-                .filter(value -> value.length() >= 4)
-                .filter(value -> !Set.of("games", "game", "publishing", "publisher", "edition").contains(value))
-                .collect(Collectors.toSet());
     }
 
     private String bounded(String value, int maximum) {

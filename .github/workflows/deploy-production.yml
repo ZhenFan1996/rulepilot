@@ -665,7 +665,7 @@ jobs:
             'WEB_SEARCH_MODEL=qwen3.8-flash' \
             'QWEN_MODEL=qwen3.8-max' \
             'QWEN_VISION_CAPABLE=true' \
-            'RULEBOOK_DISCOVERY_MODEL=qwen3.7-max' \
+            'RULEBOOK_DISCOVERY_MODEL=qwen3.8-flash' \
             'RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL=PT10M' \
             'RULEBOOK_DISCOVERY_HOURLY_LIMIT=30' \
             'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' \
@@ -824,11 +824,23 @@ jobs:
             ! -path "$frontend_image_checksum" -delete
           install -d -m 0755 "$releases_root"
           removed_releases=0
+          # Dependency containers can still mount configuration from an earlier release.
+          # Retain that release until those mounts have been migrated by their own lifecycle.
+          mounted_sources=$(docker ps -aq | xargs -r docker inspect \
+            --format '{{range .Mounts}}{{if eq .Type "bind"}}{{println .Source}}{{end}}{{end}}')
           for candidate in "${releases_root}"/*; do
             [[ -d "$candidate" ]] || continue
             candidate_path=$(readlink -f "$candidate")
             [[ "$candidate_path" == "$current_release" ]] && continue
             [[ "$candidate_path" == "$release_dir" ]] && continue
+            mounted=false
+            while IFS= read -r mount_source; do
+              if [[ "$mount_source" == "$candidate_path" || "$mount_source" == "$candidate_path/"* ]]; then
+                mounted=true
+                break
+              fi
+            done <<< "$mounted_sources"
+            [[ "$mounted" == true ]] && continue
             if [[ "$candidate_path" != "${releases_root}/"* ]]; then
               echo "Refusing to remove release outside ${releases_root}: ${candidate_path}" >&2
               exit 1
