@@ -83,15 +83,12 @@ public class SpringAiNativeToolModel implements NativeToolModel {
             if (models.usesDeepSeekNonThinkingGeneration(modelRole, request.scope().ownerUsername())) {
                 openAiOptions.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else if (qwen) {
-                // Answer reasoning stays inside the same request deadline; no reviewer stage is added.
-                openAiOptions.extraBody(request.role() == Role.ANSWER
-                        ? Map.of("enable_thinking", true, "reasoning_effort",
-                                request.conversation().stream().anyMatch(message -> !message.media().isEmpty())
-                                        ? "low" : "medium")
-                        : Map.of("enable_thinking", false));
+                // Table-side answers use the same direct generation mode as the other interactive roles.
+                // Evidence acquisition and terminal validation remain in the application-controlled Agent.
+                openAiOptions.extraBody(Map.of("enable_thinking", false));
             }
             if (request.jsonOutputRequired() && !(qwen && request.role() == Role.ANSWER)) {
-                // Qwen reasoning uses application validation: forced JSON decoding can truncate quoted prose
+                // Qwen uses application validation: forced JSON decoding can truncate quoted prose
                 // into syntactically valid but incomplete fields. Other providers retain their JSON transport.
                 openAiOptions.responseFormat(ResponseFormat.builder()
                         .type(Type.JSON_OBJECT)

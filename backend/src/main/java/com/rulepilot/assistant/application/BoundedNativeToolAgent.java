@@ -307,7 +307,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                 : ActivityOutcome.SUCCEEDED,
                         "code=" + toolExecution.observation().code()
                                 + " evidenceCount=" + toolExecution.observation().evidenceCount());
-                conversation.appendTool(call, serializedObservation);
+                conversation.appendTool(call, reuseObservedEvidence(serializedObservation, repeatedObservations));
                 if (!toolExecution.observation().media().isEmpty()) {
                     conversation.appendVisual(
                             "Visual observations returned by " + call.name()
@@ -334,6 +334,29 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                 + "Preserve supported conclusions and explicitly localize anything unresolved; "
                                 + "do not invent evidence or rule claims.");
             }
+        }
+    }
+
+    private String reuseObservedEvidence(String serialized, Set<JsonNode> retained) {
+        try {
+            JsonNode envelope = objectMapper.readTree(serialized);
+            JsonNode evidence = envelope.path("data").path("evidence");
+            if (!(evidence instanceof com.fasterxml.jackson.databind.node.ArrayNode items)) return serialized;
+            boolean changed = false;
+            for (int index = 0; index < items.size(); index++) {
+                JsonNode item = items.get(index);
+                if (item.path("evidenceId").isTextual() && retained.contains(item)) {
+                    // The complete immutable evidence remains in its earlier tool message. Preserve the current
+                    // result membership and identity without resending the same excerpt on every search round.
+                    items.set(index, objectMapper.createObjectNode()
+                            .put("evidenceId", item.path("evidenceId").textValue())
+                            .put("alreadyObserved", true));
+                    changed = true;
+                }
+            }
+            return changed ? objectMapper.writeValueAsString(envelope) : serialized;
+        } catch (JsonProcessingException invalidEnvelope) {
+            throw new IllegalStateException("native tool observation could not be decoded", invalidEnvelope);
         }
     }
 
