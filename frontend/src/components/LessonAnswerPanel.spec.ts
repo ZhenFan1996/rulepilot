@@ -65,7 +65,7 @@ describe('LessonAnswerPanel reliability boundary', () => {
     await wrapper.findAll('button').find(button => button.text() === '停止等待')!.trigger('click')
     expect(wrapper.emitted('cancelAnswer')).toHaveLength(1)
     await wrapper.setProps({ answer: null, answerLoading: false })
-    const history = wrapper.get('details')
+    const history = wrapper.get('ol[aria-label] details')
     expect(history.text()).toContain(partial.explanation)
     expect(history.text()).toContain(partial.clarification)
   })

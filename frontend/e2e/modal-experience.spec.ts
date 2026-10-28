@@ -22,7 +22,7 @@ test('contains keyboard focus, closes with Escape, and restores the rulebook act
     .toEqual({ root: 'hidden', body: 'hidden' })
 
   await close.press('Shift+Tab')
-  const last = dialog.locator('button:not([disabled]), textarea:not([disabled]), input:not([disabled]), a[href]').last()
+  const last = dialog.locator(':is(button:not([disabled]), textarea:not([disabled]), input:not([disabled]), a[href], summary):visible').last()
   await expect(last).toBeFocused()
   await last.press('Tab')
   await expect(close).toBeFocused()
@@ -35,7 +35,7 @@ test('contains keyboard focus, closes with Escape, and restores the rulebook act
     .toEqual({ root: '', body: '' })
 })
 
-test('keeps the rulebook usable alongside questions and restores focus after card recognition', async ({ page }) => {
+test('keeps the rulebook usable alongside questions and restores focus after card recognition', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/rulebooks/version-1')
   const opener = page.getByRole('button', { name: '基于这本规则书答疑' }).first()
@@ -43,6 +43,8 @@ test('keeps the rulebook usable alongside questions and restores focus after car
   const answerDialog = page.getByRole('complementary', { name: '基于这本规则书答疑' })
   await page.getByRole('combobox', { name: '规则书页面' }).selectOption('2', { timeout: 1500 })
   await expect(page.getByTestId('rulebook-page-image')).toHaveAttribute('data-page-number', '2')
+  await page.screenshot({ path: testInfo.outputPath('rulebook-questions-desktop.png') })
+  await answerDialog.getByText('拍照或语音输入', { exact: true }).click()
   const cardOpener = answerDialog.getByRole('button', { name: '拍照识别卡牌文字' })
   await cardOpener.click()
 

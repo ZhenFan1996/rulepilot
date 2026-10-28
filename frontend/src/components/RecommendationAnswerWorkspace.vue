@@ -56,24 +56,20 @@ let workspaceRequest = 0
 let csrf: CsrfResponse | null = null
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
-  eyebrow: '规则答疑',
   title: `《${props.gameTitle}》规则答疑`,
-  description: '这里的问答绑定到已下载的同一版本规则书，并会保留本次追问上下文。推荐对话仍在，随时可以切回去。',
+  description: '根据当前规则书回答，可以接着追问。',
   loading: '正在恢复这款桌游的答疑会话…',
   error: '暂时无法建立绑定到这份规则书的答疑会话。',
   retry: '重试',
-  ready: '已绑定规则书，可以开始提问',
   login: '请先登录后开始规则答疑。',
   session: '无法创建或恢复规则答疑会话。',
   conversation: '无法恢复此前的规则问答。',
 } : {
-  eyebrow: 'Rules Q&A',
   title: `Rules Q&A for ${props.gameTitle}`,
-  description: 'Questions stay bound to the downloaded rulebook edition and preserve follow-up context. Your recommendation conversation remains available whenever you switch back.',
+  description: 'Ask about the current rulebook, then follow up.',
   loading: 'Restoring this game’s rules Q&A session…',
   error: 'A Q&A session bound to this rulebook cannot be established right now.',
   retry: 'Retry',
-  ready: 'Bound to the rulebook and ready for questions',
   login: 'Sign in to start rules Q&A.',
   session: 'The rules Q&A session could not be created or restored.',
   conversation: 'Earlier rules questions could not be restored.',
@@ -407,14 +403,12 @@ onBeforeUnmount(() => {
 
 <template>
   <section data-testid="recommendation-answer-workspace" tabindex="-1" class="max-h-[70vh] min-h-72 overflow-y-auto px-4 py-5 outline-none sm:min-h-[31rem] sm:px-6 sm:py-7 lg:max-h-[46rem]">
-    <header class="rounded-2xl border border-indigo/15 bg-indigo/5 px-4 py-4">
+    <header class="border-b border-ink/10 pb-4">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
-          <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ copy.eyebrow }}</p>
           <h3 class="mt-1 font-display text-xl font-semibold">{{ copy.title }}</h3>
           <p class="mt-1 max-w-2xl text-xs leading-5 text-muted">{{ copy.description }}</p>
         </div>
-        <span v-if="session" class="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">{{ copy.ready }}</span>
       </div>
     </header>
 

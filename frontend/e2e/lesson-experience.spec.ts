@@ -102,7 +102,10 @@ test('uses one tabletop reading language for private and public guides', async (
   await page.getByTestId('lesson-questions-entry').click()
   await expect(page).toHaveURL('/read/plan-1/questions')
   await expect(page.getByTestId('public-questions-reader')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '摆好灯塔', exact: true })).toHaveCount(0)
   await expect(page.locator('#public-question')).toBeVisible()
+  await expect(page.getByTestId('lesson-reading-column')).toHaveCount(0)
+  await page.getByRole('link', { name: '讲解', exact: true }).click()
   await expect(page.getByTestId('lesson-reading-column')).toBeVisible()
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
 })
@@ -190,8 +193,11 @@ test('keeps available chapters and the answer workspace usable while the mobile 
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false)
   await page.goto('/lesson/plan-1/questions')
   await expect(page.getByRole('heading', { name: '向《Catalog Game》规则书提问' })).toBeVisible()
+  await page.getByText('规则书与桌游资料', { exact: true }).click()
   await expect(page.getByText('桌游资料由 BoardGameGeek 提供')).toBeVisible()
+  await page.getByText('规则书与桌游资料', { exact: true }).click()
   await expect(page.getByRole('textbox', { name: '向规则书提问' })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('questions-empty-mobile.png'), fullPage: true })
   await page.getByRole('textbox', { name: '向规则书提问' }).fill('灯塔牌放在哪里，这张效果牌会改变设置吗？')
   await page.getByRole('button', { name: '提交问题' }).click()
   await expect(page.getByText('按规则书给出的设置顺序放置。')).toBeVisible()
@@ -210,6 +216,9 @@ test('keeps available chapters and the answer workspace usable while the mobile 
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )
   expect(hasHorizontalOverflow).toBe(false)
+  await page.screenshot({ path: testInfo.outputPath('questions-answer-mobile.png'), fullPage: true })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.screenshot({ path: testInfo.outputPath('questions-answer-desktop.png'), fullPage: true })
 })
 
 test('keeps cited lesson content when the focused crop is permanently unavailable', async ({ page }) => {
@@ -230,7 +239,7 @@ test('keeps cited lesson content when the focused crop is permanently unavailabl
   await expect(page.getByRole('link', { name: '来源：第 2 页' }).last()).toBeVisible()
 })
 
-test('shows immediate Q&A feedback and preserves verified evidence at the eight-second soft boundary', async ({ page }) => {
+test('shows immediate Q&A feedback and preserves verified evidence at the eight-second soft boundary', async ({ page }, testInfo) => {
   await page.clock.install()
   await page.addInitScript(() => {
     sessionStorage.setItem('rulepilot:public-answer-thread:v2:account:player:plan-1:zh-CN', JSON.stringify([{
@@ -258,6 +267,7 @@ test('shows immediate Q&A feedback and preserves verified evidence at the eight-
 
   await page.goto('/read/plan-1/questions')
   await expect(page.getByText('上一条已核对结论')).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('public-questions-desktop.png'), fullPage: true })
   await page.locator('#public-question').fill('这一轮是否有例外？')
   await page.getByRole('button', { name: '问规则书' }).click()
 
@@ -302,6 +312,7 @@ test('confirms browser-only Q&A reset and preserves the unsent question with sta
   const question = page.locator('#public-question')
   await question.fill('这句尚未发送')
 
+  await page.getByText('会话选项', { exact: true }).click()
   const reset = page.getByRole('button', { name: '清空本次答疑' })
   await reset.focus()
   await reset.click()
