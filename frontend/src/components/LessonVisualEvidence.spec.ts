@@ -57,11 +57,12 @@ describe('LessonVisualEvidence', () => {
     setLocale('zh-CN')
   })
 
-  it('renders the selected crop and final label without internal observations', async () => {
+  it('renders source navigation without republishing stored labels as picture titles', async () => {
     const wrapper = mountEvidence()
     await flushPromises()
 
     expect(wrapper.text()).toContain('结合图片 · 1/1')
+    expect(wrapper.text()).not.toContain(focus.label)
     expect(wrapper.text()).not.toContain('六张牌排成两行，箭头从左侧指向右侧。')
     expect(wrapper.get('[data-testid="lesson-visual-image"] img').attributes('src')).toMatch(/^data:image\/jpeg;base64,/)
     expect(fetch).toHaveBeenCalledWith('/crop/6', expect.objectContaining({ credentials: 'include' }))
@@ -84,10 +85,12 @@ describe('LessonVisualEvidence', () => {
   it('localizes source navigation without changing media coordinates', async () => {
     setLocale('en')
     const wrapper = mountEvidence()
+    await wrapper.setProps({ ordinal: 2, total: 2, narrationId: 'step-narration' })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Illustrated step · 1/1')
-    expect(wrapper.get('img[alt*="Illustration for “行动网格”"]')).toBeTruthy()
+    expect(wrapper.text()).not.toContain(focus.label)
+    expect(wrapper.get('figure').attributes('aria-describedby')).toBe('step-narration')
+    expect(wrapper.get('img').attributes('alt')).toBe('Illustration 2 of 2 from rulebook page 6')
   })
 
   it('omits a thin corner-clipped candidate instead of falling back to a duplicate whole page', () => {

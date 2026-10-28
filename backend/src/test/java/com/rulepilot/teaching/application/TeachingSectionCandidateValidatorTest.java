@@ -89,7 +89,7 @@ class TeachingSectionCandidateValidatorTest {
         UUID version = UUID.randomUUID(), citation = UUID.randomUUID();
         var source = new RuleEvidence(citation, version, "RULE", "Repair", "Spend an action to repair.", 8, 8);
         var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(
-                8, "Repair", "An arrow points from a damaged component to an intact component.", 100, 100, 300, 300);
+                8, "Damaged and intact components", "An arrow points from a damaged component to an intact component.", 100, 100, 300, 300);
         var page = new com.rulepilot.document.DocumentPageImages.PageImage(8, "image/png", new byte[]{1}, 100, 100);
         var images = List.of(new com.rulepilot.teaching.TeachingLessonModel.VisualInput("offered", focus, List.of(citation), page, new byte[]{2}),
                 new com.rulepilot.teaching.TeachingLessonModel.VisualInput("wrong-source", focus, List.of(UUID.randomUUID()), page, new byte[]{2}));
@@ -101,6 +101,9 @@ class TeachingSectionCandidateValidatorTest {
                 plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT);
         assertThat(section.steps().getFirst().text()).isEqualTo("Spend an action to repair.");
         assertThat(section.steps().getFirst().visualFoci()).hasSize(selection.equals("offered") ? 1 : 0);
+        if (selection.equals("offered")) {
+            assertThat(section.steps().getFirst().visualFoci()).containsExactly(focus);
+        }
     }
 
     private TeachingPlan plan(UUID versionId) {

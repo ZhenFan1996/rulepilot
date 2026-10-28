@@ -273,7 +273,7 @@ function isReliableDetailViewport(focus: VisualFocus) {
       >
         <img
           :src="loadedDetailImageUrl"
-          :alt="t('lesson.visualEvidence.alt', { page: focus.pageNumber, label: focus.label })"
+          :alt="t('lesson.visualEvidence.alt', { page: focus.pageNumber, current: visualOrdinal, total: visualTotal })"
           class="mx-auto block h-auto w-auto max-w-full object-contain"
           :class="compact ? 'max-h-64' : 'max-h-[32rem]'"
           loading="lazy"
@@ -328,7 +328,6 @@ function isReliableDetailViewport(focus: VisualFocus) {
         </p>
         <span class="text-xs font-semibold text-muted">{{ t('lesson.chapter.page', { page: focus.pageNumber }) }}</span>
       </div>
-      <p class="mt-1 text-sm font-semibold text-ink">{{ focus.label }}</p>
       <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted">
         <a :href="originalPageUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo hover:underline" @click="openOriginal">{{ t('lesson.visualEvidence.openOriginal') }} ↗</a>
       </div>
