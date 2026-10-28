@@ -73,7 +73,7 @@ class SpringAiTeachingLessonModelRequestOptionsTest {
         var model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(OpenAiChatOptions.builder().model("test-model").build());
         when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(model);
-        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("deepseek");
+        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("qwen");
         when(model.call(any(Prompt.class))).thenReturn(response());
         when(prompts.teachingRuntimeSystem()).thenReturn("Write a grounded chapter.");
         when(prompts.teachingUser()).thenReturn("{evidence}\n{visuals}");
@@ -94,6 +94,10 @@ class SpringAiTeachingLessonModelRequestOptionsTest {
         new SpringAiTeachingLessonModel(configuration, prompts).compose(request);
         var captured = ArgumentCaptor.forClass(Prompt.class);
         verify(model).call(captured.capture());
+        assertThat(captured.getValue().getSystemMessage().getText())
+                .contains(SpringAiTeachingLessonModel.qwenTeachingSchema());
+        assertThat(((OpenAiChatOptions) captured.getValue().getOptions()).getResponseFormat().getType())
+                .isEqualTo(org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type.JSON_OBJECT);
         assertThat(captured.getValue().getUserMessage().getText())
                 .contains("owned-image", "E1");
         var media = captured.getValue().getInstructions().stream()
@@ -126,7 +130,7 @@ class SpringAiTeachingLessonModelRequestOptionsTest {
     private static ChatResponse response() {
         return new ChatResponse(List.of(new Generation(new AssistantMessage("""
                 {"locale":"zh-CN","title":"进行回合","steps":[{"heading":"移动并交棒","kind":"DO",
-                "text":"先移动一个标记，再把回合交给下一位玩家。","citationIds":["E1"],"ruleFacts":[]}]}
+                "content":[{"kind":"PARAGRAPH","text":"先移动一个标记，再把回合交给下一位玩家。","figures":[],"flow":"NONE"}],"citationIds":["E1"],"ruleFacts":[]}]}
                 """))));
     }
 }

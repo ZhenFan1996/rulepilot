@@ -32,6 +32,7 @@ interface TestSection {
     sourcePages: number[]
     visualFocus: TestVisualFocus | null
     visualFoci?: TestVisualFocus[]
+    readingBlocks?: import('@/composables/lessonSupportingContent').LessonReadingBlock[]
   }>
 }
 
@@ -202,6 +203,30 @@ describe('LessonChapterList', () => {
     expect(visual.attributes('aria-describedby')).toBe(narrative.attributes('id'))
     expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).toContain('grid')
     expect(pairedStep.get('[data-testid="lesson-step-visuals"]').classes()).not.toContain('overflow-x-auto')
+  })
+
+  it('preserves authored paragraph and figure order without also rendering legacy projections', async () => {
+    const focus: TestVisualFocus = { pageNumber: 2, label: 'Repeated step heading', x: 100, y: 150, width: 300, height: 250 }
+    const wrapper = mountDirectory([{
+      ...sections[0]!,
+      steps: [{ ...sections[0]!.steps[0]!, text: 'Aggregate for other readers', visualFocus: focus,
+        readingBlocks: [
+          { kind: 'PARAGRAPH', text: 'Start with the board.', figures: [], flow: 'NONE' },
+          { kind: 'FIGURES', text: '', figures: [{ focus, caption: 'The marked starting space.' }], flow: 'ASIDE' },
+          { kind: 'PARAGRAPH', text: 'Now follow the arrow.', figures: [], flow: 'NONE' },
+          { kind: 'FIGURES', text: '', figures: [{ focus, caption: '' }], flow: 'FULL_WIDTH' },
+        ],
+      }],
+    }])
+    await flushPromises()
+    const flow = wrapper.get('[data-testid="lesson-authored-flow"]')
+    expect(Array.from(flow.element.children).map(child => child.tagName)).toEqual(['P', 'UL', 'P', 'UL'])
+    expect(flow.findAll('[data-testid="lesson-visual-evidence"]')).toHaveLength(2)
+    expect(flow.text()).toContain('The marked starting space.')
+    expect(flow.text()).not.toContain('Repeated step heading')
+    expect(wrapper.text()).not.toContain('Aggregate for other readers')
+    expect(wrapper.find('[data-testid="lesson-step-visuals"]').exists()).toBe(false)
+    expect(flow.findAll('a[href="/page/2"]').length).toBeGreaterThan(0)
   })
 
   it('renders every visual focus attached to the same cited step', async () => {

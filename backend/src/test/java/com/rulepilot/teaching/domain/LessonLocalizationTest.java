@@ -18,6 +18,31 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class LessonLocalizationTest {
 
+    @Test
+    void translatesReadingProseWithoutReorderingOrReidentifyingTheFigures() {
+        var focus = new VisualFocus(2, "source", 100, 100, 300, 300);
+        var blocks = List.of(
+                new IllustratedLesson.ReadingBlock(IllustratedLesson.ReadingKind.PARAGRAPH, "看这条路线。", List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE),
+                new IllustratedLesson.ReadingBlock(IllustratedLesson.ReadingKind.FIGURES, "",
+                        List.of(new IllustratedLesson.ReadingFigure(focus, "蓝色路线")), IllustratedLesson.FigureFlow.ASIDE),
+                new IllustratedLesson.ReadingBlock(IllustratedLesson.ReadingKind.PARAGRAPH, "沿箭头前进。", List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE));
+        var source = new LessonStep(1, "路线", IllustratedLesson.TeachingMove.DO,
+                "看这条路线。\n\n沿箭头前进。", List.of(2), List.of(UUID.randomUUID())).withReadingBlocks(blocks);
+        var translation = new StepTranslation(1, "Route", "Look at this route.\n\nFollow the arrow.", "", "", List.of(), List.of(
+                new LessonLocalization.BlockTranslation(1, "Look at this route.", List.of()),
+                new LessonLocalization.BlockTranslation(2, "", List.of("Blue route")),
+                new LessonLocalization.BlockTranslation(3, "Follow the arrow.", List.of())));
+        var translated = LessonLocalization.translateReadingBlocks(source, translation);
+        assertThat(translated).extracting(IllustratedLesson.ReadingBlock::kind)
+                .containsExactly(IllustratedLesson.ReadingKind.PARAGRAPH, IllustratedLesson.ReadingKind.FIGURES, IllustratedLesson.ReadingKind.PARAGRAPH);
+        assertThat(translated.get(1).figures().getFirst().focus()).isEqualTo(focus);
+        assertThat(translated.get(1).figures().getFirst().caption()).isEqualTo("Blue route");
+        assertThat(translated.get(1).flow()).isEqualTo(IllustratedLesson.FigureFlow.ASIDE);
+        assertThatThrownBy(() -> LessonLocalization.translateReadingBlocks(source,
+                new StepTranslation(1, "Route", "Look", "", "", List.of(), translation.readingBlocks().subList(0, 2))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void replacesOnlyPlayerVisibleProseWhileKeepingTheCitedStructureAndCrop(boolean sourceHasDescription) {

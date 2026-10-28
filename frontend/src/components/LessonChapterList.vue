@@ -4,6 +4,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import RulebookPageViewer from '@/components/RulebookPageViewer.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
 import LessonVisualEvidence from '@/components/LessonVisualEvidence.vue'
+import LessonReadingFlow from '@/components/LessonReadingFlow.vue'
 import LessonRuleFacts, { type LessonRuleFact } from '@/components/LessonRuleFacts.vue'
 import type { VisualFocus } from '@/composables/lessonSupportingContent'
 import { useLocale } from '@/lib/locale'
@@ -16,6 +17,7 @@ interface LessonReaderStep {
   ruleFacts?: LessonRuleFact[]
   sourcePages: number[]
   visualFocus: VisualFocus | null
+  readingBlocks?: import('@/composables/lessonSupportingContent').LessonReadingBlock[]
   visualFoci?: VisualFocus[]
 }
 
@@ -177,7 +179,7 @@ function stepTone(kind: string) {
 </script>
 
 <template>
-  <div class="mt-7 xl:grid xl:grid-cols-[13rem_minmax(0,1fr)] xl:items-start xl:gap-10">
+  <div class="lesson-chapters mt-7 xl:grid xl:grid-cols-[13rem_minmax(0,1fr)] xl:items-start xl:gap-10">
     <nav data-testid="mobile-chapter-directory" class="app-sticky-below-mobile-header sticky z-10 -mx-2 flex gap-2 overflow-x-auto border border-ink/10 bg-canvas/90 p-2 elevation-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
       <a
         v-for="section in sections"
@@ -232,7 +234,7 @@ function stepTone(kind: string) {
         <p class="mb-3 text-sm font-semibold text-indigo">{{ t('public.chapter', { position: section.position }) }}</p>
 
         <div class="min-w-0">
-          <h2 class="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{{ section.title }}</h2>
+          <h2 class="lesson-chapter-title font-display text-3xl font-semibold tracking-tight sm:text-4xl">{{ section.title }}</h2>
           <p v-if="section.visualCaption && section.visualCaption !== section.title" class="mt-3 max-w-2xl leading-7 text-muted">{{ section.visualCaption }}</p>
 
           <ol class="mt-7 divide-y divide-ink/10">
@@ -255,22 +257,18 @@ function stepTone(kind: string) {
                   >
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-semibold tabular-nums text-muted">{{ step.position }}</span>
-                      <h3 class="text-xl font-semibold leading-snug sm:text-2xl">{{ step.heading }}</h3>
+                      <h3 class="lesson-step-title text-xl font-semibold leading-snug sm:text-2xl">{{ step.heading }}</h3>
                     </div>
-                    <div
+                    <LessonReadingFlow v-if="step.readingBlocks?.length" class="mt-4"
+                      :blocks="step.readingBlocks" :narration-id="stepNarrationId(section.position, step.position)"
+                      :open-page="openSource" :page-image-url="props.pageImageUrl" :focused-page-image-url="props.focusedPageImageUrl" />
+                    <!-- Retained pre-flow lessons and offline snapshots have no authored block order. -->
+                    <div v-else
                       class="mt-4"
                       :class="visibleVisuals(section, step).length ? 'grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start lg:gap-7' : ''"
                     >
                       <div class="min-w-0">
-                        <p class="max-w-[70ch] whitespace-pre-line text-base leading-8 text-ink sm:text-[1.0625rem]">{{ step.text }}</p>
-                        <details v-if="step.ruleFacts?.length" class="mt-4 border-l-2 border-ink/10 pl-3">
-                          <summary class="cursor-pointer py-2 text-sm font-semibold text-muted">{{ locale === 'en' ? 'Rule highlights' : '规则要点' }}</summary>
-                          <LessonRuleFacts :facts="step.ruleFacts" />
-                        </details>
-
-                        <div v-if="step.sourcePages.length" class="mt-4 flex flex-wrap gap-2">
-                          <a v-for="page in step.sourcePages" :key="page" :href="props.pageImageUrl(page)" class="inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-muted transition hover:border-indigo/30 hover:text-indigo" @click="openSourceLink($event, page)">{{ sourceLabel([page]) }}</a>
-                        </div>
+                        <p class="lesson-step-copy max-w-[70ch] whitespace-pre-line text-base leading-8 text-ink sm:text-[1.0625rem]">{{ step.text }}</p>
                       </div>
 
                       <ul
@@ -307,6 +305,13 @@ function stepTone(kind: string) {
                         </li>
                       </ul>
                     </div>
+                      <details v-if="step.ruleFacts?.length" class="mt-4 border-l-2 border-ink/10 pl-3">
+                        <summary class="cursor-pointer py-2 text-sm font-semibold text-muted">{{ locale === 'en' ? 'Rule highlights' : '规则要点' }}</summary>
+                        <LessonRuleFacts :facts="step.ruleFacts" />
+                      </details>
+                      <div v-if="step.sourcePages.length" class="mt-4 flex flex-wrap gap-2">
+                        <a v-for="page in step.sourcePages" :key="page" :href="props.pageImageUrl(page)" class="text-xs text-muted underline underline-offset-4" @click="openSourceLink($event, page)">{{ sourceLabel([page]) }}</a>
+                      </div>
                   </div>
                 </div>
               </div>
@@ -330,3 +335,21 @@ function stepTone(kind: string) {
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.lesson-chapters:lang(en) .lesson-chapter-title {
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.lesson-chapters:lang(en) .lesson-step-title {
+  font-size: 1.125rem;
+  line-height: 1.4;
+}
+
+.lesson-chapters:lang(en) .lesson-step-copy {
+  max-width: 65ch;
+  line-height: 1.7;
+}
+</style>

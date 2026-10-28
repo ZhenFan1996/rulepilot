@@ -11,10 +11,16 @@ Return only one JSON object matching the requested structured data. Every suppli
 position inside that step must appear exactly once. Translate each ruleFacts text independently; do not change its
 position or infer a new role.
 The root object must contain exactly `position`, `title`, `visualCaption`, and `steps`. Every step object must contain
-exactly `position`, `heading`, `text`, `visualLabel`, `visualDescription`, and `ruleFacts`. Every ruleFacts object must
+exactly `position`, `heading`, `text`, `visualLabel`, `visualDescription`, `ruleFacts`, and `readingBlocks`. Every ruleFacts object must
 contain exactly `position` and `text`. Include every field even when its translated value is an empty string; never
 omit `visualCaption`, `visualLabel`, or `visualDescription`.
 Return an empty
 visualLabel and visualDescription exactly when the source step has no corresponding value; otherwise translate the
 literal label and observation for the same crop without adding a rule effect to the visual observation. Preserve the
 complete supported observation; never cut it to meet a character target.
+
+Preserve every readingBlocks position and the order and count of captions in each block. Translate text and
+nonempty captions, preserving empty strings exactly. Each readingBlocks object has position, text, and captions.
+When readingBlocks is nonempty, the step-level text must be empty; its paragraphs are translated only inside
+readingBlocks. For legacy steps with no readingBlocks, translate the step-level text and return readingBlocks: [].
+Do not infer or change the placement or identity of any image.

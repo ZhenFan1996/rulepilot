@@ -110,7 +110,7 @@ test('uses one tabletop reading language for private and public guides', async (
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
 })
 
-test('reads a native English guide without requiring a translation', async ({ page }) => {
+test('reads a native English guide in authored order across screen sizes', async ({ page }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem('rulepilot:locale', 'en'))
   await mockSharedApis(page)
   await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({
@@ -121,13 +121,49 @@ test('reads a native English guide without requiring a translation', async ({ pa
     json: { id: 'lesson-en', teachingPlanId: 'plan-1', status: 'COMPLETE', sections: [{
       ...sections[0], title: 'Prepare the route', visualKind: 'NONE', visualCaption: '',
       steps: [{ position: 1, heading: 'Place the lighthouse', kind: 'DO',
-        text: 'Place the first lighthouse face up at the start of the route.', sourcePages: [2] }],
+        text: 'Place the first lighthouse face up at the start of the route.', sourcePages: [2],
+        readingBlocks: [
+          { kind: 'PARAGRAPH', text: 'Place the first lighthouse face up at the start of the route.', figures: [], flow: 'NONE' },
+          { kind: 'FIGURES', text: '', flow: 'ASIDE', figures: [{
+            focus: { pageNumber: 2, label: 'Place the lighthouse', x: 100, y: 180, width: 320, height: 260 },
+            caption: 'The starting space is marked on the route.',
+          }] },
+          { kind: 'PARAGRAPH', text: 'Follow the route from this space. Keep the other cards nearby so everyone can reach them when the next step calls for a card.', figures: [], flow: 'NONE' },
+          { kind: 'FIGURES', text: '', flow: 'ASIDE', figures: [{
+            focus: { pageNumber: 2, label: 'Spare cards', x: 500, y: 180, width: 320, height: 260 },
+            caption: 'The remaining cards stay beside the route.',
+          }] },
+          { kind: 'PARAGRAPH', text: 'Keep this space clear for the next card.', figures: [], flow: 'NONE' },
+        ],
+      }],
     }] },
   }))
   await page.goto('/lesson/plan-1')
   await expect(page.getByText('Place the first lighthouse face up at the start of the route.', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Prepare English guide' })).toHaveCount(0)
   await expect(page.getByText('先找到航线最左侧的起点。', { exact: true })).toHaveCount(0)
+  const flow = page.getByTestId('lesson-authored-flow')
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await flow.scrollIntoViewIfNeeded()
+    await expect(flow.getByRole('img').first()).toBeVisible()
+    expect(await flow.locator(':scope > *').evaluateAll(nodes => nodes.map(node => node.tagName))).toEqual(['P', 'UL', 'P', 'UL', 'P'])
+    const layout = await flow.evaluate(element => {
+      const figure = element.querySelector('ul')!
+      const paragraph = element.querySelectorAll('p.reading-paragraph')[1]!
+      return { float: getComputedStyle(figure).float, figureBottom: figure.getBoundingClientRect().bottom,
+        secondFigureTop: element.querySelectorAll('ul')[1]!.getBoundingClientRect().top,
+        paragraphTop: paragraph.getBoundingClientRect().top, overflow: document.documentElement.scrollWidth > innerWidth }
+    })
+    expect(layout.overflow).toBe(false)
+    expect(layout.secondFigureTop).toBeGreaterThanOrEqual(layout.figureBottom)
+    if (width === 1440) expect(layout.float).not.toBe('none')
+    else {
+      expect(layout.float).toBe('none')
+      expect(layout.paragraphTop).toBeGreaterThanOrEqual(layout.figureBottom)
+    }
+    await page.screenshot({ path: testInfo.outputPath(`authored-reading-${width}.png`) })
+  }
 })
 
 test('keeps available chapters and the answer workspace usable while the mobile guide continues', async ({ page }, testInfo) => {

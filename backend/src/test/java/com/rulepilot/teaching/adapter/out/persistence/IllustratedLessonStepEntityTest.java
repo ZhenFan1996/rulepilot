@@ -46,9 +46,18 @@ class IllustratedLessonStepEntityTest {
                 visuals.getFirst(),
                 visuals);
 
+        source = source.withReadingBlocks(List.of(
+                new com.rulepilot.teaching.domain.IllustratedLesson.ReadingBlock(
+                        com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH,
+                        source.text(), List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE),
+                new com.rulepilot.teaching.domain.IllustratedLesson.ReadingBlock(
+                        com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.FIGURES, "",
+                        source.visualFoci().stream().map(focus -> new com.rulepilot.teaching.domain.IllustratedLesson.ReadingFigure(focus, "")).toList(),
+                        com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.FULL_WIDTH)));
         IllustratedLessonStepEntity entity = new IllustratedLessonStepEntity(UUID.randomUUID(), source);
         LessonStep restored = entity.toDomain();
 
+        assertThat(restored.readingBlocks()).containsExactlyElementsOf(source.readingBlocks());
         assertThat(restored.visualFocus()).isEqualTo(visuals.getFirst());
         assertThat(restored.visualFoci()).containsExactlyElementsOf(visuals);
     }
@@ -66,9 +75,11 @@ class IllustratedLessonStepEntityTest {
                 new VisualFocus(2, "中央棋盘", 100, 120, 400, 300));
         IllustratedLessonStepEntity entity = new IllustratedLessonStepEntity(UUID.randomUUID(), source);
         entity.visualFociJson = "[]";
+        entity.readingBlocksJson = "[]";
 
         LessonStep restored = entity.toDomain();
 
         assertThat(restored.visualFoci()).containsExactly(source.visualFocus());
+        assertThat(restored.readingBlocks()).isEmpty();
     }
 }

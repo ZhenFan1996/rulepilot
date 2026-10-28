@@ -23,7 +23,7 @@ public class VersionedAgentPrompts {
     private final String lessonLocalizationUser;
 
     public VersionedAgentPrompts(
-            @Value("classpath:prompts/teaching-agent-v46-direct-source-illustrations-system.txt") Resource focusedTeachingSystem,
+            @Value("classpath:prompts/teaching-agent-v47-authored-reading-flow-system.txt") Resource focusedTeachingSystem,
             @Value("classpath:prompts/teaching-agent-v44-quantitative-aggregation-system.txt") Resource teachingQuantitativeAggregation,
             @Value("classpath:prompts/teaching-agent-v12-user.txt") Resource teachingUser,
             @Value("classpath:prompts/content-critic-v34-focused-runtime-system.txt") Resource focusedCriticSystem,
@@ -41,7 +41,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair,
             @Value("classpath:prompts/content-critic-output-repair-v1.txt") Resource criticOutputRepair,
             @Value("classpath:prompts/content-critic-output-repair-v2-claim-aspect.txt") Resource criticClaimAspectRepair,
-            @Value("classpath:prompts/lesson-localization-v2-system.txt") Resource lessonLocalizationSystem,
+            @Value("classpath:prompts/lesson-localization-v3-reading-flow-system.txt") Resource lessonLocalizationSystem,
             @Value("classpath:prompts/lesson-localization-v1-user.txt") Resource lessonLocalizationUser)
             throws IOException {
         this.focusedTeachingSystem = combined(focusedTeachingSystem, teachingQuantitativeAggregation);

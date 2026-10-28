@@ -61,7 +61,7 @@ class SpringAiLessonLocalizationModelTest {
                 new AssistantMessage("""
                         {"position":1,"title":"Setup","visualCaption":"","steps":[{"position":1,
                         "heading":"Check","text":"Check the count.","visualLabel":"",
-                        "visualDescription":"","ruleFacts":[]}]}
+                        "visualDescription":"","ruleFacts":[],"readingBlocks":[]}]}
                         """)))));
         when(prompts.lessonLocalizationSystem()).thenReturn("Translate and return JSON only.");
         when(prompts.lessonLocalizationUser()).thenReturn("Target={targetLanguage}\nSection={section}");
@@ -160,6 +160,7 @@ class SpringAiLessonLocalizationModelTest {
                     "text":"Place the board in the center.",
                     "visualLabel":"Main board",
                     "visualDescription":"The board is centered between the player areas.",
+                    "readingBlocks":[],
                     "ruleFacts":[{"position":1,"text":"Place the board in the center of the table."}]
                   }]
                 }

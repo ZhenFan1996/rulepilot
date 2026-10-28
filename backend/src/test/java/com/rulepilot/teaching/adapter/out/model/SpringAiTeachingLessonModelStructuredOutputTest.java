@@ -18,13 +18,13 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
         String natural = "先处理眼前最危险的故障；如果队友更适合修理，就把行动留给他。";
         var draft = SpringAiTeachingLessonModel.parseStructuredDraft("""
                 {"locale":"zh-CN","title":"系统故障","providerNote":"ignored","steps":[{
-                  "heading":"协商行动","kind":"DO","text":"%s","citationIds":["E1"],
+                  "heading":"协商行动","kind":"DO","content":[{"kind":"PARAGRAPH","text":"%s","figures":[],"flow":"NONE"}],"citationIds":["E1"],
                   "ruleFacts":[],"futureLayout":{"ignored":true}}]}
                 """.formatted(natural));
 
         assertThat(draft.title()).isEqualTo("系统故障");
         assertThat(draft.locale()).isEqualTo("zh-CN");
-        assertThat(draft.steps().getFirst().text()).isEqualTo(natural);
+        assertThat(draft.steps().getFirst().content().getFirst().text()).isEqualTo(natural);
     }
 
     @Test
@@ -46,7 +46,7 @@ class SpringAiTeachingLessonModelStructuredOutputTest {
         UUID evidenceId = UUID.randomUUID();
         var draft = SpringAiTeachingLessonModel.parseStructuredDraft("""
                 {"locale":"%s","title":"Setup","steps":[{
-                  "heading":"Check components","kind":"DO","text":"Check the components.",
+                  "heading":"Check components","kind":"DO","content":[{"kind":"PARAGRAPH","text":"Check the components.","figures":[],"flow":"NONE"}],
                   "citationIds":["E1"],"ruleFacts":[]}]}
                 """.formatted(language.languageTag()));
         SpringAiTeachingLessonModel subject = new SpringAiTeachingLessonModel(

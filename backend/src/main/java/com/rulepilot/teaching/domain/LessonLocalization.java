@@ -148,16 +148,17 @@ public record LessonLocalization(
                     primary.height(),
                     primary.sourceKind()));
         }
+        var readingBlocks = translateReadingBlocks(source, translated);
         return new LessonStep(
                 source.position(),
                 translated.heading(),
                 source.kind(),
-                translated.text(),
+                readingBlocks.isEmpty() ? translated.text() : IllustratedLesson.readingText(readingBlocks),
                 source.sourcePages(),
                 source.sourceChunkIds(),
                 ruleFacts,
                 visualFoci.isEmpty() ? null : visualFoci.getFirst(),
-                visualFoci);
+                visualFoci, readingBlocks);
     }
 
     public enum Status {
@@ -178,13 +179,45 @@ public record LessonLocalization(
         }
     }
 
+    public static List<IllustratedLesson.ReadingBlock> translateReadingBlocks(LessonStep source, StepTranslation translated) {
+        if (source.readingBlocks().size() != translated.readingBlocks().size())
+            throw new IllegalArgumentException("localized reading flow must preserve every content block");
+        var byPosition = translated.readingBlocks().stream().collect(Collectors.toMap(BlockTranslation::position, Function.identity()));
+        return java.util.stream.IntStream.range(0, source.readingBlocks().size()).mapToObj(index -> {
+            var block = source.readingBlocks().get(index);
+            var translation = byPosition.get(index + 1);
+            if (translation == null || translation.captions().size() != block.figures().size())
+                throw new IllegalArgumentException("localized reading flow changed block or figure identities");
+            var figures = java.util.stream.IntStream.range(0, block.figures().size()).mapToObj(figureIndex -> {
+                var figure = block.figures().get(figureIndex);
+                String caption = translation.captions().get(figureIndex);
+                if (caption == null || caption.isBlank() != figure.caption().isBlank())
+                    throw new IllegalArgumentException("localized reading figure added or omitted a caption");
+                return new IllustratedLesson.ReadingFigure(figure.focus(), caption);
+            }).toList();
+            return new IllustratedLesson.ReadingBlock(block.kind(), translation.text(), figures, block.flow());
+        }).toList();
+    }
+
+    public record BlockTranslation(int position, String text, List<String> captions) {
+        public BlockTranslation {
+            if (position < 1 || text == null || captions == null) throw new IllegalArgumentException("localized reading block is incomplete");
+            captions = List.copyOf(captions);
+        }
+    }
+
     public record StepTranslation(
             int position,
             String heading,
             String text,
             String visualLabel,
             String visualDescription,
-            List<RuleFactTranslation> ruleFacts) {
+            List<RuleFactTranslation> ruleFacts,
+            List<BlockTranslation> readingBlocks) {
+        public StepTranslation(int position, String heading, String text, String visualLabel, String visualDescription, List<RuleFactTranslation> ruleFacts) {
+            this(position, heading, text, visualLabel, visualDescription, ruleFacts, List.of());
+        }
+
         public StepTranslation(int position, String heading, String text, String visualLabel) {
             this(position, heading, text, visualLabel, "", List.of());
         }
@@ -199,6 +232,7 @@ public record LessonLocalization(
         }
 
         public StepTranslation {
+            readingBlocks = readingBlocks == null ? List.of() : List.copyOf(readingBlocks);
             ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
             if (position < 1 || blank(heading) || blank(text) || visualLabel == null || visualDescription == null) {
                 throw new IllegalArgumentException("localized lesson step is invalid");

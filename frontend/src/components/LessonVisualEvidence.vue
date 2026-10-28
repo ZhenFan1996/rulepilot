@@ -6,6 +6,7 @@ import { useLocale } from '@/lib/locale'
 
 const props = defineProps<{
   focus: VisualFocus
+  caption?: string
   narrationId?: string
   ordinal?: number
   total?: number
@@ -260,7 +261,7 @@ function isReliableDetailViewport(focus: VisualFocus) {
   <figure
     data-testid="lesson-visual-evidence"
     :aria-describedby="narrationId || undefined"
-    class="overflow-hidden rounded-lg border border-ink/10 bg-paper"
+    class="min-w-0"
   >
     <div v-if="detailIsReliable" ref="detailViewport" class="bg-canvas">
       <a
@@ -273,8 +274,8 @@ function isReliableDetailViewport(focus: VisualFocus) {
       >
         <img
           :src="loadedDetailImageUrl"
-          :alt="t('lesson.visualEvidence.alt', { page: focus.pageNumber, label: focus.label })"
-          class="mx-auto block h-auto w-auto max-w-full object-contain"
+          :alt="caption || t('lesson.visualEvidence.alt', { page: focus.pageNumber, current: visualOrdinal, total: visualTotal })"
+          class="block h-auto w-auto max-w-full object-contain"
           :class="compact ? 'max-h-64' : 'max-h-[32rem]'"
           loading="lazy"
           decoding="async"
@@ -321,14 +322,14 @@ function isReliableDetailViewport(focus: VisualFocus) {
       <p class="mt-2 text-xs leading-5 text-muted">{{ t('lesson.visualEvidence.protectedBody') }}</p>
     </div>
 
-    <figcaption class="border-t border-ink/10 px-3 py-3">
+    <figcaption class="mt-2 text-xs leading-5 text-muted">
+      <p v-if="caption" class="mb-2 text-sm leading-6 text-ink">{{ caption }}</p>
       <div class="flex flex-wrap items-center justify-between gap-2">
         <p class="text-xs font-medium text-indigo">
           {{ t('lesson.visualEvidence.figure', { current: visualOrdinal, total: visualTotal }) }}
         </p>
         <span class="text-xs font-semibold text-muted">{{ t('lesson.chapter.page', { page: focus.pageNumber }) }}</span>
       </div>
-      <p class="mt-1 text-sm font-semibold text-ink">{{ focus.label }}</p>
       <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted">
         <a :href="originalPageUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo hover:underline" @click="openOriginal">{{ t('lesson.visualEvidence.openOriginal') }} ↗</a>
       </div>

@@ -88,6 +88,7 @@ interface LessonSection {
     text: string
     sourcePages: number[]
     visualFocus: LessonVisualFocus | null
+    readingBlocks?: import('@/composables/lessonSupportingContent').LessonReadingBlock[]
     visualFoci?: LessonVisualFocus[]
   }>
 }

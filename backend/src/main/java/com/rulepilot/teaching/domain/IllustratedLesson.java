@@ -136,12 +136,16 @@ public record IllustratedLesson(
             List<UUID> sourceChunkIds,
             List<RuleFact> ruleFacts,
             VisualFocus visualFocus,
-            List<VisualFocus> visualFoci) {
+            List<VisualFocus> visualFoci,
+            List<ReadingBlock> readingBlocks) {
         public LessonStep {
+            readingBlocks = readingBlocks == null ? List.of() : List.copyOf(readingBlocks);
             if (position < 1 || heading == null || heading.isBlank() || kind == null
                     || text == null || text.isBlank()) {
                 throw new IllegalArgumentException("lesson step content is required");
             }
+            if (!readingBlocks.isEmpty() && !text.equals(readingText(readingBlocks)))
+                throw new IllegalArgumentException("lesson text projection must preserve authored paragraph order");
             sourcePages = List.copyOf(sourcePages);
             sourceChunkIds = List.copyOf(sourceChunkIds);
             ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
@@ -154,6 +158,19 @@ public record IllustratedLesson(
             if (visualFocus != null && !visualFocus.equals(visualFoci.getFirst())) {
                 throw new IllegalArgumentException("lesson step primary visual focus must be the first visual focus");
             }
+        }
+
+        public LessonStep(int position, String heading, TeachingMove kind, String text,
+                List<Integer> sourcePages, List<UUID> sourceChunkIds, List<RuleFact> ruleFacts,
+                VisualFocus visualFocus, List<VisualFocus> visualFoci) {
+            this(position, heading, kind, text, sourcePages, sourceChunkIds, ruleFacts,
+                    visualFocus, visualFoci, List.of());
+        }
+
+        public LessonStep withReadingBlocks(List<ReadingBlock> blocks) {
+            var foci = blocks.stream().flatMap(block -> block.figures().stream()).map(ReadingFigure::focus).toList();
+            return new LessonStep(position, heading, kind, readingText(blocks), sourcePages, sourceChunkIds, ruleFacts,
+                    foci.isEmpty() ? null : foci.getFirst(), foci, blocks);
         }
 
         /** Compatibility constructor for stored lessons and clients that still expose only the first visual. */
@@ -176,20 +193,6 @@ public record IllustratedLesson(
                     ruleFacts,
                     visualFocus,
                     visualFocus == null ? List.of() : List.of(visualFocus));
-        }
-
-        public LessonStep withVisualFoci(TeachingMove teachingMove, List<VisualFocus> foci) {
-            List<VisualFocus> stable = foci == null ? List.of() : List.copyOf(foci);
-            return new LessonStep(
-                    position,
-                    heading,
-                    teachingMove,
-                    text,
-                    sourcePages,
-                    sourceChunkIds,
-                    ruleFacts,
-                    stable.isEmpty() ? null : stable.getFirst(),
-                    stable);
         }
 
         public LessonStep(int position, String text, List<Integer> sourcePages, List<UUID> sourceChunkIds) {
@@ -215,6 +218,31 @@ public record IllustratedLesson(
                 List<UUID> sourceChunkIds,
                 VisualFocus visualFocus) {
             this(position, heading, kind, text, sourcePages, sourceChunkIds, List.of(), visualFocus);
+        }
+    }
+
+    public static String readingText(List<ReadingBlock> blocks) {
+        return blocks.stream().filter(block -> block.kind() == ReadingKind.PARAGRAPH)
+                .map(ReadingBlock::text).collect(java.util.stream.Collectors.joining("\n\n"));
+    }
+
+    public enum ReadingKind { PARAGRAPH, FIGURES }
+    public enum FigureFlow { NONE, ASIDE, FULL_WIDTH }
+
+    public record ReadingFigure(VisualFocus focus, String caption) {
+        public ReadingFigure {
+            if (focus == null || caption == null) throw new IllegalArgumentException("reading figure is incomplete");
+        }
+    }
+
+    public record ReadingBlock(ReadingKind kind, String text, List<ReadingFigure> figures, FigureFlow flow) {
+        public ReadingBlock {
+            figures = figures == null ? List.of() : List.copyOf(figures);
+            if (kind == null || text == null
+                    || (kind == ReadingKind.PARAGRAPH && (text.isBlank() || !figures.isEmpty() || flow != FigureFlow.NONE))
+                    || (kind == ReadingKind.FIGURES && (!text.isEmpty() || figures.isEmpty() || flow == null || flow == FigureFlow.NONE))) {
+                throw new IllegalArgumentException("reading block must be a paragraph or an explicitly placed figure group");
+            }
         }
     }
 

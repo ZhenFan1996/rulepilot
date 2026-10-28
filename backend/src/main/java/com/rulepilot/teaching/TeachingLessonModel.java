@@ -80,7 +80,7 @@ public interface TeachingLessonModel {
                 code,
                 path,
                 reason,
-                "{\"title\":\"...\",\"steps\":[{\"heading\":\"...\",\"kind\":\"DO\",\"text\":\"...\",\"citationIds\":[\"E1\"]}]}",
+                "{\"title\":\"...\",\"steps\":[{\"heading\":\"...\",\"kind\":\"DO\",\"content\":[{\"kind\":\"PARAGRAPH\",\"text\":\"...\",\"figures\":[],\"flow\":\"NONE\"}],\"citationIds\":[\"E1\"]}]}",
                 request.topicKey(),
                 request.evidence().stream().map(input -> input.chunkId().toString()).toList());
     }
@@ -351,29 +351,41 @@ public interface TeachingLessonModel {
         }
     }
 
+    record FigureDraft(String imageId, String caption) {}
+
+    record ReadingBlockDraft(
+            com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind kind,
+            String text, List<FigureDraft> figures,
+            com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow flow) {
+        public ReadingBlockDraft {
+            figures = figures == null ? List.of() : List.copyOf(figures);
+        }
+    }
+
     record StepDraft(
             String heading,
             TeachingMove kind,
-            String text,
+            List<ReadingBlockDraft> content,
             List<UUID> citationIds,
-            List<RuleFactDraft> ruleFacts,
-            List<String> imageIds) {
+            List<RuleFactDraft> ruleFacts) {
         public StepDraft {
-            imageIds = imageIds == null ? List.of() : List.copyOf(imageIds);
+            content = content == null ? List.of() : List.copyOf(content);
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
             ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
         }
 
-        public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds,
-                List<RuleFactDraft> ruleFacts) {
-            this(heading, kind, text, citationIds, ruleFacts, List.of());
+        public String text() {
+            return content.stream().filter(block -> block.kind() == com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH)
+                    .map(ReadingBlockDraft::text).collect(java.util.stream.Collectors.joining("\n\n"));
         }
 
-        public StepDraft(
-                String heading,
-                TeachingMove kind,
-                String text,
-                List<UUID> citationIds) {
+        public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds,
+                List<RuleFactDraft> ruleFacts) {
+            this(heading, kind, List.of(new ReadingBlockDraft(
+                    com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH, text, List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE)), citationIds, ruleFacts);
+        }
+
+        public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
             this(heading, kind, text, citationIds, List.of());
         }
 

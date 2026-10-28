@@ -23,6 +23,22 @@ final class LessonDraftValidator {
         if (draft == null || draft.title() == null || draft.title().isBlank() || draft.steps().isEmpty()) {
             throw new IllegalArgumentException("teaching chapter requires a title and at least one step");
         }
+        for (StepDraft step : draft.steps()) {
+            if (step == null || step.content().isEmpty()) throw new IllegalArgumentException("teaching step content is required");
+            for (var block : step.content()) {
+                if (block == null || block.kind() == null || block.text() == null
+                        || (block.kind() == com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH
+                            && (block.text().isBlank() || !block.figures().isEmpty() || block.flow() != com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE))
+                        || (block.kind() == com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.FIGURES
+                            && (!block.text().isEmpty() || block.figures().isEmpty() || block.flow() == null || block.flow() == com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE))) {
+                    throw new IllegalArgumentException("reading content must contain paragraphs and explicitly placed figure groups");
+                }
+                for (var figure : block.figures()) {
+                    if (figure == null || figure.imageId() == null || figure.imageId().isBlank() || figure.caption() == null)
+                        throw new IllegalArgumentException("reading figure needs an offered image identity and optional caption text");
+                }
+            }
+        }
         if (draft.steps().stream().anyMatch(step -> step == null
                 || step.heading() == null || step.heading().isBlank()
                 || step.kind() == null
@@ -37,6 +53,11 @@ final class LessonDraftValidator {
         int position = 1;
         for (StepDraft step : draft.steps()) {
             claims.add(new Claim(position++, step.heading() + "：" + step.text(), step.citationIds()));
+            for (var block : step.content()) {
+                for (var figure : block.figures()) {
+                    if (!figure.caption().isBlank()) claims.add(new Claim(position++, figure.caption(), step.citationIds()));
+                }
+            }
             for (RuleFactDraft fact : step.ruleFacts()) {
                 claims.add(new Claim(position++, fact.text(), fact.citationIds()));
             }

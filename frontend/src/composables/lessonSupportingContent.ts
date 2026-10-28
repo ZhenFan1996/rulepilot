@@ -39,3 +39,7 @@ export interface LessonComprehensionReport {
     visualAidResult: 'NOT_RATED' | 'HELPFUL' | 'NOT_HELPFUL'
   }>
 }
+
+export type LessonReadingBlock =
+  | { kind: 'PARAGRAPH'; text: string; figures: []; flow: 'NONE' }
+  | { kind: 'FIGURES'; text: ''; figures: Array<{ focus: VisualFocus; caption: string }>; flow: 'ASIDE' | 'FULL_WIDTH' }

@@ -89,18 +89,33 @@ class TeachingSectionCandidateValidatorTest {
         UUID version = UUID.randomUUID(), citation = UUID.randomUUID();
         var source = new RuleEvidence(citation, version, "RULE", "Repair", "Spend an action to repair.", 8, 8);
         var focus = new com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus(
-                8, "Repair", "An arrow points from a damaged component to an intact component.", 100, 100, 300, 300);
+                8, "Damaged and intact components", "An arrow points from a damaged component to an intact component.", 100, 100, 300, 300);
         var page = new com.rulepilot.document.DocumentPageImages.PageImage(8, "image/png", new byte[]{1}, 100, 100);
         var images = List.of(new com.rulepilot.teaching.TeachingLessonModel.VisualInput("offered", focus, List.of(citation), page, new byte[]{2}),
                 new com.rulepilot.teaching.TeachingLessonModel.VisualInput("wrong-source", focus, List.of(UUID.randomUUID()), page, new byte[]{2}));
         var request = new SectionRequest("repair", "Repair", "Explain repair", List.of(),
                 List.of(new EvidenceInput(citation, "RULE", "Repair", source.excerpt(), 8, 8)), images, "owner", PlayerLocale.EN);
         var draft = new SectionDraft("Repair", List.of(new StepDraft("Repair", TeachingMove.DO,
-                "Spend an action to repair.", List.of(citation), List.of(), List.of(selection))));
+                List.of(new com.rulepilot.teaching.TeachingLessonModel.ReadingBlockDraft(
+                        com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.FIGURES, "",
+                        List.of(new com.rulepilot.teaching.TeachingLessonModel.FigureDraft(selection, "")),
+                        com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.ASIDE),
+                        new com.rulepilot.teaching.TeachingLessonModel.ReadingBlockDraft(
+                        com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH,
+                        "Spend an action to repair.", List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE)), List.of(citation), List.of())));
+        if (!selection.equals("offered")) {
+            assertThatThrownBy(() -> new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
+                    plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("outside the step evidence scope");
+            return;
+        }
         var section = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
                 plan(version), planned(), List.of(source), request, draft, EvidenceStatus.CITED_DRAFT);
         assertThat(section.steps().getFirst().text()).isEqualTo("Spend an action to repair.");
         assertThat(section.steps().getFirst().visualFoci()).hasSize(selection.equals("offered") ? 1 : 0);
+        if (selection.equals("offered")) {
+            assertThat(section.steps().getFirst().visualFoci()).containsExactly(focus);
+        }
     }
 
     private TeachingPlan plan(UUID versionId) {

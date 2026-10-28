@@ -180,6 +180,69 @@ class TeachingRichLessonPaidCanaryTest {
         if (failure instanceof Error error) throw error;
     }
 
+    /** Opt-in: RULEPILOT_ALLOW_PAID_CANARY=true RULEPILOT_READING_FLOW_INPUT=<ignored JSON>
+     * ./mvnw -Dtest=TeachingRichLessonPaidCanaryTest#publishesAuthoredReadingFlowFromPreparedSourcePixels test.
+     * Owns the live provider risk that ordered multimodal output differs from mocked schema responses. */
+    @Test
+    void publishesAuthoredReadingFlowFromPreparedSourcePixels() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(environment("RULEPILOT_ALLOW_PAID_CANARY", "false")));
+        String inputPath = environment("RULEPILOT_READING_FLOW_INPUT", "");
+        assumeTrue(!inputPath.isBlank(), "an explicitly prepared source-bound request is required");
+        var input = json.readValue(Files.readString(Path.of(inputPath)), ReadingCanaryInput.class);
+        var pages = input.images().stream().map(image -> image.focus().pageNumber()).collect(java.util.stream.Collectors.toSet());
+        var evidence = input.evidence().stream().filter(source -> pages.contains(source.pageFrom())).toList();
+        assertThat(evidence).isNotEmpty().allSatisfy(source ->
+                assertThat(source.documentVersionId()).isEqualTo(input.documentVersionId()));
+        byte[] pageBytes = Files.readAllBytes(Path.of(input.pageImagePath()));
+        var decoded = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(pageBytes));
+        var visuals = new java.util.ArrayList<com.rulepilot.teaching.TeachingLessonModel.VisualInput>();
+        for (var image : input.images()) {
+            var sourcePage = new com.rulepilot.document.DocumentPageImages.PageImage(image.focus().pageNumber(),
+                    "image/jpeg", pageBytes, decoded.getWidth(), decoded.getHeight());
+            visuals.add(new com.rulepilot.teaching.TeachingLessonModel.VisualInput(image.imageId(), image.focus(),
+                    evidence.stream().filter(source -> source.pageFrom() == image.focus().pageNumber()).map(RuleEvidence::chunkId).toList(),
+                    sourcePage, Files.readAllBytes(Path.of(image.path()))));
+        }
+        String objective = "Introduce the game and its components using this source material as a natural illustrated explanation.";
+        var planned = new TeachingPlan.PlannedSection(1, "getting-started", input.title(),
+                objective, true, true, List.of("getting-started"), List.of(),
+                visuals.stream().map(visual -> visual.focus().pageNumber()).distinct().toList());
+        var plan = new TeachingPlan(UUID.randomUUID(), input.documentVersionId(), input.title(),
+                objective, List.of(planned), OWNER, Instant.now(), PlayerLocale.EN);
+        var request = new TeachingSectionModelRequestFactory().create(plan, planned, List.of(), evidence, visuals);
+        Provider selected = provider();
+        var responses = new CopyOnWriteArrayList<Map<String, Object>>();
+        var model = new SpringAiTeachingLessonModel(configuration(selected, recordingModel(selected, responses)), prompts());
+        long started = System.nanoTime();
+        com.rulepilot.teaching.TeachingLessonModel.ModelInvocation invocation;
+        try {
+            invocation = model.composeInvocation(request);
+        } finally {
+            var diagnostics = responses.stream().map(response -> {
+                Map<String, Object> diagnostic = new LinkedHashMap<>();
+                for (String key : List.of("outcome", "latencyMs", "text", "failure")) {
+                    if (response.containsKey(key)) diagnostic.put(key, response.get(key));
+                }
+                return diagnostic;
+            }).toList();
+            Files.writeString(Path.of(inputPath).resolveSibling("reading-flow-provider.json"),
+                    json.writerWithDefaultPrettyPrinter().writeValueAsString(diagnostics));
+        }
+        var section = new TeachingSectionCandidateValidator(new CitationScopeVerifier()).validate(
+                plan, planned, evidence, request, invocation.draft(), EvidenceStatus.CITED_DRAFT);
+        Path output = Path.of(inputPath).resolveSibling("reading-flow-result.json");
+        Files.writeString(output, json.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                "section", section, "latencyMs", elapsedMillis(started), "provider", selected.name(),
+                "model", selected.model(), "modelCalls", responses.size())));
+        assertThat(section.steps()).allSatisfy(step -> assertThat(step.readingBlocks()).isNotEmpty());
+        assertThat(section.steps().stream().flatMap(step -> step.readingBlocks().stream())
+                .flatMap(block -> block.figures().stream()).toList()).isNotEmpty();
+    }
+
+    private record ReadingCanaryInput(UUID documentVersionId, String title, String pageImagePath,
+            List<RuleEvidence> evidence, List<ReadingCanaryImage> images) {}
+    private record ReadingCanaryImage(String imageId, com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus focus, String path) {}
+
     private RuntimeModelConfiguration configuration(Provider provider, ChatModel model) {
         return configuration(provider.name(), provider.model(), model);
     }

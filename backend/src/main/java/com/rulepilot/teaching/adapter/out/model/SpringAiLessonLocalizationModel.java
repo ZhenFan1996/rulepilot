@@ -14,6 +14,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.LessonLocalization.SectionTranslation;
 import com.rulepilot.teaching.domain.LessonLocalization.RuleFactTranslation;
 import com.rulepilot.teaching.domain.LessonLocalization.StepTranslation;
+import com.rulepilot.teaching.domain.LessonLocalization.BlockTranslation;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -131,13 +132,20 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
                     if (!translatedFactPositions.equals(sourceFacts.keySet())) {
                         throw new IllegalArgumentException("localized lesson omitted a rule fact");
                     }
-                    return new StepTranslation(
+                    if (step.readingBlocks() == null) throw new IllegalArgumentException("localized reading blocks omitted");
+                    String text = sourceStep.readingBlocks().isEmpty() ? step.text() : step.readingBlocks().stream()
+                            .sorted(java.util.Comparator.comparingInt(BlockTranslation::position))
+                            .filter(block -> !block.text().isEmpty()).map(BlockTranslation::text)
+                            .collect(java.util.stream.Collectors.joining("\n\n"));
+                    var translated = new StepTranslation(
                             step.position(),
                             step.heading(),
-                            step.text(),
+                            text,
                             visualLabel,
                             visualDescription,
-                            translatedFacts);
+                            translatedFacts, step.readingBlocks());
+                    com.rulepilot.teaching.domain.LessonLocalization.translateReadingBlocks(sourceStep, translated);
+                    return translated;
                 })
                 .toList();
         if (!translatedStepPositions.equals(sourceSteps.keySet())) {
@@ -162,17 +170,22 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
             String text,
             String visualLabel,
             String visualDescription,
-            List<RuleFactInput> ruleFacts) {
+            List<RuleFactInput> ruleFacts,
+            List<BlockTranslation> readingBlocks) {
         static StepInput from(LessonStep step) {
             return new StepInput(
                     step.position(),
                     step.heading(),
-                    step.text(),
+                    step.readingBlocks().isEmpty() ? step.text() : "",
                     step.visualFocus() == null ? "" : step.visualFocus().label(),
                     step.visualFocus() == null ? "" : step.visualFocus().visibleDescription(),
                     step.ruleFacts().stream()
                             .map(fact -> new RuleFactInput(fact.position(), fact.role(), fact.text()))
-                            .toList());
+                            .toList(),
+                    java.util.stream.IntStream.range(0, step.readingBlocks().size()).mapToObj(index -> {
+                        var block = step.readingBlocks().get(index);
+                        return new BlockTranslation(index + 1, block.text(), block.figures().stream().map(figure -> figure.caption()).toList());
+                    }).toList());
         }
     }
 
@@ -189,7 +202,12 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
             String text,
             String visualLabel,
             String visualDescription,
-            List<RuleFactTranslationDraft> ruleFacts) {}
+            List<RuleFactTranslationDraft> ruleFacts, List<BlockTranslation> readingBlocks) {
+        StepTranslationDraft(int position, String heading, String text, String visualLabel, String visualDescription,
+                List<RuleFactTranslationDraft> ruleFacts) {
+            this(position, heading, text, visualLabel, visualDescription, ruleFacts, List.of());
+        }
+    }
 
     record RuleFactTranslationDraft(int position, String text) {}
 }

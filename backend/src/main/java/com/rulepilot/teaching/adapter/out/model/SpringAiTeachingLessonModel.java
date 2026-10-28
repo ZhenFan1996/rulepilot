@@ -195,9 +195,9 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         boolean qwen = usesQwen(role, owner);
-        int contractTokens = estimateTokens(systemPrompt(qwen))
+        int contractTokens = estimateTokens(systemPrompt())
                 + estimateTokens(promptWithoutParameters(prompts.teachingUser()))
-                + (qwen ? estimateTokens(QWEN_TEACHING_SCHEMA) : 0)
+                + (qwen && request.visuals().isEmpty() ? estimateTokens(QWEN_TEACHING_SCHEMA) : 0)
                 + estimateTokens(request.outputLanguage().languageTag())
                 + estimateTokens(request.title())
                 + estimateTokens(request.objective());
@@ -238,10 +238,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return result;
     }
 
-    private String systemPrompt(boolean qwen) {
-        return qwen
-                ? prompts.teachingRuntimeSystem()
-                : prompts.teachingRuntimeSystem() + "\n\n" + TEACHING_TEXT_OUTPUT_CONTRACT;
+    private String systemPrompt() {
+        return prompts.teachingRuntimeSystem() + "\n\n" + TEACHING_TEXT_OUTPUT_CONTRACT;
     }
 
     private int estimateTokens(String value) {
@@ -271,12 +269,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             options.model(models.modelNameFor(role, owner));
             options.temperature(temperature);
             if (!providerOptions.isEmpty()) options.extraBody(providerOptions);
-            if (usesQwen(role, owner)) {
+            // Qwen multimodal requests support JSON object mode, not schema enforcement.
+            // https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output
+            if (usesQwen(role, owner) && request.visuals().isEmpty()) {
                 options.responseFormat(ResponseFormat.builder()
                         .type(ResponseFormat.Type.JSON_SCHEMA)
                         .jsonSchema(qwenTeachingSchema())
                         .build());
-            } else if (deepSeek) {
+            } else if (deepSeek || usesQwen(role, owner)) {
                 options.responseFormat(ResponseFormat.builder()
                         .type(ResponseFormat.Type.JSON_OBJECT)
                         .build());
@@ -290,7 +290,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         String responseContent = "";
         try {
             ChatClient.ChatClientRequestSpec requestSpec = prompt
-                    .system(systemPrompt(usesQwen(role, owner)))
+                    .system(systemPrompt())
                     .user(user -> {
                         user.text(prompts.teachingUser())
                                 .param("outputLanguage", request.outputLanguage().languageTag())
@@ -397,7 +397,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             String model = models.modelNameFor(role, modelConfigurationOwner);
             // Qwen 3.8 exposes effort control. Direct illustrated composition needs source interpretation as well as prose.
             boolean controlledReasoning = model != null && model.startsWith("qwen3.8-");
-            options.put("enable_thinking", controlledReasoning);
+            options.put("enable_thinking", true);
             if (controlledReasoning) options.put("reasoning_effort", "low");
         }
         return Map.copyOf(options);
@@ -583,14 +583,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 draft.title(),
                 draft.steps().stream()
                         .map(step -> new ModelStepDraft(
-                                step.heading(), step.kind(), step.text(),
+                                step.heading(), step.kind(), step.content(),
                                 step.citationIds().stream().map(references::get).toList(),
                                 step.ruleFacts().stream()
                                         .map(fact -> new ModelRuleFact(
                                                 fact.role(),
                                                 fact.text(),
                                                 fact.citationIds().stream().map(references::get).toList()))
-                                        .toList(), step.imageIds()))
+                                        .toList()))
                         .toList());
     }
 
@@ -608,14 +608,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 draft.title(),
                 draft.steps().stream()
                         .map(step -> new StepDraft(
-                                step.heading(), step.kind(), step.text(),
+                                step.heading(), step.kind(), step.content(),
                                 resolveReferences(step.citationIds(), evidenceIds),
                                 step.ruleFacts().stream()
                                         .map(fact -> new RuleFactDraft(
                                                 fact.role(),
                                                 fact.text(),
                                                 resolveReferences(fact.citationIds(), evidenceIds)))
-                                        .toList(), step.imageIds()))
+                                        .toList()))
                         .toList());
     }
 
@@ -659,16 +659,16 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     record ModelStepDraft(
             String heading,
             TeachingMove kind,
-            String text,
+            List<TeachingLessonModel.ReadingBlockDraft> content,
             List<String> citationIds,
-            List<ModelRuleFact> ruleFacts,
-            List<String> imageIds) {
+            List<ModelRuleFact> ruleFacts) {
         ModelStepDraft(String heading, TeachingMove kind, String text, List<String> citationIds,
                 List<ModelRuleFact> ruleFacts) {
-            this(heading, kind, text, citationIds, ruleFacts, List.of());
+            this(heading, kind, List.of(new TeachingLessonModel.ReadingBlockDraft(
+                    com.rulepilot.teaching.domain.IllustratedLesson.ReadingKind.PARAGRAPH, text, List.of(), com.rulepilot.teaching.domain.IllustratedLesson.FigureFlow.NONE)), citationIds, ruleFacts);
         }
         ModelStepDraft {
-            imageIds = imageIds == null ? List.of() : List.copyOf(imageIds);
+            content = content == null ? List.of() : List.copyOf(content);
             citationIds = citationIds == null ? List.of() : citationIds.stream().distinct().toList();
             ruleFacts = ruleFacts == null ? List.of() : ruleFacts.stream().distinct().toList();
         }
