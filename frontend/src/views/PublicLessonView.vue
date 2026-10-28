@@ -1004,7 +1004,7 @@ onUnmounted(() => {
         <button type="button" class="mt-6 rounded-lg bg-ink px-4 py-2.5 font-semibold text-paper" @click="load">{{ t('public.error.retry') }}</button>
       </section>
 
-      <article v-else-if="publicLesson" class="mx-auto max-w-6xl px-5 py-8 sm:px-8 lg:py-12" :data-testid="questionMode ? 'public-questions-reader' : 'public-lesson-reader'">
+      <article v-else-if="publicLesson" class="mx-auto px-5 py-8 sm:px-8 lg:py-12" :class="questionMode ? 'max-w-4xl' : 'max-w-6xl'" :data-testid="questionMode ? 'public-questions-reader' : 'public-lesson-reader'">
         <LessonGuideHero
           :title="heroTitle"
           :eyebrow="heroEyebrow"
@@ -1037,13 +1037,7 @@ onUnmounted(() => {
           </div>
         </aside>
 
-        <section v-if="questionMode" class="tabletop-panel player-board mx-auto mt-6 max-w-4xl p-5 sm:p-7" :aria-label="t('public.question.title')">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <p class="rounded-full border border-ink/10 bg-canvas px-3 py-1.5 text-xs font-semibold text-muted">{{ t('public.question.noLogin') }}</p>
-            <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-muted transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="requestClearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
-          </div>
-          <p class="mt-3 text-xs leading-5 text-muted">{{ t('public.question.private') }}</p>
-
+        <section v-if="questionMode" class="mx-auto mt-6 max-w-3xl" :aria-label="t('public.question.title')">
           <div
             v-if="publicAnswerError || publicAnswerNotice"
             class="mt-4 rounded-2xl px-4 py-3 text-sm"
@@ -1163,13 +1157,16 @@ onUnmounted(() => {
                   </div>
                   <ul v-if="turn.answer.answer.exceptions.length" class="mt-4 list-disc stack-y-xs pl-5 text-sm leading-6 text-muted"><li v-for="exception in turn.answer.answer.exceptions" :key="exception">{{ exception }}</li></ul>
 
-                  <div v-if="index === publicAnswerTurns.length - 1 && publishesConclusion(turn.answer.answer.status)" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" :aria-label="t('lesson.answer.followUps')">
-                    <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('SIMPLIFY')">{{ t('lesson.answer.intent.simplify') }}</button>
-                    <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('EXAMPLE')">{{ t('lesson.answer.intent.example') }}</button>
-                    <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('DEFINE')">{{ t('lesson.answer.intent.define') }}</button>
-                    <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('VERIFY')">{{ t('lesson.answer.intent.verify') }}</button>
-                    <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('SOURCE')">{{ t('lesson.answer.intent.source') }}</button>
-                  </div>
+                  <details v-if="index === publicAnswerTurns.length - 1 && publishesConclusion(turn.answer.answer.status)" class="mt-4 border-t border-ink/10 pt-3" :aria-label="t('lesson.answer.followUps')">
+                    <summary class="min-h-10 cursor-pointer py-2 text-sm font-semibold text-indigo">{{ t('lesson.answer.followUps') }}</summary>
+                      <div class="flex flex-wrap gap-2">
+                      <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('SIMPLIFY')">{{ t('lesson.answer.intent.simplify') }}</button>
+                      <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('EXAMPLE')">{{ t('lesson.answer.intent.example') }}</button>
+                      <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('DEFINE')">{{ t('lesson.answer.intent.define') }}</button>
+                      <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('VERIFY')">{{ t('lesson.answer.intent.verify') }}</button>
+                      <button type="button" :disabled="publicAnswerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold text-muted disabled:opacity-40" @click="requestPublicLearningHelp('SOURCE')">{{ t('lesson.answer.intent.source') }}</button>
+                    </div>
+                  </details>
 
                   <div v-if="turn.answer.answer.citations.length" class="mt-5 border-t border-ink/10 pt-4">
                     <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted">{{ t('public.question.evidence') }}</p>
@@ -1201,11 +1198,18 @@ onUnmounted(() => {
           <form class="mt-5" @submit.prevent="submitPublicQuestion">
             <label for="public-question" class="sr-only">{{ t('public.question.submit') }}</label>
             <textarea id="public-question" v-model="publicQuestion" rows="3" :disabled="publicAnswerLoading || !readerScopeReady" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
-            <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p class="text-xs text-muted">{{ t('public.question.counter', { count: publicQuestion.length }) }}</p>
+            <div class="mt-3 flex justify-end">
               <button type="submit" :disabled="publicAnswerLoading || !readerScopeReady || !publicQuestion.trim() || publicAnswerSubmissionBlocked" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>
             </div>
           </form>
+          <details class="mt-4 text-xs text-muted">
+            <summary class="min-h-10 cursor-pointer py-2">{{ locale === 'en' ? 'Conversation options' : '会话选项' }}</summary>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <p class="rounded-full border border-ink/10 bg-canvas px-3 py-1.5 text-xs font-semibold text-muted">{{ t('public.question.noLogin') }}</p>
+              <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-muted transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="requestClearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
+            </div>
+            <p class="mt-3 text-xs leading-5 text-muted">{{ t('public.question.private') }}</p>
+          </details>
         </section>
 
         <aside
@@ -1219,6 +1223,7 @@ onUnmounted(() => {
         </aside>
 
         <LessonChapterList
+          v-if="!questionMode"
           :sections="publicLesson.lesson.sections"
           id-prefix="public-chapter"
           :page-image-url="sourcePageUrl"

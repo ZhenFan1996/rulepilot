@@ -2,6 +2,7 @@ import { nextTick, onBeforeUnmount, watch, type Ref, type WatchSource } from 'vu
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
+  'summary',
   'button:not([disabled])',
   'input:not([disabled]):not([type="hidden"])',
   'select:not([disabled])',
@@ -146,6 +147,8 @@ function isAvailable(element: HTMLElement) {
   if (!element.isConnected || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
   let current: HTMLElement | null = element
   while (current) {
+    if (current.tagName === 'DETAILS' && !current.hasAttribute('open')
+      && !current.querySelector(':scope > summary')?.contains(element)) return false
     const style = getComputedStyle(current)
     if (style.display === 'none' || style.visibility === 'hidden') return false
     current = current.parentElement

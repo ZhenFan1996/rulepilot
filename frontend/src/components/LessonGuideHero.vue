@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
+import { useLocale } from '@/lib/locale'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -22,6 +23,7 @@ const props = withDefaults(defineProps<{
   compact: false,
 })
 
+const { locale } = useLocale()
 const emit = defineEmits<{ coverError: [] }>()
 const initials = computed(() => props.title.trim().slice(0, 2).toLocaleUpperCase())
 </script>
@@ -45,11 +47,16 @@ const initials = computed(() => props.title.trim().slice(0, 2).toLocaleUpperCase
       </component>
 
       <div class="min-w-0 flex-1 py-1">
-        <p class="text-xs font-medium text-muted">{{ eyebrow }}</p>
+        <p v-if="!compact" class="text-xs font-medium text-muted">{{ eyebrow }}</p>
         <h1 class="mt-1 break-words font-semibold leading-tight tracking-tight text-ink" :class="compact ? 'text-2xl' : 'text-2xl sm:text-3xl'">{{ title }}</h1>
-        <p v-if="rulebookTitle && rulebookTitle !== title" class="mt-2 text-sm font-medium text-muted">{{ rulebookTitle }}</p>
-        <p class="max-w-2xl text-sm text-muted sm:text-base" :class="compact ? 'mt-3 leading-6' : 'mt-3 leading-6'">{{ description }}</p>
-        <div v-if="$slots.actions" class="mt-5 flex flex-wrap gap-3"><slot name="actions" /></div>
+        <p v-if="!compact && rulebookTitle && rulebookTitle !== title" class="mt-2 text-sm font-medium text-muted">{{ rulebookTitle }}</p>
+        <p v-if="!compact" class="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">{{ description }}</p>
+        <details v-if="compact && ($slots.actions || rulebookTitle)" class="mt-2 text-xs text-muted">
+          <summary class="min-h-9 cursor-pointer py-2">{{ locale === 'en' ? 'Rulebook and game details' : '规则书与桌游资料' }}</summary>
+          <p v-if="rulebookTitle" class="py-2">{{ rulebookTitle }}</p>
+          <div class="flex flex-wrap gap-3"><slot name="actions" /></div>
+        </details>
+        <div v-else-if="$slots.actions" class="mt-5 flex flex-wrap gap-3"><slot name="actions" /></div>
       </div>
     </div>
     <div v-if="$slots.status" class="relative mt-5"><slot name="status" /></div>

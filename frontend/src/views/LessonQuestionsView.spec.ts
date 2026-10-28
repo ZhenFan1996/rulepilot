@@ -47,7 +47,6 @@ describe('LessonQuestionsView', () => {
     expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).not.toContain('1–5 人')
     expect(wrapper.text()).toContain('桌游资料由 BoardGameGeek 提供')
-    expect(wrapper.text()).toContain('独立答疑')
     expect(wrapper.findAll('h2').some((heading) => heading.text() === '问规则书')).toBe(false)
     expect(wrapper.text()).not.toContain('优先参考')
     expect(wrapper.text()).not.toContain('第 2 章 · 结算分数')
@@ -182,7 +181,6 @@ describe('LessonQuestionsView', () => {
     const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
 
     expect(wrapper.text()).toContain('Ask the Deep Space rulebook')
-    expect(wrapper.text()).toContain('Focused Q&A')
     expect(wrapper.text()).toContain('Ask the rulebook')
     expect(wrapper.text()).toContain('Read a card from a photo')
     expect(wrapper.text()).not.toMatch(/[\u3400-\u9fff]/)

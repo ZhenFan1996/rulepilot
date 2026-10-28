@@ -373,7 +373,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
 </script>
 
 <template>
-  <section id="lesson-question-panel" class="mt-8 scroll-mt-6" aria-labelledby="lesson-question-title">
+  <section id="lesson-question-panel" class="mt-4 scroll-mt-6" aria-labelledby="lesson-question-title">
     <div class="answer-workspace">
       <AgentWorkspaceHeader
         v-if="showHeader"
@@ -382,11 +382,6 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
         :description="t('lesson.answer.description')"
         :status="online ? t('lesson.answer.agentReady') : ''"
       />
-
-      <div v-if="answerTurns.length" class="mt-5 flex flex-wrap items-center justify-between gap-2">
-        <p class="text-xs leading-5 text-muted">{{ t('lesson.answer.threadPrivacy') }}</p>
-        <button type="button" :disabled="answerLoading || clearThreadDisabled" class="min-h-11 rounded-xl px-3 text-sm font-semibold text-muted hover:bg-ink/5 disabled:opacity-40" @click="emit('clearThread')">{{ t('lesson.answer.clearThread') }}</button>
-      </div>
 
       <ol v-if="previousAnswerTurns.length" class="mt-3 stack-y-md" :aria-label="t('lesson.answer.thread')">
         <li v-for="(turn, index) in previousAnswerTurns" :key="`${index}-${turn.question}`" class="rounded-2xl border border-ink/8 bg-canvas p-4">
@@ -553,133 +548,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
         </li>
       </ol>
 
-      <div
-        class="mt-5 gap-5"
-        :class="answer ? 'grid lg:grid-cols-[minmax(17rem,0.68fr)_minmax(0,1.32fr)] lg:items-start lg:gap-6' : 'mx-auto max-w-3xl'"
-      >
-        <div class="min-w-0 lg:sticky lg:top-24">
-          <form class="rounded-xl border border-ink/15 bg-paper p-4 sm:p-6" @submit.prevent="submitQuestion">
-            <div class="mb-3 flex flex-wrap items-start gap-3">
-              <button
-                type="button"
-                class="min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
-                :disabled="answerLoading || !online"
-                @click="emit('openCardOcr')"
-              >
-                {{ t('lesson.answer.cardOcr') }}
-              </button>
-              <VoiceQuestionCapture :disabled="answerLoading || !online" @transcript="emit('voiceTranscript', $event)" />
-            </div>
-            <label for="lesson-question" class="sr-only">{{ t('lesson.answer.questionLabel') }}</label>
-            <textarea
-              id="lesson-question"
-              ref="questionInput"
-              v-model="questionModel"
-              rows="3"
-              :disabled="answerLoading || !online"
-              :placeholder="t('lesson.answer.placeholder')"
-              class="w-full resize-y rounded-lg border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
-            />
-            <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p class="text-xs text-muted">{{ t('lesson.answer.counter', { count: question.length }) }}</p>
-              <button
-                type="submit"
-                :disabled="answerLoading || !online || !question.trim() || answerSubmissionBlocked"
-                class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {{ answerLoading ? t('lesson.answer.loading') : online ? t('lesson.answer.submit') : t('lesson.answer.offline') }}
-              </button>
-            </div>
-          </form>
-
-          <div
-            v-if="answerError"
-            class="mt-4 rounded-2xl px-4 py-3"
-            :class="answerOutcome === 'cancelled' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-700'"
-            :role="answerOutcome === 'cancelled' ? 'status' : 'alert'"
-          >
-            <PlayerWorkStatusText
-              :status="answerErrorStatus"
-              class="text-sm font-semibold"
-            />
-            <p class="mt-1 text-xs leading-5">{{ answerError }}</p>
-            <PlayerFailureDetails
-              v-if="answerRequestFailureDetails"
-              class="mt-3"
-              :category="answerRequestFailureDetails.category"
-              :owner="answerRequestFailureDetails.owner"
-              :code="answerRequestFailureDetails.code"
-            />
-            <p
-              v-if="answerFailureRecovery"
-              data-testid="answer-failure-retry-guidance"
-              :data-retry-unchanged="answerFailureRecovery.canRetryUnchanged"
-              class="mt-2 text-xs font-semibold leading-5"
-            >
-              <span>{{ answerFailureRecovery.actionLabel }}:</span>
-              {{ answerErrorRetrySuitability }}
-            </p>
-            <div v-if="answerFailureRecovery" class="mt-3 flex flex-wrap gap-2">
-              <a
-                v-if="answerContextMustBeRestored"
-                data-testid="answer-failure-restore-context"
-                :href="answerContextRefreshHref"
-                class="inline-flex min-h-10 items-center rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800"
-              >
-                {{ answerFailureRecovery.actionLabel }}
-              </a>
-              <button
-                v-else-if="answerFailureRecovery.canRetryUnchanged && failedQuestionIsUnchanged"
-                type="button"
-                data-testid="answer-failure-retry-unchanged"
-                :disabled="answerLoading || !online || !question.trim()"
-                class="min-h-10 rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
-                @click="retryFailedQuestionUnchanged"
-              >
-                {{ answerFailureRecovery.actionLabel }}
-              </button>
-              <button
-                v-else-if="failedQuestionRequiresEdit"
-                type="button"
-                data-testid="answer-failure-edit-question"
-                :disabled="answerLoading || !online"
-                class="min-h-10 rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
-                @click="focusQuestionForMoreDetail"
-              >
-                {{ locale === 'en' ? 'Edit the question' : '修改问题' }}
-              </button>
-            </div>
-          </div>
-          <div v-else-if="answerLoading" class="mt-5 stack-y-md rounded-2xl border border-ink/8 p-5" aria-live="polite">
-            <div class="flex items-center gap-3">
-              <span class="size-3 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
-              <div>
-                <PlayerWorkStatusText
-                  :status="answerWorkStatus"
-                  class="text-sm font-semibold"
-                />
-                <p class="mt-0.5 text-xs leading-5 text-muted">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
-              </div>
-            </div>
-            <p v-if="answerSoftBudgetReached" data-testid="answer-soft-budget" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ softBudgetCopy }}</p>
-            <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-muted" :aria-label="t('lesson.answer.agentTrace')">
-              <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
-                <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
-                <span><strong v-if="item.actor" class="font-semibold text-muted">{{ item.actor }} · </strong>{{ item.label }}</span>
-              </li>
-            </ol>
-            <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-muted">{{ t('lesson.answer.waitingForTrace') }}</p>
-            <div v-if="streamedAnswerParts.verdict || streamedAnswerParts.explanation" data-testid="validated-answer-preview" class="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs leading-5 text-emerald-950">
-              <p class="font-semibold">{{ locale === 'en' ? 'Validated answer so far' : '已验证的回答' }}</p>
-              <p v-if="streamedAnswerParts.verdict" class="mt-1 font-medium">{{ streamedAnswerParts.verdict }}</p>
-              <p v-if="streamedAnswerParts.explanation" class="mt-1 text-emerald-900/75">{{ streamedAnswerParts.explanation }}</p>
-            </div>
-            <p class="text-xs leading-5 text-muted">{{ t('lesson.answer.foreignLanguage') }}</p>
-            <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
-            <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
-            <button type="button" class="min-h-11 justify-self-start rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold text-muted hover:bg-paper" @click="emit('cancelAnswer')">{{ t('lesson.answer.cancel') }}</button>
-          </div>
-        </div>
+      <div class="mx-auto mt-3 flex max-w-3xl flex-col gap-5">
         <div v-if="answer" class="min-w-0">
           <details v-if="agentTrace.some(item => item.actor)" data-testid="answer-execution-process" class="mb-3 rounded-2xl border border-ink/8 bg-paper/70 px-4 py-3 text-xs leading-5 text-muted">
             <summary class="cursor-pointer font-semibold text-muted">{{ executionProcessTitle }}</summary>
@@ -690,7 +559,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               </li>
             </ol>
           </details>
-          <article v-if="answer" class="overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
+          <article v-if="answer" class="overflow-hidden border-b border-ink/10" aria-live="polite">
             <div class="p-5 sm:p-6">
               <p class="text-xs font-semibold text-muted">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
               <div v-if="publishesConclusion(answer.status)" class="flex flex-wrap items-center gap-2 text-xs font-semibold">
@@ -881,30 +750,32 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 </ol>
               </div>
 
-              <div v-if="publishesConclusion(answer.status)" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" :aria-label="t('lesson.answer.followUps')">
-                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'DEFINE')">{{ t('lesson.answer.intent.define') }}</button>
-                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'WHY')">{{ t('lesson.answer.intent.why') }}</button>
-                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXAMPLE')">{{ t('lesson.answer.intent.example') }}</button>
-                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXCEPTIONS')">{{ t('lesson.answer.intent.exceptions') }}</button>
-                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'SOURCE')">{{ t('lesson.answer.intent.source') }}</button>
-              </div>
-
-              <div v-if="publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-ink/10 bg-paper p-4">
-                <p class="text-sm font-semibold text-ink">{{ t('lesson.answer.feedback.title') }}</p>
-                <p class="mt-1 text-xs leading-5 text-muted">{{ t('lesson.answer.feedback.description') }}</p>
-                <p v-if="answerResolved" class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800" role="status">{{ t('lesson.answer.feedback.resolvedStatus') }}</p>
-                <div v-else class="mt-3 flex flex-wrap gap-2">
-                  <button type="button" class="min-h-11 rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800" @click="markAnswerResolved">{{ t('lesson.answer.feedback.resolved') }}</button>
-                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/30 bg-copper/[0.06] px-3 text-sm font-semibold text-copper disabled:opacity-40" @click="prepareFeedbackFollowUp('SIMPLIFY')">{{ t('lesson.answer.feedback.unclear') }}</button>
-                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-950 disabled:opacity-40" @click="prepareFeedbackFollowUp('VERIFY')">{{ t('lesson.answer.feedback.incorrect') }}</button>
+              <details v-if="publishesConclusion(answer.status)" class="mt-5 border-t border-ink/10 pt-3">
+                <summary class="min-h-10 cursor-pointer py-2 text-sm font-semibold text-indigo">{{ t('lesson.answer.followUps') }}</summary>
+                <div class="mt-2 flex flex-wrap gap-2" :aria-label="t('lesson.answer.followUps')">
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'DEFINE')">{{ t('lesson.answer.intent.define') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'WHY')">{{ t('lesson.answer.intent.why') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXAMPLE')">{{ t('lesson.answer.intent.example') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXCEPTIONS')">{{ t('lesson.answer.intent.exceptions') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'SOURCE')">{{ t('lesson.answer.intent.source') }}</button>
                 </div>
-              </div>
+
+                <div class="mt-4 rounded-2xl border border-ink/10 bg-paper p-4">
+                  <p class="text-sm font-semibold text-ink">{{ t('lesson.answer.feedback.title') }}</p>
+                  <p class="mt-1 text-xs leading-5 text-muted">{{ t('lesson.answer.feedback.description') }}</p>
+                  <p v-if="answerResolved" class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800" role="status">{{ t('lesson.answer.feedback.resolvedStatus') }}</p>
+                  <div v-else class="mt-3 flex flex-wrap gap-2">
+                    <button type="button" class="min-h-11 rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800" @click="markAnswerResolved">{{ t('lesson.answer.feedback.resolved') }}</button>
+                    <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/30 bg-copper/[0.06] px-3 text-sm font-semibold text-copper disabled:opacity-40" @click="prepareFeedbackFollowUp('SIMPLIFY')">{{ t('lesson.answer.feedback.unclear') }}</button>
+                    <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-950 disabled:opacity-40" @click="prepareFeedbackFollowUp('VERIFY')">{{ t('lesson.answer.feedback.incorrect') }}</button>
+                  </div>
+                </div>
+              </details>
             </div>
 
-            <section v-if="primaryCitation" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6" aria-labelledby="lesson-answer-evidence-title">
+            <section v-if="primaryCitation" class="border-t border-ink/10 px-5 py-4 sm:px-6" aria-labelledby="lesson-answer-evidence-title">
               <p id="lesson-answer-evidence-title" class="font-semibold text-indigo">{{ t('lesson.answer.evidence.title') }}</p>
-              <p class="mt-1 text-xs leading-5 text-muted">{{ t('lesson.answer.evidence.description') }}</p>
-              <article class="mt-4 rounded-2xl border border-indigo/20 bg-paper p-4">
+              <article class="mt-3 border-l-2 border-indigo/25 pl-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <p class="font-semibold">{{ primaryCitation.heading }}</p>
                   <span class="text-xs font-semibold text-indigo">{{ citationPages(primaryCitation) }}</span>
@@ -925,7 +796,8 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               </details>
             </section>
 
-            <div v-if="answer.status === 'ANSWERED'" class="border-t border-ink/10 p-5 sm:p-6">
+            <details v-if="answer.status === 'ANSWERED'" :open="editingRuling || rulingConflict || Boolean(rulingError)" class="border-t border-ink/10 px-5 py-3 sm:px-6">
+              <summary class="min-h-10 cursor-pointer py-2 text-sm text-muted">{{ locale === 'en' ? 'Save or edit this ruling' : '保存或修订这次裁定' }}</summary>
               <p v-if="rulingError" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ rulingError }}</p>
               <div v-if="rulingConflict" class="rounded-2xl border border-amber-300 bg-amber-50 p-4" role="alert">
                 <p class="font-semibold text-amber-950">{{ t('lesson.answer.ruling.conflictTitle') }}</p>
@@ -957,10 +829,141 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               </div>
 
               <button v-else class="min-h-11 w-full rounded-xl border border-indigo/30 px-5 text-sm font-semibold text-indigo transition hover:bg-indigo/5 disabled:opacity-40" :disabled="rulingSaving" @click="emit('confirmRuling')">{{ rulingSaving ? t('lesson.answer.ruling.saving') : t('lesson.answer.ruling.confirm') }}</button>
-            </div>
+            </details>
           </article>
         </div>
+        <div class="min-w-0">
+          <form class="rounded-xl border border-ink/15 bg-paper p-4 sm:p-6" @submit.prevent="submitQuestion">
+            <label for="lesson-question" class="sr-only">{{ t('lesson.answer.questionLabel') }}</label>
+            <textarea
+              id="lesson-question"
+              ref="questionInput"
+              v-model="questionModel"
+              rows="3"
+              :disabled="answerLoading || !online"
+              :placeholder="t('lesson.answer.placeholder')"
+              class="w-full resize-y rounded-lg border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
+            />
+            <details class="mt-2 text-sm text-muted">
+              <summary class="min-h-10 cursor-pointer py-2">{{ locale === 'en' ? 'Photo or voice input' : '拍照或语音输入' }}</summary>
+              <div class="mt-3 flex flex-wrap items-start gap-3">
+                <button
+                  type="button"
+                  class="min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  :disabled="answerLoading || !online"
+                  @click="emit('openCardOcr')"
+                >
+                  {{ t('lesson.answer.cardOcr') }}
+                </button>
+                <VoiceQuestionCapture :disabled="answerLoading || !online" @transcript="emit('voiceTranscript', $event)" />
+              </div>
+            </details>
+            <div class="mt-2 flex justify-end">
+              <button
+                type="submit"
+                :disabled="answerLoading || !online || !question.trim() || answerSubmissionBlocked"
+                class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {{ answerLoading ? t('lesson.answer.loading') : online ? t('lesson.answer.submit') : t('lesson.answer.offline') }}
+              </button>
+            </div>
+          </form>
+
+          <div
+            v-if="answerError"
+            class="mt-4 rounded-2xl px-4 py-3"
+            :class="answerOutcome === 'cancelled' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-700'"
+            :role="answerOutcome === 'cancelled' ? 'status' : 'alert'"
+          >
+            <PlayerWorkStatusText
+              :status="answerErrorStatus"
+              class="text-sm font-semibold"
+            />
+            <p class="mt-1 text-xs leading-5">{{ answerError }}</p>
+            <PlayerFailureDetails
+              v-if="answerRequestFailureDetails"
+              class="mt-3"
+              :category="answerRequestFailureDetails.category"
+              :owner="answerRequestFailureDetails.owner"
+              :code="answerRequestFailureDetails.code"
+            />
+            <p
+              v-if="answerFailureRecovery"
+              data-testid="answer-failure-retry-guidance"
+              :data-retry-unchanged="answerFailureRecovery.canRetryUnchanged"
+              class="mt-2 text-xs font-semibold leading-5"
+            >
+              <span>{{ answerFailureRecovery.actionLabel }}:</span>
+              {{ answerErrorRetrySuitability }}
+            </p>
+            <div v-if="answerFailureRecovery" class="mt-3 flex flex-wrap gap-2">
+              <a
+                v-if="answerContextMustBeRestored"
+                data-testid="answer-failure-restore-context"
+                :href="answerContextRefreshHref"
+                class="inline-flex min-h-10 items-center rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800"
+              >
+                {{ answerFailureRecovery.actionLabel }}
+              </a>
+              <button
+                v-else-if="answerFailureRecovery.canRetryUnchanged && failedQuestionIsUnchanged"
+                type="button"
+                data-testid="answer-failure-retry-unchanged"
+                :disabled="answerLoading || !online || !question.trim()"
+                class="min-h-10 rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
+                @click="retryFailedQuestionUnchanged"
+              >
+                {{ answerFailureRecovery.actionLabel }}
+              </button>
+              <button
+                v-else-if="failedQuestionRequiresEdit"
+                type="button"
+                data-testid="answer-failure-edit-question"
+                :disabled="answerLoading || !online"
+                class="min-h-10 rounded-xl border border-red-300 bg-canvas px-3 text-xs font-semibold text-red-800 disabled:opacity-40"
+                @click="focusQuestionForMoreDetail"
+              >
+                {{ locale === 'en' ? 'Edit the question' : '修改问题' }}
+              </button>
+            </div>
+          </div>
+          <div v-else-if="answerLoading" class="mt-5 stack-y-md rounded-2xl border border-ink/8 p-5" aria-live="polite">
+            <div class="flex items-center gap-3">
+              <span class="size-3 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
+              <div>
+                <PlayerWorkStatusText
+                  :status="answerWorkStatus"
+                  class="text-sm font-semibold"
+                />
+                <p class="mt-0.5 text-xs leading-5 text-muted">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
+              </div>
+            </div>
+            <p v-if="answerSoftBudgetReached" data-testid="answer-soft-budget" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ softBudgetCopy }}</p>
+            <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-muted" :aria-label="t('lesson.answer.agentTrace')">
+              <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
+                <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
+                <span><strong v-if="item.actor" class="font-semibold text-muted">{{ item.actor }} · </strong>{{ item.label }}</span>
+              </li>
+            </ol>
+            <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-muted">{{ t('lesson.answer.waitingForTrace') }}</p>
+            <div v-if="streamedAnswerParts.verdict || streamedAnswerParts.explanation" data-testid="validated-answer-preview" class="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs leading-5 text-emerald-950">
+              <p class="font-semibold">{{ locale === 'en' ? 'Validated answer so far' : '已验证的回答' }}</p>
+              <p v-if="streamedAnswerParts.verdict" class="mt-1 font-medium">{{ streamedAnswerParts.verdict }}</p>
+              <p v-if="streamedAnswerParts.explanation" class="mt-1 text-emerald-900/75">{{ streamedAnswerParts.explanation }}</p>
+            </div>
+            <p class="text-xs leading-5 text-muted">{{ t('lesson.answer.foreignLanguage') }}</p>
+            <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
+            <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
+            <button type="button" class="min-h-11 justify-self-start rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold text-muted hover:bg-paper" @click="emit('cancelAnswer')">{{ t('lesson.answer.cancel') }}</button>
+          </div>
+        </div>
       </div>
+      <details v-if="answerTurns.length" class="mt-3 text-xs text-muted">
+        <summary class="min-h-10 cursor-pointer py-2">{{ locale === 'en' ? 'Conversation options' : '会话选项' }}</summary>
+        <p class="text-xs leading-5 text-muted">{{ t('lesson.answer.threadPrivacy') }}</p>
+        <button type="button" :disabled="answerLoading || clearThreadDisabled" class="min-h-11 rounded-xl px-3 text-sm font-semibold text-muted hover:bg-ink/5 disabled:opacity-40" @click="emit('clearThread')">{{ t('lesson.answer.clearThread') }}</button>
+      </details>
+
     </div>
   </section>
 </template>
