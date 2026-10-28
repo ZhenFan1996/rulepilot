@@ -2,26 +2,19 @@
 
 [![CI](https://github.com/ZhenFan1996/rulepilot/actions/workflows/ci.yml/badge.svg)](https://github.com/ZhenFan1996/rulepilot/actions/workflows/ci.yml)
 
-RulePilot 是一个证据优先的桌游助手：根据玩家偏好推荐游戏；玩家选中后绑定可信规则书；再生成带页码
-依据的上桌讲解，并围绕当前规则书回答追问。推荐、规则书、讲解和答疑是连续体验，也是可分别成功与恢复
-的四个结果。
+RulePilot is a board game assistant that recommends games, finds or imports rulebooks,
+creates guided lessons, and answers rules questions with page citations.
+Lessons and answers use the selected rulebook as evidence and highlight uncertainty.
+Interrupted lessons can resume without losing completed chapters.
 
-讲解先读取规则，章节 Agent 直接查看原页和版面提取的插图候选，在同一次生成中编排有序段落、图片组和可选图注。前端按编排呈现并适配屏幕，已有讲解继续可读。图表中需要推断的图形、数值对应关系保留为原图，
-不作为确定规则转述；讲解会保留可读的文字规则并明确需要核对的局部细节。识图或配图失败不应丢失
-已生成的有效章节。未完成的讲解仅供本人继续或恢复，完成后才进入公开讲解。
+## Stack
 
-项目逻辑、生产架构、技术选型、失败边界和面试讲法见
-[PROJECT_MODEL.md](PROJECT_MODEL.md)。工程修改约束见 [AGENTS.md](AGENTS.md)。
+Java 21 · Spring Boot 4 · Spring Modulith · Spring AI · Vue 3 · TypeScript · Vite  
+PostgreSQL/pgvector · Redis · RabbitMQ · MinIO · OpenTelemetry · Prometheus · Tempo · Grafana
 
-## 技术栈
+## Quick start
 
-Java 21、Spring Boot 4、Spring Modulith、Spring AI、Vue 3、TypeScript、Vite、PostgreSQL/pgvector、
-Redis、RabbitMQ、MinIO、OpenTelemetry、Prometheus、Tempo、Grafana、JUnit/Testcontainers、Vitest 和
-Playwright。
-
-## 本地启动
-
-需要 Java 21、Node.js 24、Docker、Docker Compose 和 GNU Make。
+Requires Java 21, Node.js 24, Docker with Compose, and GNU Make.
 
 ```sh
 git clone git@github.com:ZhenFan1996/rulepilot.git
@@ -31,79 +24,56 @@ make compose-up
 make dev
 ```
 
-访问 Web：<http://127.0.0.1:5173>；后端健康检查：<http://127.0.0.1:8080/actuator/health>；Grafana：
-<http://127.0.0.1:3000>。默认使用确定性 Fake Provider，不调用付费模型。启用真实 Provider 时，本地启动器会在
-旧 `.env` 尚未声明 `RULEPILOT_MODELS_STARTUP_ALLOWED_USERS` 的情况下，仅向已配置的本地玩家与演示管理员账号
-开放启动凭证；显式设置（包括留空）始终优先。真实凭证只放 `.env`，不得提交。
+- **Web:** <http://127.0.0.1:5173>
+- **API health:** <http://127.0.0.1:8080/actuator/health>
+- **Grafana:** <http://127.0.0.1:3000>
 
-规则书搜索默认使用 Qwen 3.8 Flash。先复用已有搜索来源并重新检查文件；缓存无可用结果时再查询外部目录和联网搜索。
-联网搜索观察到与游戏标题关联的出版社或可信站点规则页后，即交给来源检查，不等待模型继续整理文字。
-来源页仍需检查内容和下载链接，不能仅凭搜索结果认定为可导入规则书；找到符合目标语言的可导入文件后立即返回。
+Local development uses deterministic fake providers by default, with no paid model calls.
+Configure real providers and credentials in `.env`; see [.env.example](.env.example) for available settings.
+`RULEPILOT_MODELS_STARTUP_ALLOWED_USERS` controls access to startup model credentials.
 
-模型响应调试可显式设置 `MODEL_DEBUG_RECORDING_ENABLED=true`，对所有用户生效。它沿用现有
-OpenTelemetry → Tempo 链路，不记录输入 prompt、图片、私有推理或异常正文。在 Grafana 打开对应 trace，
-展开 `model-call` 的 Span attributes：`gen_ai.request.model` 是模型，`model.debug.outcome` 是完成、失败或取消，
-`model.response.000` 起的有序分片拼接为 JSON，包含 `text` 和 `tool_calls`（名称、ID、脱敏参数）。
-同步响应和流式响应使用同一个记录器，每次模型调用独立记录，流式参数在结束时合并；它们是模型候选输出，
-并不意味着已经通过业务发布校验。失败或取消标记 `partial_redacted`，无法解析的参数不输出原文。
-记录跟随 trace 采样；生产需要覆盖全部请求时同时设置 `PRODUCTION_TRACING_SAMPLING_PROBABILITY=1.0`。
-这些内容对已有 Grafana 查看者可见，并按 Tempo 的 24 小时策略保留。脱敏覆盖结构化敏感字段、当前 Provider
-凭据、常见凭据格式、邮箱及 URL 查询参数，不保证识别自然语言中所有个人信息或文档原文。
-关闭开关只停止新记录，不会立即删除已存储的 trace。
-诊断副本受 Tempo 每属性 2048 字节和 OTel 每 span 128 个属性的容量约束（16 个槽位保留给元数据）；
-生产属性值长度设为 2048，异常事件继续禁用。超限时 `model.debug.output_status=omitted_capacity`，
-不会静默展示截断 JSON，也不会影响实际模型响应、工具执行或发布。没有有效父 trace 时不创建脱离业务的记录。
-部署环境另为公开答疑的 `public-reader` 系统身份启用启动模型配置。该身份禁止登录、没有用户权限，
-模型用量仍由独立账户配额约束；本地需要验证公开答疑时，将它显式加入上述名单。
-同步答疑的累计 token 估算仅用于统计，不截断已读证据后的回答；请求统一时限、账户配额、Provider 限制、
-取消和无进展检测共同约束运行。答疑可按已观察的引用读取原始规则页，核对图表关系；无法确认的部分
-保留原图并明确不确定性。发布校验确认来源身份和引用范围，不以数字是否出现在文字摘要中判定答案。
-答疑检索使用当前模型输入容量扣除已占用上下文后的空间，不沿用固定的工具默认窗口；已确认的
-Qwen 3.8 Max 输入容量来自提供方文档，其他自定义模型由提供方执行上下文边界。累计用量遥测
-不充当回答完成门槛。同批部分证据不可用时仍交回已取得的证据；实际资源耗尽与请求超时分别报告。
-
-部署镜像内置 Apache-2.0 的 Docling Heron 版面模型及本地 ONNX runtime，不向布局服务上传规则书。
-首次配图时建立版本绑定的图片索引，后续章节复用；候选边界由布局模型提供，章节 Agent 只选择固定图片 ID。
-编号同时标在模型输入图片上，读者裁图保持原样；Qwen 3.8 章节生成使用低强度思考以联合理解规则和选图。
-`MODEL_REQUEST_TIMEOUT` 默认 4 分钟，容纳多页图文调用；各 Agent 的整体时限、取消与账户配额仍独立生效。
-本机直接运行 Java 时，可用 Python 3.10+ 创建虚拟环境，安装 `backend/requirements-layout.txt`，再运行
-`backend/install-layout-model.py <模型目录>`，通过 `DOCLING_PYTHON` 和 `DOCLING_MODEL_DIRECTORY` 指向它们。
-未配置布局运行时仍可读取原页和生成有依据的正文；原页不会自动作为插图填入每个步骤。
-
-载入项目自制的 CC0 演示规则书：
+Load the self-authored CC0 demo rulebook into the running application:
 
 ```sh
 make demo-data
 ```
 
-停止开发进程和本地基础设施：
+Stop the application and infrastructure, retaining stored data:
 
 ```sh
 make dev-stop
 make compose-down
 ```
 
-MinIO 与 `mc` 从固定的官方提交构建，版本由 `infra/minio/Dockerfile` 声明；镜像内保留对应源码归档与
-许可证。Compose 保留原镜像别名，但使用本地构建，不再拉取已不可用的上游镜像。生产应用部署只检查
-现有存储，不会替换它；更新存储镜像须单独维护，先验证对象读写并保留原镜像和数据卷。
+## Development
 
-## 常用命令
-
-| 命令 | 用途 |
+| Command | Purpose |
 | --- | --- |
-| `make help` | 查看全部命令 |
-| `make bootstrap` | 检查仓库基础结构 |
-| `make backend-test` | 后端单元、应用与集成契约 |
-| `make frontend-test` | TypeScript、lint、Vitest 与 build |
-| `make e2e` | Playwright 用户旅程 |
-| `make verify` | 合并前统一验证 |
+| `make help` | List available commands |
+| `make bootstrap` | Check repository structure |
+| `make backend-test` | Run backend unit and application tests |
+| `make frontend-test` | Run type checks, lint, unit tests, and build |
+| `make integration-test` | Check local infrastructure integrations |
+| `make e2e` | Run Playwright user journeys |
+| `make verify` | Run pre-merge verification |
 
 ```text
-backend/    Spring Modulith 模块化单体
-frontend/   Vue 3 Web / PWA
-infra/      Compose 与可观测性配置
-scripts/    开发、验证、评测和生产操作
-examples/   自制演示与评测数据
+backend/    Spring Modulith application
+frontend/   Vue web app and PWA
+infra/      Containers and observability
+scripts/    Development, verification, and operations
+examples/   Self-authored demo and evaluation data
 ```
 
-不要提交凭证、`.env`、用户上传内容、真实商业规则书或生成模型原始数据。
+Deployment images include the local Docling layout model for lesson illustrations.
+When running Java directly, install [layout dependencies](backend/requirements-layout.txt) with Python 3.10+,
+run `backend/install-layout-model.py <model-directory>`, and set `DOCLING_PYTHON` and
+`DOCLING_MODEL_DIRECTORY`. Without this setup, cited text and original rulebook pages remain available.
+
+Model response tracing is opt-in via `MODEL_DEBUG_RECORDING_ENABLED=true`.
+Recorded outputs are visible to Grafana viewers and retained by Tempo for 24 hours;
+redaction cannot guarantee removal of personal information or document excerpts.
+
+See [PROJECT_MODEL.md](PROJECT_MODEL.md) for product and architecture details and
+[AGENTS.md](AGENTS.md) for the engineering contract.
+Never commit credentials, `.env`, user uploads, commercial rulebooks, or raw model output.
