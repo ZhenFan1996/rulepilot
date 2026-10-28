@@ -129,6 +129,11 @@ test('reads a native English guide in authored order across screen sizes', async
             caption: 'The starting space is marked on the route.',
           }] },
           { kind: 'PARAGRAPH', text: 'Follow the route from this space. Keep the other cards nearby so everyone can reach them when the next step calls for a card.', figures: [], flow: 'NONE' },
+          { kind: 'FIGURES', text: '', flow: 'ASIDE', figures: [{
+            focus: { pageNumber: 2, label: 'Spare cards', x: 500, y: 180, width: 320, height: 260 },
+            caption: 'The remaining cards stay beside the route.',
+          }] },
+          { kind: 'PARAGRAPH', text: 'Keep this space clear for the next card.', figures: [], flow: 'NONE' },
         ],
       }],
     }] },
@@ -141,15 +146,17 @@ test('reads a native English guide in authored order across screen sizes', async
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 })
     await flow.scrollIntoViewIfNeeded()
-    await expect(flow.getByRole('img')).toBeVisible()
-    expect(await flow.locator(':scope > *').evaluateAll(nodes => nodes.map(node => node.tagName))).toEqual(['P', 'UL', 'P'])
+    await expect(flow.getByRole('img').first()).toBeVisible()
+    expect(await flow.locator(':scope > *').evaluateAll(nodes => nodes.map(node => node.tagName))).toEqual(['P', 'UL', 'P', 'UL', 'P'])
     const layout = await flow.evaluate(element => {
       const figure = element.querySelector('ul')!
       const paragraph = element.querySelectorAll('p.reading-paragraph')[1]!
       return { float: getComputedStyle(figure).float, figureBottom: figure.getBoundingClientRect().bottom,
+        secondFigureTop: element.querySelectorAll('ul')[1]!.getBoundingClientRect().top,
         paragraphTop: paragraph.getBoundingClientRect().top, overflow: document.documentElement.scrollWidth > innerWidth }
     })
     expect(layout.overflow).toBe(false)
+    expect(layout.secondFigureTop).toBeGreaterThanOrEqual(layout.figureBottom)
     if (width === 1440) expect(layout.float).not.toBe('none')
     else {
       expect(layout.float).toBe('none')

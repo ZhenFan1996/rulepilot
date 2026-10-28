@@ -58,6 +58,7 @@ const props = defineProps<{
 }
 @container (min-width: 36rem) {
   .reading-aside {
+    clear: both;
     float: inline-end;
     width: 42%;
     margin-block: 0.25rem 1.25rem;
