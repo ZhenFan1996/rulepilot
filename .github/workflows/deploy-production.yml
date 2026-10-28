@@ -849,14 +849,8 @@ jobs:
             removed_releases=$((removed_releases + 1))
           done
           printf 'Reclaimed %d inactive release artifact(s); current release retained.\n' "$removed_releases"
-          if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
-            echo "Ensuring the current release remains available while replacement images are prepared."
-            cd "$current_release"
-            RULEPILOT_RELEASE_ID="${current_release##*/}" docker compose --env-file .env \
-              -f infra/compose.yml \
-              -f infra/compose.deployment.yml \
-              -f infra/compose.production.yml up -d --no-build --no-deps api worker
-          fi
+          # Keep the running release untouched while loading images. Reapplying the newly synchronized
+          # environment to the old Compose project would restart it before the actual release switch.
           (cd /tmp && sha256sum --check "${backend_image_filename}.sha256")
           (cd /tmp && sha256sum --check "${frontend_image_filename}.sha256")
           gzip -dc "$backend_image_archive" | docker load
