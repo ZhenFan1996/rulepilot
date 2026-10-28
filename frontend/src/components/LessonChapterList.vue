@@ -177,7 +177,7 @@ function stepTone(kind: string) {
 </script>
 
 <template>
-  <div class="mt-7 xl:grid xl:grid-cols-[13rem_minmax(0,1fr)] xl:items-start xl:gap-10">
+  <div class="lesson-chapters mt-7 xl:grid xl:grid-cols-[13rem_minmax(0,1fr)] xl:items-start xl:gap-10">
     <nav data-testid="mobile-chapter-directory" class="app-sticky-below-mobile-header sticky z-10 -mx-2 flex gap-2 overflow-x-auto border border-ink/10 bg-canvas/90 p-2 elevation-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
       <a
         v-for="section in sections"
@@ -232,7 +232,7 @@ function stepTone(kind: string) {
         <p class="mb-3 text-sm font-semibold text-indigo">{{ t('public.chapter', { position: section.position }) }}</p>
 
         <div class="min-w-0">
-          <h2 class="font-display text-3xl font-semibold tracking-tight sm:text-4xl">{{ section.title }}</h2>
+          <h2 class="lesson-chapter-title font-display text-3xl font-semibold tracking-tight sm:text-4xl">{{ section.title }}</h2>
           <p v-if="section.visualCaption && section.visualCaption !== section.title" class="mt-3 max-w-2xl leading-7 text-muted">{{ section.visualCaption }}</p>
 
           <ol class="mt-7 divide-y divide-ink/10">
@@ -255,14 +255,14 @@ function stepTone(kind: string) {
                   >
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-sm font-semibold tabular-nums text-muted">{{ step.position }}</span>
-                      <h3 class="text-xl font-semibold leading-snug sm:text-2xl">{{ step.heading }}</h3>
+                      <h3 class="lesson-step-title text-xl font-semibold leading-snug sm:text-2xl">{{ step.heading }}</h3>
                     </div>
                     <div
                       class="mt-4"
                       :class="visibleVisuals(section, step).length ? 'grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start lg:gap-7' : ''"
                     >
                       <div class="min-w-0">
-                        <p class="max-w-[70ch] whitespace-pre-line text-base leading-8 text-ink sm:text-[1.0625rem]">{{ step.text }}</p>
+                        <p class="lesson-step-copy max-w-[70ch] whitespace-pre-line text-base leading-8 text-ink sm:text-[1.0625rem]">{{ step.text }}</p>
                         <details v-if="step.ruleFacts?.length" class="mt-4 border-l-2 border-ink/10 pl-3">
                           <summary class="cursor-pointer py-2 text-sm font-semibold text-muted">{{ locale === 'en' ? 'Rule highlights' : '规则要点' }}</summary>
                           <LessonRuleFacts :facts="step.ruleFacts" />
@@ -330,3 +330,21 @@ function stepTone(kind: string) {
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.lesson-chapters:lang(en) .lesson-chapter-title {
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.lesson-chapters:lang(en) .lesson-step-title {
+  font-size: 1.125rem;
+  line-height: 1.4;
+}
+
+.lesson-chapters:lang(en) .lesson-step-copy {
+  max-width: 65ch;
+  line-height: 1.7;
+}
+</style>

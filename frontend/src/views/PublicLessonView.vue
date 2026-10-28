@@ -1025,16 +1025,12 @@ onUnmounted(() => {
           </template>
         </LessonGuideHero>
 
-        <aside v-if="!questionMode && publicLesson.publicGame" class="mx-auto mt-4 flex max-w-4xl flex-col gap-3 border-y border-ink/10 px-1 py-4 sm:flex-row sm:items-center sm:justify-between" aria-label="BoardGameGeek game identity">
-          <div class="min-w-0">
-            <p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted">{{ locale === 'zh-CN' ? '关联桌游' : 'Linked game' }}</p>
-            <p class="mt-1 truncate font-display text-xl font-semibold">{{ publicLesson.publicGame.name }}</p>
-            <p class="mt-1 text-xs text-muted">{{ locale === 'zh-CN' ? 'BGG 资料仅用于桌游身份、封面和目录，不作为规则证据。' : 'BGG data supplies identity, covers, and catalog context—not rule evidence.' }}</p>
-          </div>
-          <div class="flex shrink-0 flex-wrap items-center gap-3">
-            <RouterLink :to="{ name: 'game-discovery', params: { bggId: publicLesson.publicGame.bggId } }" class="inline-flex min-h-11 items-center rounded-xl border border-indigo/20 px-4 text-sm font-semibold text-indigo">{{ locale === 'zh-CN' ? '查看桌游资料' : 'View game details' }}</RouterLink>
+        <aside v-if="!questionMode && publicLesson.publicGame" class="mx-auto mt-2 max-w-4xl border-b border-ink/10 pb-3 text-muted" aria-label="BoardGameGeek game identity">
+          <div class="flex flex-wrap items-center gap-x-5 gap-y-1">
+            <RouterLink :to="{ name: 'game-discovery', params: { bggId: publicLesson.publicGame.bggId } }" class="inline-flex min-h-11 items-center text-sm font-medium text-indigo underline underline-offset-4">{{ locale === 'zh-CN' ? '查看桌游资料' : 'View game details' }}</RouterLink>
             <a :href="publicLesson.publicGame.bggUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[128px]" width="342" height="76"></a>
           </div>
+          <p class="text-xs leading-5">{{ locale === 'zh-CN' ? 'BGG 资料仅用于桌游身份、封面和目录，不作为规则证据。' : 'Game details from BGG. Rules are cited from the rulebook.' }}</p>
         </aside>
 
         <section v-if="questionMode" class="mx-auto mt-6 max-w-3xl" :aria-label="t('public.question.title')">
