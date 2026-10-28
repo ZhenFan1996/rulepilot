@@ -671,7 +671,7 @@ jobs:
             'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' \
             'PRODUCTION_TRACING_EXPORT_OTLP_ENABLED=true' \
             'PRODUCTION_TRACING_OTLP_ENDPOINT=http://tempo:4318/v1/traces' \
-            'PRODUCTION_TRACING_SAMPLING_PROBABILITY=0.05' >> "$temporary_env"
+            'PRODUCTION_TRACING_SAMPLING_PROBABILITY=1.0' >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"
           unset token
