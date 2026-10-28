@@ -297,7 +297,7 @@ class RecommendationReActContractTest {
     }
 
     @Test
-    void oneSearchContractIgnoresInheritedProfileAndPublishesModelAuthoredExplanations() throws Exception {
+    void currentTurnSearchIgnoresInheritedProfileAndPublishesModelAuthoredExplanations() throws Exception {
         Game groveRoutes = game(501, "Grove Routes", BggGameType.FAMILY, 2, 34, 45, "1.8");
         Game groveLines = game(502, "Grove Lines", BggGameType.STRATEGY, 2, 35, 55, "2.4");
         Game expansion = game(503, "Grove Routes: New Paths", BggGameType.EXPANSION, 2, 4, 35, "1.9");
@@ -384,9 +384,7 @@ class RecommendationReActContractTest {
                 .isEqualTo(BoardGameRecommendationAgent.RECOMMEND_TOOL);
         assertThat(terminalDecision.tools())
                 .extracting(BoardGameRecommendationModel.ToolSpec::name)
-                .doesNotContain(
-                        BoardGameRecommendationAgent.SEARCH_TOOL,
-                        BoardGameRecommendationAgent.COMPARE_TOOL);
+                .doesNotContain(BoardGameRecommendationAgent.COMPARE_TOOL);
         JsonNode publicationSchema = new ObjectMapper().readTree(terminalDecision.tools().stream()
                 .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                 .findFirst()
@@ -593,7 +591,6 @@ class RecommendationReActContractTest {
                 .extracting(BoardGameRecommendationModel.ToolSpec::name)
                 .contains(BoardGameRecommendationAgent.RECOMMEND_TOOL)
                 .doesNotContain(
-                        BoardGameRecommendationAgent.SEARCH_TOOL,
                         BoardGameRecommendationAgent.COMPARE_TOOL,
                         BoardGameRecommendationAgent.RESEARCH_TOOL);
         loop.stopBoundedCalls();
@@ -1355,7 +1352,8 @@ class RecommendationReActContractTest {
                         {"evidence":"U1","requestedGameCount":1,"includeTypes":[],"excludeTypes":[],
                          "complexity":{"strength":"%s","minimum":3.8}}
                         """.formatted(strength)),
-                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                strength == ConstraintRange.Strength.HARD ? answer("No verified candidate meets that minimum.")
+                        : action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         """
                         {"newRecommendationCount":1,"selections":[{"bggId":903,"internalEvidenceIds":["B903:complexity"]}],
                          "playerReply":"这款复杂度为3.2，比偏好的重度更轻。"}
@@ -1368,6 +1366,39 @@ class RecommendationReActContractTest {
             assertThat(response.outcome()).isEqualTo(strength == ConstraintRange.Strength.HARD
                     ? Outcome.NO_MATCH : Outcome.RECOMMENDATIONS);
             assertThat(response.games()).hasSize(strength == ConstraintRange.Strength.HARD ? 0 : 1);
+        } finally {
+            loop.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void emptyQueryAllowsRevisedRetrievalBeforePublishingVerifiedCandidates() {
+        Game candidate = game(904, "Garden Routes", BggGameType.FAMILY, 2, 6, 25, "1.6");
+        var catalog = org.mockito.Mockito.mock(BoardGameRecommendationCatalog.class);
+        org.mockito.Mockito.when(catalog.searchGames(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    CatalogFilters filters = invocation.getArgument(0);
+                    return new CandidateSet(1, filters.types().contains(BggGameType.STRATEGY)
+                            ? List.of() : List.of(candidate), true);
+                });
+        ScriptedModel model = new ScriptedModel(
+                action("narrow", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"requestedGameCount\":1,\"includeTypes\":[\"STRATEGY\"],\"excludeTypes\":[],\"players\":5,\"maxMinutes\":40}"),
+                action("broader", BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"evidence\":\"U1\",\"requestedGameCount\":1,\"includeTypes\":[],\"excludeTypes\":[],\"players\":5,\"maxMinutes\":40}"),
+                action("publish", BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        """
+                        {"newRecommendationCount":1,"selections":[{"bggId":904,"internalEvidenceIds":["B904:complexity"]}],
+                         "playerReply":"Garden Routes has verified complexity 1.6."}
+                        """));
+        RecommendationReActLoop loop = loop(model, catalog);
+        try {
+            var response = loop.converse(new ConversationRequest(RecommendationProfile.empty(),
+                    "Find a planning game for five players, within forty minutes."), "en", "player", ignored -> {});
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).extracting(value -> value.game().ranking().bggId()).containsExactly(904);
+            assertThat(response.profile().playerCount().minimum()).isEqualTo(5);
+            assertThat(response.profile().durationMinutes().maximum()).isEqualTo(40);
         } finally {
             loop.stopBoundedCalls();
         }
@@ -1397,9 +1428,6 @@ class RecommendationReActContractTest {
         assertThat(response.assistantMessage())
                 .doesNotContain("Ghost Harbor");
         assertThat(response.games()).isEmpty();
-        assertThat(response.harness().modelCalls()).isEqualTo(1);
-        assertThat(catalog.searches).hasValue(1);
-        assertThat(model.requests).hasSize(1);
         loop.stopBoundedCalls();
     }
 

@@ -444,7 +444,7 @@ final class RecommendationActions {
         observation.put(
                 "guidance",
                 verifiedIds.isEmpty()
-                        ? "No verified candidate matched this complete current-turn search contract. Finish transparently without naming an unverified game; do not search again in this turn."
+                        ? "No verified candidate matched this query. Reconsider retrieval choices against the current-turn requirements, or explain the evidence gap without naming an unverified game."
                         : experienceResearch == null
                                 ? "These candidate IDs are verified. Decide whether the available observations are enough for recommend_games or one genuinely distinct available read would materially improve the answer."
                                 : "The catalog and the one bounded experience read have settled. Finish with recommend_games from the returned evidence, and state any experience dimension that remains unknown instead of opening another research stage.");
