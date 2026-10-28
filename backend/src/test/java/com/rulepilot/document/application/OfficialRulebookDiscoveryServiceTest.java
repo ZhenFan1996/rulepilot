@@ -20,10 +20,96 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class OfficialRulebookDiscoveryServiceTest {
 
     private static final UUID EDITION_ID = UUID.fromString("26ba0d70-51e3-445b-9245-d50754562a13");
+
+    @Test
+    void followsAnObservedDownloadBeforeAlternativeSourcePages() {
+        var finder = new FakeFinder(List.of(
+                new OfficialRulebookCandidateFinder.Candidate("Rules", "https://stonemaiergames.com/rules", "", "", ""),
+                new OfficialRulebookCandidateFinder.Candidate("Other", "https://stonemaiergames.com/other", "", "", "")));
+        var service = new OfficialRulebookDiscoveryService(catalog(), sourceIdentity(), finder, request -> List.of(),
+                source -> {
+                    if (source.getPath().equals("/rules")) return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                            source, OfficialRulebookSourceInspector.MediaType.HTML,
+                            List.of(new OfficialRulebookSourceInspector.Link(
+                                    URI.create("https://stonemaiergames.com/document.pdf"), "English rules"))));
+                    if (source.getPath().equals("/document.pdf")) return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                            source, OfficialRulebookSourceInspector.MediaType.PDF, List.of()));
+                    throw new AssertionError("alternative pages must not block the observed download");
+                }, "");
+
+        assertThat(service.discover(EDITION_ID, "en").candidates()).anySatisfy(candidate -> {
+            assertThat(candidate.url()).endsWith("/document.pdf");
+            assertThat(candidate.nextAction()).isEqualTo(SourceAction.IMPORT_DOCUMENT);
+        });
+    }
+
+    @Test
+    void returnsARevalidatedCachedRulebookWithoutWaitingForAnUnavailableCatalog() {
+        var candidate = new OfficialRulebookCandidateFinder.Candidate(
+                "English rules", "https://stonemaiergames.com/rules.pdf", "Stonemaier Games", "en", "Base");
+        var finder = new FakeFinder(List.of());
+        finder.cached = List.of(candidate);
+        var service = new OfficialRulebookDiscoveryService(
+                catalog(), sourceIdentity(), finder,
+                request -> { throw new AssertionError("a usable cached document must not wait for the catalog"); },
+                source -> Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source, OfficialRulebookSourceInspector.MediaType.PDF, List.of())), "");
+
+        var result = service.discover(EDITION_ID, "en");
+
+        assertThat(result.candidates()).anySatisfy(found -> {
+            assertThat(found.url()).isEqualTo(candidate.url());
+            assertThat(found.capability()).isEqualTo(SourceCapability.DIRECT_DOCUMENT);
+            assertThat(found.languageVerified()).isTrue();
+        });
+    }
+
+    @Test
+    void continuesDiscoveryWhenACachedDocumentNoLongerExists() {
+        var finder = new FakeFinder(List.of());
+        finder.cached = List.of(new OfficialRulebookCandidateFinder.Candidate(
+                "English rules", "https://stonemaiergames.com/old.pdf", "Stonemaier Games", "en", "Base"));
+        var service = new OfficialRulebookDiscoveryService(
+                catalog(), sourceIdentity(), finder,
+                request -> List.of(new OfficialRulebookCandidateFinder.Candidate(
+                        "English rules", "https://stonemaiergames.com/current.pdf", "Stonemaier Games", "en", "Base")),
+                source -> source.getPath().equals("/current.pdf")
+                        ? Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                                source, OfficialRulebookSourceInspector.MediaType.PDF, List.of())) : Optional.empty(), "");
+
+        var result = service.discover(EDITION_ID, "en");
+
+        assertThat(result.candidates()).filteredOn(candidate -> candidate.nextAction() == SourceAction.IMPORT_DOCUMENT)
+                .singleElement().satisfies(candidate -> assertThat(candidate.url()).endsWith("/current.pdf"));
+    }
+
+    @Test
+    void publishesAnAvailableRulebookBeforeAnUnrelatedSourceCanTimeOut() {
+        var finder = new FakeFinder(List.of(
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "English rules", "https://stonemaiergames.com/rules.pdf", "Stonemaier Games", "en", "Base"),
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "Other source", "https://stonemaiergames.com/slow", "Stonemaier Games", "en", "Base")));
+        var service = new OfficialRulebookDiscoveryService(
+                catalog(), sourceIdentity(), finder, request -> List.of(), source -> {
+                    if (!source.getPath().equals("/rules.pdf")) {
+                        throw new AssertionError("an optional source must not delay a verified rulebook");
+                    }
+                    return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                            source, OfficialRulebookSourceInspector.MediaType.PDF, List.of()));
+                }, "");
+
+        var result = service.discover(EDITION_ID, "en");
+
+        assertThat(result.candidates()).anyMatch(candidate -> candidate.nextAction() == SourceAction.IMPORT_DOCUMENT);
+        assertThat(result.discovery().completion()).isEqualTo(OfficialRulebookDiscoveryService.DiscoveryCompletion.COMPLETE);
+    }
 
     @Test
     void rejectsAnImportActionWhenCapabilityAndAcquisitionModeDisagree() {
@@ -441,8 +527,9 @@ class OfficialRulebookDiscoveryServiceTest {
         assertThat(candidate.languageVerified()).isFalse();
     }
 
-    @Test
-    void usesTheObservedScriptOfAChineseCatalogDocumentTitleWhenNoExplicitLanguageNameIsPresent() {
+    @ParameterizedTest
+    @ValueSource(strings = {"zh-CN", "en"})
+    void usesTheObservedScriptWithoutOverridingAnExplicitDocumentLanguage(String language) {
         GstoneRulebookCatalogLookup gstoneCatalog = request -> List.of(
                 new OfficialRulebookCandidateFinder.Candidate(
                         "目录游戏", "https://www.gstonegames.com/game/info-1234.html", "集石", "", "基础版"));
@@ -470,20 +557,14 @@ class OfficialRulebookDiscoveryServiceTest {
         var service = new OfficialRulebookDiscoveryService(
                 catalog(), sourceIdentity(), finder, gstoneCatalog, inspector, "");
 
-        var result = service.discover(EDITION_ID, "zh-CN");
+        var result = service.discover(EDITION_ID, language);
 
         assertThat(result.candidates())
-                .filteredOn(candidate -> candidate.url().endsWith("/game/doc-1111.html"))
+                .filteredOn(candidate -> candidate.url().endsWith(
+                        language.equals("en") ? "/game/doc-2222.html" : "/game/doc-1111.html"))
                 .singleElement()
                 .satisfies(candidate -> {
-                    assertThat(candidate.language()).isEqualTo("zh-CN");
-                    assertThat(candidate.languageVerified()).isTrue();
-                });
-        assertThat(result.candidates())
-                .filteredOn(candidate -> candidate.url().endsWith("/game/doc-2222.html"))
-                .singleElement()
-                .satisfies(candidate -> {
-                    assertThat(candidate.language()).isEqualTo("en");
+                    assertThat(candidate.language()).isEqualTo(language);
                     assertThat(candidate.languageVerified()).isTrue();
                 });
         assertThat(finder.calls).isZero();
@@ -803,6 +884,7 @@ class OfficialRulebookDiscoveryServiceTest {
 
     private static final class FakeFinder implements OfficialRulebookCandidateFinder {
         private final List<OfficialRulebookCandidateFinder.Candidate> candidates;
+        private List<OfficialRulebookCandidateFinder.Candidate> cached = List.of();
         private boolean configured = true;
         private int calls;
         private int refinementCalls;
@@ -820,6 +902,11 @@ class OfficialRulebookDiscoveryServiceTest {
             this.candidates = candidates;
             this.expectedGame = expectedGame;
             this.expectedPublisher = expectedPublisher;
+        }
+
+        @Override
+        public List<OfficialRulebookCandidateFinder.Candidate> cachedCandidates(Request request) {
+            return cached;
         }
 
         @Override

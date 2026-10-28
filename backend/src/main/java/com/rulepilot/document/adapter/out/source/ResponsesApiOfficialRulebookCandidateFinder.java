@@ -182,6 +182,16 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     }
 
     @Override
+    public List<Candidate> cachedCandidates(OfficialRulebookCandidateFinder.Request request) {
+        if (!configured() || request == null) return List.of();
+        try {
+            return cached(cacheKey(prompt(request), "initial")).orElse(List.of());
+        } catch (IOException exception) {
+            return List.of();
+        }
+    }
+
+    @Override
     public List<Candidate> find(OfficialRulebookCandidateFinder.Request request) {
         if (!configured() || request == null) return List.of();
         try {
@@ -213,7 +223,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     private List<Candidate> search(
             OfficialRulebookCandidateFinder.Request request, String input, String strategy) {
         try {
-            String cacheKey = "rulepilot:rulebook-discovery:v6:" + strategy + ":" + digest(model + "\n" + input);
+            String cacheKey = cacheKey(input, strategy);
             Optional<List<Candidate>> cached = cached(cacheKey);
             if (cached.isPresent()) return cached.orElseThrow();
             if (!permits.tryAcquire()) return List.of();
@@ -300,8 +310,8 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                             && event.path("item").isObject()) {
                         observedOutput.add(event.path("item"));
                         if ("web_search_call".equals(event.path("item").path("type").asText())
-                                && containsTrustedDirectPdf(observedOutput, request)) {
-                            LOGGER.info("Official rulebook discovery completed from an observed trusted PDF source");
+                                && containsInspectableRulebookSource(observedOutput, request)) {
+                            LOGGER.info("Official rulebook discovery handed observed sources to document inspection");
                             break;
                         }
                     } else if ("response.completed".equals(event.path("type").asText())
@@ -340,12 +350,13 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         return partialResponse;
     }
 
-    private boolean containsTrustedDirectPdf(
+    private boolean containsInspectableRulebookSource(
             ArrayNode observedOutput, OfficialRulebookCandidateFinder.Request request) {
         return sources(observedOutput).values().stream()
                 .anyMatch(sourceUrl -> {
-                    Candidate candidate = trustedDirectPdf(sourceUrl, request);
-                    return candidate != null && unambiguousRulebookPath(URI.create(sourceUrl), request);
+                    Candidate candidate = trustedRulebookSource(sourceUrl, request);
+                    return candidate != null && (!URI.create(sourceUrl).getPath().toLowerCase(Locale.ROOT).endsWith(".pdf")
+                            || unambiguousRulebookPath(URI.create(sourceUrl), request));
                 });
     }
 
@@ -358,6 +369,10 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
             LOGGER.warn("Official rulebook discovery returned a malformed stream event");
             return null;
         }
+    }
+
+    private String cacheKey(String input, String strategy) {
+        return "rulepilot:rulebook-discovery:v7:" + strategy + ":" + digest(model + "\n" + input);
     }
 
     private Optional<List<Candidate>> cached(String key) {
@@ -413,7 +428,8 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         Map<Integer, String> sourceUrls = sources(output);
         List<Candidate> result = new ArrayList<>();
         try {
-            JsonNode payload = json.readTree(jsonPayload(outputText(output)));
+            String text = outputText(output);
+            JsonNode payload = text.isBlank() ? null : json.readTree(jsonPayload(text));
             if (payload != null && payload.isObject() && payload.path("candidates").isArray()) {
                 for (JsonNode candidate : payload.path("candidates")) {
                     if (result.size() == 8) break;
@@ -428,7 +444,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         }
         for (String sourceUrl : sourceUrls.values()) {
             if (result.size() == 8) break;
-            Candidate trusted = trustedDirectPdf(sourceUrl, request);
+            Candidate trusted = trustedRulebookSource(sourceUrl, request);
             if (trusted != null && result.stream().noneMatch(existing -> existing.url().equals(trusted.url()))) {
                 result.add(trusted);
             }
@@ -486,7 +502,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         return !meaningful.isEmpty() && meaningful.stream().allMatch(allowed::contains);
     }
 
-    private Candidate trustedDirectPdf(
+    private Candidate trustedRulebookSource(
             String sourceUrl,
             OfficialRulebookCandidateFinder.Request request) {
         try {
@@ -496,6 +512,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                     .map(this::normalizedDomain)
                     .filter(domain -> !domain.isBlank())
                     .anyMatch(domain -> host.equals(domain) || host.endsWith("." + domain));
+            Optional<String> publisher = OfficialRulebookCandidateFinder.publisherForHost(host, request.publishers());
             String normalizedPath = normalizedWords(uri.getPath());
             boolean rulebookPath = Set.of(
                             "rulebook", "rules", "manual", "regles", "regeln", "spielanleitung",
@@ -510,18 +527,16 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                     .filter(token -> !Set.of("board", "game", "official", "rulebook", "rules", "edition")
                             .contains(token))
                     .anyMatch(normalizedPath::contains);
-            if (!trustedHost
+            if ((!trustedHost && publisher.isEmpty())
                     || uri.getPath() == null
-                    || !uri.getPath().toLowerCase(Locale.ROOT).endsWith(".pdf")
                     || !rulebookPath
                     || !titleBound) return null;
-            String publisher = request.publishers().isEmpty() ? "" : request.publishers().getFirst();
             return new Candidate(
-                    bounded(request.gameName() + " official rulebook", 180),
+                    bounded(request.gameName() + " rulebook source", 180),
                     sourceUrl,
-                    bounded(publisher, 120),
-                    bounded(request.language(), 40),
-                    bounded(request.editionName(), 120));
+                    bounded(publisher.orElse(""), 120),
+                    "",
+                    "");
         } catch (RuntimeException exception) {
             return null;
         }

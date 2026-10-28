@@ -28,6 +28,44 @@ import org.springframework.data.redis.core.ValueOperations;
 class ResponsesApiOfficialRulebookCandidateFinderTest {
 
     @Test
+    void handsObservedPublisherRulesToInspectionWithoutWaitingForModelNarration() throws Exception {
+        var release = new java.util.concurrent.CountDownLatch(1);
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            try {
+                var item = Map.of("type", "web_search_call", "action", Map.of("sources", List.of(
+                        Map.of("url", "https://atlas.example/games/catalog-game/rules/"),
+                        Map.of("url", "https://unrelated.example/catalog-game/rules/"))));
+                byte[] event = ("data:" + new ObjectMapper().writeValueAsString(Map.of(
+                        "type", "response.output_item.done", "item", item)) + "\n\n").getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+                exchange.sendResponseHeaders(200, 0);
+                exchange.getResponseBody().write(event);
+                exchange.getResponseBody().flush();
+                release.await();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            } finally { exchange.close(); }
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(new OkHttpClient(), new ObjectMapper(),
+                    true, "test-key", "http://127.0.0.1:" + server.getAddress().getPort(), "qwen3.8-flash");
+            var result = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(2),
+                    () -> finder.find(new OfficialRulebookCandidateFinder.Request(42, "Catalog Game", "Base", 2024,
+                            "en", List.of("Catalog Game"), List.of("Atlas Games"), List.of())));
+            assertThat(result).singleElement().satisfies(candidate -> {
+                assertThat(candidate.url()).isEqualTo("https://atlas.example/games/catalog-game/rules/");
+                assertThat(candidate.sourcePageHint()).isEqualTo(OfficialRulebookCandidateFinder.SourcePageHint.UNVERIFIED_PAGE);
+                assertThat(candidate.language()).isEmpty();
+            });
+        } finally {
+            release.countDown();
+            server.stop(0);
+        }
+    }
+
+    @Test
     void productionComponentHasAnUnambiguousSpringInjectionPoint() {
         try (var context = new AnnotationConfigApplicationContext()) {
             context.getBeanFactory().setConversionService(ApplicationConversionService.getSharedInstance());
@@ -256,7 +294,10 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                 java.time.Duration.ofDays(30));
         var request = new OfficialRulebookCandidateFinder.Request(42, "Catalog Game", "Base", 2024, "en");
 
+        assertThat(finder.cachedCandidates(request)).isEmpty();
+        assertThat(requests).hasValue(0);
         assertThat(finder.find(request)).hasSize(1);
+        assertThat(finder.cachedCandidates(request)).hasSize(1);
         assertThat(finder.find(request)).hasSize(1);
 
         assertThat(requests).hasValue(1);
@@ -416,8 +457,11 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                             "https://publisher.example/Catalog-Game-Base-Game-Rulebook.pdf",
                             "https://publisher.example/Catalog-Game-rulebook.pdf",
                             "https://publisher.example/Catalog-Game-Landmarks-Rulebook.pdf");
-            assertThat(candidates).allSatisfy(candidate ->
-                    assertThat(candidate.publisher()).isEqualTo("Publisher Studio"));
+            assertThat(candidates).allSatisfy(candidate -> {
+                assertThat(candidate.publisher()).isEmpty();
+                assertThat(candidate.language()).isEmpty();
+                assertThat(candidate.edition()).isEmpty();
+            });
         } finally {
             server.stop(0);
         }

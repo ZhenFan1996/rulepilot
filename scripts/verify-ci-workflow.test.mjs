@@ -2319,12 +2319,6 @@ test('production activation observes existing dependencies after pressure withou
   assert.doesNotMatch(dependencyWait, /PRODUCTION_INFRASTRUCTURE_REQUIRED_SUCCESSFUL_HEALTHCHECKS/)
   assert.match(productionLauncher, /timeout -k 2s "\$\{command_timeout_seconds\}s" docker/)
 
-  const activation = workflowRunBlock(
-    deploymentWorkflow,
-    'Activate release and verify production health',
-  )
-  assert.match(activation,
-    /Ensuring the current release remains available[\s\S]*?up -d --no-build --no-deps api worker/)
 })
 
 test('application deployment observes existing Tempo without owning observability lifecycle', () => {
