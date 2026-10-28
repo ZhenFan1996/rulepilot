@@ -134,12 +134,12 @@ describe('GameRecommendationAgent', () => {
       .toBe(String(game.bggId))
   })
 
-  it('shows the assistant natural-language reply without rewriting it', async () => {
+  it.each(['conversation', 'no_match'] as const)('shows the %s reply even without game cards', async outcome => {
     const assistantMessage = '先不用补成表格；你说的安静、合作和短局，我会一起带进下一轮。'
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
       String(input) === '/api/auth/csrf'
         ? Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-        : recommendationStreamResult(conversationResult(assistantMessage))))
+        : recommendationStreamResult({ ...conversationResult(assistantMessage), outcome })))
     const wrapper = await mountAgent()
 
     await wrapper.get('textarea').setValue('两个人，想安静合作，最好半小时左右')

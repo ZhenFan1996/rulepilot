@@ -403,7 +403,8 @@ final class RecommendationReActLoop {
                     state.actions.add("EMPTY_MODEL_RESPONSE");
                     return unavailable(state, locale, "EMPTY_MODEL_RESPONSE");
                 }
-                if (state.pendingPublicationSeed != null) {
+                if (state.pendingPublicationSeed != null
+                        || state.activeSearch != null && !Integer.valueOf(0).equals(state.activeSearch.requestedCount())) {
                     if (recommendableIds(state).isEmpty()) {
                         if (state.activeSearch != null) {
                             decisionObservation.stop("completed", true, null);
@@ -610,16 +611,6 @@ final class RecommendationReActLoop {
         if (outcome.settledRead()) {
             checkpointListener.accept(new TurnCheckpoint(state.profile, state.verifiedForAgent()));
         }
-        if (!outcome.rejected()
-                && outcome.response() == null
-                && SEARCH_TOOL.equals(call.name())
-                && recommendableIds(state).isEmpty()) {
-            progress.complete();
-            return new ActionStep(
-                    null,
-                    nextStateEpoch,
-                    publishNoMatch(state, locale, progress));
-        }
         if (outcome.response() != null) {
             progress.complete();
             return new ActionStep(
@@ -720,8 +711,8 @@ final class RecommendationReActLoop {
                                 ? "当前目录里还没核验到你说的游戏。能补充英文名、封面或出版社中的任意一项，帮我确认是哪款吗？"
                                 : "I could not verify that game in the catalog. Could you share its original title, cover, or publisher to help identify it?"
                         : chinese(locale)
-                                ? "当前目录里没有找到同时符合全部条件的游戏，因此这次先不推荐不符合要求的替代品。"
-                                : "The current catalog has no game matching all these conditions, so I have not substituted games that fail your requirements.",
+                                ? "这次搜索未核验到符合条件的游戏，暂时无法给出有依据的推荐。这不代表没有合适的游戏。"
+                                : "This search did not verify a matching game, so I cannot yet provide an evidence-backed recommendation. This does not establish that no suitable game exists.",
                 state.selectionProfile(),
                 null,
                 state.sourceCount,
