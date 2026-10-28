@@ -118,6 +118,11 @@ class BoundedNativeToolAgentTest {
             case 1 -> turn(call("first", search.name(), "{}"));
             case 2 -> turn(call("again", search.name(), "{\"query\":\"another wording\"}"));
             case 3 -> {
+                String history = request.conversation().stream().map(ConversationMessage::content)
+                        .collect(java.util.stream.Collectors.joining("\n"));
+                assertThat(history.split("The marker stays on its space", -1)).hasSize(2);
+                assertThat(history.split("The chart is unresolved", -1)).hasSize(2);
+                assertThat(history).contains("alreadyObserved", first.get("evidenceId"), second.get("evidenceId"));
                 assertThat(request.tools()).extracting(NativeToolModel.ToolSpec::name)
                         .doesNotContain(search.name());
                 if (originalPageAvailable) {
@@ -142,6 +147,26 @@ class BoundedNativeToolAgentTest {
             assertThat(result.observations()).extracting(NativeToolAgent.ObservationRecord::toolName)
                     .contains(originalPage.name());
         }
+    }
+
+    @Test
+    void keepsExpandedEvidenceWithTheSameIdentityInFull() {
+        String id = UUID.randomUUID().toString();
+        AtomicInteger reads = new AtomicInteger();
+        NativeAgentTool source = new TestTool("read_rule_pages") {
+            @Override public ToolObservation execute(String arguments, ToolScope scope) {
+                String excerpt = reads.incrementAndGet() == 1 ? "Initial condition." : "Initial condition. Complete exception.";
+                return ToolObservation.success("FOUND", Map.of("evidence",
+                        List.of(Map.of("evidenceId", id, "excerpt", excerpt))), 1);
+            }
+        };
+        QueueModel model = new QueueModel(turn(call("initial", source.name(), "{}")),
+                turn(call("expanded", source.name(), "{}")), finalTurn("Supported answer."));
+        var result = agent(model, List.of(source), new RecordingInvocations(null))
+                .run(request(Set.of(source.name()), TerminalContract.none()));
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(model.conversations.get(2)).extracting(ConversationMessage::content)
+                .anySatisfy(content -> assertThat(content).contains("Initial condition. Complete exception."));
     }
 
     @Test

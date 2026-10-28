@@ -134,7 +134,10 @@ class SpringAiNativeToolModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        if (provider.equals("qwen")) assertThat(options.getResponseFormat()).isNull();
+        if (provider.equals("qwen")) {
+            assertThat(options.getResponseFormat()).isNull();
+            assertThat(options.getExtraBody()).containsEntry("enable_thinking", false).doesNotContainKey("reasoning_effort");
+        }
         else assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getToolCallbacks()).hasSize(1);
     }
